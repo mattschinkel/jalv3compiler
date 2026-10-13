@@ -1,4 +1,6 @@
-# Welcome to the JALV2 Compiler 
+# Welcome to the JALV3 Compiler  
+
+Not yet released.
 
 This project holds the source files and executables of the JALV2 compiler.
 
