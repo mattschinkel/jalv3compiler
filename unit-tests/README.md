@@ -26,7 +26,7 @@ detection layer and always run first. Subcommands: `compile`, `symbols`,
 `watch` (PC-attributed write timeline on named variables under gpsim;
 final-RAM snapshot on the 32-bit QEMU targets), `trace` (disassembly
 annotated with symbols and the a/d bits — opcode table parsed live from
-src/libpic12/pic16.c so it cannot disagree with the compiler),
+src/libpic12/pic16.c and pic14.c so they cannot disagree with the compiler; PIC18 + classic 14-bit cores),
 `uart` (TXREG capture), `build REF` (clean out-of-tree git-worktree
 build, cached), `pin-check WITNESS --old REF` (prove a witness fails
 the pre-fix build — the j50 lesson), `cost --old REF` (compile-time

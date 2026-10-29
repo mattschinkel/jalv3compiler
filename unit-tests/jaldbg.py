@@ -208,33 +208,68 @@ def cmd_uart(args):
 
 # ---------------------------------------------------------------- trace
 
-_PIC16_C = REPO / "src/libpic12/pic16.c"
+_ENC_C = {
+    "pic16": REPO / "src/libpic12/pic16.c",   # PIC18, 16-bit words
+    "pic14": REPO / "src/libpic12/pic14.c",   # classic 14-bit words
+}
+# which table a device uses (keyed by the include name from the .jal)
+CORE_OF_DEVICE = {
+    "18f4620": "pic16", "18f26k22": "pic16", "18f67j50": "pic16",
+    "16f877": "pic14", "16f1825": "pic14", "12f1840": "pic14",
+}
 
-def load_opcode_table() -> list[dict]:
-    """Parse the compiler's own PIC18 encoding table out of pic16.c so the
-    disassembler cannot disagree with the emitter. The mask clears every
-    bit the emitter ORs in (dst bit 9, access bit 8, f/literal low bits),
-    so each entry matches exactly its opcode family."""
-    if not _PIC16_C.is_file():
+def load_opcode_table(core: str = "pic16") -> list[dict]:
+    """Parse the compiler's own encoding table out of the back end source
+    (pic16.c / pic14.c) so the disassembler cannot disagree with the
+    emitter. The mask clears every bit the emitter ORs in, so each entry
+    matches exactly its opcode family."""
+    src = _ENC_C.get(core)
+    if not src or not src.is_file():
         return []
+    text = src.read_text(errors="replace")
     table = []
-    for m in re.finditer(
-            r"case PIC_OPCODE_(\w+):\s*\n?\s*pcode_lo = 0x([0-9A-Fa-f]{4})\s*\|"
-            r"((?:\s*(?:dst|access|bit|lit\d+|val|shadow)\s*\|?)*)",
-            _PIC16_C.read_text(errors="replace")):
-        name, base, fields = m.group(1), int(m.group(2), 16), m.group(3)
-        mask = 0xFFFF
-        if "dst" in fields:
-            mask &= ~0x0200
-        if "access" in fields:
-            mask &= ~0x0100
-        if "val" in fields or "bit" in fields or "lit" in fields:
-            mask &= ~0x00FF
-        table.append({"name": name.lower(), "base": base, "mask": mask,
-                      "d": "dst" in fields, "a": "access" in fields})
+    if core == "pic16":
+        for m in re.finditer(
+                r"case PIC_OPCODE_(\w+):\s*\n?\s*pcode_lo = 0x([0-9A-Fa-f]{4})\s*\|"
+                r"((?:\s*(?:dst|access|bit|lit\d+|val|shadow)\s*\|?)*)", text):
+            name, base, fields = m.group(1), int(m.group(2), 16), m.group(3)
+            mask = 0xFFFF
+            if "dst" in fields:
+                mask &= ~0x0200
+            if "access" in fields:
+                mask &= ~0x0100
+            if "val" in fields or "bit" in fields or "lit" in fields:
+                mask &= ~0x00FF
+            table.append({"name": name.lower(), "base": base, "mask": mask,
+                          "d": "dst" in fields, "a": "access" in fields})
+    else:
+        # pic14.c: `pcode = 0xNNNN | dst | val;` -- dst is bit 7, f is
+        # bits 6..0; bit-ops shift the literal << 7; literals lit8/lit10
+        for m in re.finditer(
+                r"case PIC_OPCODE_(\w+):\s*pcode = 0x([0-9A-Fa-f]{4})\s*\|"
+                r"((?:\s*(?:\(?bit\s*<<\s*7\)?|dst|lit8|lit10|lit11|val)\s*\|?)*)",
+                text):
+            name, base, fields = m.group(1), int(m.group(2), 16), m.group(3)
+            mask = 0x3FFF
+            if "dst" in fields:
+                mask &= ~0x0080
+            if "val" in fields:
+                mask &= ~0x007F
+            if "bit" in fields:
+                mask &= ~0x0380
+            if "lit8" in fields:
+                mask &= ~0x00FF
+            if "lit10" in fields or "lit11" in fields:
+                mask &= ~0x03FF
+            table.append({"name": name.lower(), "base": base, "mask": mask,
+                          "d": "dst" in fields, "a": False,
+                          "bitop": "bit" in fields,
+                          "lit10": "lit10" in fields or "lit11" in fields})
     # most specific (longest mask) first so families do not shadow
     table.sort(key=lambda t: -bin(t["mask"]).count("1"))
     return table
+
+FMT_W = {"0x0E": "movlw", "0x01": "movlb"}
 
 def load_hex_words(hexf: Path) -> dict[int, int]:
     mem = {}
@@ -260,9 +295,11 @@ def cmd_trace(args):
     out = ensure_compiled(jal, args.compiler)
     syms = load_symbols(out["asm"])
     words = load_hex_words(out["hex"])
-    table = load_opcode_table()
+    dev = detect_device(jal) or ""
+    core = CORE_OF_DEVICE.get(dev, "pic16")
+    table = load_opcode_table(core)
     if not table:
-        raise SystemExit("cannot parse the opcode table from src/libpic12/pic16.c")
+        raise SystemExit(f"cannot parse the {core} opcode table")
     addr = int(args.at, 0)
     shown = 0
     a = addr & ~1
@@ -283,6 +320,14 @@ def decode_word(w: int, words: dict, table: list, a: int) -> str:
             d = (w >> 9) & 1
             ab = (w >> 8) & 1
             name = t["name"]
+            if t.get("lit10"):                      # 14-bit call/goto
+                tgt = (w & 0x3FF) * 2
+                return f"{name} 0x{tgt:04x}"
+            if t.get("bitop"):                      # 14-bit bcf/bsf/btfsc/btfss
+                return f"{name} 0x{w & 0x7F:02x},bit {(w >> 7) & 7}"
+            if t["d"] and not t["a"]:               # 14-bit file-op, dst bit 7
+                d14 = (w >> 7) & 1
+                return f"{name} 0x{w & 0x7F:02x} d={'f' if d14 else 'w'}"
             if name in ("movlw", "retlw"):
                 return f"{name} 0x{w & 0xFF:02x}"
             if name == "movlb":
