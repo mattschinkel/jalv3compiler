@@ -20,6 +20,7 @@
 #include "../libcore/vardef.h"
 #include "esp32.h"
 #include "esp.h"
+#include "esp32_clock.h"
 #include "esp_float.h"
 
 void esp_const_pool_place(pfile_t *pf);
@@ -66,6 +67,28 @@ variable_sz_t esp_pointer_size_get(pfile_t *pf)
 {
   UNUSED(pf);
   return 4;
+}
+
+/* the descriptor published through libpic12's back-end registry
+ * (jal_main registers it for PIC_TARGET_CPU_ESP32); the clock hook
+ * adapts esp32_clock_solve's boolean_t return to the descriptor shape */
+static void esp32_clock_solve_maybe(pfile_t *pf)
+{
+  (void) esp32_clock_solve(pf);
+}
+
+const pic_backend_t *esp32_backend_get(void)
+{
+  static const pic_backend_t esp32_backend = {
+    esp_cmd_generate,
+    esp_cmd_dump,
+    esp_code_cleanup,
+    esp_code_emu,
+    esp_pointer_size_get,
+    esp32_clock_solve_maybe
+  };
+
+  return &esp32_backend;
 }
 
 esp_code_t esp_code_list_head(pfile_t *pf)

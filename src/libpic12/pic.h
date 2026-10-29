@@ -207,8 +207,6 @@ boolean_t        pic_is_12bit(pfile_t *pf);
 boolean_t        pic_is_14bit(pfile_t *pf);
 boolean_t        pic_is_14bit_hybrid(pfile_t *pf);
 boolean_t        pic_is_16bit(pfile_t *pf);
-/* pic_is_mips32 / pic_is_esp32: file-local predicates in pic.c
- * (only pic_backend_get uses them; pic_is_16bit stays public). */
 boolean_t        instruction_set_is_p16f1_v1(pfile_t* pf);
 boolean_t        instruction_set_is_pic18f_v6(pfile_t* pf);
 
@@ -227,28 +225,30 @@ boolean_t        pic_in_isr(pfile_t *pf); /* TRUE when generating ISR code */
 value_t          pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which);
 variable_sz_t    pic_pointer_size_get(pfile_t *pf);
 
-/* back-end descriptor: the per-target delegation seam. A NULL
- * descriptor selects the classic PIC12/14/14H/18/SX implementation in
- * this library (libpic12); PIC32 (libpic32) and ESP32 (libesp32) map to
- * their descriptors via pic_backend_get (see pic.c) -- the single place
- * that knows which library serves a core. pic_cmd_optimize is IR-level
- * and shared by every target, so it is not part of the descriptor. */
-typedef struct pic_backend_s {
-  void          (*cmd_generate)(pfile_t *pf, const cmd_t cmd);
-  void          (*cmd_dump)(pfile_t *pf, const cmd_t cmd, boolean_t first);
-  void          (*code_cleanup)(pfile_t *pf);
-  void          (*code_emu)(pfile_t *pf);
-  variable_sz_t (*pointer_size_get)(pfile_t *pf);
-} pic_backend_t;
+/* back-end descriptor (pic_backend.h): the per-target delegation seam.
+ * A NULL descriptor selects the classic PIC12/14/14H/18/SX
+ * implementation in this library (libpic12); the other back ends map
+ * to their descriptors through the registry below, wired at startup by
+ * the composition root (jal_main) -- pic.c holds no libpic32/libesp32
+ * references. pic_cmd_optimize is IR-level and shared by every target,
+ * so it is not part of the descriptor. */
+#include "pic_backend.h"
 
+/* registry: map a target CPU to its back-end descriptor. jal_main
+ * registers each back-end library's descriptor at startup;
+ * re-registering a target replaces its entry. A classic-only link
+ * simply registers nothing. */
+void             pic_backend_register(pic_target_cpu_t target,
+  const pic_backend_t *be);
 const pic_backend_t *pic_backend_get(pfile_t *pf);
 /* TRUE on back ends whose locals have unique static addresses (the
  * 32-bit linear allocators) -- task bodies may declare variables;
  * classic cores keep the var-in-task error */
 boolean_t        pic_task_locals_allowed(pfile_t *pf);
 unsigned         pic_code_gen_pass_get(pfile_t *pf);
-/* PIC32 clock-tree solve hook (pragma target OSC/clock); no-op on every
- * non-MIPS32 target -- docs/investigations/pic32_clock_select_plan.md */
+/* Clock-tree solve hook (pragma target OSC/clock), routed through the
+ * back-end registry; no-op when the target's back end has no solver
+ * (classic cores) -- docs/investigations/pic32_clock_select_plan.md */
 void             pic32_clock_solve_maybe(pfile_t *pf);
 /* the _reentrant block is a temporary holding area for re-entrant functions */
 

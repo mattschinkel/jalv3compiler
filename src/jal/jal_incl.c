@@ -24,7 +24,6 @@
 #include "jal_incl.h"
 #include "../libcore/pfiled.h"
 #include "../libcore/label.h"
-#include "../libpic12/pic.c"
 
 /* list of known jal fuses */
 

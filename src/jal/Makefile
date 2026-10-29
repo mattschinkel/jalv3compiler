@@ -20,8 +20,3 @@ dummy:
 
 include ../Makefile.inc
 
-# jal_incl.c includes pic.c; that TU must rebuild when pic.c changes so the
-# linked executable does not keep stale pic code (pic.o in the archive is not
-# linked for symbols already defined in jal_incl.o).
-$(OBJ_DIR)/jal_incl.o: ../libpic12/pic.c
-

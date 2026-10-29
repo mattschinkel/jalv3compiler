@@ -22,7 +22,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # at midnight; would fail the canary on pure date rollover). All other
 # bytes remain strictly byte-identical.
 date_norm() {
-  python3 "$ROOT/scripts/_hex_datemask.py" "$1"
+  python3 "$ROOT/sims/_hex_datemask.py" "$1"
 }
 COMPILER="${1:-$ROOT/bin/jalv3-x86-64}"
 TMPDIR="$(mktemp -d)"
@@ -37,7 +37,7 @@ for spec in \
   label="${spec%%:*}"; rest="${spec#*:}"
   name="${rest%%:*}"; src="${rest#*:}"
   golden="$ROOT/sims/golden/$name.hex"
-  if "$COMPILER" -s "$ROOT/demo_lib;$ROOT/third_party/jallib/lib;$ROOT/tests" \
+  if "$COMPILER" -s "$ROOT/demo_lib;$ROOT/third_party/jallib/lib;$ROOT/sims/shared" \
       -no-codfile -qemu-hex -hex "$TMPDIR/$name.hex" "$ROOT/$src" >/dev/null 2>&1;
   then
     # The MIPS loader boot metadata embeds a YYYYMMDD build-date word

@@ -19,6 +19,7 @@
 #include "../libcore/vardef.h"
 #include "pic32.h"
 #include "mips.h"
+#include "mips_clock.h"
 #include "mips_alloc.h"
 #include "mips_reg.h"
 
@@ -253,6 +254,28 @@ variable_sz_t mips_pointer_size_get(pfile_t *pf)
 {
   UNUSED(pf);
   return 4;
+}
+
+/* the descriptor published through libpic12's back-end registry
+ * (jal_main registers it for PIC_TARGET_CPU_MIPS32); the clock hook
+ * adapts mips_clock_solve's boolean_t return to the descriptor shape */
+static void mips_clock_solve_maybe(pfile_t *pf)
+{
+  (void) mips_clock_solve(pf);
+}
+
+const pic_backend_t *pic32_backend_get(void)
+{
+  static const pic_backend_t pic32_backend = {
+    mips_cmd_generate,
+    mips_cmd_dump,
+    mips_code_cleanup,
+    mips_code_emu,
+    mips_pointer_size_get,
+    mips_clock_solve_maybe
+  };
+
+  return &pic32_backend;
 }
 
 mips_code_t mips_code_list_head(pfile_t *pf)

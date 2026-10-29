@@ -42,10 +42,6 @@
 #include "pic_emu.h"
 #include "pic.h"
 #include "pic12.h"
-#include "../libpic32/pic32.h"
-#include "../libpic32/mips_clock.h"
-#include "../libesp32/esp32_clock.h"
-#include "../libesp32/esp32.h"
 #include "pic14.h"
 #include "pic14h.h"
 #include "pic16.h"
@@ -6657,14 +6653,50 @@ boolean_t pic_is_16bit(pfile_t *pf)
   return (PIC_TARGET_CPU_16BIT == pic_target_cpu_get(pf));
 }
 
-static boolean_t pic_is_mips32(pfile_t *pf)
+/* back-end registry: target CPU -> descriptor. The composition root
+ * (jal_main) registers each non-classic back end at startup; this
+ * library holds no libpic32/libesp32 references -- which library serves
+ * a core is a wiring decision, not a libpic12 one. A classic-only link
+ * registers nothing and every lookup misses. */
+#define PIC_BACKEND_REGISTRY_CT 4
+
+static struct {
+  pic_target_cpu_t     target;
+  const pic_backend_t *be;
+} pic_backend_registry[PIC_BACKEND_REGISTRY_CT];
+
+void pic_backend_register(pic_target_cpu_t target, const pic_backend_t *be)
 {
-  return (PIC_TARGET_CPU_MIPS32 == pic_target_cpu_get(pf));
+  size_t ii;
+  size_t slot;
+
+  assert(PIC_TARGET_CPU_NONE != target);
+  slot = COUNT(pic_backend_registry);
+  for (ii = 0; ii < COUNT(pic_backend_registry); ii++) {
+    if (target == pic_backend_registry[ii].target) {
+      pic_backend_registry[ii].be = be; /* re-register replaces */
+      return;
+    }
+    if ((PIC_TARGET_CPU_NONE == pic_backend_registry[ii].target)
+        && (slot == COUNT(pic_backend_registry))) {
+      slot = ii;
+    }
+  }
+  assert(slot < COUNT(pic_backend_registry)); /* registry full */
+  pic_backend_registry[slot].target = target;
+  pic_backend_registry[slot].be     = be;
 }
 
-static boolean_t pic_is_esp32(pfile_t *pf)
+static const pic_backend_t *pic_backend_find(pic_target_cpu_t target)
 {
-  return (PIC_TARGET_CPU_ESP32 == pic_target_cpu_get(pf));
+  size_t ii;
+
+  for (ii = 0; ii < COUNT(pic_backend_registry); ii++) {
+    if (target == pic_backend_registry[ii].target) {
+      return pic_backend_registry[ii].be;
+    }
+  }
+  return (const pic_backend_t *) 0;
 }
 
 void pic32_clock_solve_maybe(pfile_t *pf)
@@ -6674,12 +6706,11 @@ void pic32_clock_solve_maybe(pfile_t *pf)
   value_t v = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
 
   if (v) {
-    pic_target_cpu_t cpu = (pic_target_cpu_t) value_const_get(v);
+    const pic_backend_t *be
+      = pic_backend_find((pic_target_cpu_t) value_const_get(v));
 
-    if (PIC_TARGET_CPU_MIPS32 == cpu) {
-      (void) mips_clock_solve(pf);
-    } else if (PIC_TARGET_CPU_ESP32 == cpu) {
-      (void) esp32_clock_solve(pf);
+    if (be && be->clock_solve_maybe) {
+      be->clock_solve_maybe(pf);
     }
     value_release(v);
   }
@@ -6714,30 +6745,12 @@ boolean_t pic_task_locals_allowed(pfile_t *pf)
 }
 
 
+/* the single seam where non-classic cores delegate: map the selected
+ * target to its registered back-end descriptor. NULL = the classic
+ * PIC12/14/14H/18/SX implementation in this library. */
 const pic_backend_t *pic_backend_get(pfile_t *pf)
 {
-  static const pic_backend_t pic_backend_mips = {
-    mips_cmd_generate,
-    mips_cmd_dump,
-    mips_code_cleanup,
-    mips_code_emu,
-    mips_pointer_size_get
-  };
-  static const pic_backend_t pic_backend_esp32 = {
-    esp_cmd_generate,
-    esp_cmd_dump,
-    esp_code_cleanup,
-    esp_code_emu,
-    esp_pointer_size_get
-  };
-
-  if (pic_is_mips32(pf)) {
-    return &pic_backend_mips;
-  }
-  if (pic_is_esp32(pf)) {
-    return &pic_backend_esp32;
-  }
-  return (const pic_backend_t *) 0;
+  return pic_backend_find(pic_target_cpu_get(pf));
 }
 
 unsigned pfile_bitbucket_packed_lo_reserve_get(pfile_t *pf)
@@ -6759,7 +6772,7 @@ unsigned pfile_bitbucket_packed_lo_reserve_get(pfile_t *pf)
    * refer to that byte while the first user bit (e.g. `var bit flags[0]`) is
    * true. PIC18 / PIC14 enhanced / PIC32 use pool bit 0 (no gpsim bitbucket
    * reservation on MIPS). */
-  if (pic_is_mips32(pf) || pic_is_esp32(pf) || pic_is_16bit(pf)
+  if (pic_backend_get(pf) || pic_is_16bit(pf)
       || pic_is_14bit_hybrid(pf)) {
     return 0;
   }

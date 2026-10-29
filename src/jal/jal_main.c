@@ -20,6 +20,8 @@
 #include "../libcore/pf_cmd.h"
 #include "../libpic12/pic_cmdo.h"
 #include "../libpic12/pic.h"
+#include "../libpic32/pic32.h"
+#include "../libesp32/esp32.h"
 #include "../libcore/pfile.h"
 #include "jal_blck.h"
 #include "jal_file.h"
@@ -728,7 +730,12 @@ int main(int argc, char **argv)
   files_disabled = 0;
   hex_atomic_pending = BOOLEAN_FALSE;
   hex_atomic_output = BOOLEAN_FALSE;
-  cli_info_only = BOOLEAN_FALSE;
+  cli_info_only     = BOOLEAN_FALSE;
+
+  /* wire the non-classic back ends into libpic12's registry -- the
+   * single place that knows which library serves a core */
+  pic_backend_register(PIC_TARGET_CPU_MIPS32, pic32_backend_get());
+  pic_backend_register(PIC_TARGET_CPU_ESP32, esp32_backend_get());
 
 #ifdef MSDOS
   cos(1.0); /* silly, but it links in the math bits */

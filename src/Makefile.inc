@@ -169,8 +169,17 @@ $(PROGRAM): $(OBJS) $(LIBS) | $(BIN_DIR)
 $(BIN_DIR):
 	mkdir -p $@
 	
+# `$(PROGRAM).exe` is a build intermediate only where the toolchain
+# appends .exe (the win64 cross, Windows-native builds).  For the Linux
+# x86-64 flavor that same name is the PUBLISHED Windows binary in bin/
+# (cut from the win64 build) -- a Linux clean must never delete it.
+EXE_RM := $(PROGRAM).exe
+ifeq ($(ARCH)$(shell uname -s 2>/dev/null),x86-64Linux)
+  EXE_RM :=
+endif
+
 clean::
-	-rm -f $(PROGRAM) $(PROGRAM).exe
+	-rm -f $(PROGRAM) $(EXE_RM)
 	-rm -rf $(OBJ_DIR)
 	-rm -rf $(DEP_DIR)
 
