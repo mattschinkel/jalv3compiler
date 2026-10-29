@@ -106,6 +106,42 @@ check "escaped pointer-bound bank-spanning array refused" \
 # --- WORD twin: the shape that produced the 2026-10-15 "Attempt to assign
 # to a lookup table" follow-up.  It must reach the pointer refusal, not
 # pic_assign_to_ptr's lookup error -- the report was the never-written-array
+# MUST-COMPILE acceptance shapes (16f18857, the non-monotonic false-refusal
+# witnesses from fixes/fix_16f18857_multibank_elem_sz.md -- word[400] and
+# byte[720] compile; the compile-only 16f18857 file was dropped from the
+# old tests/ tree in the 2026-10-29 restructure, so pin them here):
+cat > "$WORK/mb_word.jal" << 'EOF4'
+include 16f18857
+pragma target clock 32_000_000
+var word big_words[400]
+var word k
+var word acc
+for 8 using k loop
+   big_words[k] = 1000 + k
+   acc = acc + big_words[k]
+end loop
+forever loop
+end loop
+EOF4
+check_clean "16f18857 word[400] multibank acceptance" \
+  "$WORK/mb_word.jal"
+
+cat > "$WORK/mb_byte.jal" << 'EOF5'
+include 16f18857
+pragma target clock 32_000_000
+var byte big_bytes[720]
+var byte k
+var byte acc
+for 8 using k loop
+   big_bytes[k] = k
+   acc = acc + big_bytes[k]
+end loop
+forever loop
+end loop
+EOF5
+check_clean "16f18857 byte[720] multibank acceptance" \
+  "$WORK/mb_byte.jal"
+
 # const fold (already fixed); this pin keeps the stale misdiagnosis from
 # returning. ---
 cat > "$WORK/ptr_word.jal" << 'EOF'

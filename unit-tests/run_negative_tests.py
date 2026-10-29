@@ -32,6 +32,8 @@ LIBS = f"{_REPO}/demo_lib;{_REPO}/third_party/jallib/lib"
 # diagnostic line's message text; keep them tight enough to pin the
 # semantic error, loose enough to survive line-number drift.
 TABLE = [
+    ("hex_bin_call_reserved.jal",
+     ["'hex' is reserved for the text cast (a called name is always the cast)"]),
     ("task_var_classic.jal",
      ["variables cannot be declared inside a task body on this target"]),
     ("task_var_out_of_order.jal",

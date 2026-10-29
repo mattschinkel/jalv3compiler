@@ -1,0 +1,11 @@
+-- hex()/bin() are hard-reserved in call position: a user-defined
+-- function of that name cannot be called (a called name is always the
+-- text cast). Pins fixes/fix_text_cast_dec_removed_hex_bin_hard.md.
+include 16f877
+
+function hex return byte is
+   return 7
+end function
+
+var byte r = 0
+r = hex()
