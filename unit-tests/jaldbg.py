@@ -360,28 +360,51 @@ def run_witness(witness: Path, compiler: Path) -> tuple[int, str]:
              str(witness)], capture_output=True, text=True, cwd=str(REPO))
     return r.returncode, (r.stdout + r.stderr)[-1500:]
 
+def _pin_one(witness: Path, new_bin: Path, old_bin: Path, ref: str):
+    rc_new, out_new = run_witness(witness, new_bin)
+    rc_old, out_old = run_witness(witness, old_bin)
+    if rc_old != 0 and rc_new == 0:
+        verdict = "pinned"
+        ok = True
+    elif rc_old == 0 and rc_new == 0:
+        verdict = "passes both (no between-build coverage)"
+        ok = None   # ambiguous: could predate the squash or be a gap
+    elif rc_old == 0 and rc_new != 0:
+        verdict = "REGRESSION (passes old, fails new)"
+        ok = False
+    else:
+        verdict = "fails both (broken build or wrong fix)"
+        ok = False
+    print(f"  {witness.name[:52]:54s} new={'PASS' if rc_new == 0 else 'FAIL'} "
+          f"old={'PASS' if rc_old == 0 else 'FAIL'}  {verdict}")
+    if not ok and rc_new != 0:
+        print("    new tail: " + out_new.strip().splitlines()[-1][:100]
+              if out_new.strip() else "")
+    return ok
+
 def cmd_pin_check(args):
     new_bin = Path(args.new) if args.new else COMPILER
     old_bin = do_build(args.old, False)
-    rc_new, out_new = run_witness(Path(args.witness), new_bin)
-    rc_old, out_old = run_witness(Path(args.witness), old_bin)
-    print(f"new ({new_bin}): {'PASS' if rc_new == 0 else 'FAIL'}")
-    print(f"old ({args.old}): {'PASS' if rc_old == 0 else 'FAIL'}")
-    if rc_new != 0:
-        print("\nnew output tail:\n" + out_new)
-    if rc_old == 0:
-        print("\nVERDICT: witness does NOT pin anything between the builds "
-              "(passes on old). Either it never exercised the difference "
-              "(the j50 stale-print witness gap), or the fix it pins "
-              "predates the old ref -- this repo's history begins at the "
-              "source squash, so pre-2026-10-29 fixes have no pre-fix ref "
-              "here and stay held by the suites, not pin-check.")
+    witnesses = [Path(w) for w in args.witness]
+    single = len(witnesses) == 1
+    if single:
+        print(f"new bin: {new_bin}\nold bin: {old_bin} ({args.old})")
+    else:
+        print(f"== pin-check batch ({len(witnesses)} witnesses, old={args.old}) ==")
+    bad = 0
+    amb = 0
+    for w in witnesses:
+        ok = _pin_one(w, new_bin, old_bin, args.old)
+        if ok is False:
+            bad += 1
+        elif ok is None:
+            amb += 1
+    if not single:
+        print(f"\nsummary: {len(witnesses) - bad - amb} pinned, "
+              f"{amb} passes-both, {bad} failing")
+    if bad:
+        print("\nFAILING entries need attention before landing")
         return 1
-    if rc_new != 0:
-        print("\nVERDICT: witness fails on BOTH builds -- the new build "
-              "is broken or the witness is not for this fix")
-        return 1
-    print("\nVERDICT: pinned (fails old, passes new)")
     return 0
 
 COST_CANARIES = [
@@ -391,17 +414,28 @@ COST_CANARIES = [
 ]
 
 def cmd_cost(args):
-    bins = {"old": do_build(args.old, False)}
-    bins["new"] = Path(args.new) if args.new else COMPILER
+    asan = args.asan
+    bins = {"old": do_build(args.old, asan)}
+    bins["new"] = (Path(args.new) if args.new and not args.new.startswith("-")
+                   and Path(args.new).is_file()
+                   else (do_build(args.new or "HEAD", asan) if asan else COMPILER))
     for name, b in bins.items():
         t0 = time.time()
+        sanitizer_hit = ""
         for s in COST_CANARIES[:args.samples]:
-            subprocess.run(
+            r = subprocess.run(
                 [str(b), "-s", LIBS, "-no-codfile",
                  str(REPO / f"third_party/jallib/samples/{s}.jal")],
-                capture_output=True, cwd=str(REPO))
+                capture_output=True, text=True, cwd=str(REPO))
+            if asan and ("AddressSanitizer" in (r.stdout + r.stderr)
+                         or "runtime error" in (r.stdout + r.stderr)):
+                line = next((l for l in (r.stdout + r.stderr).splitlines()
+                             if "ERROR" in l or "runtime error" in l), "?")
+                sanitizer_hit += f"  !! {s}: {line[:110]}"
         print(f"{name} ({b}): {time.time() - t0:.1f}s "
               f"for {min(args.samples, len(COST_CANARIES))} giants")
+        if sanitizer_hit:
+            print(sanitizer_hit)
 
 # ---------------------------------------------------------------- main
 
@@ -446,7 +480,7 @@ def main() -> int:
     p.set_defaults(fn=lambda a: (do_build(a.ref, a.asan), None)[1])
 
     p = sub.add_parser("pin-check")
-    p.add_argument("witness", type=Path)
+    p.add_argument("witness", type=Path, nargs="+")
     p.add_argument("--old", required=True, help="git ref of the pre-fix build")
     p.add_argument("--new", default=None, help="new binary or ref (default: work tree)")
     p.set_defaults(fn=cmd_pin_check)
@@ -455,6 +489,8 @@ def main() -> int:
     p.add_argument("--old", required=True)
     p.add_argument("--new", default=None)
     p.add_argument("--samples", type=int, default=2)
+    p.add_argument("--asan", action="store_true",
+                   help="build both refs with SAN=1 and flag sanitizer hits")
     p.set_defaults(fn=cmd_cost)
 
     args = ap.parse_args()
