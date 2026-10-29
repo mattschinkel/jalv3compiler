@@ -9,6 +9,7 @@
 #ifndef cmdd_h__
 #define cmdd_h__
 
+#include "pfile.h"
 #include "pf_src.h"
 #include "pf_proc.h"
 #include "vararray.h"

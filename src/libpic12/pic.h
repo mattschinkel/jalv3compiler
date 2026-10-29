@@ -68,6 +68,7 @@ static const char instruction_sets[][14] = {
 };
 
 #include "../libcore/pfile.h"
+#include "../libcore/cmd_asm.h"
 #include "pic_code.h"
 
 #define PIC_LABEL_RESET   "_pic_reset"    /* reset vector */
@@ -241,6 +242,11 @@ variable_sz_t    pic_pointer_size_get(pfile_t *pf);
 void             pic_backend_register(pic_target_cpu_t target,
   const pic_backend_t *be);
 const pic_backend_t *pic_backend_get(pfile_t *pf);
+/* classic-PIC semantics for inline-asm commands (pic_asmcmd.c): the
+ * shared IR stores opcodes opaquely; jal_main registers this table
+ * (cmd_asm_semantics_set) so dump/use-def/successor/optimizer
+ * questions resolve in this library */
+extern const cmd_asm_semantics_t pic_asm_semantics;
 /* TRUE on back ends whose locals have unique static addresses (the
  * 32-bit linear allocators) -- task bodies may declare variables;
  * classic cores keep the var-in-task error */

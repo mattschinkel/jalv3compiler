@@ -902,7 +902,7 @@ void cmd_analyze(cmd_t cmd_top, cmd_t cmd, flag_t flag, size_t depth,
       }
       pv_cond = BOOLEAN_FALSE;
       cmd = cmd_link_get(cmd);
-    } else if (PIC_OPCODE_RESET == cmd_asm_op_get(cmd)) {
+    } else if (cmd_asm_op_is_flow_terminator(cmd_asm_op_get(cmd))) {
       cmd = (pv_cond) ? cmd_link_get(cmd) : CMD_NONE;
     } else if (CMD_TYPE_BRANCH == cmd_type_get(cmd)) {
       switch (cmd_brtype_get(cmd)) {
@@ -1021,7 +1021,7 @@ void cmd_analyze(cmd_t cmd_top, cmd_t cmd, flag_t flag, size_t depth,
       cmd = 0; /* we're done */
     } else if (CMD_TYPE_ASM == cmd_type_get(cmd)) {
       label_t lbl;
-      pic_opcode_t op;
+      cmd_asm_op_t op;
 
       lbl = cmd_asm_lbl_get(cmd);
       if (LABEL_NONE != lbl) {
@@ -1044,19 +1044,13 @@ void cmd_analyze(cmd_t cmd_top, cmd_t cmd, flag_t flag, size_t depth,
       cmd = cmd_link_get(cmd);
 #endif
 
-      pv_cond = (PIC_OPCODE_INCFSZ == op)
-        || (PIC_OPCODE_DECFSZ == op)
-        || (PIC_OPCODE_BTFSC == op)
-        || (PIC_OPCODE_BTFSS == op);
+      pv_cond = cmd_asm_op_is_cond_skip(op);
     } else {
       if (cmd_is_executable(cmd)) {
-        pic_opcode_t op;
+        cmd_asm_op_t op;
 
         op = cmd_asm_op_get(cmd);
-        pv_cond = (PIC_OPCODE_INCFSZ == op)
-          || (PIC_OPCODE_DECFSZ == op)
-          || (PIC_OPCODE_BTFSC == op)
-          || (PIC_OPCODE_BTFSS == op);
+        pv_cond = cmd_asm_op_is_cond_skip(op);
       }
       cmd = cmd_link_get(cmd);
     }

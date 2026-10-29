@@ -2073,7 +2073,7 @@ static void pic_cmd_to_asm(pfile_t *pf, cmd_t cmd)
   value_t      n;
   unsigned     page_size;
 
-  op        = cmd_asm_op_get(cmd);
+  op        = (pic_opcode_t) cmd_asm_op_get(cmd);
   lbl       = cmd_asm_lbl_get(cmd);
   val       = cmd_asm_val_get(cmd);
   n         = cmd_asm_n_get(cmd);
@@ -2119,7 +2119,7 @@ static void pic_cmd_to_asm(pfile_t *pf, cmd_t cmd)
   pic_code_cmd_set(code, cmd);
   pic_code_flag_set_all(code, cmd_asm_flag_get_all(cmd));
   pic_code_brdst_set(code, lbl);
-  pic_code_dst_set(code, cmd_asm_opdst_get(cmd));
+  pic_code_dst_set(code, (pic_opdst_t) cmd_asm_opdst_get(cmd));
   pic_code_literal_set(code, n);
   pic_code_value_set(code, val);
   pic_code_ofs_set(code, cmd_asm_valofs_get(cmd));

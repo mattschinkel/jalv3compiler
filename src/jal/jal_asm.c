@@ -240,7 +240,8 @@ static void asm_cmd_add(pfile_t *pf,
 {
   cmd_t cmd;
 
-  cmd = cmd_asm_alloc(op, val, valofs, opdst, n, lbl, flags, data_sz, data);
+  cmd = cmd_asm_alloc((cmd_asm_op_t) op, val, valofs,
+      (cmd_asm_opdst_t) opdst, n, lbl, flags, data_sz, data);
   if (cmd) {
     pfile_cmd_add(pf, cmd);
   }

@@ -736,6 +736,9 @@ int main(int argc, char **argv)
    * single place that knows which library serves a core */
   pic_backend_register(PIC_TARGET_CPU_MIPS32, pic32_backend_get());
   pic_backend_register(PIC_TARGET_CPU_ESP32, esp32_backend_get());
+  /* wire the classic opcode semantics for inline-asm commands (the
+   * shared IR stores them opaquely) */
+  cmd_asm_semantics_set(&pic_asm_semantics);
 
 #ifdef MSDOS
   cos(1.0); /* silly, but it links in the math bits */
