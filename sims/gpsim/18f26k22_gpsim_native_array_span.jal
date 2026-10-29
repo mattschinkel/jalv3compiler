@@ -1,0 +1,67 @@
+-- ------------------------------------------------------
+-- Title: 18f26k22 gpsim witness — >256-byte native array, runtime indexes
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime-indexed array subscripts across 256-byte boundaries: a
+--    600-byte native array filled/read by word index (three linear
+--    banks) plus a small array pinned high whose byte index crosses
+--    0x100 (0x1C0+70 = 0x226). Pins the FSR0L->FSR0H carry tail —
+--    `pic_fsr0_add_dynamic_index` used to take its carry-free fast
+--    path for every array (the span query read the ELEMENT def,
+--    storage need 1), so base+index wrapped into low RAM.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v__b0 0
+-- expect byte v__b255 255
+-- expect byte v__b256 0
+-- expect byte v__b511 255
+-- expect byte v__b512 0
+-- expect byte v__b599 87
+-- expect byte v_hi_snap 42
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f26k22_device
+include regression
+
+var byte big[600]
+var byte hi[16] at 0x1C0
+
+var volatile byte _b0   = 0
+var volatile byte _b255 = 0
+var volatile byte _b256 = 0
+var volatile byte _b511 = 0
+var volatile byte _b512 = 0
+var volatile byte _b599 = 0
+var volatile byte hi_snap = 0
+var volatile byte hi_idx = 70
+
+procedure _run() is
+   var word i
+   regression_begin_run()
+   for 600 using i loop
+      big[i] = byte(i)
+   end loop
+   _b0   = big[0]
+   _b255 = big[255]
+   _b256 = big[256]
+   _b511 = big[511]
+   _b512 = big[512]
+   _b599 = big[599]
+   regression_checkpoint()
+   hi[hi_idx] = 42
+   hi_snap = hi[hi_idx]
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+forever loop
+end loop

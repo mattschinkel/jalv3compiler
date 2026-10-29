@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — large array
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    ESP32: large_array_1 only (flat PIC32 path)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_large_array.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 3
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_large_array_body

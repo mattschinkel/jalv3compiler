@@ -1,0 +1,163 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — native packed bit arrays
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises native `var bit[N]` storage with constant and runtime-variable
+--    subscript reads and writes. The selected indexes cross a byte boundary in
+--    the packed bit bucket.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 15
+-- expect byte v__gpsim_ba_snap0 1
+-- expect byte v__gpsim_ba_snap3 1
+-- expect byte v__gpsim_ba_snap8 1
+-- expect byte v__gpsim_ba_snap9 0
+-- expect byte v__gpsim_ba_dyn6 1
+-- expect byte v__gpsim_ba_dyn9 1
+-- expect byte v__gpsim_ba_dyn6_clear 0
+-- expect byte v__gpsim_ba_init_snap0 1
+-- expect byte v__gpsim_ba_init_snap1 0
+-- expect byte v__gpsim_ba_const_snap2 1
+-- expect byte v__gpsim_ba_fixed_formal 1
+-- expect byte v__gpsim_ba_open_formal 1
+-- expect byte v__gpsim_ba_cast_snap 1
+-- expect byte v__gpsim_ba_logic_snap 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var bit _gpsim_ba_flags[10]
+var volatile byte _gpsim_ba_snap0 = 0
+var volatile byte _gpsim_ba_snap3 = 0
+var volatile byte _gpsim_ba_snap8 = 0
+var volatile byte _gpsim_ba_snap9 = 0
+var volatile byte _gpsim_ba_dyn6 = 0
+var volatile byte _gpsim_ba_dyn9 = 0
+var volatile byte _gpsim_ba_dyn6_clear = 0
+var byte _gpsim_ba_index = 0
+var bit _gpsim_ba_copy
+var bit _gpsim_ba_init_flags[4] = {true, false, true, true}
+const bit _gpsim_ba_const_flags[4] = {false, true, true, false}
+var volatile byte _gpsim_ba_init_snap0 = 0
+var volatile byte _gpsim_ba_init_snap1 = 0
+var volatile byte _gpsim_ba_const_snap2 = 0
+var volatile byte _gpsim_ba_fixed_formal = 0
+var volatile byte _gpsim_ba_open_formal = 0
+var volatile byte _gpsim_ba_cast_snap = 0
+var volatile byte _gpsim_ba_logic_snap = 0
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ba_use_fixed(bit in bits[4]) is
+   if bits[2] then
+      _gpsim_ba_fixed_formal = 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ba_use_open(bit in bits[]) is
+   if bits[0] then
+      _gpsim_ba_open_formal = 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ba_run() is
+   regression_begin_run()
+
+   _gpsim_ba_flags[0] = true
+   _gpsim_ba_flags[3] = true
+   _gpsim_ba_flags[8] = true
+   _gpsim_ba_flags[9] = false
+
+   if _gpsim_ba_flags[0] then
+      _gpsim_ba_snap0 = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_ba_flags[3] then
+      _gpsim_ba_snap3 = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_ba_flags[8] then
+      _gpsim_ba_snap8 = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_ba_flags[9] then
+      _gpsim_ba_snap9 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_ba_flags[3] = false
+   if _gpsim_ba_flags[3] then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _gpsim_ba_index = 6
+   _gpsim_ba_flags[_gpsim_ba_index] = true
+   if _gpsim_ba_flags[_gpsim_ba_index] then
+      _gpsim_ba_dyn6 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_ba_index = 9
+   _gpsim_ba_flags[_gpsim_ba_index] = true
+   _gpsim_ba_copy = _gpsim_ba_flags[_gpsim_ba_index]
+   if _gpsim_ba_copy then
+      _gpsim_ba_dyn9 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_ba_index = 6
+   _gpsim_ba_flags[_gpsim_ba_index] = false
+   if _gpsim_ba_flags[_gpsim_ba_index] then
+      _gpsim_ba_dyn6_clear = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_ba_init_flags[0] then
+      _gpsim_ba_init_snap0 = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_ba_init_flags[1] then
+      _gpsim_ba_init_snap1 = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_ba_const_flags[2] then
+      _gpsim_ba_const_snap2 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_ba_use_fixed(_gpsim_ba_init_flags)
+   regression_checkpoint()
+
+   _gpsim_ba_use_open(_gpsim_ba_init_flags)
+   regression_checkpoint()
+
+   _gpsim_ba_cast_snap = byte(_gpsim_ba_init_flags[0])
+   regression_checkpoint()
+
+   if _gpsim_ba_init_flags[0] & _gpsim_ba_init_flags[2] then
+      _gpsim_ba_logic_snap = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_ba_run()
+
+forever loop
+end loop

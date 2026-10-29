@@ -1,0 +1,71 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — byte + wide literals through pointers
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv2-original)
+--
+-- Description:
+--    Merged **`…_byte_literal.jal`** + **`…_wide_literal.jal`**:.
+--    **`regression_*`** RAM error lines plus golden **`expect`**s.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_pointer_literals.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 4
+-- expect byte v__gpsim_pl_cell 42
+-- expect word_le v__gpsim_pl_w 42330
+-- expect dword_le v__gpsim_pl_dw 305419896
+-- expect word_le v__gpsim_pl_sw 65535
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte _gpsim_pl_cell = 0
+var pointer _gpsim_pl_pb as var byte
+var word _gpsim_pl_w = 0
+var pointer _gpsim_pl_pw as var word
+var dword _gpsim_pl_dw = 0
+var pointer _gpsim_pl_pd as var dword
+var sword _gpsim_pl_sw = 0
+var pointer _gpsim_pl_ps as var sword
+
+--------------------------------------------------------------------------------
+procedure _gpsim_pl_run() is
+   regression_begin_run()
+   _gpsim_pl_pb is _gpsim_pl_cell
+   _gpsim_pl_pb = 42
+   if _gpsim_pl_cell != 42 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pl_pw is _gpsim_pl_w
+   _gpsim_pl_pw = 0xA55A
+   if _gpsim_pl_w != 0xA55A then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pl_pd is _gpsim_pl_dw
+   _gpsim_pl_pd = 0x12345678
+   if _gpsim_pl_dw != 0x12345678 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pl_ps is _gpsim_pl_sw
+   _gpsim_pl_ps = -1
+   if _gpsim_pl_sw != -1 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_pl_run()
+
+forever loop
+end loop

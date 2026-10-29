@@ -1,0 +1,125 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — multibank arrays with element-aligned
+--    chunks (elem_sz fix)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The multibank placement trimmed every non-final chunk down to a
+--    whole multiple of the ELEMENT size, but the element size was read
+--    from the ARRAY def (whole array, in bytes) as if it were element
+--    BITS: elem_sz = ceil(total/8). For any array whose byte size is a
+--    multiple of 8 the bogus elem_sz exceeded the 80-byte bank nodes,
+--    every chunk trimmed to 0 and placement failed far below the real
+--    RAM ceiling (the 16f18857 user report: word[400] refused with 4093
+--    bytes free, non-monotonically in the size). Smaller shapes placed
+--    with garbage chunk layouts. This body fills and reads back a
+--    168-byte word array and a 150-byte byte array (both multibank,
+--    chunked across the bank holes) entirely through RUNTIME indices,
+--    re-checks the byte array AFTER the word array (overlap detector),
+--    and reads const indices around element boundaries.
+--
+-- @gpsim_validate begin
+-- steps: 12000000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_regression_flags 0
+-- expect word_le v__mb_sum 11175
+-- expect word_le v__mw_sum 6972
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+-- 168 bytes > one 80-byte bank: chunked across the holes; word
+-- elements must never straddle a chunk boundary
+var word _mw_arr[84]
+-- 150 bytes: byte elements, chunk-walking runtime subscripts
+var byte _mb_arr[150]
+var byte _mb_i
+var word _mb_sum = 0
+var word _mw_sum = 0
+var volatile byte _mb_done
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   -- byte array: runtime-index fill + read back (fill value i,
+   -- sum 0..149 = 11175)
+   for 150 using _mb_i loop
+      _mb_arr[_mb_i] = _mb_i
+   end loop
+   _mb_sum = 0
+   for 150 using _mb_i loop
+      _mb_sum = _mb_sum + _mb_arr[_mb_i]
+   end loop
+   if _mb_sum != 11175 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+
+   -- word array: runtime-index fill + read back (fill value 2i,
+   -- sum 2*(0..83) = 6972)
+   for 84 using _mb_i loop
+      _mw_arr[_mb_i] = 2 * _mb_i
+   end loop
+   _mw_sum = 0
+   for 84 using _mb_i loop
+      _mw_sum = _mw_sum + _mw_arr[_mb_i]
+   end loop
+   if _mw_sum != 6972 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 2
+
+   -- the word array must not have stomped the byte array (chunk-map
+   -- overlap detector): re-sum the byte array untouched
+   _mb_sum = 0
+   for 150 using _mb_i loop
+      _mb_sum = _mb_sum + _mb_arr[_mb_i]
+   end loop
+   if _mb_sum != 11175 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 3
+
+   -- const subscripts: first/last elements and an element pair around
+   -- the middle read back the filled values (element boundaries land
+   -- inside distinct chunks whatever the exact map)
+   if _mw_arr[0] != 0 then
+      _check_failed = true
+   end if
+   if _mw_arr[1] != 2 then
+      _check_failed = true
+   end if
+   if _mw_arr[41] != 82 then
+      _check_failed = true
+   end if
+   if _mw_arr[42] != 84 then
+      _check_failed = true
+   end if
+   if _mw_arr[83] != 166 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 4
+
+   -- runtime-indexed WRITE in the last chunk, read back const
+   _mb_i = 149
+   _mb_arr[_mb_i] = 200
+   if _mb_arr[149] != 200 then
+      _check_failed = true
+   end if
+   _mb_done = 1
+   regression_checkpoint()                       -- 5
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

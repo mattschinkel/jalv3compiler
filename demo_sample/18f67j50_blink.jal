@@ -1,0 +1,45 @@
+--------------------------------------------------------------------------------
+-- Title: Blink-a-led on RG2 of the PIC18F67J50
+--
+-- Target: PIC18F67J50 (64-pin TQFP), internal oscillator, no crystal needed
+--
+-- This file is part of the jalv2 fork demo samples.
+--------------------------------------------------------------------------------
+--
+include 18f67j50
+
+-- Internal INTOSC at 8 MHz
+pragma target clock     8_000_000
+
+-- Complete pragma configuration
+pragma target OSC       INTOSC_NOCLKOUT   -- INTOSC, RA6/RA7 available as I/O
+pragma target PLLDIV    P1                -- no PLL prescale (PLL unused)
+pragma target WDT       CONTROL           -- WDT controlled by SWDTEN bit
+pragma target STVR      ENABLED           -- reset on stack overflow
+pragma target XINST     DISABLED          -- no extended instruction set
+pragma target DEBUG     DISABLED          -- RB6/RB7 free as I/O
+pragma target CPUDIV    P1                -- no CPU clock divide
+pragma target CP0       DISABLED          -- no code protection
+pragma target FCMEN     DISABLED          -- no fail-safe clock monitor
+pragma target IESO      DISABLED          -- no two-speed start-up
+pragma target WDTPS     P1                -- WDT postscaler 1:1 (WDT off anyway)
+pragma target CCP2MUX   pin_C1            -- ECCP2 on RC1 (away from our LED)
+pragma target MSSPMASK  B7                -- 7-bit MSSP addressing
+
+OSCCON_IRCF = 0b111                       -- INTOSC 8 MHz
+WDTCON_SWDTEN = OFF                       -- watchdog off
+
+enable_digital_io()                       -- all pins digital
+
+-- LED on RG2 (PMA6/RX2 when a peripheral owns it)
+alias led            is pin_G2
+alias led_direction  is pin_G2_direction
+
+led_direction = OUTPUT
+
+forever loop
+   led = ON
+   _usec_delay(500_000)
+   led = OFF
+   _usec_delay(500_000)
+end loop

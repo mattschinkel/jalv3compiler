@@ -1,0 +1,169 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — indexed procedure-pointer slots
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime regression for `var pointer name[N] as procedure(...)` slots:
+--    `slot[k] is proc` stores the routine address into the selected slot and
+--    `slot[k](arg)` calls the selected procedure. Also checks `WHEREIS(slot[k])`
+--    for bound, unbound, and runtime-indexed slots, plus `WHEREIS(normal_var)`
+--    to guard the non-pointer path. A separate data pointer declared after the
+--    procedure slots guards against PIC18 slot-storage overlap. Covers
+--,
+--, and
+--. Const initializer
+--    `WHEREIS(pointer)` coverage tracks.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/18f4620_gpsim_proc_pointer_slots.jal
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__gpsim_pps_hit_a 1
+-- expect byte v__gpsim_pps_hit_b 1
+-- expect byte v__gpsim_pps_last 33
+-- expect word_le v__gpsim_pps_unbound_addr 0
+-- expect word_le v__gpsim_pps_const_unbound_addr 0
+-- expect file_addr_ne v__gpsim_pps_slots 4 v__gpsim_pps_normal_ptr
+-- expect file_addr_ne v__gpsim_pps_slots 5 v__gpsim_pps_normal_ptr
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+var byte _gpsim_pps_hit_a = 0
+var byte _gpsim_pps_hit_b = 0
+var byte _gpsim_pps_last = 0
+var word _gpsim_pps_unbound_addr = 99
+var word _gpsim_pps_addr_a = 0
+var word _gpsim_pps_addr_b = 0
+var byte _gpsim_pps_idx = 0
+var word _gpsim_pps_addr_dyn = 0
+var pointer _gpsim_pps_slots[2] as procedure(byte in)
+var volatile byte _gpsim_pps_normal_var = 0
+var word _gpsim_pps_normal_addr = 0
+var word _gpsim_pps_normal_ptr_addr = 0
+var pointer _gpsim_pps_normal_ptr as var byte
+var volatile byte _gpsim_pps_const_data = 0
+var pointer _gpsim_pps_const_ptr as var byte
+var pointer _gpsim_pps_const_unbound_ptr as var byte
+
+_gpsim_pps_const_ptr is _gpsim_pps_const_data
+
+const word _gpsim_pps_const_ptr_addr = whereis(_gpsim_pps_const_ptr)
+const word _gpsim_pps_const_data_addr = whereis(_gpsim_pps_const_data)
+const word _gpsim_pps_const_unbound = whereis(_gpsim_pps_const_unbound_ptr)
+
+var word _gpsim_pps_const_ptr_addr_rt = 99
+var word _gpsim_pps_const_data_addr_rt = 99
+var word _gpsim_pps_const_unbound_addr = 99
+
+--------------------------------------------------------------------------------
+-- Description: Record a call through procedure-pointer slot A.
+-- Parameters:
+-- - v - value to record
+-- Returns:
+-- - none
+-- Notes: Used by indexed procedure-pointer slot gpsim regression.
+--------------------------------------------------------------------------------
+procedure _gpsim_pps_target_a(byte in v) is
+   _gpsim_pps_hit_a = _gpsim_pps_hit_a + 1
+   _gpsim_pps_last = v
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Record a call through procedure-pointer slot B.
+-- Parameters:
+-- - v - value to record
+-- Returns:
+-- - none
+-- Notes: Used by indexed procedure-pointer slot gpsim regression.
+--------------------------------------------------------------------------------
+procedure _gpsim_pps_target_b(byte in v) is
+   _gpsim_pps_hit_b = _gpsim_pps_hit_b + 1
+   _gpsim_pps_last = v
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Run indexed procedure-pointer slot checks.
+-- Parameters:
+-- - none
+-- Returns:
+-- - none
+-- Notes: Sets regression status variables checked by @gpsim_validate.
+--------------------------------------------------------------------------------
+procedure _gpsim_pps_run() is
+   regression_begin_run()
+   _gpsim_pps_unbound_addr = whereis(_gpsim_pps_slots[1])
+   _gpsim_pps_slots[0] is _gpsim_pps_target_a
+   _gpsim_pps_slots[1] is _gpsim_pps_target_b
+   _gpsim_pps_addr_a = whereis(_gpsim_pps_slots[0])
+   _gpsim_pps_addr_b = whereis(_gpsim_pps_slots[1])
+   _gpsim_pps_idx = 1
+   _gpsim_pps_addr_dyn = whereis(_gpsim_pps_slots[_gpsim_pps_idx])
+   _gpsim_pps_normal_var = _gpsim_pps_hit_a
+   _gpsim_pps_normal_ptr is _gpsim_pps_normal_var
+   _gpsim_pps_normal_addr = whereis(_gpsim_pps_normal_var)
+   _gpsim_pps_normal_ptr_addr = whereis(_gpsim_pps_normal_ptr)
+   _gpsim_pps_const_ptr_addr_rt = _gpsim_pps_const_ptr_addr
+   _gpsim_pps_const_data_addr_rt = _gpsim_pps_const_data_addr
+   _gpsim_pps_const_unbound_addr = _gpsim_pps_const_unbound
+   _gpsim_pps_slots[1](77)
+   _gpsim_pps_slots[0](33)
+   if _gpsim_pps_unbound_addr != 0 then
+      _check_failed = true
+   end if
+   if _gpsim_pps_addr_a != whereis(_gpsim_pps_target_a) then
+      _check_failed = true
+   end if
+   if _gpsim_pps_addr_b != whereis(_gpsim_pps_target_b) then
+      _check_failed = true
+   end if
+   if _gpsim_pps_addr_a == _gpsim_pps_addr_b then
+      _check_failed = true
+   end if
+   if _gpsim_pps_addr_dyn != whereis(_gpsim_pps_target_b) then
+      _check_failed = true
+   end if
+   if _gpsim_pps_normal_addr == 0 then
+      _check_failed = true
+   end if
+   if _gpsim_pps_normal_addr != _gpsim_pps_normal_ptr_addr then
+      _check_failed = true
+   end if
+   if _gpsim_pps_const_ptr_addr_rt == 0 then
+      _check_failed = true
+   end if
+   if _gpsim_pps_const_ptr_addr_rt != _gpsim_pps_const_data_addr_rt then
+      _check_failed = true
+   end if
+   if _gpsim_pps_const_unbound_addr != 0 then
+      _check_failed = true
+   end if
+   if _gpsim_pps_hit_a != 1 then
+      _check_failed = true
+   end if
+   if _gpsim_pps_hit_b != 1 then
+      _check_failed = true
+   end if
+   if _gpsim_pps_last != 33 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_pps_run()
+
+forever loop
+end loop

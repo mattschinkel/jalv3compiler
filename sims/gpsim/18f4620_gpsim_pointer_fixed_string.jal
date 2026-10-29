@@ -1,0 +1,38 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — pointer to fixed `var string[N]`
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var pointer p as var string[16]`, `p is buf`, literal assign through `p`,
+--    then verify `_LENGTH` and contents on the direct `var string[16]` buffer.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__ptrfix_ok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte _ptrfix_ok = 0
+var string[16] _ptrfix_buf
+var pointer _ptrfix_p as var string[16]
+
+procedure _ptrfix_run() is
+   regression_begin_run()
+
+   _ptrfix_p is _ptrfix_buf
+   _ptrfix_p = "hi"
+   if (COUNT(_ptrfix_buf) == 2) & (_ptrfix_buf == "hi") then
+      _ptrfix_ok = 1
+   end if
+   regression_checkpoint()
+end procedure
+
+_ptrfix_run()

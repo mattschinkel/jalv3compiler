@@ -1,0 +1,36 @@
+-- Title: PIC18F26K22 gpsim regression — device defaults + @config_expect
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Second **PIC18** gpsim suite device (**64K** words code, **K22** family): same role as
+--    **`regression_18f4620_device.jal`** but targets **`include 18f26k22`** so regression runs on a
+--    part **supported by gpsim 0.31** (**`pic18f26k22`**). Replaces the former **PIC18F8722** suite
+--    (no **pic18f8722** CPU model in stock gpsim). **`pragma target clock`** only (no extra fuse
+--    pragmas) so **`__config`** matches **`third_party/jallib/lib/18f26k22.jal`** **`_FUSE_BASE` / `_FUSES`**.
+--
+-- Notes:
+--    Golden **`@config_expect`** lines are **`_FUSES`** from **`third_party/jallib/lib/18f26k22.jal`** (verified with
+--    **`./bin/jalv2-original -s lib`** and this file’s **`pragma target clock`** only).
+
+include 18f26k22
+
+-- @config_expect begin
+-- 0x00300000 0xff
+-- 0x00300001 0x25
+-- 0x00300002 0x1f
+-- 0x00300003 0x3f
+-- 0x00300004 0xff
+-- 0x00300005 0xbf
+-- 0x00300006 0x85
+-- 0x00300007 0xff
+-- 0x00300008 0x0f
+-- 0x00300009 0xc0
+-- 0x0030000a 0x0f
+-- 0x0030000b 0xe0
+-- 0x0030000c 0x0f
+-- 0x0030000d 0x40
+-- @config_expect end
+
+pragma target clock 4_000_000
+
+enable_digital_io()

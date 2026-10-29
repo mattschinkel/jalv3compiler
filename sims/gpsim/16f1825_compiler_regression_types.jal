@@ -1,0 +1,29 @@
+-- ------------------------------------------------------
+-- Title: PIC16F1825 compiler regression — types, records, operators (guide ch.2–3)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_pic14_types_body.jal`**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/16f1825_compiler_regression_types.jal
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect byte v__check_step 11
+-- word_le v__w_expect 0xABCD
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_pic14_types_body

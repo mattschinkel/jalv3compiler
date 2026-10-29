@@ -1,0 +1,154 @@
+-- Title: Shared PIC14 regression body — jallib
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_jallib.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+include constants_jallib
+include checksum
+include crc16_ccitt_bitwise
+
+-- crc7_sd_card.jal references `crc_large_array_bytes` (see lib header); stub for compile.
+var byte _crc7_large_byte_stub[4]
+alias crc_large_array_bytes is _crc7_large_byte_stub
+
+include crc7_sd_card
+include jascii
+include strings
+include math
+include random
+
+var byte _buf8[8]
+var byte _crc9[9]
+var byte _sd5[5]
+var byte _s_hi[4]
+var byte _s_lo[4]
+var byte _num42[4]
+
+--------------------------------------------------------------------------------
+-- Description: Run jallib algorithm checks (checksum, CRC, strings, math, RNG)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Seven checkpoints (including two Marsaglia steps); no pins/peripherals.
+--------------------------------------------------------------------------------
+procedure _run_jallib_checks() is
+   var word _w
+   var byte _len
+   var dword _dw
+
+   regression_begin_run()
+
+   -- checksum.jal — IP-style 16-bit sum / ones’ complement
+   _buf8[0] = 0
+   _buf8[1] = 0
+   if !checksum_16_byte_verify(_buf8, 0, 2) then
+      _check_failed = true
+   end if
+   _buf8[0] = 0
+   _buf8[1] = 0
+   _buf8[2] = 1
+   _buf8[3] = 2
+   _w = checksum_16_byte_calc(_buf8, 0, 4)
+   if _w != 0xFEFD then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- crc16_ccitt_bitwise.jal — poly 0x1021, init 0
+   _crc9[0] = 0x31
+   _crc9[1] = 0x32
+   _crc9[2] = 0x33
+   _crc9[3] = 0x34
+   _crc9[4] = 0x35
+   _crc9[5] = 0x36
+   _crc9[6] = 0x37
+   _crc9[7] = 0x38
+   _crc9[8] = 0x39
+   _w = crc16_calculate_array_bytes(_crc9, 9)
+   if _w != 0x31C3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- crc7_sd_card.jal — SD/MMC-style CRC7 over command bytes (algorithm only)
+   _sd5[0] = 0x40
+   _sd5[1] = 0
+   _sd5[2] = 0
+   _sd5[3] = 0
+   _sd5[4] = 0
+   if crc7_calculate_array_bytes(_sd5, 5) != 0x95 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- strings.jal / characters.jal
+   _s_hi[0] = "A"
+   _s_hi[1] = "b"
+   _s_hi[2] = 0
+   _s_hi[3] = 0
+   _s_lo[0] = "a"
+   _s_lo[1] = "b"
+   _s_lo[2] = 0
+   _s_lo[3] = 0
+   if !string_compare(_s_hi, _s_lo) then
+      _check_failed = true
+   end if
+   _len = string_length(_s_hi)
+   if _len != 2 then
+      _check_failed = true
+   end if
+   _num42[0] = "4"
+   _num42[1] = "2"
+   _num42[2] = 0
+   _num42[3] = 0
+   _dw = string_to_dword(_num42)
+   if _dw != 42 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- math.jal
+   if sqrt16(625) != 25 then
+      _check_failed = true
+   end if
+   if sqrt16(0) != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- random.jal — first two Marsaglia words at default _rndx/_rndy seeds
+   _w = random_word()
+   if _w != 0x0A69 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w = random_word()
+   if _w != 0xA835 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_jallib_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

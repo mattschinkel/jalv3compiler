@@ -1,0 +1,47 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — POSC_SPLL runtime clock re-assert
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): pic32_clock.jal's MX osc_select() on the crystal
+--    path -- 20 MHz POSC /5 x20 /2 = 40 MHz.  Self-contained device
+--    block (the shared wrapper pins FRC_SPLL; pragmas cannot be
+--    redefined).  The staged switch goes to FRC, re-asserts the PLL
+--    divider codes (mult code 5, odiv code 1), then re-selects
+--    NOSC=3 (POSCPLL).  Silicon-proven 2026-10-25: COSC stays 3 with
+--    SLOCK=1 and the beat cadence is identical before/after the call
+--    (fixes/fix_mx_osc_pllmult_code_const.md).  QEMU does not model
+--    the PLL/OSWEN beyond storing the register, hence the bounded
+--    waits.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_osc_select_posc.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_selected 1
+-- @sim_validate end
+--
+
+include 32mx270f256b
+
+pragma target clock      40_000_000
+pragma target oscillator 20_000_000
+pragma target OSC        POSC_SPLL
+pragma target image      pfm
+pragma target WDT        DISABLED
+
+enable_digital_io()
+
+include pic32_clock
+
+var volatile byte selected
+
+osc_select()
+selected = 1
+
+forever loop
+end loop

@@ -1,0 +1,28 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — multidim byte-index wide offsets
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Multi-dimensional rows + 1D word arrays with BYTE indexes: the
+--    subscript offset must widen past 8 bits when
+--    (bound-1)*element_size > 255
+--
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_multidim_wide.jal
+--
+-- @sim_validate begin
+-- duration_s: 4.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 4
+-- expect byte v__mdw_grid_ok 1
+-- expect byte v__mdw_const_ok 1
+-- expect byte v__mdw_run_ok 1
+-- expect byte v__mdw_word_ok 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_multidim_wide_body

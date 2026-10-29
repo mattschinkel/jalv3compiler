@@ -1,0 +1,124 @@
+-- Title: Shared PIC18 regression body — flow
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_flow.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- Description: Exercise CASE, REPEAT, WHILE, FOR EXIT LOOP, BLOCK scope
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Checkpoint count must match @gpsim_validate expect byte v__check_step 8.
+--------------------------------------------------------------------------------
+procedure _run_flow_checks() is
+   var byte _a
+   var byte _b
+   var byte _i
+
+   regression_begin_run()
+
+   _a = 2
+   case _a of
+   1 : block
+      _check_failed = true
+   end block
+   2 : block
+      regression_checkpoint()
+   end block
+   otherwise block
+      _check_failed = true
+   end block
+   end case
+
+   _a = 10
+   case _a of
+   10 : block
+      _b = 1
+      regression_checkpoint()
+   end block
+   otherwise block
+      _check_failed = true
+   end block
+   end case
+
+   _a = 88
+   case _a of
+   1 : block
+      _check_failed = true
+   end block
+   otherwise block
+      regression_checkpoint()
+   end block
+   end case
+
+   _a = 0
+   repeat
+      _a = _a + 1
+   until _a == 6
+   if _a != 6 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _a = 0
+   while _a < 7 loop
+      _a = _a + 1
+   end loop
+   if _a != 7 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _a = 9
+   while _a < 2 loop
+      _check_failed = true
+   end loop
+   if _a != 9 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   for 40 using _i loop
+      if _i == 11 then
+         exit loop
+      end if
+   end loop
+   if _i != 11 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _a = 30
+   block
+      var byte _a
+      _a = 200
+   end block
+   if _a != 30 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_flow_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

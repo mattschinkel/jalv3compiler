@@ -1,0 +1,76 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — scalar **`is`** hop + rvalue **`b = p`**
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv2-original)
+--
+-- Description:
+--    Merged **`…_hop.jal`** + **`…_rvalue_assign.jal`**:,
+--. **`regression_*`** RAM error lines
+--    (**`_bad`** / **`_check_step`**) complement golden **`expect byte`** values.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_pointer_scalars.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect byte v__gpsim_psc_ha 10
+-- expect byte v__gpsim_psc_hb 20
+-- expect byte v__gpsim_psc_hc 30
+-- expect byte v__gpsim_psc_ra 77
+-- expect byte v__gpsim_psc_rb 77
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte _gpsim_psc_ha = 0, _gpsim_psc_hb = 0, _gpsim_psc_hc = 0
+var pointer _gpsim_psc_hp as var byte
+var byte _gpsim_psc_ra = 0
+var byte _gpsim_psc_rb = 0
+var pointer _gpsim_psc_rp as var byte
+var pointer _gpsim_psc_rq as var byte
+
+--------------------------------------------------------------------------------
+-- Description: Run scalar hop + rvalue pointer tests; gpsim **`expect`** hooks.
+--------------------------------------------------------------------------------
+procedure _gpsim_psc_run() is
+   regression_begin_run()
+   _gpsim_psc_hp is _gpsim_psc_ha
+   _gpsim_psc_hp = 10
+   _gpsim_psc_hp is _gpsim_psc_hb
+   _gpsim_psc_hp = 20
+   _gpsim_psc_hp is _gpsim_psc_hc
+   _gpsim_psc_hp = 30
+   if _gpsim_psc_ha != 10 then
+      _check_failed = true
+   end if
+   if _gpsim_psc_hb != 20 then
+      _check_failed = true
+   end if
+   if _gpsim_psc_hc != 30 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_psc_rp is _gpsim_psc_ra
+   _gpsim_psc_rq is _gpsim_psc_rb
+   _gpsim_psc_rp = 77
+   _gpsim_psc_rb = _gpsim_psc_rp
+   if _gpsim_psc_ra != 77 then
+      _check_failed = true
+   end if
+   if _gpsim_psc_rb != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_psc_run()
+
+forever loop
+end loop

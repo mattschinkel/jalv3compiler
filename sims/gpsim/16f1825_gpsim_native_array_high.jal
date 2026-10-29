@@ -1,0 +1,43 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — high-placed array, index crosses 0x100
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    14H-hybrid twin of the FSR-carry witness: an 80-byte array at
+--    0xE0 indexed by a runtime byte (0xE0+70 = 0x126) exercises the
+--    same shared `pic_fsr0_add_dynamic_index` path through
+--    MOVLW/MOVWF _fsr0l/_fsr0h + the BTFSC carry tail.
+--
+-- @gpsim_validate begin
+-- steps: 500000
+-- frequency_hz: auto
+-- expect byte v_hi_snap 42
+-- expect byte v_hi_done 1
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+var byte arr[80] at 0xE0
+var volatile byte idx = 70
+var volatile byte hi_snap = 0
+var volatile byte hi_done = 0
+
+procedure _run() is
+   regression_begin_run()
+   arr[idx] = 42
+   hi_snap = arr[idx]
+   hi_done = 1
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+forever loop
+end loop

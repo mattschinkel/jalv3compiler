@@ -1,0 +1,98 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — pseudo-variable bound into a pointer-slot array
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `slots[k] is pv` on a CONST index (stage 1 of the slot-array
+--    pseudo support): reads and writes through that element dispatch
+--    statically to the pseudo's 'get/'put, while plain-bound elements
+--    of the SAME array keep the ordinary slot dereference. Runtime-
+--    indexed access to a pseudo-marked pointer array is refused at
+--    compile time (pinned in scripts/test_pointer_pseudo_binds.sh).
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_slot_pseudo.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__psp_chk 0
+-- expect byte v__psp_snap1 41
+-- expect byte v__psp_snap2 42
+-- expect byte v__psp_rb_s 55
+-- expect byte v__psp_rb_v 42
+-- expect byte v__psp_rt_sum 97
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var volatile byte _psp_shadow = 0
+var volatile byte _psp_v2 = 0
+var volatile byte _psp_snap1 = 0
+var volatile byte _psp_snap2 = 0
+var volatile byte _psp_rb_s = 0
+var volatile byte _psp_rb_v = 0
+var volatile byte _psp_chk = 0
+
+function _psp_pv'get return byte is
+   return _psp_shadow
+end function
+
+procedure _psp_pv'put(byte in v) is
+   _psp_shadow = v
+end procedure
+
+var pointer _psp_slots[2] as var byte
+
+regression_begin_run()
+_psp_slots[0] is _psp_pv
+_psp_slots[1] is _psp_v2
+_psp_shadow = 41
+_psp_v2 = 42
+_psp_snap1 = _psp_slots[0]
+_psp_snap2 = _psp_slots[1]
+_psp_slots[0] = 55
+-- NOTE: a plain-element WRITE (_psp_slots[1] = v) is deliberately not
+-- exercised here: read+write through the same pointer-slot array
+-- mis-compiles on classic cores as a PRE-EXISTING defect (independent
+-- of pseudos; logged in AGENTS.md) -- the pseudo write above is a CALL
+-- and unaffected.
+regression_checkpoint()
+if _psp_snap1 != 41 then
+   _psp_chk = 1
+end if
+if _psp_snap2 != 42 then
+   _psp_chk = 1
+end if
+_psp_rb_s = _psp_shadow
+_psp_rb_v = _psp_v2
+if (_psp_rb_s != 55) | (_psp_rb_v != 42) then
+   _psp_chk = 1
+end if
+regression_checkpoint()
+-- stage 2: runtime-indexed dispatch on the same mixed array
+var byte _psp_k = 0
+var volatile byte _psp_rt_sum = 0
+_psp_rt_sum = _psp_slots[_psp_k]
+_psp_k = 1
+_psp_rt_sum = _psp_rt_sum + _psp_slots[_psp_k]
+_psp_k = 0
+_psp_slots[_psp_k] = 66
+if _psp_rt_sum != 97 then
+   _check_failed = true
+end if
+if _psp_shadow != 66 then
+   _check_failed = true
+end if
+if _psp_v2 != 42 then
+   _check_failed = true
+end if
+regression_checkpoint()
+regression_pass_led_if_clean()

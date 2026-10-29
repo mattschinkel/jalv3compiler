@@ -1,0 +1,112 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B runtime-index SFR overlay repro (BENCH)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Runtime-indexed SFR-overlay regression + bench-hardware record.
+--    The overlay checks (`lat_bits[i] = 1` with a runtime index over a
+--    volatile dword SFR) DO work on silicon for every bit the board
+--    latches -- the original "defect" was the BENCH: LATB bits 6 and
+--    12 are held by the ICSP/board wiring, and even a bare
+--    `LATB = 0xFFFF` word store will not stick on them with the tool
+--    attached (measured 2026-10-24).  QEMU passes the overlay checks
+--    but fails the alias PORT readback (unmodeled).  This file keeps
+--    the runtime-index write+read paths under the QEMU gate and pins
+--    the bench finding.
+--
+-- Notes:
+--    Bench harness rule: open the serial port BEFORE the -OK -OL
+--    release/reset; the prints are one-shot at boot (~5 s settle).
+--
+-- @sim_validate begin
+-- duration_s: 8
+-- machine: pic32mx7-explorer16
+-- uart_contains: const-index overlay bits 10/11
+-- expect byte v_checks 3
+-- @sim_validate end
+--
+-- QEMU scores the SAME 3 of 4 as silicon, failing the opposite check
+-- (QEMU: alias PORT readback unmodeled, runtime-index overlay works;
+-- silicon: alias readback works, runtime-index overlay is the defect).
+-- v_checks = 3 in both worlds; which OK line is missing tells you where
+-- you are running.
+include 32mx270f256b                -- target device (PIC32MX1/2, MIPS32 M4K)
+pragma target clock 40_000_000      -- oscillator frequency
+pragma target OSC    FRC_SPLL       -- internal 8 MHz FRC through the system PLL (/2 x20 /2)
+pragma target image pfm             -- 3 KB boot flash: PFM app + boot block
+pragma target WDT   DISABLED        -- watchdog
+--
+enable_digital_io()                 -- all pins digital (RB14 has an analog function)
+_usec_delay(100_000)                -- wait for power to stabilize
+
+-- setup uart for communication (board wiring: RPB3 = U1TX, RPB2 = U1RX)
+const serial_hw_baudrate  = 115_200
+alias serial_hw_pin_tx is pin_B3
+alias serial_hw_pin_tx_direction is pin_B3_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB3R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+
+include serial_hardware
+serial_hw_init()
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+
+include print
+
+_usec_delay(5_000_000) -- start delay: time to open a serial terminal
+
+var volatile byte checks = 0
+
+print_string(serial_data, "========================================\r\n")
+print_string(serial_data, "jalv2 pin-alias witness - PIC32MX270F256B\r\n")
+print_string(serial_data, "========================================\r\n")
+
+-- plain pin alias: the pin write lands in LATB, the read returns the pin level
+pin_B14 = 1
+if (LATB & 0x4000) != 0 then
+   print_string(serial_data, "OK   LED bit set in LATB after pin write\r\n")
+   checks = checks + 1
+end if
+
+-- fixed-function pin alias (the PGED3/PGEC3 debug pair share RA0): the same port
+-- bit through its friendly name, plus the _direction twin in TRIS
+pin_PGED3 = 1
+pin_PGED3_direction = OUTPUT
+if pin_PGED3 == 1 then
+   print_string(serial_data, "OK   pin_PGED3 alias readback\r\n")
+   checks = checks + 1
+end if
+
+-- runtime-indexed bit overlay over LATB (the sibling SFR-overlay idiom)
+var bit lat_bits[16] at LATB
+lat_bits[10] = 1
+lat_bits[11] = 1
+if ((LATB & 0x0C00) == 0x0C00) & (lat_bits[10] == 1) then
+   print_string(serial_data, "OK   const-index overlay bits 10/11\r\n")
+   checks = checks + 1
+end if
+var byte i
+for 8 using i loop
+   lat_bits[i + 8] = 1
+end loop
+if (LATB & 0xFF00) == 0xFF00 then
+   print_string(serial_data, "OK   runtime-index overlay bits 8..15\r\n")
+   checks = checks + 1
+end if
+
+print_string(serial_data, "checks passed: ")
+print_byte_dec(serial_data, checks)
+print_string(serial_data, " of 4\r\n")
+print_string(serial_data, "##DONE##\r\n")
+
+-- heartbeat: LED blink at ~1 Hz through the plain pin alias
+forever loop
+   pin_B14 = 1
+   _usec_delay(500_000)
+   pin_B14 = 0
+   _usec_delay(500_000)
+end loop
+

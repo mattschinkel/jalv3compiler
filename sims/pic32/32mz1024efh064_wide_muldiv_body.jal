@@ -1,0 +1,45 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — wide MUL/DIV/MOD body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_wide_muldiv_body` via @sim_validate:
+--    runtime-operand qword multiply / divide / modulo, signed
+--    division cases, wide negation, runtime-count and arithmetic
+--    shifts.  Pins the shared wide-const width fix (synthetic
+--    16-byte UNIVERSAL literal defs) on the mips back-end too.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_wide_muldiv_body.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 17
+-- expect byte v__gpsim_wmd_mul 1
+-- expect byte v__gpsim_wmd_mul_self 1
+-- expect byte v__gpsim_wmd_mul_alias 1
+-- expect byte v__gpsim_wmd_div 1
+-- expect byte v__gpsim_wmd_mod 1
+-- expect byte v__gpsim_wmd_div_neg 1
+-- expect byte v__gpsim_wmd_mod_neg 1
+-- expect byte v__gpsim_wmd_div_negden 1
+-- expect byte v__gpsim_wmd_mod_negden 1
+-- expect byte v__gpsim_wmd_div_negboth 1
+-- expect byte v__gpsim_wmd_mod_negboth 1
+-- expect byte v__gpsim_wmd_neg 1
+-- expect byte v__gpsim_wmd_shl 1
+-- expect byte v__gpsim_wmd_shr 1
+-- expect byte v__gpsim_wmd_sar 1
+-- expect byte v__gpsim_wmd_sar_const 1
+-- expect byte v__gpsim_wmd_divzero 1
+-- @sim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_32mz1024efh064_device
+include regression_pic32
+
+include _regression_wide_muldiv_body

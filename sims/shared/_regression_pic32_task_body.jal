@@ -1,0 +1,57 @@
+-- Title: Shared PIC32 regression body — cooperative task _task_start/suspend
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Same sequence as `_regression_pic14_task_body`, plus `_task_hits`
+--    so QEMU can prove the worker actually ran (ignored TASK_* used
+--    to pass on checkpoints alone).
+--
+-- ------------------------------------------------------
+
+pragma task 2
+
+var volatile byte _task_hits = 0
+
+--------------------------------------------------------------------------------
+task _worker() is
+   _task_hits = _task_hits + 1
+   _task_pin = high
+   _task_yield
+   _task_hits = _task_hits + 1
+   _task_pin = low
+end task
+
+regression_begin_run()
+
+_task_pin = low
+_task_start _worker()
+_task_yield
+regression_checkpoint()
+
+_task_yield
+regression_checkpoint()
+
+if _task_hits != 2 then
+   _check_failed = true
+end if
+if _task_pin then
+   _check_failed = true
+end if
+
+regression_pass_led_if_clean()
+led = low
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

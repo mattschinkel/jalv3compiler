@@ -1,0 +1,156 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — **`p is arr[k]`** + folded slot array + backing index
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv2-original)
+--
+-- Description:
+--    Merged **`…_elem_is.jal`** + **`…_array_slots.jal`**: element **`is`**,,
+--    **`for`** over **`par_ptr[i]`**, **`arr2_snap`** ( context).
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_pointer_arrays.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 4
+-- expect byte v__gpsim_pan_snap_a 44
+-- expect byte v__gpsim_pan_snap_b 55
+-- expect word_le v__gpsim_par_arr 25354
+-- expect byte v__gpsim_par_mix 139
+-- expect word_le v__gpsim_pas_arr 25345
+-- expect byte v__gpsim_pas_arr2_snap 3
+-- expect byte v__gpsim_pas_r0 1
+-- expect byte v__gpsim_pas_r1 2
+-- expect byte v__gpsim_pas_r2 3
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+-- Avoid `var byte a[n] = {…}` at file scope (current compiler: ARRAY/ARRAY mismatch on aggregate init).
+var byte _gpsim_par_arr[3]
+_gpsim_par_arr[0] = 10
+_gpsim_par_arr[1] = 20
+_gpsim_par_arr[2] = 30
+var pointer _gpsim_par_p as var byte
+var byte _gpsim_par_mix
+
+var volatile byte _gpsim_pan_a = 7
+var volatile byte _gpsim_pan_b = 11
+var pointer _gpsim_pan_slots[2] as var byte
+var byte _gpsim_pan_snap_a
+var byte _gpsim_pan_snap_b
+var byte _gpsim_pan_idx
+var word _gpsim_pan_addr_dyn
+
+var byte _gpsim_pas_arr[3]
+_gpsim_pas_arr[0] = 1
+_gpsim_pas_arr[1] = 2
+_gpsim_pas_arr[2] = 3
+var pointer _gpsim_pas_q as var byte[3]
+
+var byte _gpsim_pas_buf_a[3]
+_gpsim_pas_buf_a[0] = 1
+_gpsim_pas_buf_a[1] = 2
+_gpsim_pas_buf_a[2] = 3
+var byte _gpsim_pas_buf_b[3]
+_gpsim_pas_buf_b[0] = 10
+_gpsim_pas_buf_b[1] = 20
+_gpsim_pas_buf_b[2] = 30
+var pointer _gpsim_pas_ptr as var byte[3]
+
+var byte _gpsim_pas_I
+var byte _gpsim_pas_x
+var byte _gpsim_pas_r0
+var byte _gpsim_pas_r1
+var byte _gpsim_pas_r2
+
+var byte _gpsim_pas_arr2_snap
+
+--------------------------------------------------------------------------------
+procedure _gpsim_par_pas_run() is
+   regression_begin_run()
+   _gpsim_par_p is _gpsim_par_arr[1]
+   _gpsim_par_p = 99
+   _gpsim_par_mix = _gpsim_par_arr[0] + _gpsim_par_arr[1] + _gpsim_par_arr[2]
+   _gpsim_par_mix = _gpsim_par_mix + _gpsim_par_arr[0] + _gpsim_par_arr[1] + _gpsim_par_arr[2] - 139
+   if _gpsim_par_arr[0] != 10 then
+      _check_failed = true
+   end if
+   if _gpsim_par_arr[1] != 99 then
+      _check_failed = true
+   end if
+   if _gpsim_par_arr[2] != 30 then
+      _check_failed = true
+   end if
+   if _gpsim_par_mix != 139 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pan_slots[0] is _gpsim_pan_a
+   _gpsim_pan_slots[1] is _gpsim_pan_b
+   _gpsim_pan_slots[0] = 44
+   _gpsim_pan_slots[1] = 55
+   _gpsim_pan_snap_a = _gpsim_pan_a
+   _gpsim_pan_snap_b = _gpsim_pan_b
+   _gpsim_pan_idx = 1
+   _gpsim_pan_addr_dyn = whereis(_gpsim_pan_slots[_gpsim_pan_idx])
+   if _gpsim_pan_snap_a != 44 then
+      _check_failed = true
+   end if
+   if _gpsim_pan_snap_b != 55 then
+      _check_failed = true
+   end if
+   if _gpsim_pan_addr_dyn != whereis(_gpsim_pan_b) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pas_q is _gpsim_pas_arr
+   _gpsim_pas_arr[1] = 99
+   if _gpsim_pas_arr[0] != 1 then
+      _check_failed = true
+   end if
+   if _gpsim_pas_arr[1] != 99 then
+      _check_failed = true
+   end if
+   if _gpsim_pas_arr[2] != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pas_ptr is _gpsim_pas_buf_a
+   for 3 using _gpsim_pas_I loop
+      _gpsim_pas_x = _gpsim_pas_ptr[_gpsim_pas_I]
+   end loop
+   _gpsim_pas_r0 = _gpsim_pas_ptr[0]
+   _gpsim_pas_r1 = _gpsim_pas_ptr[1]
+   _gpsim_pas_r2 = _gpsim_pas_ptr[2]
+   _gpsim_pas_ptr is _gpsim_pas_buf_b
+   for 3 using _gpsim_pas_I loop
+      _gpsim_pas_x = _gpsim_pas_ptr[_gpsim_pas_I]
+   end loop
+   _gpsim_pas_arr2_snap = _gpsim_pas_arr[2]
+   _gpsim_pas_arr2_snap = _gpsim_pas_arr2_snap + _gpsim_pas_r0 + _gpsim_pas_r1 + _gpsim_pas_r2 - 6
+   if _gpsim_pas_r0 != 1 then
+      _check_failed = true
+   end if
+   if _gpsim_pas_r1 != 2 then
+      _check_failed = true
+   end if
+   if _gpsim_pas_r2 != 3 then
+      _check_failed = true
+   end if
+   if _gpsim_pas_arr2_snap != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_par_pas_run()
+
+forever loop
+end loop

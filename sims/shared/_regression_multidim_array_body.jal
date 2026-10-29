@@ -1,0 +1,75 @@
+-- ----------------------------------------------------------------------------
+-- Title: Native multi-dimensional arrays — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Extracted from **`tests/16f877_gpsim_native_multidim_array.jal`** so the same runtime
+--    coverage runs on multiple architectures.
+--
+-- ----------------------------------------------------------------------------
+
+var byte _gpsim_mda_matrix[2][3] = {{1, 2, 3}, {4, 5, 6}}
+const byte _gpsim_mda_const[2][2] = {{10, 11}, {12, 13}}
+var byte _gpsim_mda_row = 1
+var byte _gpsim_mda_col = 2
+var dword _gpsim_mda_addr_a = 0
+var dword _gpsim_mda_addr_b = 0
+var dword _gpsim_mda_addr_dyn = 0
+
+var volatile byte _gpsim_mda_len_ok = 0
+var volatile byte _gpsim_mda_const_ok = 0
+var volatile byte _gpsim_mda_write_ok = 0
+var volatile byte _gpsim_mda_dyn_ok = 0
+var volatile byte _gpsim_mda_whereis_ok = 0
+var volatile byte _gpsim_mda_whereis_dyn_ok = 0
+
+regression_begin_run()
+
+if (COUNT(_gpsim_mda_matrix) == 2) & (COUNT(_gpsim_mda_matrix[0]) == 3) then
+   _gpsim_mda_len_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+if _gpsim_mda_const[1][1] == 13 then
+   _gpsim_mda_const_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+_gpsim_mda_matrix[1][2] = 42
+if _gpsim_mda_matrix[1][2] == 42 then
+   _gpsim_mda_write_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+if _gpsim_mda_matrix[_gpsim_mda_row][_gpsim_mda_col] == 42 then
+   _gpsim_mda_dyn_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+_gpsim_mda_addr_a = WHEREIS(_gpsim_mda_matrix[0][0])
+_gpsim_mda_addr_b = WHEREIS(_gpsim_mda_matrix[1][2])
+if _gpsim_mda_addr_b > _gpsim_mda_addr_a then
+   _gpsim_mda_whereis_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+_gpsim_mda_addr_dyn = WHEREIS(_gpsim_mda_matrix[_gpsim_mda_row][_gpsim_mda_col])
+if _gpsim_mda_addr_dyn == _gpsim_mda_addr_b then
+   _gpsim_mda_whereis_dyn_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()

@@ -1,0 +1,112 @@
+-- Title: Shared PIC14 regression body — lib misc
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_lib misc.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+var volatile byte seconds
+var byte hours
+var byte minutes
+var byte date
+var byte month
+var word year
+
+include calendar
+
+include constants_jallib
+include crc16_ccitt_lookup
+
+const byte pintools_map[] = {"A", 1}
+include pintools
+
+include characters
+
+var byte _crc9[9]
+var word _wi
+var byte _ci
+var bit _pl
+
+--------------------------------------------------------------------------------
+-- Description: Exercise calendar, CRC16 lookup, pintools, char_int_to_ascii
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _run_lib_misc_checks() is
+   var word _i
+
+   regression_begin_run()
+
+   seconds = 75
+   minutes = 0
+   hours = 10
+   date = 20
+   month = 3
+   year = 2021
+   calendar()
+   if (seconds != 15) | (minutes != 1) | (hours != 10) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _crc9[0] = 0x31
+   _crc9[1] = 0x32
+   _crc9[2] = 0x33
+   _crc9[3] = 0x34
+   _crc9[4] = 0x35
+   _crc9[5] = 0x36
+   _crc9[6] = 0x37
+   _crc9[7] = 0x38
+   _crc9[8] = 0x39
+   crc16_init(9)
+   for 9 using _i loop
+      crc16_calculate_bytes(_crc9[_i])
+   end loop
+   _wi = crc16_get_result()
+   if _wi != 0x31C3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   pintools_direction[0] = OUTPUT
+   pintools_level[0] = HIGH
+   _pl = pintools_level[0]
+   if !_pl then
+      _check_failed = true
+   end if
+   pintools_level[0] = LOW
+   _pl = pintools_level[0]
+   if _pl then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _ci = 8
+   char_int_to_ascii(_ci)
+   if _ci != 0x38 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_lib_misc_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

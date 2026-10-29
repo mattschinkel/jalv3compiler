@@ -1,0 +1,68 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — string heap fragmentation, retry ON (recovers)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Same allocation pattern as **`16f877_gpsim_string_heap_retry_off_fragment_fail.jal`**
+--    (five `var string` handles, clear **`_s2`** and **`_s4`** with **`x = x & ""`**, then
+--    assign a **14**-byte literal to **`_t`**). Here **`const word _string_heap_size = 48`** and
+--    **`pragma string retry on`** give enough total space that, after the first
+--    free-list scan fails, **`string_heap_compact`**-equivalent relocation runs once
+--    and the second scan succeeds: **`_string_error == STRING_ERROR_NONE`** and
+--    **`COUNT(_t) == 14`**.
+--
+--    On **`const word _string_heap_size = 46`**, the same final assignment still fails even with
+--    **retry on** (not enough bytes after packing). See the companion **retry off**
+--    test for the **46**-byte **heap-full** baseline.
+--
+-- @gpsim_validate begin
+-- allow_compiler_warnings: 1
+-- (this witness DELIBERATELY undersizes the heap to exercise the
+-- retry/fragmentation paths; the Option A heap-sizing advisory fires
+-- by design -- heap fits the literals but carries no 25% headroom)
+-- steps: 120000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__frag_err 0
+-- expect byte v__frag_len 14
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const word _string_heap_size = 48
+pragma string retry on
+
+var volatile byte _frag_err at 0x20
+var volatile byte _frag_len at 0x22
+
+var string _s1
+var string _s2
+var string _s3
+var string _s4
+var string _s5
+var string _t
+
+--------------------------------------------------------------------------------
+-- Description: Same fragmentation as companion; retry path must succeed here
+--------------------------------------------------------------------------------
+procedure _frag_retry_on_run() is
+   regression_begin_run()
+   _s1 = "11"
+   _s2 = "22"
+   _s3 = "33"
+   _s4 = "44"
+   _s5 = "55"
+   _s2 = _s2 & ""
+   _s4 = _s4 & ""
+   _t = "DDDDDDDDDDDDDD"
+   _frag_err = _string_error
+   _frag_len = COUNT(_t)
+   regression_checkpoint()
+end procedure
+
+_frag_retry_on_run()

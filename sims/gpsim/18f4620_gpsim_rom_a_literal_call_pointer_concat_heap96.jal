@@ -1,0 +1,41 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — ROM (A) literal `CALL string_from_array` + `p is a` + `p = p & …` (heap 96)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    With **`JALV2_ROM_A_STRING_LITERAL_CALL=1`**, **`a = "ab"`** lowers to
+--    **`CALL l_string_from_array`**. **`p is a`** then **`p = p & "c"`** must
+--    leave **`a`** as **`"abc"`**. **`_string_heap_size = 96`** matches the
+--    failing layout in **`18f4620_gpsim_pointer_dyn_string_self_append.jal`**.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var string a
+var pointer p as var string
+
+procedure t() is
+   regression_begin_run()
+   a = "ab"
+   p is a
+   p = p & "c"
+   if (a == "abc") & (COUNT(a) == 3) then
+      regression_checkpoint()
+   end if
+   regression_pass_led_if_clean()
+end procedure
+
+t()

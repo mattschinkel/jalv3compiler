@@ -1,0 +1,42 @@
+-- Title: PIC32MX270F256B @sim_validate regression — device + pragma targets + stubs
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Single include for **`tests/pic32/32mx270f256b_*.jal`**: pulls in
+--    **`32mx270f256b`**, then the canonical **`pragma target clock`**,
+--    **`enable_digital_io()`**, LED / PORTA stubs for the shared regression
+--    bodies, and the loader image shape.
+--
+-- Notes:
+--    **PIC32MX270F256B only.** Mirrors `regression_32mz1024efh064_device.jal`.
+--    The body images use `pragma target image pfm`: the MX boot flash is
+--    3 KB (0xBF0 usable before the config words), far too small for the
+--    shared bodies.
+--
+--    Clock: 40 MHz is the part maximum.  FRC (8 MHz) /2 x20 /2 = 40 MHz;
+--    with a 20 MHz crystal use POSC_SPLL instead (the solver picks
+--    /5 x20 /2).  QEMU does not model the PLL/fuses, so the runtime gate
+--    proves the code shape, not the clock.
+--
+--    DMT does not exist on this family, so it is not set here.
+
+include 32mx270f256b
+
+pragma target clock 40_000_000
+pragma target OSC   FRC_SPLL
+pragma target image pfm
+pragma target WDT   DISABLED
+
+enable_digital_io()
+
+-- Own byte so `led` does not pack into `_bitbucket` with `var bit` temps
+-- the shared bodies allocate later.
+var volatile byte _pic32_led_byte = 0
+var volatile bit _pic32_led_stub at _pic32_led_byte : 0
+alias led is _pic32_led_stub
+alias led_pin is _pic32_led_stub
+
+-- The MX device file declares the real PORTA/PORTB SFRs and TRISA
+-- aliases (the MZ device file does not), so `portA`/`portA_direction`
+-- here ARE the device SFRs; `pintools` uses them through `defined()`.
+-- QEMU models PORTA/PORTB as latches.

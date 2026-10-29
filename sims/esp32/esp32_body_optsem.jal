@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — optimizer-semantics body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared SDCC-adoption optimizer semantics via
+--    `_regression_optsem_body`: side-effect ordering, loop-carried
+--    wrap, bit ops across calls, argument evaluation order, branch
+--    inversion, non-CSE-able loads, volatile preservation.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_optsem.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 8
+-- expect byte v__os_r_fn_side 1
+-- expect byte v__os_r_loop_wrap 1
+-- expect byte v__os_r_bits_call 1
+-- expect byte v__os_r_arg_order 1
+-- expect byte v__os_r_branch_inv 1
+-- expect byte v__os_r_nocse 1
+-- expect byte v__os_r_volatile 1
+-- expect byte v__os_r_preserve 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_optsem_body

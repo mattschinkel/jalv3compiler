@@ -1,0 +1,42 @@
+-- ------------------------------------------------------
+-- Title: PIC16F1825 compiler regression — **`var pointer` / `is` / subscripts** (shared body)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    **`tests/_gpsim_pointer_portable_body.jal`** — PIC16 enhanced (**FSR**/banking path).
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/16f1825_compiler_regression_pointers.jal
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect_hw_stkptr_le_compiler_depth: 1
+-- hw_stkptr_steps: 25000
+-- expect file_addr_ne v__gptr_cp 1 v__check_step
+-- expect bit_clear v__gpsim_regression_flags 0
+-- expect byte v__check_step 5
+-- expect byte v__gptr_ha 10
+-- expect byte v__gptr_hb 20
+-- expect byte v__gptr_hc 30
+-- expect byte v__gptr_lc 42
+-- expect byte v__gptr_ra 77
+-- expect byte v__gptr_rb 77
+-- expect word_le v__gptr_sb 1287
+-- expect byte v__gptr_dd0 3
+-- expect byte v__gptr_dd1 1
+-- expect byte v__gptr_dd2 4
+-- expect byte v__gptr_dd3 11
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _gpsim_pointer_portable_body

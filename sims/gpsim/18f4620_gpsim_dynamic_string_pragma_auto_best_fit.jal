@@ -1,0 +1,100 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — dynamic strings: index auto, alloc best_fit, helpers
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime coverage for **`pragma string index auto`**, **`pragma string alloc best_fit`**,
+--    and **`pragma string retry off`** after **`const word _string_heap_size`** and before **`include strings_dynamic`**:
+--    **`string_from_array_truncate`** (byte **`max_len`**, truncated payload, FALSE return),
+--    **`string_to_array`** (non-truncate bridge), and a small literal assignment so the
+--    heap allocator runs under **best_fit** selection.
+--
+-- Notes:
+--    `./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/18f4620_gpsim_dynamic_string_pragma_auto_best_fit.jal`
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__gpsim_phs_from_trunc 1
+-- expect byte v__gpsim_phs_to_array 1
+-- expect byte v__gpsim_phs_lit_alloc 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+pragma string index auto
+pragma string alloc best_fit
+pragma string retry off
+include strings_dynamic
+
+var volatile byte _gpsim_phs_from_trunc = 0
+var volatile byte _gpsim_phs_to_array = 0
+var volatile byte _gpsim_phs_lit_alloc = 0
+
+var string _phs_a
+var string _phs_b
+var byte _phs_src[8]
+var byte _phs_out[8]
+var bit _phs_ok
+
+--------------------------------------------------------------------------------
+-- Description: Run pragma auto / best_fit string checks (see file header).
+-- Parameters: (none)
+-- Returns: (none)
+-- Notes: Three **`regression_checkpoint()`** calls; must match **`v__check_step`**.
+--------------------------------------------------------------------------------
+procedure _phs_run() is
+   -- 1) string_from_array_truncate: five source bytes, max_len 3 -> "hel", FALSE
+   _phs_src[0] = "h"
+   _phs_src[1] = "e"
+   _phs_src[2] = "l"
+   _phs_src[3] = "l"
+   _phs_src[4] = "o"
+   _phs_src[5] = 0
+   _phs_src[6] = 0
+   _phs_src[7] = 0
+   _phs_ok = string_from_array_truncate(_phs_a, _phs_src, 3)
+   if (_phs_ok == FALSE)
+      & (COUNT(_phs_a) == 3)
+      & (_phs_a == "hel") then
+      _gpsim_phs_from_trunc = 1
+   end if
+   regression_checkpoint()
+
+   -- 2) string_to_array (full copy, non-truncate helper)
+   _phs_a = "pq"
+   _phs_out[0] = 0
+   _phs_out[1] = 0
+   _phs_out[2] = 0
+   _phs_out[3] = 0
+   _phs_out[4] = 0
+   _phs_out[5] = 0
+   _phs_out[6] = 0
+   _phs_out[7] = 0
+   _phs_ok = string_to_array(_phs_out, _phs_a)
+   if _phs_ok & (_phs_out[0] == "p") & (_phs_out[1] == "q") & (_phs_out[2] == 0) then
+      _gpsim_phs_to_array = 1
+   end if
+   regression_checkpoint()
+
+   -- 3) Second handle + literal under best_fit heap
+   _phs_b = "!"
+   if (COUNT(_phs_b) == 1) & (_string_error == STRING_ERROR_NONE) then
+      _gpsim_phs_lit_alloc = 1
+   end if
+   regression_checkpoint()
+   -- v__bitbucket is the same file byte as _phs_ok (packed bit 0); clear for
+   -- @gpsim_validate expect bit_clear v__bitbucket 0
+   _phs_ok = false
+end procedure
+
+regression_begin_run()
+_phs_run()
+regression_pass_led_if_clean()

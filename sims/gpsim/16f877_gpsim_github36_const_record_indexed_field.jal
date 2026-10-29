@@ -1,0 +1,53 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim github36 const record indexed field
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Minimal #36-style const record array + variable index reads (PIC16F877 gpsim).
+include regression_16f877_device
+include regression
+
+record array_def is
+   byte a_array[3]
+   byte b_array[5]
+end record
+
+const array_def array[] = { {"a_1", "b_001"}, {"a_2", "b_002"}, {"a_3", "b_003"} }
+
+var byte index
+var volatile byte v_t36_a2_0 = 0
+var volatile byte v_t36_a2_1 = 0
+var volatile byte v_t36_a2_2 = 0
+var volatile byte v_t36_b0_0 = 0
+var volatile byte v_t36_b0_1 = 0
+var volatile byte v_t36_b0_2 = 0
+
+-- @gpsim_validate begin
+-- steps: 80000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v_v_t36_a2_0 49
+-- expect byte v_v_t36_a2_1 50
+-- expect byte v_v_t36_a2_2 51
+-- expect byte v_v_t36_b0_0 98
+-- expect byte v_v_t36_b0_1 98
+-- expect byte v_v_t36_b0_2 98
+-- @gpsim_validate end
+
+procedure _t36_capture() is
+   index = 0
+   v_t36_a2_0 = array[index].a_array[2]
+   v_t36_b0_0 = array[index].b_array[0]
+   index = 1
+   v_t36_a2_1 = array[index].a_array[2]
+   v_t36_b0_1 = array[index].b_array[0]
+   index = 2
+   v_t36_a2_2 = array[index].a_array[2]
+   v_t36_b0_2 = array[index].b_array[0]
+end procedure
+
+regression_begin_run()
+_t36_capture()
+regression_checkpoint()
+regression_pass_led_if_clean()

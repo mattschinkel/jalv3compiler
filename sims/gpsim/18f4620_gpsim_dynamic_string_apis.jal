@@ -1,0 +1,113 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - dynamic string helper APIs
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises dynamic string helper APIs from strings_dynamic.jal: append,
+--    append with max length: literal 5, then `var word` max (compiler emits
+--    string-heap p-code without spurious width warnings); non-empty dest, no
+--    truncation; then explicit truncation, byte-array to
+--    string, and string
+--    to byte-array bridging.
+--
+-- @gpsim_validate begin
+-- allow_compiler_warnings: yes
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 6
+-- expect byte v__dynapi_append 1
+-- expect byte v__dynapi_at_byte 1
+-- expect byte v__dynapi_at_word 1
+-- expect byte v__dynapi_truncate 1
+-- expect byte v__dynapi_array_from 1
+-- expect byte v__dynapi_array_to 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var volatile byte _dynapi_append = 0
+var volatile byte _dynapi_at_byte = 0
+var volatile byte _dynapi_at_word = 0
+var volatile byte _dynapi_truncate = 0
+var volatile byte _dynapi_array_from = 0
+var volatile byte _dynapi_array_to = 0
+
+var string _dynapi_first
+var string _dynapi_second
+var byte _dynapi_src_bytes[4]
+var byte _dynapi_out_bytes[8]
+var bit _dynapi_ok
+var word _dynapi_wmax
+
+--------------------------------------------------------------------------------
+procedure _dynapi_run() is
+   regression_begin_run()
+
+   _dynapi_first = "hi"
+   _dynapi_second = "!"
+   _dynapi_ok = string_append(_dynapi_first, _dynapi_second)
+   if _dynapi_ok & (_dynapi_first == "hi!") then
+      _dynapi_append = 1
+   end if
+   regression_checkpoint()
+
+   _dynapi_first = "ab"
+   _dynapi_second = "cd"
+   _dynapi_ok = string_append_truncate(_dynapi_first, _dynapi_second, 5)
+   if _dynapi_ok
+      & (_dynapi_first == "abcd")
+      & (COUNT(_dynapi_first) == 4) then
+      _dynapi_at_byte = 1
+   end if
+   regression_checkpoint()
+
+   _dynapi_wmax = word(5)
+   _dynapi_first = "ab"
+   _dynapi_second = "cd"
+   _dynapi_ok = string_append_truncate(_dynapi_first, _dynapi_second, _dynapi_wmax)
+   if _dynapi_ok
+      & (_dynapi_first == "abcd")
+      & (COUNT(_dynapi_first) == 4) then
+      _dynapi_at_word = 1
+   end if
+   regression_checkpoint()
+
+   _dynapi_first = "abcdef"
+   _dynapi_ok = string_truncate(_dynapi_first, 3)
+   if (_dynapi_ok == FALSE) & (_dynapi_first == "abc") & (COUNT(_dynapi_first) == 3) then
+      _dynapi_truncate = 1
+   end if
+   regression_checkpoint()
+
+   _dynapi_src_bytes[0] = "w"
+   _dynapi_src_bytes[1] = "x"
+   _dynapi_src_bytes[2] = "y"
+   _dynapi_src_bytes[3] = "z"
+   _dynapi_ok = string_from_array(_dynapi_first, _dynapi_src_bytes)
+   if _dynapi_ok & (_dynapi_first == "wxyz") then
+      _dynapi_array_from = 1
+   end if
+   regression_checkpoint()
+
+   _dynapi_out_bytes[0] = 0
+   _dynapi_out_bytes[1] = 0
+   _dynapi_out_bytes[2] = 0
+   _dynapi_out_bytes[3] = 0
+   _dynapi_ok = string_to_array_truncate(_dynapi_out_bytes, _dynapi_first, 3)
+   if (_dynapi_ok == FALSE) & (_dynapi_out_bytes[0] == "w") & (_dynapi_out_bytes[1] == "x") then
+      if (_dynapi_out_bytes[2] == "y") & (_dynapi_out_bytes[3] == 0) then
+         _dynapi_array_to = 1
+      end if
+   end if
+   regression_checkpoint()
+end procedure
+
+_dynapi_run()

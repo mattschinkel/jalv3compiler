@@ -1,0 +1,80 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — whereis
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: WHEREIS scalars / pointers / array / procedure
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_whereis.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+
+var volatile byte ha = 0
+var volatile byte hb = 0
+var volatile byte arr[4] = {0, 0, 0, 0}
+var volatile byte _wh_ran = 0
+var volatile dword wa = 0
+var volatile dword wb = 0
+var volatile dword wc = 0
+var volatile dword wd = 0
+var volatile dword we = 0
+var volatile dword wf = 0
+var pointer p as var byte
+var pointer q as var byte
+
+--------------------------------------------------------------------------------
+-- Description: Marker procedure so WHEREIS(_wh_mark) has a live code label
+-- Parameters: none
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure _wh_mark is
+   _wh_ran = 1
+end procedure
+
+wa = WHEREIS(ha)
+p is ha
+wb = WHEREIS(p)
+wc = WHEREIS(q)
+wd = WHEREIS(hb)
+we = WHEREIS(arr[2])
+wf = WHEREIS(_wh_mark)
+_wh_mark()
+
+if wa == wb then
+   ra = 1
+end if
+if wc == 0 then
+   rb = 1
+end if
+if wd != wa then
+   rc = 1
+end if
+if (we >> 16) == 0x8000 then
+   rd = 1
+end if
+if (wf >> 16) == 0xBFC0 then
+   re = 1
+end if
+if _wh_ran == 1 then
+   rf = 1
+end if

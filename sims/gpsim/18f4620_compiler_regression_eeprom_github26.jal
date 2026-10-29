@@ -1,0 +1,35 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — data EEPROM inline-temp (#26)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_eeprom_body.jal`** (from
+--    **`16f1825_compiler_regression_eeprom_github26.jal`**) — runtime
+--    `data_eeprom_write` seed + the **#26** `buf[i+1] = data_eeprom(i+1)`
+--    pattern on the PIC18 core (different EECON/EEADR sequence).
+--
+-- @gpsim_validate begin
+-- skip_gpsim: 1
+-- (gpsim 0.31 **p18f4620**: data-EEPROM model returns 0 for reads on this
+-- part — verified the BASELINE compiler also reads zeros on a minimal
+-- seed/read program, so this is a simulator model limitation, not a
+-- compiler regression. Compile + check-config still cover the PIC18
+-- EECON sequence. See.)
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_v_gpsim_ee26_b 66
+-- expect byte v_v_gpsim_ee26_c 67
+-- expect byte v_v_gpsim_ee26_d 68
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+include pic_data_eeprom
+
+include _regression_eeprom_body

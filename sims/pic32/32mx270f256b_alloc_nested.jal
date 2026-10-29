@@ -1,0 +1,42 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — alloc nested
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 Phase-C1: nested local $s homes across calls
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_alloc_nested.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_out1 7
+-- expect byte v_out2 15
+-- expect byte v_out3 8
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte out1
+var volatile byte out2
+var volatile byte out3
+
+procedure _helper(byte in x) is
+  -- Callee work must not corrupt caller's nested $s homes.
+  out3 = x + 1
+end procedure
+
+procedure _run_alloc_nested() is
+  var byte na
+  var byte nb
+
+  na = 7
+  nb = na + 1
+  _helper(7)
+  out1 = na
+  out2 = nb + na
+end procedure
+
+_run_alloc_nested()

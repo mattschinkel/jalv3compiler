@@ -1,0 +1,71 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — pointer-to-pseudo EOF-tail and operator contexts
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `p is pv` (pseudo-variable with 'get/'put) at FILE SCOPE where
+--    the token-guard defect lived: reads inside operator continuations
+--    (`x = p + 1`, `if p == k`) and the WRITE as the LAST statement of
+--    the file (EOF next token) all silently bypassed the accessor link
+--    and dereferenced the GET code address stored in the slot. The final
+--    write must route to 'put (shadow becomes 88) and the operator-context
+--    reads must route to 'get (snap2 78, ok 1).
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_pseudo_eof_write.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__ppe_shadow 88
+-- expect byte v__ppe_snap1 77
+-- expect byte v__ppe_snap2 78
+-- expect byte v__ppe_ok 1
+-- expect byte v__ppe_chk 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var volatile byte _ppe_shadow = 0
+var byte _ppe_snap1 = 0
+var byte _ppe_snap2 = 0
+var byte _ppe_ok = 0
+var byte _ppe_chk = 0
+var pointer _ppe_p as var byte
+
+function _ppe_pv'get return byte is
+   return _ppe_shadow
+end function
+
+procedure _ppe_pv'put(byte in v) is
+   _ppe_shadow = v
+end procedure
+
+_ppe_shadow = 77
+_ppe_p is _ppe_pv
+_ppe_snap1 = _ppe_p
+_ppe_snap2 = _ppe_p + 1
+if _ppe_p == 77 then
+   _ppe_ok = 1
+end if
+if _ppe_snap1 != 77 then
+   _ppe_chk = 1
+end if
+if _ppe_snap2 != 78 then
+   _ppe_chk = 1
+end if
+if _ppe_ok != 1 then
+   _ppe_chk = 1
+end if
+if _ppe_chk != 0 then
+   _ppe_shadow = 0
+end if
+regression_checkpoint()
+-- last statement of the file: EOF next token, the write-side defect shape
+_ppe_p = 88

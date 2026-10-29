@@ -1,0 +1,104 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — dual-source ISR (TIMG0 + TIMG1)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Two peripheral interrupt sources (TIMG0 T0 alarm = source 14,
+--    TIMG1 T0 alarm = source 17) both routed through the interrupt
+--    matrix into the SAME level-1 CPU interrupt and the single
+--    user-exception vector slot.  The one pragma-interrupt handler
+--    distinguishes sources by their per-timer status/clear registers
+--    (W1C to T*INT_CLR both deasserts and identifies).  Main arms
+--    both alarms; both sources must dispatch through the shared
+--    vector and each bump its own counter.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_isr_dual.jal
+--
+-- @sim_validate begin
+-- duration_s: 10.0
+-- machine: esp32
+-- expect byte v_ds_hit0 1
+-- expect byte v_ds_hit1 1
+-- expect byte v_ds_done 1
+-- @sim_validate end
+--
+include esp32_xtensa_lx6
+
+var volatile byte ds_hit0 = 0
+var volatile byte ds_hit1 = 0
+var volatile byte ds_done = 0
+
+-- TIMG0 (base 0x3FF5F000)
+var volatile dword g0_t0config  at 0x3FF5F000
+var volatile dword g0_t0loadlo  at 0x3FF5F004
+var volatile dword g0_t0load    at 0x3FF5F00C
+var volatile dword g0_t0alarmlo at 0x3FF5F010
+var volatile dword g0_t0int_ena at 0x3FF5F098
+var volatile dword g0_t0int_st  at 0x3FF5F0A0
+var volatile dword g0_t0int_clr at 0x3FF5F0A4
+-- TIMG1 (base 0x3FF60000)
+var volatile dword g1_t0config  at 0x3FF60000
+var volatile dword g1_t0loadlo  at 0x3FF60004
+var volatile dword g1_t0load    at 0x3FF6000C
+var volatile dword g1_t0alarmlo at 0x3FF60010
+var volatile dword g1_t0int_ena at 0x3FF60098
+var volatile dword g1_t0int_st  at 0x3FF600A0
+var volatile dword g1_t0int_clr at 0x3FF600A4
+-- matrix map: source 14 (TG0_T0_LEVEL) -> CPU int 1
+var volatile dword g0_map       at 0x3FF0013C
+-- matrix map: source 17 (TG1_T0_LEVEL) -> CPU int 1
+var volatile dword g1_map       at 0x3FF00148
+
+--------------------------------------------------------------------------------
+-- Description: shared level-1 handler for both timer alarms
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: clears whichever alarm fired (W1C identifies + deasserts),
+-- - bumps the matching counter.  QEMU: LEVEL_INT + ALARM must both be
+-- - set in T0CONFIG for the level IRQ to raise.
+--------------------------------------------------------------------------------
+procedure _ds_isr() is
+   pragma interrupt
+
+   if g0_t0int_st != 0 then
+      g0_t0int_clr = 1
+      ds_hit0 = ds_hit0 + 1
+   end if
+   if g1_t0int_st != 0 then
+      g1_t0int_clr = 1
+      ds_hit1 = ds_hit1 + 1
+   end if
+end procedure
+
+-- route both sources to CPU int 1 (level 1)
+g0_map = 1
+g1_map = 1
+
+-- arm TIMG0 alarm: short count, level-triggered
+g0_t0loadlo = 20
+g0_t0load = 20
+g0_t0alarmlo = 20
+g0_t0int_ena = 1
+g0_t0config = 0x80000000 | 0x40000000 | (1 << 11) | (1 << 10) | (20 << 13)
+
+-- arm TIMG1 alarm: short count, level-triggered
+g1_t0loadlo = 20
+g1_t0load = 20
+g1_t0alarmlo = 20
+g1_t0int_ena = 1
+g1_t0config = 0x80000000 | 0x40000000 | (1 << 11) | (1 << 10) | (20 << 13)
+
+-- wait for both sources to dispatch
+var byte guard = 0
+while ((ds_hit0 == 0) | (ds_hit1 == 0)) & (guard < 100) loop
+   guard = guard + 1
+end loop
+if (ds_hit0 == 1) & (ds_hit1 == 1) then
+   ds_done = 1
+end if
+
+forever loop
+end loop

@@ -1,0 +1,41 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — ISR re-dispatch
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The shared single-vector handler keeps its own IFS0 flag pending
+--    until it has run three times, so every ERET must re-enter the EIC
+--    vector (repeated delivery, not just one first dispatch).  PIC32MX
+--    has no Timer1 in QEMU; the flag is software-raised, which is all
+--    the resolver needs.
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v_ticks 3
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ticks = 0
+
+procedure ct_isr() is
+   pragma interrupt
+
+   ticks = ticks + 1
+   if ticks >= 3 then
+      IFS0CLR = 1
+   end if
+end procedure
+
+IPC0 = 0x1C
+IEC0SET = 1
+IFS0SET = 1
+
+var byte guard = 0
+while (ticks < 3) & (guard < 255) loop
+   guard = guard + 1
+end loop
+forever loop
+end loop

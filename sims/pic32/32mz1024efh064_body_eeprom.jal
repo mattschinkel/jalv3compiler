@@ -1,0 +1,24 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 compiler regression — eeprom
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: EEPROM language pattern (RAM-backed)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_eeprom.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 1
+-- expect byte v__gpsim_ee26_b 66
+-- expect byte v__gpsim_ee26_c 67
+-- expect byte v__gpsim_ee26_d 68
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _regression_pic32_eeprom_body

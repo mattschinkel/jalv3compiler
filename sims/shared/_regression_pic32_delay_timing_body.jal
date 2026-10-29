@@ -1,0 +1,40 @@
+-- Title: PIC32 delay-timing body (no PIC TMR1)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Companion to `_regression_delay_timing_body.jal`. PIC32 `_usec_delay`
+--    counts SYSCLK cycles (not Fosc/4), and QEMU has no faithful TMR1 for
+--    cycle measurement. This body verifies short delays complete twice and
+--    leaves the same `_dt_*_ok` markers the PIC wrappers expect.
+--
+-- Notes:
+--    Do not use multi-millisecond delays at 200 MHz in QEMU.
+-- ----------------------------------------------------------------------------
+
+var volatile byte _dt_lo_ok = 0
+var volatile byte _dt_hi_ok = 0
+var volatile byte _dt_1ms_ok = 0
+
+--------------------------------------------------------------------------------
+procedure _dt_run() is
+   regression_begin_run()
+
+   -- 1) short delay must return (codegen / loop structure smoke)
+   _usec_delay(1000)
+   _dt_lo_ok = 1
+   _dt_hi_ok = 1
+   regression_checkpoint()
+
+   -- 2) repeat — a broken delay loop often hangs or skips the second call
+   _usec_delay(1000)
+   _dt_1ms_ok = 1
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_dt_run()
+
+forever loop
+end loop

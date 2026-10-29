@@ -1,0 +1,111 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim - dynamic string heap
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises dynamic string literal assignment, string-to-string assignment,
+--    `&` concatenation, string equality/inequality, empty assignment freeing,
+--    free-list coalescing, COUNT(dynamic string), and heap-full failure
+--    preserving destination.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 8
+-- expect byte v__dynstr_lit 1
+-- expect byte v__dynstr_copy 1
+-- expect byte v__dynstr_concat 1
+-- expect byte v__dynstr_compare 1
+-- expect byte v__dynstr_clear 1
+-- expect byte v__dynstr_coalesce 1
+-- expect byte v__dynstr_len 1
+-- expect byte v__dynstr_fail_preserve 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const word _string_heap_size = 32
+
+var volatile byte _dynstr_lit at 0x20
+var volatile byte _dynstr_copy at 0x21
+var volatile byte _dynstr_concat at 0x22
+var volatile byte _dynstr_compare at 0x23
+var volatile byte _dynstr_clear at 0x24
+var volatile byte _dynstr_coalesce at 0x25
+var volatile byte _dynstr_len at 0x26
+var volatile byte _dynstr_fail_preserve at 0x27
+
+var string _dynstr_first
+var string _dynstr_second
+var string _dynstr_third
+var string _dynstr_empty
+
+--------------------------------------------------------------------------------
+procedure _dynstr_run() is
+   regression_begin_run()
+
+   _dynstr_first = "abc"
+   if _string_heap[3] == "a" & _string_heap[4] == "b" & _string_heap[5] == "c" then
+      _dynstr_lit = 1
+   end if
+   regression_checkpoint()
+
+   _dynstr_second = _dynstr_first
+   if _string_heap[9] == "a" & _string_heap[10] == "b" & _string_heap[11] == "c" then
+      _dynstr_copy = 1
+   end if
+   regression_checkpoint()
+
+   _dynstr_third = _dynstr_first & "!" & _dynstr_second
+   if COUNT(_dynstr_third) == 7 then
+      if _string_heap[15] == "a" & _string_heap[16] == "b" & _string_heap[17] == "c" then
+         if _string_heap[18] == "!" & _string_heap[19] == "a" & _string_heap[20] == "b" then
+            if _string_heap[21] == "c" then
+               _dynstr_concat = 1
+            end if
+         end if
+      end if
+   end if
+   regression_checkpoint()
+
+   if (_dynstr_third == "abc!abc") & (_dynstr_second != _dynstr_third) then
+      _dynstr_compare = 1
+   end if
+   regression_checkpoint()
+
+   _dynstr_third = _dynstr_empty
+   if COUNT(_dynstr_third) == 0 then
+      if _string_free_head == 12 then
+         _dynstr_clear = 1
+      end if
+   end if
+   regression_checkpoint()
+
+   _dynstr_second = "abcdefghijkl"
+   if _string_error == STRING_ERROR_NONE & COUNT(_dynstr_second) == 12 then
+      if _string_heap[15] == "a" & _string_heap[26] == "l" then
+         _dynstr_coalesce = 1
+      end if
+   end if
+   regression_checkpoint()
+
+   if COUNT(_dynstr_first) == 3 & COUNT(_dynstr_second) == 12 then
+      _dynstr_len = 1
+   end if
+   regression_checkpoint()
+
+   _dynstr_second = "abcdefghijklm"
+   if _string_error == STRING_ERROR_HEAP_FULL & COUNT(_dynstr_second) == 12 then
+      if _string_heap[15] == "a" & _string_heap[26] == "l" then
+         _dynstr_fail_preserve = 1
+      end if
+   end if
+   regression_checkpoint()
+end procedure
+
+_dynstr_run()

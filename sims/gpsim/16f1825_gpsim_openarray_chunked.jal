@@ -1,0 +1,81 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — open-array formals over chunked arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the open-array specialization for chunked (holed) actuals
+--    (fix_openarray_chunked_specialization): a DIRECT call records an
+--    (actual -> formal) pair at pass-1 end, and the accepted holed
+--    placement propagates its chunk map onto the formal -- the
+--    callee's subscripts then walk the actual's chunks (runtime and
+--    const indices) instead of the old flat linear base+index over
+--    the holes. Before this, the shape either refused or (pre-guard)
+--    silently mis-executed.
+--
+--    Indirect (pointer) calls and pointer binds keep the refusal --
+--    pinned in scripts/test_openarray_chunked_pins.sh.
+--
+-- @gpsim_validate begin
+-- steps: 10000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 4
+-- expect byte v__r1 50
+-- expect byte v__r2 131
+-- expect byte v__r3 53
+-- expect byte v__r4 21
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var byte arr[300]
+var volatile byte _r1 = 0
+var volatile byte _r2 = 0
+var volatile byte _r3 = 255
+var volatile byte _r4 = 255
+var word i
+var word t = 0
+
+-- callee with RUNTIME-indexed access across all four chunks:
+-- sum of (i mod 256) over 0..299 = 32640 + 946 = 33586 = 0x8332
+function _sum300(byte in b[]) return word is
+   var word s = 0
+   var word k
+   for 300 using k loop
+      s = s + b[k]
+   end loop
+   return s
+end function
+
+-- callee with CONST-indexed access deep in chunk 3
+function _cidx(byte in b[]) return byte is
+   return b[280] + b[29]
+end function
+
+-- callee WRITING through the formal (in-formals are by reference)
+procedure _tag(byte in b[]) is
+   var word k
+   for 40 using k loop
+      b[256 + k] = 21
+   end loop
+end procedure
+
+for 300 using i loop
+   arr[i] = byte(i)
+end loop
+regression_checkpoint()                       -- 1
+
+t = _sum300(arr)
+_r1 = byte(t)                                 -- 0x32 = 50
+_r2 = byte(t >> 8)                            -- 0x83 = 131
+regression_checkpoint()                       -- 2
+
+-- 24 + 29 = 53 (const indices: byte(280)=24 in chunk 4, 29 in chunk 1)
+_r3 = _cidx(arr)
+regression_checkpoint()                       -- 3
+
+_tag(arr)
+_r4 = arr[260]                                -- 21 (write through formal)
+regression_checkpoint()                       -- 4

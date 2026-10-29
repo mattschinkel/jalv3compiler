@@ -1,0 +1,55 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — WORD-pointee pointer over chunked array
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    WORD-pointee walked binds (the follow-up to
+--    fix_pointer_bind_escape_analysis): every word-element subscript
+--    scales the index (idx*2 -> a computed temp), so this shape was
+--    refused under the old plain-variable-only contract. Fill via the
+--    array, rewrite a far region through p[150 + i] (offset walk),
+--    read back a full word and the whole-array checksum through p.
+--
+-- @gpsim_validate begin
+-- steps: 12000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 4
+-- expect byte v__r1 115
+-- expect byte v__r2 27
+-- expect byte v__r3 98
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var word buf[200]
+var pointer p as var word[200]
+p is buf
+var volatile byte _r1 = 255
+var volatile byte _r2 = 255
+var volatile byte _r3 = 255
+var word i
+var word s = 0
+
+for 200 using i loop
+   buf[i] = i * 3
+end loop
+regression_checkpoint()                       -- 1
+
+for 30 using i loop
+   p[150 + i] = 7000 + i
+end loop
+regression_checkpoint()                       -- 2
+
+i = 177
+_r1 = byte(p[i])                              -- (7000+27)&0xFF = 115
+_r2 = byte(p[i] >> 8)                         -- 27
+regression_checkpoint()                       -- 3
+
+for 200 using i loop
+   s = s + p[i]
+end loop
+_r3 = byte(s)                                 -- 150330 & 0xFF = 98
+regression_checkpoint()                       -- 4

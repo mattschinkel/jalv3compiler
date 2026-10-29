@@ -1,0 +1,360 @@
+-- ------------------------------------------------------
+-- Title: Shared regression body — float IEEE semantics (32-bit)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Soft-float IEEE-754 checks for the 32-bit back ends
+--    (originally ESP32/Xtensa; PIC32 twin = cut 1m of the float_alg
+--    plan): round-to-nearest-even DIV/MUL/ADD/SUB, gradual
+--    underflow (denormals), overflow to +-inf, NaN propagation
+--    and relations, -0 handling, and int<->float conversions
+--    (saturating F2I).  All arithmetic goes through volatile
+--    variables so the frontend cannot const-fold the witness.
+--    Constants are exact except 0.33333334, the 1/3 RNE witness.
+--    PIC32 note: the CURRENT mips float is the pre-IEEE algorithm
+--    (no RNE/inf-NaN/denormals) -- this body is the SPEC; the PIC32
+--    wrapper lives OUTSIDE the suite glob until cuts 2-5 make it
+--    pass, then moves in as the regression pin.
+-- ------------------------------------------------------
+
+var volatile float _fie_fa = 0.0
+var volatile float _fie_fb = 0.0
+var volatile float _fie_fc = 0.0
+var volatile float _fie_fd = 0.0
+var volatile float _fie_fe = 0.0
+var volatile float _fie_inf_f = 0.0
+var volatile float _fie_nan_f = 0.0
+var volatile sdword _fie_si = 0
+var volatile sdword _fie_slimit = -1
+var volatile dword _fie_dw = 0
+var word _fie_ix = 0
+var byte _fie_r1 = 0
+
+var byte _fie_div_exact = 0
+var byte _fie_div_rne = 0
+var byte _fie_div_under = 0
+var byte _fie_add_denorm = 0
+var byte _fie_addsub = 0
+var byte _fie_mul = 0
+var byte _fie_inf = 0
+var byte _fie_nan = 0
+var byte _fie_negzero = 0
+var byte _fie_conv = 0
+
+regression_begin_run()
+
+-- DIV: exact quotient
+_fie_div_exact = 1
+_fie_fa = 6.0
+_fie_fb = 3.0
+_fie_fc = _fie_fa / _fie_fb
+if _fie_fc != 2.0 then
+   _fie_div_exact = 0
+end if
+if _fie_div_exact == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- DIV: round-to-nearest-even
+_fie_div_rne = 1
+-- 16777215 / 2 = 8388607.5, exactly representable (ulp 0.5)
+_fie_fa = float(16777215)
+_fie_fb = 2.0
+_fie_fc = _fie_fa / _fie_fb
+if _fie_fc != 8388607.5 then
+   _fie_div_rne = 0
+end if
+-- 16777215 / 4 = 4194303.75, exact (ulp 0.25); truncation or a
+-- wrong sticky would give 4194303.5 / 4194303
+_fie_fc = _fie_fa / 4.0
+if _fie_fc != 4194303.75 then
+   _fie_div_rne = 0
+end if
+-- 16777213 / 4 = 4194303.25, exact
+_fie_fa = float(16777213)
+_fie_fc = _fie_fa / 4.0
+if _fie_fc != 4194303.25 then
+   _fie_div_rne = 0
+end if
+-- 1/3 rounds up to 0.33333334; truncation keeps 0.33333332
+_fie_fa = 1.0
+_fie_fc = _fie_fa / 3.0
+if _fie_fc != 0.33333334 then
+   _fie_div_rne = 0
+end if
+if _fie_div_rne == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- DIV: gradual underflow
+_fie_div_under = 1
+-- 1.0 halved 149 times is 2**-149, the minimum denormal
+_fie_fa = 1.0
+_fie_ix = 0
+while _fie_ix < 149 loop
+   _fie_fa = _fie_fa / 2.0
+   _fie_ix = _fie_ix + 1
+end loop
+_fie_fb = _fie_fa
+if _fie_fa == 0.0 then
+   _fie_div_under = 0
+end if
+if _fie_fa < 0.0 then
+   _fie_div_under = 0
+end if
+-- one more halving: 2**-150 is an exact tie -> zero
+_fie_fc = _fie_fa / 2.0
+if _fie_fc != 0.0 then
+   _fie_div_under = 0
+end if
+if _fie_div_under == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- ADD: denormals are real numbers, not flush-to-zero
+_fie_add_denorm = 1
+-- double the min denormal back to 1.0 (149 exact additions)
+_fie_fa = _fie_fb
+_fie_ix = 0
+while _fie_ix < 149 loop
+   _fie_fa = _fie_fa + _fie_fa
+   _fie_ix = _fie_ix + 1
+end loop
+if _fie_fa != 1.0 then
+   _fie_add_denorm = 0
+end if
+if _fie_add_denorm == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- ADD/SUB: tie-to-even + exact cancellation
+_fie_addsub = 1
+-- 8388608 + 1.5 ties between 8388609/8388610 -> even -> 8388610
+_fie_fa = float(8388608)
+_fie_fb = 1.5
+_fie_fc = _fie_fa + _fie_fb
+if _fie_fc != float(8388610) then
+   _fie_addsub = 0
+end if
+-- 8388610 - 1.5 = 8388608.5 -> tie -> even -> 8388608
+_fie_fc = _fie_fc - _fie_fb
+if _fie_fc != float(8388608) then
+   _fie_addsub = 0
+end if
+-- exact add/cancel: 2**23 + 1 - 1
+_fie_fa = float(8388608) + float(1)
+_fie_fc = _fie_fa - float(1)
+if _fie_fc != float(8388608) then
+   _fie_addsub = 0
+end if
+-- small exact ops
+_fie_fa = 1.0
+_fie_fb = 2.0
+_fie_fc = _fie_fa + _fie_fb
+if _fie_fc != 3.0 then
+   _fie_addsub = 0
+end if
+_fie_fc = _fie_fa - _fie_fb
+if _fie_fc != -1.0 then
+   _fie_addsub = 0
+end if
+if _fie_addsub == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- MUL: exact + round-to-nearest-even
+_fie_mul = 1
+_fie_fa = float(123456)
+_fie_fb = _fie_fa * 2.0
+if _fie_fb != float(246912) then
+   _fie_mul = 0
+end if
+_fie_fa = 3.0
+_fie_fb = _fie_fa * 5.0
+if _fie_fb != 15.0 then
+   _fie_mul = 0
+end if
+-- 8388609 * 3 = 25165827: an exact tie on the [2^24, 2^25) grid
+-- (ulp 2) -> round to even -> 25165828; truncation gives 25165826
+_fie_fa = float(8388609)
+_fie_fc = _fie_fa * 3.0
+if _fie_fc != float(25165828) then
+   _fie_mul = 0
+end if
+if _fie_mul == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- overflow to infinity, inf arithmetic
+_fie_inf = 1
+_fie_fa = float(8388608)
+_fie_ix = 0
+while _fie_ix < 256 loop
+   _fie_fa = _fie_fa * 2.0
+   _fie_ix = _fie_ix + 1
+end loop
+_fie_inf_f = _fie_fa
+-- inf * 0 -> NaN
+_fie_fc = _fie_fa * 0.0
+if _fie_fc == _fie_fc then
+   _fie_inf = 0
+end if
+-- inf / inf -> NaN
+_fie_fc = _fie_fa / _fie_fa
+if _fie_fc == _fie_fc then
+   _fie_inf = 0
+end if
+-- inf + -inf -> NaN
+_fie_fe = 0.0 - _fie_fa
+_fie_fc = _fie_fa + _fie_fe
+if _fie_fc == _fie_fc then
+   _fie_inf = 0
+end if
+-- inf - inf -> NaN
+_fie_fc = _fie_fa - _fie_fa
+if _fie_fc == _fie_fc then
+   _fie_inf = 0
+end if
+-- inf survives + finite
+_fie_fb = _fie_fa + 1.0
+_fie_fc = _fie_fb * 0.0
+if _fie_fc == _fie_fc then
+   _fie_inf = 0
+end if
+if _fie_inf == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- NaN semantics
+_fie_nan = 1
+_fie_fd = 0.0
+_fie_fe = 0.0
+_fie_fc = _fie_fd / _fie_fe
+_fie_nan_f = _fie_fc
+-- NaN is not equal to itself
+_fie_r1 = _fie_fc == _fie_fc
+if _fie_r1 != 0 then
+   _fie_nan = 0
+end if
+-- NaN never relates
+_fie_r1 = _fie_fc < 1.0
+if _fie_r1 != 0 then
+   _fie_nan = 0
+end if
+_fie_r1 = _fie_fc > 1.0
+if _fie_r1 != 0 then
+   _fie_nan = 0
+end if
+-- ...except != itself, which is true
+_fie_r1 = _fie_fc != _fie_fc
+if _fie_r1 == 0 then
+   _fie_nan = 0
+end if
+-- NaN propagates through arithmetic
+_fie_fd = _fie_fc + 1.0
+_fie_r1 = _fie_fd == _fie_fd
+if _fie_r1 != 0 then
+   _fie_nan = 0
+end if
+if _fie_nan == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- -0 handling
+_fie_negzero = 1
+-- -1 * 0 = -0, and -0 compares equal to +0
+_fie_fa = 0.0 - 1.0
+_fie_fb = 0.0 * _fie_fa
+_fie_r1 = _fie_fb == 0.0
+if _fie_r1 == 0 then
+   _fie_negzero = 0
+end if
+_fie_r1 = _fie_fb < 0.0
+if _fie_r1 != 0 then
+   _fie_negzero = 0
+end if
+_fie_r1 = _fie_fb > 0.0
+if _fie_r1 != 0 then
+   _fie_negzero = 0
+end if
+-- 1 / -0 = -inf, 1 / (+0) = +inf  (also: -0 + +0 rounds to +0)
+_fie_fc = _fie_fb + 0.0
+_fie_fd = 1.0 / _fie_fb
+_fie_r1 = _fie_fd < 0.0
+if _fie_r1 == 0 then
+   _fie_negzero = 0
+end if
+_fie_fe = 1.0 / _fie_fc
+_fie_r1 = _fie_fe > 0.0
+if _fie_r1 == 0 then
+   _fie_negzero = 0
+end if
+if _fie_negzero == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- int <-> float conversions
+_fie_conv = 1
+-- F2I truncates toward zero
+_fie_fa = 7.0
+_fie_fb = 2.0
+_fie_fc = _fie_fa / _fie_fb
+_fie_si = _fie_fc
+if _fie_si != 3 then
+   _fie_conv = 0
+end if
+_fie_fa = 0.0 - 7.0
+_fie_fc = _fie_fa / _fie_fb
+_fie_si = _fie_fc
+if _fie_si != -3 then
+   _fie_conv = 0
+end if
+-- +inf saturates to 2147483647
+_fie_si = _fie_inf_f
+if _fie_si != 2147483647 then
+   _fie_conv = 0
+end if
+-- -inf saturates negative (the MIN literal trips a known frontend
+-- defect, so only check the sign)
+_fie_fc = 0.0 - _fie_inf_f
+_fie_si = _fie_fc
+if _fie_si > _fie_slimit then
+   _fie_conv = 0
+end if
+-- NaN converts to 0
+_fie_si = _fie_nan_f
+if _fie_si != 0 then
+   _fie_conv = 0
+end if
+-- I2F both ways
+_fie_dw = 1000000
+_fie_fa = _fie_dw
+if _fie_fa != 1000000.0 then
+   _fie_conv = 0
+end if
+_fie_si = -12345
+_fie_fa = _fie_si
+_fie_si = _fie_fa
+if _fie_si != -12345 then
+   _fie_conv = 0
+end if
+if _fie_conv == 0 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+
+forever loop
+end loop

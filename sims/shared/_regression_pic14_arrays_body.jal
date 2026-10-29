@@ -1,0 +1,88 @@
+-- Title: PIC14 enhanced arrays regression body (include-only)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Same checks as **`_regression_pic18_arrays_body.jal`** but **`var byte _native_buf[64]`**
+--    so the buffer plus **`regression.jal`** GPRs stay within one PIC14 bank (**<128** bytes).
+--    Probes indices **0**, **32**, **63**; **`large_array_6`** fill/sum unchanged (**96** elements).
+--
+-- Notes:
+--    Top-level **`.jal`** must **`include regression_<device>_device`** for **16F1825** / **12F1840**,
+--    then **`alias led`**, **`pin_A0_direction`**, **`include regression`**, then this file.
+--    Five **`regression_checkpoint()`** calls; **`expect byte v__check_step 5`**.
+
+var byte _native_buf[64]
+
+const dword LARGE_ARRAY_6_SIZE = 96
+const dword LARGE_ARRAY_6_VARIABLE_SIZE = 1
+include large_array_6
+alias _la6 is large_array_6
+
+--------------------------------------------------------------------------------
+-- Description: Verify native buffer and large_array_6 (PIC14 bank-sized native array)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _run_array_checks() is
+   var byte _i
+   var word _sum
+
+   regression_begin_run()
+
+   _native_buf[0] = 0xA1
+   _native_buf[32] = 0xB2
+   _native_buf[63] = 0xC3
+
+   if _native_buf[0] != 0xA1 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if _native_buf[32] != 0xB2 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if _native_buf[63] != 0xC3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   for 96 using _i loop
+      _la6[_i] = _i
+   end loop
+   regression_checkpoint()
+
+   _sum = 0
+   for 96 using _i loop
+      if _la6[_i] != _i then
+         _check_failed = true
+      end if
+      _sum = _sum + word(_la6[_i])
+   end loop
+
+   if _sum != 4560 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_array_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

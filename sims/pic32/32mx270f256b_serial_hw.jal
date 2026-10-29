@@ -1,0 +1,66 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — serial_hw
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 serial_hardware.jal (U1MODE/UART) runtime smoke: init,
+--    blocking write of a known byte, and data_available/read path.
+--    The QEMU run captures the emulated UART output and the harness
+--    checks it equals "A" (see sim_validate uart_out). U1TXREG itself
+--    reads as 0 (write-only), and URXDA stays 0 with no input.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_serial_hw.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- uart_out: A
+-- expect byte v_read_back 0
+-- expect byte v_echo 1
+-- expect dword_le v_mode_reg 0x8008
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+
+-- NOTE: no PMD5 write — PMD resets to 0 (modules enabled); qemu-pic32
+-- treats unimplemented peripheral registers as fatal.
+
+-- define serial inputs/outputs (physical pins)
+pin_B0_direction = output                  -- UART1 TX (U1TX via PPS)
+pin_B2_direction = input                   -- UART1 RX (U1RX via PPS)
+
+-- route UART1 to the pins (PPS)
+-- setup serial library (UART1 registers + board wiring RPB0/RPB2)
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_B0
+alias serial_hw_pin_tx_direction is pin_B0_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB0R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+include serial_hardware
+serial_hw_init()
+
+var volatile byte read_back = 0
+var volatile byte echo = 0
+
+-- blocking write: byte goes out the emulated UART (harness checks the
+-- captured output equals "A"; U1TXREG itself reads 0 = write-only)
+serial_hw_write("A")
+
+-- no input connected: data_available() must be FALSE and read must not
+-- return data
+if serial_hw_data_available() then
+   read_back = serial_hw_data
+end if
+
+-- verify the init state of the control registers (dword for uart check)
+var volatile dword mode_reg = U1MODE
+if mode_reg == 0x00008008 then             -- ON + BRGH (4x baud divisor)
+   if U1STA_URXDA == FALSE then
+      echo = 1                             -- all control state verified
+   end if
+end if

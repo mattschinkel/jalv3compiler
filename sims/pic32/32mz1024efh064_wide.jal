@@ -1,0 +1,101 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — wide
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: N-byte / wide integer (qword/oword + call)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_wide.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- expect byte v_rg 1
+-- expect byte v_rh 1
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+var volatile byte rg = 0
+var volatile byte rh = 0
+
+var volatile dword da = 0
+var volatile qword qa = 0
+var volatile qword qb = 0
+var volatile oword oa = 0
+var volatile sqword sq = 0
+
+--------------------------------------------------------------------------------
+-- Description: Copy qword in, write qword+1 to out (wide param marshal)
+-- Parameters:
+-- - _qin  - input qword
+-- - _qout - output qword
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure _wide_inc(qword in _qin, qword out _qout) is
+   _qout = _qin + 1
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Add two signed qwords
+-- Parameters:
+-- - _x - left operand
+-- - _y - right operand
+-- Returns: _x + _y
+--------------------------------------------------------------------------------
+function _wide_sum(sqword in _x, sqword in _y) return sqword is
+   return _x + _y
+end function
+
+da = 0x01020304
+if da == 0x01020304 then
+   rd = 1
+end if
+
+qa = 0x0123456789ABCDEF
+qb = qa + 0x11
+if byte(qa >> 56) == 0x01 then
+   ra = 1
+end if
+if byte(qb) == 0x00 then
+   rb = 1
+end if
+if byte(qb >> 8) == 0xCE then
+   rc = 1
+end if
+
+oa = 0x0123456789ABCDEF0123456789ABCDEF
+if byte(oa >> 120) == 0x01 then
+   re = 1
+end if
+oa = oa + 1
+if byte(oa) == 0xF0 then
+   rf = 1
+end if
+
+sq = -2
+if sq == -2 then
+   rg = 1
+end if
+
+_wide_inc(qa, qb)
+if byte(qb) == 0xF0 then
+   rh = 1
+end if
+if _wide_sum(sq, sq) != -4 then
+   rh = 0
+end if

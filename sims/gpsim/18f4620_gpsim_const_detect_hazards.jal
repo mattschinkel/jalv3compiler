@@ -1,0 +1,64 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim regression — const-detect promotion hazards
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the hardened vetoes of the opt-in const-detect pass
+--    (fix_const_detect_overlay_host_veto.md), all with
+--    `pragma opt const_detect yes` ACTIVE:
+--    (1) a variable that is the storage HOST of an overlay must not be
+--        const-folded -- writes through the overlay reference the
+--        overlay's variable, never the host (byte-at-byte and
+--        byte-at-dword shapes);
+--    (2) a variable referenced before its single const assign must not
+--        be folded -- the earlier read sees unassigned storage.
+--
+--    Known REMAINING unsound shapes of the opt-in pass, documented in
+--    the fix doc and deliberately NOT pinned here (they fail by
+--    design): a runtime-guarded const assign whose read can execute on
+--    the skipped path (needs dominance analysis), and indirect
+--    (pointer) calls with out actuals (pass corrupts the marshalling
+--    independent of promotion -- pre-existing).
+--
+-- @gpsim_validate begin
+-- steps: 100000
+-- frequency_hz: 20000000
+-- expect byte v__check_step 3
+-- expect byte v__r1 7
+-- expect byte v__r2 255
+-- expect byte v__r3 0
+-- @gpsim_validate end
+
+include regression_18f4620_device
+include regression
+include 18f4620
+
+pragma opt const_detect yes
+
+var volatile byte _r1 = 0
+var volatile byte _r2 = 0
+var volatile byte _r3 = 0
+
+-- (1a) byte overlay writes the host after the host's const assign
+var byte y1
+var byte x1 at y1
+y1 = 5
+x1 = 7
+_r1 = y1              -- must read 7 (RAM), not the folded 5
+regression_checkpoint()
+
+-- (1b) byte overlay on a dword host; alias overwrites the low byte
+var dword host
+var byte lo at host
+host = 0x11223344
+lo = 0xFF
+_r2 = byte(host)      -- must read 0xFF, not the folded 0x44
+regression_checkpoint()
+
+-- (2) read BEFORE the single const assign sees unassigned storage
+var byte y3
+_r3 = y3              -- must read 0 (fresh RAM), not the folded 5
+y3 = 5
+regression_checkpoint()

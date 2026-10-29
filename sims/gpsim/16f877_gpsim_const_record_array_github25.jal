@@ -1,0 +1,69 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — const record array (GitHub jalv2compiler #25)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Minimal behavioural check for upstream **#25**: **`const`** array of
+--    **`record`** values (same shape as the GitHub issue #25 repro)
+--    and indexed reads of **`.data`** in RAM. No serial / EEPROM — only **gpsim**
+--    RAM **`expect`** on extracted bytes.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64
+--    tests/16f877_gpsim_const_record_array_github25.jal`**
+--
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v_v_gh25_d0 1
+-- expect byte v_v_gh25_d1 2
+-- expect byte v_v_gh25_d2 3
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+record cmd_def is
+   byte tla[3]
+   word data
+end record
+
+const cmd_def cmds[3] = { {"s1n", 1}, {"s1r", 2}, {"s1m", 3} }
+
+var volatile byte v_gh25_d0 = 0
+var volatile byte v_gh25_d1 = 0
+var volatile byte v_gh25_d2 = 0
+
+procedure _gh25_capture() is
+   v_gh25_d0 = byte(cmds[0].data)
+   v_gh25_d1 = byte(cmds[1].data)
+   v_gh25_d2 = byte(cmds[2].data)
+end procedure
+
+TRISA = 0
+TRISB = 0
+TRISC = 0
+PORTA = 0
+PORTB = 0
+PORTC = 0
+
+regression_begin_run()
+
+_gh25_capture()
+
+if (v_gh25_d0 != 1) | (v_gh25_d1 != 2) | (v_gh25_d2 != 3) then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()

@@ -1,0 +1,22 @@
+-- Title: PIC16F877 gpsim regression — device defaults (classic mid-range PIC14)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Matches root **`16f877_pointer_basic_test.jal`**: **`include 16f877`**, **`pragma target`**
+--    (**HS** **20 MHz**, **WDT** off, **LVP** on, **DEBUG**/**CP** off), **`enable_digital_io()`**.
+--    No **`@config_expect`** (optional fuse check omitted like the root pointer smoke test).
+--    **gpsim** processor **`p16f877`**.
+--
+-- Notes:
+--    Include only on **PIC16F877** pointer / mid-range tests under **`tests/16f877_gpsim_*.jal`**.
+
+include 16f877
+
+pragma target clock 20_000_000
+pragma target OSC      HS
+pragma target LVP      enabled
+pragma target WDT      disabled
+pragma target DEBUG    disabled
+pragma target CP       disabled
+
+enable_digital_io()

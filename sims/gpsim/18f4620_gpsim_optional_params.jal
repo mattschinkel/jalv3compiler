@@ -1,0 +1,119 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim regression — optional parameters
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `optional <type> in <name> default <const>`: calls at every
+--    arity fill from the declared defaults; bit / byte / word scalar
+--    defaults; open-array (string literal) default incl. the hidden
+--    COUNT member; full-arity calls unaffected.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: 40000000
+-- expect byte v__op_sent 26
+-- expect byte v__op_sent2 34
+-- expect byte v__check_step 6
+-- expect byte v__op_lit0 0
+-- expect byte v__op_lit2 2
+-- expect byte v__op_lit4 4
+-- expect byte v__op_litd 4
+-- expect byte v__op_full 7
+-- expect byte v__op_one 21
+-- expect byte v__op_none 22
+-- expect byte v__op_bit_t 1
+-- expect byte v__op_bit 2
+-- expect byte v__op_arr0 103
+-- expect byte v__op_arrn 5
+-- expect byte v__op_arromit_n 3
+-- @gpsim_validate end
+
+include regression_18f4620_device
+include regression
+include 18f4620
+
+var volatile byte _op_full  = 0
+var volatile byte _op_one   = 0
+var volatile byte _op_none  = 0
+var volatile byte _op_bit   = 0
+var volatile byte _op_bit_t = 0
+var volatile byte _op_arr0  = 0
+var volatile byte _op_arrn  = 0
+var volatile byte _op_arromit_n = 0
+var volatile byte _op_sent   = 0
+var volatile byte _op_sent2  = 0
+
+var volatile byte _sink = 0
+
+procedure _mix(byte in base, optional word in scale default 5,
+    optional byte in bias default 1) is
+   -- expose base+scale+bias (kept <= 255 per call)
+   _sink = byte(word(base) + word(scale) + word(bias))
+end procedure
+
+procedure _switch(optional bit in on default true) is
+   if on then
+      _op_bit = 1
+   else
+      _op_bit = 2
+   end if
+end procedure
+
+procedure _tag(optional byte in txt[] default "gpsim") is
+   _op_arr0 = txt[0]
+   _op_arrn = byte(COUNT(txt))
+end procedure
+
+-- full arity: 2 + 3 + 1 = 6... byte() cast shapes below keep it simple
+_mix(2, 3, 1)                       -- 2+3+1 = 6 -> _sink
+_op_full = _sink + 1                -- 7
+regression_checkpoint()
+
+_mix(10, 10)                        -- 10+10+1 = 21
+_op_one = _sink
+regression_checkpoint()
+
+_mix(16)                            -- 16+5+1 = 22
+_op_none = _sink
+regression_checkpoint()
+
+_switch()                           -- default true -> 1
+_op_bit_t = _op_bit
+_switch(false)                      -- -> 2
+_tag("abc")                         -- arr0='a'(97), n=3
+_op_arromit_n = _op_arrn            -- 3
+_tag()                              -- "gpsim": 'g'=103, n=5
+regression_checkpoint()
+
+-- empty-string sentinel: `""` on a NON-string optional formal means
+-- OMITTED -- the declared default fills exactly as a missing argument
+_mix(20, "")                        -- 20+5+1 = 26
+_op_sent = _sink                    -- 26
+_mix(20, "", 9)                     -- sentinel mid-list: 20+5+9 = 34
+_op_sent2 = _sink                   -- 34
+_tag("")                            -- default "gpsim" fills: 'g', 5
+regression_checkpoint()
+
+-- DYNAMIC-string formal takes literals of ANY length (including
+-- empty) and the omitted-arg default reads as a real string
+const word _string_heap_size = 64
+include strings_dynamic
+var volatile byte _op_litn = 255
+var volatile byte _op_lit0 = 99
+var volatile byte _op_lit2 = 99
+var volatile byte _op_lit4 = 99
+var volatile byte _op_litd = 99
+procedure _litlen(optional string in s default "dflt") is
+   _op_litn = byte(COUNT(s))
+end procedure
+_litlen("")                         -- 0
+_op_lit0 = _op_litn
+_litlen("ab")                       -- 2 (pre-fix: type mismatch)
+_op_lit2 = _op_litn
+_litlen("abcd")                     -- 4 (pre-fix: type mismatch)
+_op_lit4 = _op_litn
+_litlen()                           -- default "dflt" staged: 4
+_op_litd = _op_litn
+regression_checkpoint()

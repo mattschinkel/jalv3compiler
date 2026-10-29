@@ -1,0 +1,93 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — bare const string (flash, no heap handle)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `const string S = "literal"` is a compile-time flash string (the
+--    sized `const string[N]` semantics with size from the literal);
+--    previously it mis-routed into the dynamic-string machinery and
+--    demanded a heap (and an error-recovery path asserted). Checks:
+--    COUNT folds, [i] reads flash, ==, declaration-initialize a heap
+--    string FROM the const, chain with the const as operand.
+--
+-- @gpsim_validate begin
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect byte v_cs_n1 5
+-- expect byte v_cs_b0 104
+-- expect byte v_cs_b4 111
+-- expect byte v_cs_eq 1
+-- expect byte v_cs_ns 5
+-- expect byte v_cs_nc 6
+-- expect byte v_cs_c0 104
+-- expect byte v_cs_c5 33
+-- expect byte v__check_step 4
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const string STR = "hello"
+const string TAIL = "!"
+
+const word _string_heap_size = 60
+include strings_dynamic
+
+var string s = STR
+var string c = STR & TAIL
+
+var volatile byte cs_n1 = 0
+var volatile byte cs_b0 = 0
+var volatile byte cs_b4 = 0
+var volatile byte cs_eq = 0
+var volatile byte cs_ns = 0
+var volatile byte cs_nc = 0
+var volatile byte cs_c0 = 0
+var volatile byte cs_c5 = 0
+
+var byte buf[8]
+var byte r
+
+procedure _run() is
+   regression_begin_run()
+   cs_n1 = COUNT(STR)
+   cs_b0 = STR[0]
+   cs_b4 = STR[4]
+   if STR == "hello" then
+      cs_eq = 1
+   end if
+   regression_checkpoint()
+   cs_ns = COUNT(s)
+   cs_nc = COUNT(c)
+   r = string_to_array(buf, c)
+   cs_c0 = buf[0]
+   cs_c5 = buf[5]
+   regression_checkpoint()
+   -- direct const string as the `string in` source (no heap copy needed
+   -- in the source text -- the call-site coercion handles it)
+   r = string_to_array(buf, STR)
+   if (buf[0] == 104) & (buf[1] == 101) then
+      regression_checkpoint()
+   end if
+   -- re-assign the heap string from the const still works
+   s = TAIL
+   if COUNT(s) == 1 then
+      regression_checkpoint()
+   end if
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+led = low
+
+forever loop
+end loop

@@ -1,0 +1,100 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 print_shadow suite — print.jal shadow, exact opt-in
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the demo_lib/print.jal fork shadow's opt-in path
+--    (fix_print_jal_shadow): with
+--       const _PRINT_FLOAT_EXACT = TRUE
+--    defined BEFORE `include print`, the SAME call name print_float
+--    must render through the exact shortest-round-trip renderer
+--    (demo_lib/float_str.jal) — same text as print_float_exact.
+--    print_byte_dec is driven first to pin that the rest of the
+--    shadowed print.jal is intact in the exact configuration too.
+--
+--    The negative half (the opt-in on a part that cannot hold the
+--    128-bit renderer) is a compile pin:
+--    scripts/test_print_shadow_negative.sh (16F877 fails cleanly).
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- frequency_hz: 20000000
+-- expect byte v__check_step 5
+-- expect byte v__sib_n 2
+-- expect byte v__sib_b0 52
+-- expect byte v__sib_b1 50
+-- expect byte v__c0_n 10
+-- expect byte v__c0_b0 48
+-- expect byte v__c0_b9 52
+-- expect byte v__c1_n 10
+-- expect byte v__c1_b0 49
+-- expect byte v__c1_b9 53
+-- expect byte v__c2_n 3
+-- expect byte v__c3_n 3
+-- expect byte v__c3_b2 53
+-- @gpsim_validate end
+
+include regression_18f4620_device
+include regression
+include 18f4620
+
+const _PRINT_FLOAT_EXACT = TRUE
+
+include print
+
+-- capture pseudo-device: same 'put dispatch as serial_hw_data
+var byte _cap[64]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+var volatile byte _sib_n = 0
+var volatile byte _sib_b0 = 0
+var volatile byte _sib_b1 = 0
+var volatile byte _c0_n = 0
+var volatile byte _c0_b0 = 0
+var volatile byte _c0_b9 = 0
+var volatile byte _c1_n = 0
+var volatile byte _c1_b0 = 0
+var volatile byte _c1_b9 = 0
+var volatile byte _c2_n = 0
+var volatile byte _c3_n = 0
+var volatile byte _c3_b2 = 0
+
+procedure _chk(float in f) is
+   _capn = 0
+   print_float(cap, f)
+end procedure
+
+-- sibling sanity: the rest of the shadowed print.jal works unchanged
+_capn = 0
+print_byte_dec(cap, 42)  -- "42"
+regression_checkpoint()
+_sib_n = _capn            -- 2
+_sib_b0 = _cap[0]         -- '4' = 52
+_sib_b1 = _cap[1]         -- '2' = 50
+
+_chk(0.14159274)          -- "0.14159274" (10 chars; stock: 1.4159226e-01)
+regression_checkpoint()
+_c0_n = _capn             -- 10
+_c0_b0 = _cap[0]          -- '0' = 48
+_c0_b9 = _cap[9]          -- '4' = 52
+
+_chk(19.634954)           -- boundary form "19.6349545" (value-correct)
+regression_checkpoint()
+_c1_n = _capn             -- 10
+_c1_b0 = _cap[0]          -- '1' = 49
+_c1_b9 = _cap[9]          -- '5' = 53
+
+_chk(0.1)                 -- "0.1"
+regression_checkpoint()
+_c2_n = _capn             -- 3
+
+_chk(3.5)                 -- "3.5"
+regression_checkpoint()
+_c3_n = _capn             -- 3
+_c3_b2 = _cap[2]          -- '5' = 53

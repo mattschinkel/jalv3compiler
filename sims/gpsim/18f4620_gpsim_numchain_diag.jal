@@ -1,0 +1,41 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim numchain diag
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- allow_compiler_warnings: 1
+-- expect byte v__c7 1
+-- expect byte v__c8 1
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 240
+pragma string index byte
+include strings_dynamic
+
+var volatile byte _c7 = 0
+var volatile byte _c8 = 0
+var string num_out
+var byte u8
+var sbyte s8 = -7
+
+num_out = "v=" & 32 & "!"
+if num_out == "v=32!" then
+   _c7 = 1
+end if
+u8 = 42
+num_out = "n=" & u8 & " s=" & s8 & " l=" & -42
+if num_out == "n=42 s=-7 l=-42" then
+   _c8 = 1
+end if
+regression_checkpoint()
+regression_pass_led_if_clean()
+forever loop
+   _usec_delay(100_000)
+end loop

@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC32 compiler regression — float IEEE body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The IEEE-754 semantics pin for the MIPS float (float_alg cuts
+--    2-5 LANDED: the battery that spent the migration out-of-suite
+--    as the failing spec is now the permanent regression pin --
+--    10/10 sections green).
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: pic32mz-explorer16
+-- compiler_args: -Wno-misc -Wno-conversion
+-- expect byte v__check_step 10
+-- expect byte v__fie_div_exact 1
+-- expect byte v__fie_div_rne 1
+-- expect byte v__fie_div_under 1
+-- expect byte v__fie_add_denorm 1
+-- expect byte v__fie_addsub 1
+-- expect byte v__fie_mul 1
+-- expect byte v__fie_inf 1
+-- expect byte v__fie_nan 1
+-- expect byte v__fie_negzero 1
+-- expect byte v__fie_conv 1
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _regression_float_ieee_body

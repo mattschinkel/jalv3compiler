@@ -1,0 +1,23 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — runtime signed div/mod
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_sdiv_body` via @sim_validate: scalar signed
+--    DIV/MOD sign semantics with runtime divisors (the outlined-helper
+--    sign-flag clobber fix).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_sdiv.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 5
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_sdiv_body

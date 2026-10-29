@@ -1,0 +1,65 @@
+-- ----------------------------------------------------------------------------
+-- Title: Pointer-to-pseudo-variable binding — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `p is pv` where pv is a pseudo-variable with 'get/'put
+--    accessors: reading through the bound pointer routes to 'get
+--    (the pre-existing rvalue link), and writing through it routes to
+--    'put (the write-side mirror added with it). Pre-fix, the write
+--    stored through the pointer slot -- which holds no pointee
+--    address for a pseudo -- corrupting whatever the bind left there
+--    and never reaching the accessor (broken on every back end; the
+--    read side was already correct on ESP32/PIC32 and classic).
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+regression_begin_run()
+
+var byte _ppg_shadow = 77
+var byte _ppg_snap1 = 0
+var byte _ppg_snap2 = 0
+var byte _ppg_snap3 = 0
+var pointer _ppg_p as var byte
+
+function _ppg_pv'get return byte is
+   return _ppg_shadow
+end function
+
+procedure _ppg_pv'put(byte in v) is
+   _ppg_shadow = v
+end procedure
+
+_ppg_p is _ppg_pv
+_ppg_snap1 = _ppg_p
+if _ppg_snap1 == 77 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+_ppg_pv = 88
+_ppg_snap2 = _ppg_p
+if _ppg_snap2 == 88 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+_ppg_p = 99
+if _ppg_shadow == 99 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+_ppg_snap3 = _ppg_p
+if _ppg_snap3 == 99 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()

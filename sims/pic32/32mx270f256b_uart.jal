@@ -1,0 +1,50 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — UART
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): serial_hw_init (U1MODE/U1STA + PPS) and a
+--    short UART transcript.  Board wiring used here (change for your
+--    board): RPB0 = U1TX, RPB2 = U1RX (U1RXR code 0b0100 per the
+--    MX1/2 PPS input table), 115200 8N1, PBCLK = SYSCLK/2 (FPBDIV=1).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_uart.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- uart_contains: MX270F256B UART ok
+-- expect byte v_uart_done 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_B0
+alias serial_hw_pin_tx_direction is pin_B0_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB0R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+
+include serial_hardware
+serial_hw_init()
+
+var volatile byte uart_done = 0
+const byte msg[] = "MX270F256B UART ok"
+var byte n
+
+for 20 loop
+   n = 0
+   while msg[n] != 0 loop
+      serial_hw_write(msg[n])
+      n = n + 1
+   end loop
+   serial_hw_write(10)
+end loop
+uart_done = 1
+forever loop
+end loop

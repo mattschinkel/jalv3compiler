@@ -1,0 +1,70 @@
+-- Title: PIC32 sample-PWM body (software stub; no CCP in QEMU device file)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Mirrors the checkpoint shape of `_regression_pic14_sample_pwm_body.jal`
+--    without `pwm_hardware` (no CCP SFRs on the minimal PIC32 device file).
+--    Exercises percent/clamp arithmetic used by sample PWM apps.
+--
+-- ------------------------------------------------------
+
+var byte _pwm_duty = 0
+var byte _pwm_on = 0
+
+--------------------------------------------------------------------------------
+procedure _pwm_max_resolution(byte in n) is
+   if n == 0 then
+      _check_failed = true
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _pwm1_on() is
+   _pwm_on = 1
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _pwm1_set_dutycycle_percent(byte in pct) is
+   if pct > 100 then
+      _pwm_duty = 100
+   else
+      _pwm_duty = pct
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _run_pwm_sample_checks() is
+   regression_begin_run()
+
+   _pwm_max_resolution(1)
+   _pwm1_on()
+   if _pwm_on != 1 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _pwm1_set_dutycycle_percent(40)
+   if _pwm_duty != 40 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_pwm_sample_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

@@ -1,0 +1,137 @@
+gpsim_validate contract — JAL sources + tests/jal_gpsim_validate.sh
+=======================================================================
+
+Purpose
+-------
+A block in a `.jal` file tells **`tests/jal_gpsim_validate.sh`** how long to
+step **gpsim**, which **file-register** values to read after the run, and what
+**pass** means. **Default run** (without **`--no-validate`**) **requires** this
+block and **at least one** **`expect`** line; the script fails fast before compile
+if not (**`tests/gpsim_validate_engine.py check-contract`**). The script maps **JAL
+variables** to assembler symbols by reading the generated **`.asm`**: a variable
+**`_foo`** normally appears as **`v__foo`** (lines like **`v__foo EQU 0x....`**).
+Use those **`v__...`** names in **`expect`** lines (peek at `.asm` once if unsure).
+
+For new tests, **`tests/regression.jal`** (**`include regression`**, compile with **`-s 'lib;gpsim_tests'`**) supplies **`_check_step`**
+and helpers **`regression_begin_run`**, **`regression_checkpoint`**, **`regression_pass_led_if_clean`**
+— see **`instructions_gpsim_test.txt`** (repo root).
+
+Markers (case-insensitive), each on its own `--` comment line:
+
+  -- @gpsim_validate begin
+  ...directives...
+  -- @gpsim_validate end
+
+Optional device configuration (checked against **`.asm`** after compile, before **gpsim**):
+
+  -- @config_expect begin
+  -- 0x00300000 0xff
+  -- 0x00300001 0x06
+  ... one line per configuration byte: address then value (hex) ...
+  -- @config_expect end
+
+Each line between the markers must be exactly **`-- 0xADDRESS 0xVALUE`** (two hex literals).
+For **PIC18**, each **`VALUE`** is one configuration byte (matches one **`__config`** line).
+For **PIC14 enhanced**, **`VALUE`** is the full **14-bit config word** (e.g. **`0x3FFF`**) at
+logical word address **`0x8007`**, **`0x8008`**, … (matches **`__config 0x8007, 0x3fff`** in **`.asm`**).
+**`jal_gpsim_validate.sh`** runs **`gpsim_validate_engine.py check-config`**: **`__config`** in
+the generated **`.asm`** must match this block; **Intel HEX** must match too — **PIC18** bytes
+at extended linear **`0x0030`**, **PIC14** words as **little-endian** pairs at linear
+**`0x10000 + 2×(addr − 0x8000)`** (INHX32 segment **`0x0001`**), as emitted by this compiler.
+The block may live in the main **`.jal`** or in a **local** included fragment (same directory), e.g.
+**`tests/regression_18f4620_device.jal`** / **`regression_18f26k22_device.jal`** /
+**`regression_16f1825_device.jal`** / **`regression_12f1840_device.jal`** /
+**`regression_16f877_device.jal`** (classic **PIC16F877** / **`p16f877`**, no **`@config_expect`**).
+Other MCUs must use a **different** **`regression_<device>_device.jal`** — do not **`include regression_18f4620_device`** on non-4620 parts.
+Omit **`@config_expect`** when no fuse check is needed.
+
+Directives (each starts with **`-- `**, keyword, colon or space-separated fields):
+
+  steps: <integer>
+    Instruction steps before **`dump r`**. Ignored if you pass **`-n`** on the
+    script command line.
+
+  frequency_hz: auto | <integer>
+    **`frequency`** passed to gpsim. **`auto`** = infer from **`pragma target clock`**
+    in this file, else script default (40 MHz). Ignored if you pass **`-f`** on the
+    CLI.
+
+  checkpoint_verify: off | false | 0 | no
+    (**`run_regression_suite.py` only.**) Skip the **`regression_checkpoint()`** count
+    vs **`expect byte v__check_step`** pairing for this **`.jal`**. Use sparingly when
+    **`_check_step`** file storage can be clobbered by the firmware under test (e.g.
+    large dynamic-string / compaction paths on PIC18); document why in the test file.
+
+  compiler_args: <tokens…>
+    Extra arguments inserted after **`-s lib;…/gpsim_tests`** and before the **`.jal`**
+    path when **`tests/jal_gpsim_validate.sh`** invokes the compiler (e.g.
+    **`compiler_args: -task 2`** for **`pragma task`**). Whitespace-separated only.
+
+  skip_gpsim: 1 | true | yes | on
+    After a successful compile, **`check-config`**, and (unless **`--no-validate`**) **`check-asm-symbols`**,
+    exit **0** without running **gpsim** or RAM **`expect`** validation. Use when this **gpsim** build has
+    no CPU model for the part (e.g. legacy **pic18f8722**-only layouts) or for other temporary opt-outs documented in **`progress.md`** / **`fix_*.md`**.
+
+  allow_compiler_warnings: 1 | true | yes | on
+    After compile, **`jal_gpsim_validate.sh`** does **not** treat a non-zero warning count as failure.
+    Use **sparingly** (e.g. **PIC14H** **`pragma task`** files with known backend **pclath** diagnostics) and document why.
+
+  expect_hw_stkptr_le_compiler_depth: 1 | true | yes | on
+    After RAM **`expect`** checks pass, run **`scripts/gpsim_hw_return_stack_max.py`** on the same **`.hex`**
+    (same **`-p`** / **`-f`** / **`-n`** as the main gpsim run unless **`hw_stkptr_steps`** overrides step count).
+    Parse **`Hardware stack depth X of Y`** from the compiler log; **fail** if the simulated maximum **STKPTR**
+    exceeds **X** (dynamic one-path bound vs static CFG bound). **PIC18** and **PIC16 enhanced** (gpsim exposes **`stkptr`**)
+    only — classic mid-range **PIC14** (e.g. **p16f877**) cannot use this directive.
+
+  hw_stkptr_steps: <integer>
+    Optional. When **`expect_hw_stkptr_le_compiler_depth`** is on, instruction count for the STKPTR trace only
+    (defaults to the same value as **`steps:`**). Lower values shorten the extra gpsim pass but may miss a deeper
+    nest that occurs later on the simulated path.
+
+  expect bit_clear <asm_symbol> <bit 0-7>
+    PASS if (byte at file address of symbol) & (1<<bit) == 0.
+
+  expect bit_set <asm_symbol> <bit>
+    PASS if bit is set.
+
+  expect byte <asm_symbol> <0-255 or 0xNN>
+    Single-byte equality at that file address. **`<asm_symbol>`** may be
+    **`<base>+<decimal>`** (e.g. **`v__mh00+1`**) to read **`EQU(base)+offset`**
+    when the harness has no separate **`.asm`** label for that byte.
+
+  expect word_le <asm_symbol> <decimal>
+    Little-endian 16-bit word at symbol address (same **`+offset`** suffix as
+    **`expect byte`**, applied to the **low** byte of the word).
+
+  expect dword_le <asm_symbol> <decimal>
+    Little-endian 32-bit dword at symbol address (same **`+offset`** rule).
+
+  expect file_addr_ne <base_asm_symbol> <byte_offset> <other_asm_symbol>
+    **Assembler-only** (checked in **`check-asm-symbols`** after compile, before **gpsim**; not read from **`dump r`**):
+    **`EQU`** address of **`base_asm_symbol`** plus **`byte_offset`** must **not** equal the **`EQU`**
+    address of **`other_asm_symbol`**. Catches GPR alias bugs such as PIC18 **`v__gptr_cp+2`** sharing a
+    file address with **`v__check_step`**. For PIC14 **2-byte** pointers, use **`byte_offset`** **`1`**
+    for the high byte of the slot; for PIC18 **3-byte** pointers, use **`2`** for the third byte (**UU**).
+
+All **`expect`** lines must pass. If the block is **missing** or has **no** **`expect`**
+lines, **`jal_gpsim_validate.sh`** exits **non-zero** before compile (unless you pass
+**`--no-validate`**, which runs compile + **gpsim** only with no RAM checks).
+
+Harness variables (recommended for new tests)
+---------------------------------------------
+- **`var bit _bad = false`** — set **`true`** when any runtime assertion fails; maps
+  to a packed byte; the usual check is **`expect bit_clear v__bitbucket 0`** when
+  **`_bad`** lives in bit 0 of **`v__bitbucket`** (typical JALv2 layout). **`tests/regression.jal`**
+  for **PIC14H** **`16f1825`** regression stacks **`_bad` / `_check_failed`** into **`_gpsim_regression_flags`**
+  at file **0x7D** — use **`expect bit_clear v__gpsim_regression_flags 0`**.
+- Publish **golden** values the script should read with **`expect dword_le v__myvar N`**
+  (etc.), using the **`v__`** name from **`.asm`**.
+- Pointer suites (**`16f877_gpsim_pointer_*.jal`**, **`{18f4620,12f1840}_compiler_regression_pointers.jal`**):
+  combine golden **`expect byte`** / **`word_le`** checks with **`expect bit_clear v__bitbucket 0`**
+  and **`expect byte v__check_step N`** after **`regression_begin_run`** / **`regression_checkpoint`**
+  / **`regression_pass_led_if_clean`** (see **`tests/regression.jal`**). **`16f1825_compiler_regression_pointers.jal`** uses **`expect bit_clear v__gpsim_regression_flags 0`** (same **`regression.jal`**, different asm tag).
+
+Do not rely on **PORT vs LATA** reads in checks that must pass in **gpsim** unless
+you model pins; drive outputs with **`lat`** / aliases as needed.
+
+See also **`instructions_gpsim_test.txt`** (repo root: harness + writing good tests).

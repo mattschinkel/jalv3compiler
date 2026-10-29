@@ -1,0 +1,36 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — native bit array
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: shared `_regression_native_bit_array_body` via @sim_validate
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_native_bit_array.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 17
+-- expect byte v__gpsim_ba_snap0 1
+-- expect byte v__gpsim_ba_snap3 1
+-- expect byte v__gpsim_ba_snap8 1
+-- expect byte v__gpsim_ba_snap9 0
+-- expect byte v__gpsim_ba_dyn6 1
+-- expect byte v__gpsim_ba_dyn9 1
+-- expect byte v__gpsim_ba_dyn6_clear 0
+-- expect byte v__gpsim_ba_init_snap0 1
+-- expect byte v__gpsim_ba_init_snap1 0
+-- expect byte v__gpsim_ba_const_snap2 1
+-- expect byte v__gpsim_ba_fixed_formal 1
+-- expect byte v__gpsim_ba_open_formal 1
+-- expect byte v__gpsim_ba_cast_snap 1
+-- expect byte v__gpsim_ba_logic_snap 1
+-- expect byte v__gpsim_ba_notl_snap 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_native_bit_array_body

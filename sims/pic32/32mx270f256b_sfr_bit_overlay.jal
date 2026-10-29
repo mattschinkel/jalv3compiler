@@ -1,0 +1,67 @@
+-- ------------------------------------------------------
+-- Title: PIC32 SFR bit-array overlay — aliasing proof + QEMU byte0 caveat
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var bit x[32] at <SFR dword>` aliases the SFR: runtime-indexed
+--    stores/reads address the register (listing-verified LUI/ORI base +
+--    runtime byte-1 RMW). Two environment caveats, not compiler defects:
+--    PORTB has pin-read semantics (writes latch, reads return pins) --
+--    LATB is the RMW-correct overlay target; and QEMU models SFR BYTE-0
+--    reads as 0xFF, so byte-0 RMW self-or's to 0xFF there (plain byte
+--    stores land fine; silicon byte-reads SFRs correctly). Bit indices
+--    here stay in byte 1 for QEMU robustness.
+--
+-- @sim_validate begin
+-- machine: pic32mx7-explorer16
+-- duration_s: 20.0
+-- expect byte v__check_step 4
+-- expect byte v__sfr_set 1
+-- expect byte v__sfr_read 1
+-- expect byte v__sfr_clear 1
+-- expect byte v__ram_ctl 1
+-- expect dword_le v__lat_snap 2048
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+include regression_pic32
+
+var volatile dword ramhost = 0
+var bit latb_bits[32] at LATB
+var bit rambits[32] at ramhost
+var volatile byte _sfr_set = 0
+var volatile byte _sfr_read = 0
+var volatile byte _sfr_clear = 0
+var volatile byte _ram_ctl = 0
+var volatile dword _lat_snap = 0
+var byte pin
+
+LATB = 0   -- materialize the register (QEMU byte-reads of never-written SFRs return 0xFF)
+pin = 11
+latb_bits[pin] = 1
+_lat_snap = LATB
+if _lat_snap == 0x800 then
+   _sfr_set = 1
+end if
+regression_checkpoint()
+
+if latb_bits[pin] == 1 then
+   _sfr_read = 1
+end if
+regression_checkpoint()
+
+latb_bits[pin] = 0
+if LATB == 0 then
+   _sfr_clear = 1
+end if
+regression_checkpoint()
+
+-- control: same overlay machinery over a RAM dword
+pin = 5
+rambits[pin] = 1
+if ramhost == 0x20 then
+   _ram_ctl = 1
+end if
+regression_checkpoint()

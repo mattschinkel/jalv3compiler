@@ -1,0 +1,43 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — single-vector ISR
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): plain `pragma interrupt` (single vector,
+--    software register save) dispatched through EBASE+0x200 in a PFM
+--    image.  QEMU models the MX IFS/IEC/IPC controller; the interrupt
+--    is raised in software via IFS0SET (core timer flag), as the MZ
+--    suite does.  Multi-vector (INTCON.MVEC table) is not supported on
+--    this family yet -- QEMU forces vector spacing 0, so it cannot be
+--    gated in simulation anyway.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_isr.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ticks 1
+-- expect byte v_isr_done 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+var volatile byte ticks = 0
+var volatile byte isr_done = 0
+
+procedure ct_isr() is
+   pragma interrupt
+
+   IFS0CLR = 1
+   ticks = ticks + 1
+end procedure
+
+IPC0 = 0x1C
+IEC0SET = 1
+IFS0SET = 1
+isr_done = 1
+forever loop
+end loop

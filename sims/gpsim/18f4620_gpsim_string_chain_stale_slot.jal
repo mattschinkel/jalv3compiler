@@ -1,0 +1,149 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim witness — heap-chain free-list stale link
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A chain-assignment sequence that ages the heap (greeting chain,
+--    three expression-position if-chains, int/neg/float chains) and
+--    then renders hex() casts into further chains. The interval
+--    temp allocator used to reuse a subscript index temp's slot for a
+--    load result, so the free_old merge wrote a stale heap byte as a
+--    free-list link; later allocations then handed out overlapping
+--    blocks and the hex() pad output read back its own payload
+--    ("ex: " instead of "001a"). Pins byte-level content of the
+--    per-statement results plus a re-render equality compare.
+--
+-- Notes:
+--    The interleaved string_to_array reads are ONLY after the int and
+--    neg statements and at the end -- reading after every statement
+--    changes the heap traffic enough that the historical defect did
+--    not trigger. Keep this shape when editing.
+--
+-- @gpsim_validate begin
+-- steps: 40000000
+-- frequency_hz: auto
+-- expect byte v__check_step 12
+-- expect byte v__gpsim_regression_flags 0
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 255
+pragma string index byte
+include strings_dynamic
+
+var string greeting
+var string name = "JALv2!"
+var string out
+var byte cnt
+var dword addr
+var sqword big_signed
+var byte buf[26]
+var bit r
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   greeting = "Hello, " & name
+   if greeting != "Hello, " & name then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+
+   if "Hello, " & name != greeting then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 2
+
+   if ! (greeting != "A" & name & "B") then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 3
+
+   cnt = 42
+   addr = 4294967295
+   big_signed = -1234567890
+   out = "cnt=" & cnt & " addr=" & addr
+   r = string_to_array(buf, out)
+   if buf[3] != "=" then
+      _check_failed = true
+   end if
+   if buf[4] != "4" then
+      _check_failed = true
+   end if
+   if buf[5] != "2" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 4
+
+   out = "neg: " & -42 & " sqw: " & big_signed
+   r = string_to_array(buf, out)
+   if buf[0] != "n" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 5
+
+   out = "pi~ " & 1.5 & " neg " & -2.25 & " hun " & 100.0
+   cnt = 26
+   out = "dec:  " & cnt & " (" & -7 & ")"
+   out = "hex:  " & hex(cnt) & " pad4 " & hex(cnt, 4)
+   r = string_to_array(buf, out)
+   if buf[0] != "h" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 6
+
+   if buf[14] != "0" then
+      _check_failed = true
+   end if
+   if buf[15] != "0" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 7
+
+   if buf[17] != "a" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 8
+
+   if COUNT(out) != 18 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 9
+
+   if out != "hex:  1a pad4 001a" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 10
+
+   r = string_to_array(buf, greeting)
+   if buf[0] != "H" then
+      _check_failed = true
+   end if
+   if buf[1] != "e" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 11
+
+   out = "tail " & cnt & " end"
+   r = string_to_array(buf, out)
+   if buf[5] != "2" then
+      _check_failed = true
+   end if
+   if buf[6] != "6" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 12
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

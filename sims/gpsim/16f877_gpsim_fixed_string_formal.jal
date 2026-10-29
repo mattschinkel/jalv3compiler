@@ -1,0 +1,107 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — literal actuals into fixed-string formals
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `p("hello")` on a `string[16] in s` formal used to be a type
+--    mismatch -- the literal's char-count def never matched the
+--    formal's capacity def, and only the exact count==N coincidence
+--    compiled (`p("0123456789abcdef")`). Literal actuals now stage
+--    into a compiler `var string[16]` cell (zero-padded by the fixed
+--    assign; a longer literal is a clean compile error). This body
+--    checks character reads inside the callee for literals of several
+--    lengths (including empty and the exact-N shape) and the unchanged
+--    direct pass of a same-capacity var. (COUNT on a fixed FORMAL
+--    folds to the capacity -- pre-existing fixed-array-formal
+--    semantics -- so the checks read characters instead.)
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- expect byte v__ff_a 97
+-- expect byte v__ff_b 0
+-- expect byte v__ff_c 0
+-- expect byte v__ff_d 0
+-- expect byte v__ff_e 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte _string_error = 0
+var string[16] _ff_buf
+var volatile byte _ff_a
+var volatile byte _ff_b
+var volatile byte _ff_c
+var volatile byte _ff_d
+var volatile byte _ff_e
+
+procedure _ff_probe(string[16] in s) is
+   _ff_a = s[0]
+   _ff_b = s[4]
+   _ff_c = s[5]
+   _ff_d = s[15]
+   _ff_e = _string_error
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   -- short literal: staged, zero-padded ("hello")
+   _ff_probe("hello")
+   if _ff_a != 104 then
+      _check_failed = true
+   end if
+   if _ff_b != 111 then
+      _check_failed = true
+   end if
+   if _ff_c != 0 then
+      _check_failed = true
+   end if
+   if _ff_d != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+
+   -- empty literal: staged, all zero
+   _ff_probe("")
+   if _ff_a != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 2
+
+   -- exact-capacity literal (the old coincidence shape, now staged)
+   _ff_probe("0123456789abcdef")
+   if _ff_a != 48 then
+      _check_failed = true
+   end if
+   if _ff_d != 102 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 3
+
+   -- same-capacity var passes directly (unchanged path)
+   _ff_buf = "abc"
+   _ff_probe(_ff_buf)
+   if _ff_a != 97 then
+      _check_failed = true
+   end if
+   if _ff_c != 0 then
+      _check_failed = true
+   end if
+   if _ff_e != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 4
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

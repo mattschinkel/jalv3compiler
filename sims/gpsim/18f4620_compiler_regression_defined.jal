@@ -1,0 +1,85 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — defined() boolean (label/value lookup)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Same **defined()** checks as **16f1825_compiler_regression_defined.jal** on PIC18.
+--    Guards **jal_expr.c** `defined(id)` (handles valid before **value_release** /
+--    **label_release**).
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/18f4620_compiler_regression_defined.jal
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect_hw_stkptr_le_compiler_depth: 1
+-- hw_stkptr_steps: 25000
+-- expect byte v__check_step 3
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+alias led is pin_A0
+alias led_pin is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const byte _GPR_EXISTING = 99
+
+--------------------------------------------------------------------------------
+-- Description: Empty procedure so **defined** can resolve a label (not only a const value).
+--------------------------------------------------------------------------------
+procedure _defined_label_probe() is
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Run **defined()** checks; each block ends with **regression_checkpoint**.
+--------------------------------------------------------------------------------
+procedure _run_defined_checks() is
+   regression_begin_run()
+
+   if defined(_GPR_EXISTING) then
+      if _GPR_EXISTING != 99 then
+         _check_failed = true
+      end if
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if defined(_GPR_DOES_NOT_EXIST_ZZZ) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if defined(_defined_label_probe) then
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led_pin = low
+end procedure
+
+_run_defined_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

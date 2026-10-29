@@ -1,0 +1,493 @@
+-- Title: Shortest round-trip float -> decimal renderer (heap-free)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: Render a float32 as the shortest decimal text that parses
+--    back to the same float32. Heap-free: the caller supplies a 48-byte
+--    buffer, so float-only consumers do not need `_string_heap_size` or
+--    `include strings_dynamic`.
+--
+--    Shared by demo_lib/print_float_exact.jal and the dynamic-string
+--    concat/chain machinery in demo_lib/strings_dynamic.jal (which includes
+--    this file). Extracted unchanged from strings_dynamic.jal 2026-10-21.
+--
+-- Sources:
+--  - fixes/fix_float_literal_parser_and_runtime_renderer.md (renderer)
+--  - fixes/fix_string_concat_float_consts.md (stage 2d const/format policy)
+--  - fixes/fix_float_str_extraction.md (this extraction)
+-- ------------------------------------------------------
+--
+
+--------------------------------------------------------------------------------
+-- Description: Render a float as shortest-round-trip decimal text (runtime)
+-- Parameters:
+-- - f   - value to render
+-- - buf - 48-byte destination buffer (ASCII, not NUL-terminated)
+-- Returns:
+-- - byte - text length written into buf
+-- Notes: Stage 2d v2, the runtime twin of the compiler's float-CONST
+--   renderer (fixes/fix_string_concat_float_consts.md). IEEE754 binary32
+--   decomposes to sign / 24-bit mantissa / 2^E; digits come from exact
+--   128-bit integer arithmetic (value = num/den, subnormal tails scaled by
+--   5^t so the denominator stays <= 2^120); the shortest form is probed
+--   p = 1..9 by re-parsing the rounded digits with float operations; the
+--   formatting follows the const policy (fixed decimal preferred when the
+--   fraction fits <= 17 digits, trailing-zero trim, integral values carry
+--   no decimal point, "nan"/"inf"/"-0" specials, 2-digit exponents).
+
+--------------------------------------------------------------------------------
+--
+function _string_float_str(float in f, byte out buf[48]) return byte is
+   var float   _fs_f     = f
+   var dword   _fs_bits  at _fs_f
+   var byte    _fs_sign  = byte(_fs_bits >> 31)
+   var byte    _fs_exp   = byte((_fs_bits >> 23) & 0xFF)
+   var dword   _fs_man   = _fs_bits & 0x7FFFFF
+   var oword   _fs_num   = 0
+   var oword   _fs_den   = 1
+   var oword   _fs_ip    = 0
+   var oword   _fs_r     = 0
+   var sdword  _fs_e     = 0
+   var sdword  _fs_d     = 0
+   var sdword  _fs_ksh   = 0
+   var sdword  _fs_k     = 0
+   var sdword  _fs_kk    = 0
+   var sdword  _fs_ci    = 0
+   var sdword  _fs_ae    = 0
+   var byte    _fs_t     = 0
+   var byte    _fs_dig[12]
+   var byte    _fs_itmp[40]
+   var byte    _fs_cd[12]
+   var byte    _fs_et[4]
+   var byte    _fs_nd    = 0
+   var byte    _fs_nint  = 0
+   var byte    _fs_tailnz = 0
+   var byte    _fs_dg    = 0
+   var byte    _fs_i     = 0
+   var byte    _fs_j     = 0
+   var byte    _fs_b     = 0
+   var byte    _fs_p     = 1
+   var byte    _fs_q     = 1
+   var byte    _fs_up    = 0
+   var byte    _fs_nz    = 0
+   var byte    _fs_carry = 0
+   var byte    _fs_ok    = 0
+   var byte    _fs_done  = 0
+   var byte    _fs_len   = 0
+   var byte    _fs_en    = 0
+   var dword   _fs_dd    = 0
+   var float   _fs_rr    = 0.0
+   var dword   _fs_rrbits at _fs_rr
+   var dword   _fs_rc1   = 0
+   var dword   _fs_rc2   = 0
+   var dword   _fs_pwb   = 0
+   var float   _fs_pw    at _fs_pwb
+   var dword   _fs_pfb   = 1065353216
+   var float   _fs_pf    at _fs_pfb
+   var sdword  _fs_jj    = 0
+   var sdword  _fs_aa    = 0
+   var byte    _fs_pmax  = 9
+   var byte    _fs_isint = 0
+   var byte    _fs_nzj   = 0
+   var byte    _fs_i2    = 0
+   var byte    _fs_k2    = 0
+   var byte    _fs_j2    = 0
+
+   -- specials: NaN / Inf / (negative) zero
+   if _fs_exp == 255 then
+      if _fs_man != 0 then
+         buf[0] = "n"
+         buf[1] = "a"
+         buf[2] = "n"
+         return 3
+      end if
+      if _fs_sign != 0 then
+         buf[0] = "-"
+         buf[1] = "i"
+         buf[2] = "n"
+         buf[3] = "f"
+         return 4
+      end if
+      buf[0] = "i"
+      buf[1] = "n"
+      buf[2] = "f"
+      return 3
+   end if
+   if _fs_exp == 0 then
+      if _fs_man == 0 then
+         if _fs_sign != 0 then
+            buf[0] = "-"
+            buf[1] = "0"
+            return 2
+         end if
+         buf[0] = "0"
+         return 1
+      end if
+   end if
+
+   -- value = num * 2^E  (num: 24-bit significand, implicit bit for normals)
+   if _fs_exp != 0 then
+      _fs_num = _fs_man + 0x800000
+      _fs_e = sdword(_fs_exp) - 150
+   else
+      _fs_num = _fs_man
+      _fs_e = -149
+   end if
+   if _fs_e >= 0 then
+      _fs_num = _fs_num << byte(_fs_e)
+   else
+      _fs_d = -_fs_e
+      if _fs_d <= 120 then
+         _fs_den = _fs_den << byte(_fs_d)
+      else
+         -- deep tail (denominator 2^D, D > 120): scale the numerator by
+         -- 5^t and remember the 10^-t exponent shift; num*5^t <= 92 bits
+         _fs_t = byte(_fs_d - 120)
+         _fs_den = _fs_den << 120
+         for _fs_t loop
+            _fs_num = _fs_num * 5
+         end loop
+         _fs_ksh = sdword(_fs_t)
+      end if
+   end if
+
+   -- integer digits (LSB-first), then the fraction
+   _fs_ip = _fs_num / _fs_den
+   _fs_r = _fs_num % _fs_den
+   _fs_i = 0
+   while _fs_i < 12 loop
+      _fs_dig[_fs_i] = 0
+      _fs_i = _fs_i + 1
+   end loop
+   if _fs_r == 0 then
+      _fs_isint = 1
+   end if
+   while _fs_ip != 0 loop
+      -- the byte temp re-bases the wide MOD result: a direct
+      -- array[rt] = byte(oword % n) store keeps the wide def on the
+      -- RHS and the ESP32 back end rejects it
+      _fs_dg = byte(_fs_ip % 10)
+      _fs_itmp[_fs_nint] = _fs_dg
+      _fs_ip = _fs_ip / 10
+      _fs_nint = _fs_nint + 1
+   end loop
+   if _fs_nint != 0 then
+      _fs_k = sdword(_fs_nint) - 1
+      _fs_i = 0
+      while _fs_i < _fs_nint loop
+         _fs_dig[_fs_i] = _fs_itmp[_fs_nint - 1 - _fs_i]
+         _fs_i = _fs_i + 1
+      end loop
+      _fs_nd = _fs_nint
+   else
+      _fs_k = -1
+   end if
+   -- fraction digits: skip leading zeros (they lower K), cap at 12
+   _fs_done = 0
+   while _fs_done == 0 loop
+      if _fs_r == 0 then
+         _fs_done = 1
+      else
+         if _fs_nd >= 12 then
+            _fs_tailnz = 1
+            _fs_done = 1
+         else
+            _fs_r = _fs_r * 10
+            _fs_dg = byte(_fs_r / _fs_den)
+            _fs_r = _fs_r % _fs_den
+            if _fs_nd != 0 then
+               _fs_dig[_fs_nd] = _fs_dg
+               _fs_nd = _fs_nd + 1
+            else
+               if _fs_dg != 0 then
+                  _fs_dig[0] = _fs_dg
+                  _fs_nd = 1
+               else
+                  _fs_k = _fs_k - 1
+               end if
+            end if
+         end if
+      end if
+   end loop
+   if _fs_r != 0 then
+      _fs_tailnz = 1
+   end if
+   if _fs_ksh != 0 then
+      _fs_isint = 0
+   end if
+   _fs_k = _fs_k - _fs_ksh
+   if _fs_nd < 9 then
+      _fs_pmax = _fs_nd
+   end if
+
+   -- probe p = 1..9: correctly-rounded p digits that re-parse to f
+   while _fs_ok == 0 loop
+      _fs_i = 0
+      while _fs_i < _fs_p loop
+         _fs_cd[_fs_i] = _fs_dig[_fs_i]
+         _fs_i = _fs_i + 1
+      end loop
+      _fs_kk = _fs_k
+      _fs_up = 0
+      if _fs_p < _fs_nd then
+         if _fs_dig[_fs_p] > 5 then
+            _fs_up = 1
+         else
+            if _fs_dig[_fs_p] == 5 then
+               _fs_nz = _fs_tailnz
+               _fs_j = _fs_p + 1
+               while _fs_j < _fs_nd loop
+                  if _fs_dig[_fs_j] != 0 then
+                     _fs_nz = 1
+                  end if
+                  _fs_j = _fs_j + 1
+               end loop
+               if _fs_nz != 0 then
+                  _fs_up = 1
+               else
+                  _fs_up = _fs_cd[_fs_p - 1] & 1
+               end if
+            end if
+         end if
+      end if
+      if _fs_up != 0 then
+         _fs_j = _fs_p
+         _fs_carry = 1
+         while _fs_carry != 0 loop
+            if _fs_j == 0 then
+               -- 99..9 rolled over: 1 followed by zeros, exponent +1
+               _fs_i = _fs_p - 1
+               while _fs_i > 0 loop
+                  _fs_cd[_fs_i] = _fs_cd[_fs_i - 1]
+                  _fs_i = _fs_i - 1
+               end loop
+               _fs_cd[0] = 1
+               _fs_kk = _fs_kk + 1
+               _fs_carry = 0
+            else
+               _fs_j = _fs_j - 1
+               _fs_cd[_fs_j] = _fs_cd[_fs_j] + 1
+               if _fs_cd[_fs_j] == 10 then
+                  _fs_cd[_fs_j] = 0
+               else
+                  _fs_carry = 0
+               end if
+            end if
+         end loop
+      end if
+      -- re-parse: float(dd) scaled by 10^kk, compare against f
+      _fs_dd = 0
+      _fs_i = 0
+      while _fs_i < _fs_p loop
+         _fs_dd = _fs_dd * 10 + _fs_cd[_fs_i]
+         _fs_i = _fs_i + 1
+      end loop
+      _fs_rr = float(_fs_dd)
+      _fs_jj = _fs_kk - (sdword(_fs_p) - 1)
+      -- scale by 10^jj: one exact-factor op per 10^38 chain step
+      if _fs_jj < 0 then
+         _fs_aa = -_fs_jj
+      else
+         _fs_aa = _fs_jj
+      end if
+      -- scale by 10^jj: build 10^aa from EXACT factors (x10.0 ten
+      -- times is exact 10^10; its square is 10^20 with one rounding;
+      -- the x10.0 tail is exact again), then one multiply/divide per
+      -- 10^38 chain step
+      _fs_nzj = 0
+      while _fs_nzj == 0 loop
+         if _fs_aa > 38 then
+            _fs_i2 = 38
+         else
+            _fs_i2 = byte(_fs_aa)
+            _fs_nzj = 1
+         end if
+         _fs_pwb = 1065353216
+         _fs_k2 = _fs_i2
+         if _fs_k2 >= 20 then
+            _fs_pfb = 1065353216
+            _fs_j2 = 10
+            while _fs_j2 > 0 loop
+               _fs_pf = _fs_pf * 10.0
+               _fs_j2 = _fs_j2 - 1
+            end loop
+            _fs_pf = _fs_pf * _fs_pf
+            _fs_pw = _fs_pw * _fs_pf
+            _fs_k2 = _fs_k2 - 20
+         end if
+         if _fs_k2 >= 10 then
+            _fs_pfb = 1065353216
+            _fs_j2 = 10
+            while _fs_j2 > 0 loop
+               _fs_pf = _fs_pf * 10.0
+               _fs_j2 = _fs_j2 - 1
+            end loop
+            _fs_pw = _fs_pw * _fs_pf
+            _fs_k2 = _fs_k2 - 10
+         end if
+         while _fs_k2 > 0 loop
+            _fs_pw = _fs_pw * 10.0
+            _fs_k2 = _fs_k2 - 1
+         end loop
+         if _fs_jj >= 0 then
+            _fs_rr = _fs_rr * _fs_pw
+         else
+            _fs_rr = _fs_rr / _fs_pw
+         end if
+         _fs_aa = _fs_aa - sdword(_fs_i2)
+      end loop
+      if _fs_sign != 0 then
+         _fs_rr = 0.0 - _fs_rr
+      end if
+      -- compare through PLAIN dword copies: a direct overlay-to-overlay
+      -- dword compare over float hosts mis-compares on ESP32
+      _fs_rc1 = _fs_rrbits
+      _fs_rc2 = _fs_bits
+      if _fs_rc1 == _fs_rc2 then
+         _fs_ok = 1
+      else
+         if _fs_p >= _fs_pmax then
+            _fs_ok = 1
+         else
+            _fs_p = _fs_p + 1
+         end if
+      end if
+   end loop
+
+   -- format (const renderer policy): trim trailing zeros, fixed decimal
+   -- while the fraction fits 17 digits, else d[.ddd]e+-XX
+   _fs_len = 0
+   if _fs_sign != 0 then
+      buf[0] = "-"
+      _fs_len = 1
+   end if
+   _fs_q = _fs_p
+   _fs_done = 0
+   while _fs_done == 0 loop
+      if _fs_q > 1 then
+         if _fs_cd[_fs_q - 1] == 0 then
+            _fs_q = _fs_q - 1
+         else
+            _fs_done = 1
+         end if
+      else
+         _fs_done = 1
+      end if
+   end loop
+   if _fs_kk < (sdword(_fs_p) - 18) then
+      -- exponent form
+      buf[_fs_len] = _fs_cd[0] + "0"
+      _fs_len = _fs_len + 1
+      if _fs_q > 1 then
+         buf[_fs_len] = "."
+         _fs_len = _fs_len + 1
+         _fs_i = 1
+         while _fs_i < _fs_q loop
+            buf[_fs_len] = _fs_cd[_fs_i] + "0"
+            _fs_len = _fs_len + 1
+            _fs_i = _fs_i + 1
+         end loop
+      end if
+      buf[_fs_len] = "e"
+      _fs_len = _fs_len + 1
+      if _fs_kk < 0 then
+         buf[_fs_len] = "-"
+      else
+         buf[_fs_len] = "+"
+      end if
+      _fs_len = _fs_len + 1
+      if _fs_kk < 0 then
+         _fs_ae = -_fs_kk
+      else
+         _fs_ae = _fs_kk
+      end if
+      _fs_en = 0
+      while _fs_ae != 0 loop
+         _fs_dg = byte(_fs_ae % 10)
+         _fs_et[_fs_en] = _fs_dg
+         _fs_ae = _fs_ae / 10
+         _fs_en = _fs_en + 1
+      end loop
+      if _fs_en < 2 then
+         buf[_fs_len] = "0"
+         _fs_len = _fs_len + 1
+      end if
+      while _fs_en > 0 loop
+         _fs_en = _fs_en - 1
+         buf[_fs_len] = _fs_et[_fs_en] + "0"
+         _fs_len = _fs_len + 1
+      end loop
+   else
+      if _fs_kk >= (sdword(_fs_q) - 1) then
+         -- integral: the EXACT integer expansion when the fraction
+         -- terminated (the const renderer %.0f form); otherwise the
+         -- rounded p digits + kk-(q-1) zeros
+         if _fs_isint != 0 then
+            -- _fs_itmp is LSB-first: emit MSB-first
+            _fs_i = _fs_nint
+            while _fs_i > 0 loop
+               _fs_i = _fs_i - 1
+               _fs_dg = _fs_itmp[_fs_i]
+               buf[_fs_len] = _fs_dg + "0"
+               _fs_len = _fs_len + 1
+            end loop
+         else
+            _fs_i = 0
+            while _fs_i < _fs_q loop
+               buf[_fs_len] = _fs_cd[_fs_i] + "0"
+               _fs_len = _fs_len + 1
+               _fs_i = _fs_i + 1
+            end loop
+            _fs_ci = _fs_kk - (sdword(_fs_q) - 1)
+            while _fs_ci > 0 loop
+               buf[_fs_len] = "0"
+               _fs_len = _fs_len + 1
+               _fs_ci = _fs_ci - 1
+            end loop
+         end if
+      else
+         if _fs_kk >= 0 then
+            -- d.dddd: kk+1 integer digits, then the fraction
+            _fs_ci = 0
+            while _fs_ci <= _fs_kk loop
+               _fs_b = byte(_fs_ci)
+               buf[_fs_len] = _fs_cd[_fs_b] + "0"
+               _fs_len = _fs_len + 1
+               _fs_ci = _fs_ci + 1
+            end loop
+            buf[_fs_len] = "."
+            _fs_len = _fs_len + 1
+            _fs_ci = _fs_kk + 1
+            while _fs_ci < _fs_q loop
+               _fs_b = byte(_fs_ci)
+               buf[_fs_len] = _fs_cd[_fs_b] + "0"
+               _fs_len = _fs_len + 1
+               _fs_ci = _fs_ci + 1
+            end loop
+         else
+            -- 0.000ddd
+            buf[_fs_len] = "0"
+            _fs_len = _fs_len + 1
+            buf[_fs_len] = "."
+            _fs_len = _fs_len + 1
+            _fs_ci = -(_fs_kk + 1)
+            while _fs_ci > 0 loop
+               buf[_fs_len] = "0"
+               _fs_len = _fs_len + 1
+               _fs_ci = _fs_ci - 1
+            end loop
+            _fs_ci = 0
+            while _fs_ci < _fs_q loop
+               _fs_b = byte(_fs_ci)
+               buf[_fs_len] = _fs_cd[_fs_b] + "0"
+               _fs_len = _fs_len + 1
+               _fs_ci = _fs_ci + 1
+            end loop
+         end if
+      end if
+   end if
+   return _fs_len
+end function

@@ -1,0 +1,96 @@
+-- ----------------------------------------------------------------------------
+-- Title: Runtime signed DIV / MOD — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the scalar signed divide/modify runtime on the 32-bit back
+--    ends: the ESP32 outlined
+--    helpers __esp32_sdiv/__esp32_smod kept their operand-sign flags in
+--    registers the restoring-division core clobbers ($a5 shift scratch,
+--    $a6 bit counter), so EVERY remainder came back negated and the
+--    quotient sign ignored the divisor -- found via print_float's sbyte
+--    exponent printing '/' instead of '1' (demo_sample/esp32_float_math).
+--
+--    Semantics: truncating division; remainder takes the dividend's
+--    sign.  Divisors are runtime variables (volatile) so nothing folds.
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+var volatile sbyte  _sdv_p9    = 9
+var volatile sbyte  _sdv_n7    = -7
+var volatile sbyte  _sdv_p93   = 93
+var volatile sword  _sdv_wn93  = -93
+var volatile sdword _sdv_dneg  = -1000003
+var volatile byte   _sdv_u93   = 93
+var volatile sbyte  _sdv_ten   = 10
+var volatile sbyte  _sdv_mten  = -10
+var volatile sword  _sdv_wten  = 10
+var volatile sdword _sdv_d7    = 7
+var volatile byte   _sdv_uten  = 10
+
+var sbyte  _sdv_sb
+var sword  _sdv_sw
+var sdword _sdv_sd
+
+-- group 1: positive sbyte dividend, both divisor signs
+_sdv_sb = _sdv_p9 % _sdv_ten
+if (_sdv_sb == 9) & (_sdv_p9 / _sdv_ten == 0) then
+else
+   _check_failed = true
+end if
+_sdv_sb = _sdv_p93 % _sdv_mten
+if (_sdv_sb == 3) & (_sdv_p93 / _sdv_mten == -9) then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- group 2: negative sbyte dividend (sign of dividend)
+_sdv_sb = _sdv_n7 % _sdv_ten
+if (_sdv_sb == -7) & (_sdv_n7 / _sdv_ten == 0) then
+else
+   _check_failed = true
+end if
+_sdv_sb = _sdv_n7 % _sdv_mten
+if (_sdv_sb == -7) & (_sdv_n7 / _sdv_mten == 0) then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- group 3: sword, both results
+_sdv_sw = _sdv_wn93 / _sdv_wten
+if _sdv_sw == -9 then
+else
+   _check_failed = true
+end if
+_sdv_sw = _sdv_wn93 % _sdv_wten
+if _sdv_sw == -3 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- group 4: sdword wide-ish magnitudes (truncation, remainder -4)
+_sdv_sd = _sdv_dneg / _sdv_d7
+if _sdv_sd == -142857 then
+else
+   _check_failed = true
+end if
+_sdv_sd = _sdv_dneg % _sdv_d7
+if _sdv_sd == -4 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- group 5: unsigned stays unsigned
+if (_sdv_u93 % _sdv_uten == 3) & (_sdv_u93 / _sdv_uten == 9) then
+else
+   _check_failed = true
+end if
+regression_checkpoint()

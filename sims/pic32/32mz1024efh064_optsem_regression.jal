@@ -1,0 +1,36 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — SDCC optimizer-semantics body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Port of **18f4620_compiler_regression_optsem.jal** to PIC32
+--    (@sim_validate / QEMU).  Shared body
+--    **`tests/_regression_optsem_body.jal`**: side-effect
+--    ordering, loop-carried wrap, bit ops across calls, argument
+--    evaluation order, branch inversion, non-CSE-able loads,
+--    volatile preservation.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_optsem_regression.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 8
+-- expect byte v__os_r_fn_side 1
+-- expect byte v__os_r_loop_wrap 1
+-- expect byte v__os_r_bits_call 1
+-- expect byte v__os_r_arg_order 1
+-- expect byte v__os_r_branch_inv 1
+-- expect byte v__os_r_nocse 1
+-- expect byte v__os_r_volatile 1
+-- expect byte v__os_r_preserve 1
+-- @sim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_32mz1024efh064_device
+include regression_pic32
+
+include _regression_optsem_body

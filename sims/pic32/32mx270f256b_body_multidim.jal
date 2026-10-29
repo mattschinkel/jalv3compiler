@@ -1,0 +1,27 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — multidim
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: shared `_regression_multidim_array_body` via @sim_validate
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_multidim.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 6
+-- expect byte v__gpsim_mda_len_ok 1
+-- expect byte v__gpsim_mda_const_ok 1
+-- expect byte v__gpsim_mda_write_ok 1
+-- expect byte v__gpsim_mda_dyn_ok 1
+-- expect byte v__gpsim_mda_whereis_ok 1
+-- expect byte v__gpsim_mda_whereis_dyn_ok 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_multidim_array_body

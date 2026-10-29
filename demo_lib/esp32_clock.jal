@@ -1,0 +1,203 @@
+-- ------------------------------------------------------
+-- Title: ESP32 CPU clock control (cold bring-up)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Switches the ESP32 to a fast CPU clock from the cold boot
+--    state (40 MHz crystal, PLL off) with no bootloader required.
+--    `esp32_clock_240mhz()` powers up the PLL, programs it to
+--    480 MHz over the internal regi2c bus, raises the core
+--    voltage, quiesces the flash cache, selects PLL/2 = 240 MHz
+--    and fixes the UART divisor for the 80 MHz APB. Call it as
+--    the FIRST statement of a program that declares
+--    `pragma target clock 240_000_000` (the delay budget in the
+--    compiled code assumes the new speed). 80/160 MHz variants
+--    select PLL/6 and PLL/3.
+--
+-- Notes:
+--    - The register sequence is hardware-verified on
+--      ESP32-D0WD-V3.
+--    - DPORT registers are written with FULL writes only
+--      (read-modify-write reads are unstable).
+--    - Works from either boot slot (ROM-direct 0x1000 or behind
+--      the ESP-IDF bootloader at 0x10000).
+--
+
+-- compiler-solved fields (pragma target OSC; defaults are inert --
+-- the solver has already defined them when the pragma preceded this
+-- include):
+--
+if ! defined(_esp32_clk_ready) then
+const dword _esp32_clk_ready = 0   -- 1 = a configuration was solved
+const dword _esp32_clk_div   = 0   -- BBPLL divider: 6=80 3=160 2=240 MHz
+const dword _esp32_clk_boost = 0   -- 1 = 240 MHz core-voltage boost
+const dword _esp32_clk_pll   = 0   -- 1 = reprogram the BBPLL (240 only)
+end if
+
+-- SFR names from the device file (esp32_xtensa_lx6.jal); the two
+-- 0x6000Exxx analog-domain registers were added to the generator from
+-- IDF v4.4.7's regi2c_ctrl.h (ANA_CONFIG_REG) and our own ROM
+-- disassembly (I2C_ANA_MST_CMD0, no public header name exists --
+-- fixes/fix_esp32_analog_regs_device_file.md)
+var volatile dword _esp32_clk_conf   at RTC_CNTL_CLK_CONF
+var volatile dword _esp32_rtc_cntl   at RTC_CNTL
+var volatile dword _esp32_options0   at RTC_CNTL_OPTIONS0
+var volatile dword _esp32_ana_config at ANA_CONFIG_REG
+var volatile dword _esp32_regi2c     at I2C_ANA_MST_CMD0
+var volatile dword _esp32_cache_ctrl at DPORT_PRO_CACHE_CTRL
+var volatile dword _esp32_cuperiod   at DPORT_CPU_PER_CONF
+var volatile dword _esp32_uart_clkdiv at UART0_CLKDIV
+var word _esp32_pll_poll
+
+--------------------------------------------------------------------------------
+-- Description: Write one BBPLL register through the internal regi2c bus
+-- Parameters:
+-- - preg - PLL register address
+-- - val  - value
+-- Notes: ROM packing (decoded from rom_chip_i2c_writeReg): host slot 4,
+-- - word = 0x01000000 | 0x66 | reg<<8 | val<<16, poll until bit 25 clears.
+--------------------------------------------------------------------------------
+procedure _esp32_pll_write(byte in preg, byte in val) is
+   _esp32_regi2c = 0x01000000 | 0x66 | (dword(preg) << 8) | (dword(val) << 16)
+   _esp32_pll_poll = 0
+   while ((_esp32_regi2c & 0x02000000) != 0) & (_esp32_pll_poll < 10000) loop
+      _esp32_pll_poll = _esp32_pll_poll + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Bring the CPU to 480/(6/div) MHz from the cold state
+-- Parameters:
+-- - div - 6 -> 80 MHz, 3 -> 160 MHz, 2 -> 240 MHz (core voltage raised
+-- -        only for div = 2)
+-- Notes: call first thing in main; pair with the matching
+-- - pragma target clock so delay budgets match.
+--------------------------------------------------------------------------------
+procedure _esp32_clock_pll(byte in div) is
+   -- (no clock-source touch before the PLL is programmed: RMW on
+   -- RTC_CLK_CONF from the cold state corrupts it -- measured)
+   -- power up the internal I2C bus + BBPLL
+   _esp32_options0 = _esp32_options0 & 0xFFFBFBBF
+   _esp32_ana_config = _esp32_ana_config & 0xFFFDFFFF
+   _esp32_rtc_cntl = _esp32_rtc_cntl & 0xFFFF1FFF
+   if div == 2 then
+      _esp32_rtc_cntl = _esp32_rtc_cntl | (7 << 11)   -- 1.25 V
+   else
+      _esp32_rtc_cntl = _esp32_rtc_cntl | (4 << 11)   -- 1.10 V
+   end if
+   _usec_delay(250_000)  -- voltage settle: 50 ms survived an intermittent
+                         -- 240 MHz corruption event on the bench; be generous
+   -- BBPLL programming (40 MHz crystal values, esp-idf clk_tree_ll):
+   -- 80/160 MHz run from the 320 MHz PLL, 240 from 480 -- the OC div
+   -- and the ENDIV5/BBADC_DSMP values differ per target (esp-idf
+   -- clk_ll_bbpll_set_config; decoded register map: 11=ENDIV5,
+   -- 9=BBADC_DSMP, 2=OC_LREF, 3=OC_DIV_7_0, 5=OC_DCUR)
+   _esp32_pll_write(0, 0x18)
+   _esp32_pll_write(1, 0x20)
+   _esp32_pll_write(4, 0x9a)
+   _esp32_pll_write(10, 0x00)
+   _esp32_pll_write(12, 0x00)
+   if div == 2 then
+      _esp32_pll_write(11, 0xc3)   -- ENDIV5: 480M
+      _esp32_pll_write(9, 0x74)    -- BBADC_DSMP: 480M
+      _esp32_pll_write(3, 28)      -- OC_DIV_7_0: 480/40
+   else
+      _esp32_pll_write(11, 0x43)   -- ENDIV5: 320M
+      _esp32_pll_write(9, 0x84)    -- BBADC_DSMP: 320M
+      _esp32_pll_write(3, 32)      -- OC_DIV_7_0: 320/40
+   end if
+   _esp32_pll_write(2, 0x00)       -- OC_LREF (40 MHz: 0)
+   _esp32_pll_write(5, 0xc6)       -- OC_DCUR
+   -- PLL LOCK WAIT (esp-idf SOC_DELAY_PLL_ENABLE): at 80/160 the PLL
+   -- changes frequency (480 -> 320) and needs lock time before the
+   -- CPU may select it -- flipping onto an unlocked PLL gives a few
+   -- clean prints then garbage (the banner-then-garble defect). We
+   -- sit on XTAL here, so the delay is safe and honest.
+   _usec_delay(150_000)
+   -- flash cache quiesce (the APB doubles at the flip)
+   _esp32_cache_ctrl = 0
+   -- CPU <- XTAL FIRST (esp-idf rtc_clk order): never reprogram a PLL
+   -- that is currently driving the CPU -- switching 480->320 mid-
+   -- flight stalls the core (the 80/160 silent-hang defect; 240 only
+   -- worked because the boot PLL is already 480)
+   _esp32_clk_conf = _esp32_clk_conf & 0xE7FFFFFF
+   _usec_delay(20_000)
+   -- CPU <- PLL: DPORT_CPUPERIOD_SEL is a 2-bit SELECTOR (esp-idf
+   -- clk_ll_cpu_set_freq_mhz_from_pll: 0=80, 1=160, 2=240) -- NOT the
+   -- raw divider; the old code wrote 6/3/2 whose low bits made every
+   -- speed select 240 (the "3x-fast 80 MHz" defect)
+   if div == 6 then
+      _esp32_cuperiod = 0
+   elsif div == 3 then
+      _esp32_cuperiod = 1
+   else
+      _esp32_cuperiod = 2
+   end if
+   _esp32_clk_conf = (_esp32_clk_conf & 0xE7FFFFFF) | 0x08000000
+   -- UART0 divisor (measured with a bench divisor sweep, 2026-10-08):
+   -- 80 and 160 MHz keep the boot divisor (~694 @ an 80 MHz UART
+   -- source reads clean; 462/925/1388 all garble); 240 needs the
+   -- read-and-double (1388 @ a 160 MHz source = 115200). The OLD code
+   -- doubled unconditionally -- it only appeared right because the
+   -- CPUPERIOD_SEL bug ran every speed at 240, where doubling IS
+   -- correct.
+   if div == 2 then
+      _esp32_uart_clkdiv = _esp32_uart_clkdiv * 2
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Bring the CPU to the configuration selected by
+-- `pragma target OSC` + `pragma target clock` (single entry -- the
+-- compiler solved the fields above). CRYSTAL 40 MHz is the cold boot
+-- state, so with no PLL configuration solved this is a no-op.
+--------------------------------------------------------------------------------
+procedure esp32_clock_init() is
+   if _esp32_clk_ready != 0 then
+      if _esp32_clk_pll != 0 then
+         -- 240: the only speed that needs the BBPLL reprogrammed
+         -- (boot 320 MHz -> 480 MHz)
+         _esp32_clock_pll(2)
+      else
+         -- 80/160 MHz: the cold boot runs the CPU on the 40 MHz XTAL
+         -- (divisor-sweep-proven: the boot UART source is 40 MHz,
+         -- divisor 347). The BBPLL is up at 320 MHz -- select its /4
+         -- (80) or /2 (160) output and flip the source; NO PLL
+         -- programming (reprogramming the running PLL was the killer),
+         -- and the UART source doubles/quadruples with the flip:
+         -- scale the live divisor (347 -> 694 at 80, -> 1388 at 160).
+         _esp32_options0 = _esp32_options0 & 0xFFFBFBBF
+         _esp32_ana_config = _esp32_ana_config & 0xFFFDFFFF
+         _esp32_rtc_cntl = _esp32_rtc_cntl & 0xFFFF1FFF
+         _esp32_rtc_cntl = _esp32_rtc_cntl | (4 << 11)   -- 1.10 V
+         _usec_delay(50_000)
+         _esp32_cache_ctrl = 0
+         -- APB clamps at 80 MHz (esp-idf rtc_clk_apb_freq_update), so
+         -- the UART source exactly doubles at BOTH 80 and 160 -- x2
+         -- for either (x4 overscaled 160 into silence)
+         _esp32_uart_clkdiv = _esp32_uart_clkdiv * 2
+         if _esp32_clk_div == 6 then
+            _esp32_cuperiod = 0
+         else
+            _esp32_cuperiod = 1
+         end if
+         _esp32_clk_conf = (_esp32_clk_conf & 0xE7FFFFFF) | 0x08000000
+      end if
+   end if
+end procedure
+
+procedure esp32_clock_80mhz() is
+   _esp32_clock_pll(6)
+end procedure
+
+procedure esp32_clock_160mhz() is
+   _esp32_clock_pll(3)
+end procedure
+
+procedure esp32_clock_240mhz() is
+   _esp32_clock_pll(2)
+end procedure

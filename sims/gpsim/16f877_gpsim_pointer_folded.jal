@@ -1,0 +1,65 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — folded **`var pointer var byte/word p[2]`** subscripts
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv2-original)
+--
+-- Description:
+--    Merged **`…_subscript_var.jal`** + **`…_word_subscript.jal`**: pointer-to-array fold
+--    (). **`regression_*`** hooks.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_pointer_folded.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect word_le v__gpsim_pfd_bb 1287
+-- expect dword_le v__gpsim_pfd_wb 13107300
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte _gpsim_pfd_bb[2]
+_gpsim_pfd_bb[0] = 0
+_gpsim_pfd_bb[1] = 0
+var pointer _gpsim_pfd_pb as var byte[2]
+var word _gpsim_pfd_wb[2]
+_gpsim_pfd_wb[0] = 0
+_gpsim_pfd_wb[1] = 0
+var pointer _gpsim_pfd_pw as var word[2]
+
+--------------------------------------------------------------------------------
+procedure _gpsim_pfd_run() is
+   regression_begin_run()
+   _gpsim_pfd_pb is _gpsim_pfd_bb
+   _gpsim_pfd_pb[0] = 7
+   _gpsim_pfd_pb[1] = 5
+   if _gpsim_pfd_bb[0] != 7 then
+      _check_failed = true
+   end if
+   if _gpsim_pfd_bb[1] != 5 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_pfd_pw is _gpsim_pfd_wb
+   _gpsim_pfd_pw[0] = 100
+   _gpsim_pfd_pw[1] = 200
+   if _gpsim_pfd_wb[0] != 100 then
+      _check_failed = true
+   end if
+   if _gpsim_pfd_wb[1] != 200 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_pfd_run()
+
+forever loop
+end loop

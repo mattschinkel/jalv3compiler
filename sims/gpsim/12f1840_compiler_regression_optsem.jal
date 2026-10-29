@@ -1,0 +1,34 @@
+-- ------------------------------------------------------
+-- Title: PIC12F1840 compiler regression — optimizer-semantics checks
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_optsem_body.jal`** (SDCC-suite adoption
+--    batch.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/12f1840_compiler_regression_optsem.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 8
+-- expect byte v__os_r_fn_side 1
+-- expect byte v__os_r_loop_wrap 1
+-- expect byte v__os_r_bits_call 1
+-- expect byte v__os_r_arg_order 1
+-- expect byte v__os_r_branch_inv 1
+-- expect byte v__os_r_nocse 1
+-- expect byte v__os_r_volatile 1
+-- expect byte v__os_r_preserve 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_12f1840_device
+
+include regression
+
+include _regression_optsem_body

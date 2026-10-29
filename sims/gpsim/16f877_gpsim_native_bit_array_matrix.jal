@@ -1,0 +1,180 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim - native packed bit array matrix
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises native `var bit[N]` edge cases not covered by the primary smoke
+--    test: dynamic indexes on packed-byte boundaries, false reads, expression
+--    operators, casts, and array formal write-back.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 15
+-- expect byte v__gpsim_bam_dyn0 1
+-- expect byte v__gpsim_bam_dyn7 1
+-- expect byte v__gpsim_bam_dyn8 1
+-- expect byte v__gpsim_bam_dyn15 1
+-- expect byte v__gpsim_bam_dyn16 1
+-- expect byte v__gpsim_bam_dyn_false 1
+-- expect byte v__gpsim_bam_not_snap 1
+-- expect byte v__gpsim_bam_or_snap 1
+-- expect byte v__gpsim_bam_xor_snap 1
+-- expect byte v__gpsim_bam_eq_snap 1
+-- expect byte v__gpsim_bam_neq_snap 1
+-- expect byte v__gpsim_bam_cast_false 0
+-- expect byte v__gpsim_bam_open_dyn 1
+-- expect byte v__gpsim_bam_fixed_cross 1
+-- expect byte v__gpsim_bam_inout_snap 1
+-- expect byte v__gpsim_bam_out_snap 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var bit _gpsim_bam_flags[17]
+var bit _gpsim_bam_writeback[17]
+var byte _gpsim_bam_index = 0
+var volatile byte _gpsim_bam_dyn0 = 0
+var volatile byte _gpsim_bam_dyn7 = 0
+var volatile byte _gpsim_bam_dyn8 = 0
+var volatile byte _gpsim_bam_dyn15 = 0
+var volatile byte _gpsim_bam_dyn16 = 0
+var volatile byte _gpsim_bam_dyn_false = 0
+var volatile byte _gpsim_bam_not_snap = 0
+var volatile byte _gpsim_bam_or_snap = 0
+var volatile byte _gpsim_bam_xor_snap = 0
+var volatile byte _gpsim_bam_eq_snap = 0
+var volatile byte _gpsim_bam_neq_snap = 0
+var volatile byte _gpsim_bam_cast_false = 1
+var volatile byte _gpsim_bam_open_dyn = 0
+var volatile byte _gpsim_bam_fixed_cross = 0
+var volatile byte _gpsim_bam_inout_snap = 0
+var volatile byte _gpsim_bam_out_snap = 0
+
+--------------------------------------------------------------------------------
+procedure _gpsim_bam_use_open_dyn(bit in bits[]) is
+   if bits[_gpsim_bam_index] then
+      _gpsim_bam_open_dyn = 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_bam_use_fixed_cross(bit in bits[17]) is
+   if bits[15] then
+      _gpsim_bam_fixed_cross = 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_bam_use_inout(bit in out bits[17]) is
+   bits[8] = true
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_bam_use_out(bit out bits[17]) is
+   bits[16] = true
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_bam_run() is
+   regression_begin_run()
+
+   _gpsim_bam_index = 0
+   _gpsim_bam_flags[_gpsim_bam_index] = true
+   if _gpsim_bam_flags[_gpsim_bam_index] then
+      _gpsim_bam_dyn0 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_bam_index = 7
+   _gpsim_bam_flags[_gpsim_bam_index] = true
+   if _gpsim_bam_flags[_gpsim_bam_index] then
+      _gpsim_bam_dyn7 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_bam_index = 8
+   _gpsim_bam_flags[_gpsim_bam_index] = true
+   if _gpsim_bam_flags[_gpsim_bam_index] then
+      _gpsim_bam_dyn8 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_bam_index = 15
+   _gpsim_bam_flags[_gpsim_bam_index] = true
+   if _gpsim_bam_flags[_gpsim_bam_index] then
+      _gpsim_bam_dyn15 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_bam_index = 16
+   _gpsim_bam_flags[_gpsim_bam_index] = true
+   if _gpsim_bam_flags[_gpsim_bam_index] then
+      _gpsim_bam_dyn16 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_bam_index = 5
+   if !_gpsim_bam_flags[_gpsim_bam_index] then
+      _gpsim_bam_dyn_false = 1
+   end if
+   regression_checkpoint()
+
+   if !_gpsim_bam_flags[5] then
+      _gpsim_bam_not_snap = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_bam_flags[0] | _gpsim_bam_flags[5] then
+      _gpsim_bam_or_snap = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_bam_flags[7] ^ _gpsim_bam_flags[5] then
+      _gpsim_bam_xor_snap = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_bam_flags[5] == false then
+      _gpsim_bam_eq_snap = 1
+   end if
+   regression_checkpoint()
+
+   if _gpsim_bam_flags[8] != _gpsim_bam_flags[5] then
+      _gpsim_bam_neq_snap = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_bam_cast_false = byte(_gpsim_bam_flags[5])
+   regression_checkpoint()
+
+   _gpsim_bam_index = 16
+   _gpsim_bam_use_open_dyn(_gpsim_bam_flags)
+   regression_checkpoint()
+
+   _gpsim_bam_use_fixed_cross(_gpsim_bam_flags)
+   regression_checkpoint()
+
+   _gpsim_bam_use_inout(_gpsim_bam_writeback)
+   if _gpsim_bam_writeback[8] then
+      _gpsim_bam_inout_snap = 1
+   end if
+
+   _gpsim_bam_use_out(_gpsim_bam_writeback)
+   if _gpsim_bam_writeback[16] then
+      _gpsim_bam_out_snap = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_bam_run()
+
+forever loop
+end loop

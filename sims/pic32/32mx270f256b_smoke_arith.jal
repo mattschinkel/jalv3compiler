@@ -1,0 +1,45 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — smoke arith
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 smoke: arithmetic / logic / shift on bytes
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_smoke_arith.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_va 20
+-- expect byte v_vb 6
+-- expect byte v_vc 26
+-- expect byte v_vd 14
+-- expect byte v_ve 120
+-- expect byte v_vf 3
+-- expect byte v_vg 2
+-- expect byte v_vh 80
+-- expect byte v_vi 4
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte va
+var volatile byte vb
+var volatile byte vc
+var volatile byte vd
+var volatile byte ve
+var volatile byte vf
+var volatile byte vg
+var volatile byte vh
+var volatile byte vi
+va = 20
+vb = 6
+vc = va + vb
+vd = va - vb
+ve = va * vb
+vf = va / vb
+vg = va % vb
+vh = va << 2
+vi = va & vb

@@ -1,0 +1,78 @@
+-- ----------------------------------------------------------------------------
+-- Title: Compiler regression — delay timing (TMR1 cycle measurement)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Measures the elapsed instruction cycles (TMR1 @ Fosc/4) around
+--    **`_usec_delay()`** and verifies the count is within a wide tolerance
+--    of the requested duration — the runtime companion to the inline-delay
+--    ROM restructures (`fix_pic12_delay_movwf_redundant_bank_select.md`).
+--    Works on every suite device with TMR1 (classic 14, 14E, 12E, PIC18).
+--
+--    Tolerance is intentionally generous (50%-200% of nominal): the point is
+--    to catch order-of-magnitude / structure regressions (missing loop
+--    bodies, wrong loop constants), not to certify exact cycle counts.
+--
+-- Notes:
+--    Included by **`{16f877,16f1825,12f1840,18f4620}_compiler_regression_delay_timing.jal`**.
+--    Device file provides **`target_clock`**; TMR1 ticks at Fosc/4.
+-- ----------------------------------------------------------------------------
+
+var word _dt_before = 0
+var word _dt_after = 0
+var word _dt_cycles = 0
+var volatile byte _dt_lo_ok = 0
+var volatile byte _dt_hi_ok = 0
+var volatile byte _dt_1ms_ok = 0
+
+-- cycles per microsecond at Fosc/4 (target_clock is in Hz)
+const word _DT_CYCLES_PER_US = target_clock / 4 / 1_000_000
+
+procedure _dt_measure_1000us() is
+   T1CON = 0                -- internal clock, 1:1 prescale, stopped
+   TMR1 = 0
+   T1CON_TMR1ON = true
+   _usec_delay(1000)
+   T1CON_TMR1ON = false
+   _dt_after = TMR1
+end procedure
+
+procedure _dt_run() is
+   var word nominal
+
+   regression_begin_run()
+
+   -- 1) 1000 us delay: expect ~1000 * _DT_CYCLES_PER_US cycles
+   _dt_measure_1000us()
+   _dt_cycles = _dt_after - _dt_before
+   nominal = 1000 * _DT_CYCLES_PER_US
+   if _dt_cycles >= (nominal / 2) then
+      _dt_lo_ok = 1
+   else
+      _check_failed = true
+   end if
+   if _dt_cycles <= (nominal * 2) then
+      _dt_hi_ok = 1
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- 2) repeat: the same measurement must land in the same window twice
+   --    (a loop-constant regression usually passes once and fails repeats)
+   _dt_measure_1000us()
+   _dt_cycles = _dt_after - _dt_before
+   if (_dt_cycles >= (nominal / 2)) & (_dt_cycles <= (nominal * 2)) then
+      _dt_1ms_ok = 1
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_dt_run()
+
+forever loop
+end loop

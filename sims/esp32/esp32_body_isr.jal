@@ -1,0 +1,71 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — ISR vector body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    TIMG0 alarm interrupt routed through the interrupt matrix into
+--    the level-1 vector.
+--    The compiler wires VECBASE, the vector table and INTENABLE
+--    (CPU int 1); the ISR clears the alarm (W1C) and bumps `tick`,
+--    main observes it and sets `done`.  QEMU's timg autoreload does
+--    not re-arm, so exactly one dispatch is expected (tick == 1).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_isr.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v_tick 1
+-- expect byte v_done 1
+-- @sim_validate end
+--
+include esp32_xtensa_lx6
+
+var volatile byte tick = 0
+var volatile byte done = 0
+
+-- TIMG0 timer 0 (base 0x3FF5F000)
+var volatile dword t0config  at 0x3FF5F000
+var volatile dword t0loadlo  at 0x3FF5F004
+var volatile dword t0loadhi  at 0x3FF5F008
+var volatile dword t0load    at 0x3FF5F00C
+var volatile dword t0alarmlo at 0x3FF5F010
+var volatile dword t0int_ena at 0x3FF5F098
+var volatile dword t0int_clr at 0x3FF5F0A4
+-- interrupt matrix: PRO map register for source 14 (TG0_T0_LEVEL)
+-- = 0x3FF00104 + 14*4; value = CPU interrupt number (1 = intlevel 1)
+var volatile dword t0_map    at 0x3FF0013C
+
+--------------------------------------------------------------------------------
+-- Description: TIMG0 alarm handler
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: clears the alarm flag (W1C) so the level interrupt deasserts,
+-- - then bumps the counter the main loop waits on.
+--------------------------------------------------------------------------------
+procedure _t0_isr() is
+   pragma interrupt
+   t0int_clr = 0x00000001
+   tick = tick + 1
+end procedure
+
+t0int_clr = 0x00000001
+t0loadlo  = 0x00000000
+t0loadhi  = 0x00000000
+t0alarmlo = 0x0000FFFF
+t0load    = 0x00000001                -- reload the counter now
+-- QEMU (esp32_timg.h) T0CONFIG fields: EN 31 | INCREASE 30 |
+-- AUTORELOAD 29 | DIVIDER 26:13 | EDGE_INT 12 | LEVEL_INT 11 | ALARM 10.
+-- LEVEL_INT must be set or the model never raises the level IRQ line.
+t0config  = 0xE0004C00                -- EN|INC|AUTORELOAD|div2|LEVEL_INT|ALARM
+t0int_ena = 0x00000001
+t0_map    = 0x00000001
+
+while tick == 0 loop
+end loop
+done = 1
+forever loop
+end loop

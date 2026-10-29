@@ -1,0 +1,79 @@
+-- Title: Shared regression body — task-local variables (32-bit targets)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Acceptance body for lifting the var-in-task guard on the 32-bit
+--    back ends (locals there get UNIQUE linear homes -- no frame
+--    sharing): two tasks with same-shaped locals that would alias
+--    under a shared-frame model, a shared procedure called BETWEEN
+--    yields, main yielding slices until both finish. Pre-lift this
+--    does not even compile (the guard); the runtime proof is that
+--    each task's accumulation survives the other task's slices.
+--
+-- ------------------------------------------------------
+
+pragma task 3
+
+var volatile byte _tl_a_final = 0
+var volatile byte _tl_b_final = 0
+var volatile byte _tl_a_hits = 0
+var volatile byte _tl_b_hits = 0
+
+--------------------------------------------------------------------------------
+function _tl_scale(byte in v) return byte is
+   return v * 2
+end function
+
+task _tl_a() is
+   var byte mine = 3
+   var byte i
+   for 4 using i loop
+      mine = _tl_scale(mine)
+      _tl_a_hits = _tl_a_hits + 1
+      _task_yield
+   end loop
+   _tl_a_final = mine                 -- 3*2*2*2*2 = 48
+end task
+
+task _tl_b() is
+   var byte mine = 90
+   var byte i
+   for 4 using i loop
+      mine = mine - 10
+      _tl_b_hits = _tl_b_hits + 1
+      _task_yield
+   end loop
+   _tl_b_final = mine                 -- 90 - 40 = 50
+end task
+
+regression_begin_run()
+
+_task_start _tl_a()
+_task_start _tl_b()
+
+var byte _tl_guard = 0
+while ((_tl_a_final == 0) | (_tl_b_final == 0)) & (_tl_guard < 40) loop
+   _tl_guard = _tl_guard + 1
+   _task_yield
+end loop
+
+regression_checkpoint()               -- 1
+
+if _tl_a_final != 48 then
+   _check_failed = true
+end if
+if _tl_b_final != 50 then
+   _check_failed = true
+end if
+if (_tl_a_hits != 4) | (_tl_b_hits != 4) then
+   _check_failed = true
+end if
+regression_checkpoint()               -- 2
+
+regression_pass_led_if_clean()
+led = low
+
+forever loop
+   _usec_delay(100_000)
+end loop

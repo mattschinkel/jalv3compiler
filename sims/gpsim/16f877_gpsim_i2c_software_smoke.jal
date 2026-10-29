@@ -1,0 +1,50 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — software I2C master init (label/cmd pcode regression)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv2-original)
+--
+-- Description:
+--    Exercises **`third_party/jallib/lib/i2c_software.jal`** on **16f877** with the same pin/speed
+--    pattern as **`third_party/jallib/samples/16f877_i2c_sw_l0.jal`**. That sample used to
+--    abort pcode analysis with stale **`label->cmd`** ();
+--    this test locks in compile + a short **gpsim** run.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_i2c_software_smoke.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+alias i2c_scl            is pin_c3
+alias i2c_scl_direction  is pin_c3_direction
+alias i2c_sda            is pin_c4
+alias i2c_sda_direction  is pin_c4_direction
+
+const word _i2c_bus_speed = 1
+const bit  _i2c_level     = true
+-- Avoid infinite **while i2c_scl == low** in **gpsim** when pins are not pulled.
+const byte _i2c_scl_timeout = 100
+
+include i2c_software
+
+--------------------------------------------------------------------------------
+procedure _i2c_sw_smoke_run() is
+   regression_begin_run()
+   i2c_initialize()
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_i2c_sw_smoke_run()
+
+forever loop
+end loop

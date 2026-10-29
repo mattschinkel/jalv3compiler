@@ -1,0 +1,199 @@
+-- ----------------------------------------------------------------------------
+-- Title: Multi-dimensional bit arrays — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the multidim bit-array subscript stride fix
+--: `grid[row][col]` used to
+--    flatten to `row + col` (bit arrays skipped the stride multiply
+--    entirely), so every access landed on bit positions 0..14 and the
+--    const path composed dimensions through a non-additive bit-offset
+--    delta.  Runtime and constant indices of every dimension mix are
+--    covered, including non-square and non-byte-multiple row strides
+--    (bit[16] rows, 20-bit rows).
+--
+-- Sources:
+--
+--
+-- Notes:
+--    Wrappers: ESP32 (esp32_body_bit2d), PIC32
+--    (32mz1024efh064_body_bit2d) and classic PIC16F877 gpsim
+--    (16f877_gpsim_bit2d_arrays).  The final group pins N-dimensional
+--    shapes (4D bits, 3D bytes) with runtime and mixed indexes.
+--
+-- ----------------------------------------------------------------------------
+
+var bit _bt2d_g[8][8]
+var bit _bt2d_w[4][16]
+var bit _bt2d_t[3][20]
+var byte _bt2d_r
+var byte _bt2d_c
+var byte _bt2d_n = 0
+
+var volatile byte _bt2d_fill_ok = 0
+var volatile byte _bt2d_const_ok = 0
+var volatile byte _bt2d_run_ok = 0
+var volatile byte _bt2d_wide_ok = 0
+var volatile byte _bt2d_stride20_ok = 0
+var volatile byte _bt2d_nd4_ok = 0
+var volatile byte _bt2d_nd3b_ok = 0
+
+regression_begin_run()
+
+-- runtime x runtime: checkerboard fill and count (32 of 64)
+for 8 using _bt2d_r loop
+   for 8 using _bt2d_c loop
+      _bt2d_g[_bt2d_r][_bt2d_c] = (_bt2d_r + _bt2d_c) % 2 == 0
+   end loop
+end loop
+for 8 using _bt2d_r loop
+   for 8 using _bt2d_c loop
+      if _bt2d_g[_bt2d_r][_bt2d_c] then
+         _bt2d_n = _bt2d_n + 1
+      end if
+   end loop
+end loop
+if _bt2d_n == 32 then
+   _bt2d_fill_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- const x const: toggle one known bit, read neighbours
+_bt2d_g[5][3] = false
+if (_bt2d_g[5][3] == false) & (_bt2d_g[5][2] == false)
+   & (_bt2d_g[0][0] == true) & (_bt2d_g[7][7] == true)
+   & (_bt2d_g[4][3] == false) then
+   _bt2d_const_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- runtime x const and const x runtime mixes
+_bt2d_r = 6
+_bt2d_g[_bt2d_r][1] = true
+_bt2d_c = 4
+_bt2d_g[2][_bt2d_c] = true
+if (_bt2d_g[6][1] == true) & (_bt2d_g[6][2] == true)
+   & (_bt2d_g[2][4] == true) & (_bt2d_g[3][4] == false) then
+   _bt2d_run_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- non-square, 16-bit rows: set and read back across the stride
+for 4 using _bt2d_r loop
+   for 16 using _bt2d_c loop
+      _bt2d_w[_bt2d_r][_bt2d_c] = false
+   end loop
+end loop
+_bt2d_w[3][0] = true
+_bt2d_w[3][15] = true
+_bt2d_w[0][15] = true
+if (_bt2d_w[3][0] == true) & (_bt2d_w[3][14] == false)
+   & (_bt2d_w[3][15] == true) & (_bt2d_w[0][15] == true)
+   & (_bt2d_w[1][15] == false) then
+   _bt2d_wide_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- 20-bit rows (stride not a byte multiple): flat bit 40 and 59
+for 3 using _bt2d_r loop
+   for 20 using _bt2d_c loop
+      _bt2d_t[_bt2d_r][_bt2d_c] = false
+   end loop
+end loop
+_bt2d_t[2][0] = true
+_bt2d_t[2][19] = true
+_bt2d_t[1][19] = true
+if (_bt2d_t[2][0] == true) & (_bt2d_t[2][1] == false)
+   & (_bt2d_t[2][19] == true) & (_bt2d_t[1][19] == true)
+   & (_bt2d_t[0][19] == false) then
+   _bt2d_stride20_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- 4D bit array [2][2][4][2] (32 bits): spiral fill through all four
+-- runtime indexes, spot-verify const and runtime reads
+var bit _bt2d_q4[2][2][4][2]
+var byte _bt2d_a
+var byte _bt2d_b2
+var byte _bt2d_d
+var byte _bt2d_e
+var byte _bt2d_ct = 0
+
+for 2 using _bt2d_a loop
+   for 2 using _bt2d_b2 loop
+      for 4 using _bt2d_d loop
+         for 2 using _bt2d_e loop
+            _bt2d_q4[_bt2d_a][_bt2d_b2][_bt2d_d][_bt2d_e] = false
+         end loop
+      end loop
+   end loop
+end loop
+_bt2d_q4[1][0][3][1] = true
+_bt2d_q4[0][1][0][0] = true
+_bt2d_a = 1
+_bt2d_e = 1
+_bt2d_q4[_bt2d_a][1][2][_bt2d_e] = true
+for 2 using _bt2d_a loop
+   for 2 using _bt2d_b2 loop
+      for 4 using _bt2d_d loop
+         for 2 using _bt2d_e loop
+            if _bt2d_q4[_bt2d_a][_bt2d_b2][_bt2d_d][_bt2d_e] then
+               _bt2d_ct = _bt2d_ct + 1
+            end if
+         end loop
+      end loop
+   end loop
+end loop
+if (_bt2d_ct == 3) & (_bt2d_q4[1][0][3][1] == true)
+   & (_bt2d_q4[1][1][2][1] == true) & (_bt2d_q4[0][1][0][0] == true)
+   & (_bt2d_q4[1][1][2][0] == false) & (_bt2d_q4[0][0][0][0] == false)
+   & (_bt2d_q4[1][0][3][0] == false) then
+   _bt2d_nd4_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- 3D byte array [3][3][3]: fill with flat index, checksum 0..26
+var byte _bt2d_c3[3][3][3]
+var byte _bt2d_cg
+var byte _bt2d_ch
+var byte _bt2d_ck
+var word _bt2d_sum = 0
+
+for 3 using _bt2d_cg loop
+   for 3 using _bt2d_ch loop
+      for 3 using _bt2d_ck loop
+         _bt2d_c3[_bt2d_cg][_bt2d_ch][_bt2d_ck] =
+            _bt2d_cg * 9 + _bt2d_ch * 3 + _bt2d_ck
+      end loop
+   end loop
+end loop
+for 3 using _bt2d_cg loop
+   for 3 using _bt2d_ch loop
+      for 3 using _bt2d_ck loop
+         _bt2d_sum = _bt2d_sum + _bt2d_c3[_bt2d_cg][_bt2d_ch][_bt2d_ck]
+      end loop
+   end loop
+end loop
+if (_bt2d_sum == 351) & (_bt2d_c3[2][2][2] == 26)
+   & (_bt2d_c3[1][0][2] == 11) & (_bt2d_c3[0][2][1] == 7)
+   & (_bt2d_c3[2][0][0] == 18) then
+   _bt2d_nd3b_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()

@@ -1,0 +1,44 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — POSC (non-PLL) runtime clock re-assert
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): pic32_clock.jal's MX osc_select() NON-PLL
+--    branch -- 20 MHz POSC direct, SYSCLK = crystal, NOSC=2 only (the
+--    branch never touches the PLL divider bits).  Self-contained
+--    device block (the shared wrapper pins FRC_SPLL).  Silicon-proven
+--    2026-10-25: boots C2, returns C2 S0 K0 (SLOCK 0 is correct -- the
+--    PLL is unused on this path), cadence identical before/after
+--    (fixes/fix_mx_osc_pllmult_code_const.md addenda).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_osc_select_posc_direct.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_selected 1
+-- @sim_validate end
+--
+
+include 32mx270f256b
+
+pragma target clock      20_000_000
+pragma target oscillator 20_000_000
+pragma target OSC        POSC
+pragma target image      pfm
+pragma target WDT        DISABLED
+
+enable_digital_io()
+
+include pic32_clock
+
+var volatile byte selected
+
+osc_select()
+selected = 1
+
+forever loop
+end loop

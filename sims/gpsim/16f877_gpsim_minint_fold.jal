@@ -1,0 +1,77 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim regression — MIN_INT relation const-fold (per-bug pin)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the MIN_INT relation-fold family: a MIN literal (−2147483648
+--    for sdword, −32768 for sword) must fold relations correctly — the
+--    known jalv25r9 defect flagged `v != -2147483648` as "always TRUE"
+--    (MIN literal treated as +2147483648). All six relations are
+--    evaluated at v = MIN: eq/ne/le/ge must be true, gt false, and
+--    lt against MIN+1 true.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh tests/16f877_gpsim_minint_fold.jal
+--
+-- @gpsim_validate begin
+-- steps: 40000
+-- frequency_hz: auto
+-- allow_compiler_warnings: 1
+-- expect byte v__check_step 1
+-- expect byte v__mi_eq  1
+-- expect byte v__mi_ne  0
+-- expect byte v__mi_lt  1
+-- expect byte v__mi_le  1
+-- expect byte v__mi_gt  0
+-- expect byte v__mi_ge  1
+-- expect byte v__mi_weq 1
+-- expect byte v__mi_wne 0
+-- @gpsim_validate end
+--
+
+include regression_16f877_device
+include regression
+include 16f877
+
+var volatile sdword v = -1
+var volatile byte _mi_eq  = 0
+var volatile byte _mi_ne  = 0
+var volatile byte _mi_lt  = 0
+var volatile byte _mi_le  = 0
+var volatile byte _mi_gt  = 0
+var volatile byte _mi_ge  = 0
+var volatile byte _mi_weq = 0
+var volatile byte _mi_wne = 0
+
+v = -2147483648
+if v == -2147483648 then
+   _mi_eq = 1
+end if
+if v != -2147483648 then
+   _mi_ne = 1
+end if
+if v < -2147483647 then
+   _mi_lt = 1
+end if
+if v <= -2147483648 then
+   _mi_le = 1
+end if
+if v > -2147483648 then
+   _mi_gt = 1
+end if
+if v >= -2147483648 then
+   _mi_ge = 1
+end if
+
+var volatile sword sv = -1
+sv = -32768
+if sv == -32768 then
+   _mi_weq = 1
+end if
+if sv != -32768 then
+   _mi_wne = 1
+end if
+
+regression_checkpoint()

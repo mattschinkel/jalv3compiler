@@ -1,0 +1,43 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — MVEC default-vector recovery
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    MVEC hardening: an enabled but unassigned vector must not wedge the
+--    core.  IRQ9 (unassigned, priority 7) is raised together with IRQ4
+--    (assigned, priority 1); the dispatcher selects slot 9 first, the
+--    default stub clears that IFS bit and returns, then IRQ4 dispatches
+--    to its handler.  Without the default's per-vector IFS clear the
+--    pending flag re-enters slot 9 forever and v_b stays 0.
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v_b 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+var volatile byte b = 0
+
+procedure isr4() is
+   pragma interrupt 4
+
+   IFS0CLR = 0x10
+   b = b + 1
+end procedure
+
+IPC1 = 0x04          -- IRQ4 priority 1
+IPC2 = 0x1C00        -- IRQ9 priority 7 (unassigned)
+IEC0SET = 0x210      -- enable IRQ4 + IRQ9
+IFS0SET = 0x210      -- raise both
+
+var byte guard = 0
+while (b == 0) & (guard < 100) loop
+   guard = guard + 1
+end loop
+
+forever loop
+end loop

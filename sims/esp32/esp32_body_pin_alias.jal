@@ -1,0 +1,44 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — GPIO pin aliases
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises the synthesized device-file pin aliases end to end:
+--    pin_N_out / pin_N_direction bit writes (RMW), pin_N input reads,
+--    the bank-1 variants, and the runtime-indexed overlay over
+--    GPIO_OUT.  QEMU (espressif) models the GPIO block read-as-zero
+--    and does not retain writes -- VALUE checks are impossible there
+--    (see fixes/fix_esp32_pin_aliases.md: the addressed registers are
+--    listing-verified instead); this body proves the accesses execute
+--    fault-free and the program completes.
+--
+-- @sim_validate begin
+-- machine: esp32
+-- duration_s: 8.0
+-- expect byte v__check_step 1
+-- expect byte v__pa_reads 0
+-- @sim_validate end
+
+include regression_esp32_device
+include regression
+include esp32_xtensa_lx6
+
+var volatile byte _pa_reads = 255
+var byte i
+
+pin_2_direction = 1               -- RMW into GPIO_ENABLE
+pin_2_out = 1                     -- RMW into GPIO_OUT
+pin_32_direction = 1              -- bank-1 variants
+pin_32_out = 1
+var bit out_bits[32] at GPIO_OUT  -- runtime-indexed overlay (sibling probe)
+i = 5
+out_bits[i] = 1
+out_bits[i] = 0
+pin_2_out = 0
+pin_32_direction = 0
+if (pin_2 == 0) & (pin_32 == 0) then
+   _pa_reads = 0                  -- QEMU RAZ; silicon reads real levels
+end if
+regression_checkpoint()

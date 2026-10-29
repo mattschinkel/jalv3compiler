@@ -1,0 +1,33 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — runtime clock re-assert
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): pic32_clock.jal's MX osc_select() branch --
+--    SYSKEY window + one OSCCON RMW (PLLMULT/PLLODIV/NOSC/OSWEN) and a
+--    bounded OSWEN wait.  The boot fuses already run at 40 MHz; this
+--    re-asserts the solved configuration.  QEMU does not model the
+--    PLL/OSWEN beyond storing the register, hence the bounded wait.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_osc_select.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_selected 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+include pic32_clock
+
+var volatile byte selected
+
+osc_select()
+selected = 1
+
+forever loop
+end loop

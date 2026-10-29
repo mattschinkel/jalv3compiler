@@ -1,0 +1,29 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — pragma targets + device __config
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Smoke test for **`regression_18f4620_device`**. Shared logic: **`tests/_regression_pic18_pragma_body.jal`**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/18f4620_compiler_regression_pragma.jal
+--
+-- @gpsim_validate begin
+-- steps: 80000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_pic18_pragma_body

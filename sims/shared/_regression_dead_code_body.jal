@@ -1,0 +1,270 @@
+-- Title: Shared regression body — dead code elimination vs live paths
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    **Dead (should be eliminable):** never-called procedures **`_dead_never_called`**,
+--    **`_dead_never_called_alt`**, **`_dead_proc_zero_refs`**, **`_dead_fn_zero_refs`** (no
+--    references); callee **`_dead_callee_deep`**, function **`_dead_fn_only_dead`** only from
+--    the dead tree; globals **`_dead_global_scratch`**, **`_dead_global_arr`**, consts
+--    **`_dead_orphan_const`**, **`_dead_orphan_const_2`** only there; pseudo **`_pv_dead`**;
+--    locals including **`volatile`** inside unreachable code.
+--    **Live (must not be eliminated):** arrays, **`word`** / **`bit`** / **`byte`** vars,
+--    **`const`** **`_live_magic`** / **`_live_tag`**, procedures/functions and nested calls
+--    (**`_live_inner`**, **`_live_wrap`** → **`_live_add`**), pseudo **`_pv_live`**, and
+--    **`var volatile byte`** **`_vol_keep`** / **`_vol_second`** (observable load/store).
+--
+-- Notes:
+--    Eight **`regression_checkpoint()`** calls → **`expect byte v__check_step 8`**.
+--    Include after **`include regression`** (same pattern as **`_regression_pic14_misc_body.jal`**).
+
+-- Live consts (reachable)
+const byte _live_magic = 0xC5
+const byte _live_tag = 0x2A
+-- Consts only referenced from unreachable procedures / dead-only helpers
+const byte _dead_orphan_const = 0x77
+const byte _dead_orphan_const_2 = 0xEE
+
+var byte _live_arr[4]
+var byte _live_var
+var word _live_word
+var bit _live_bit
+-- Must not be eliminated (volatile semantics / observable access)
+var volatile byte _vol_keep
+var volatile byte _vol_second
+
+-- Live pseudo-variable
+var byte _pv_live_shadow
+
+--------------------------------------------------------------------------------
+function _pv_live'get() return byte is
+   return _pv_live_shadow
+end function
+
+--------------------------------------------------------------------------------
+procedure _pv_live'put(byte in x) is
+   _pv_live_shadow = x
+end procedure
+
+-- Pseudo-variable only touched from dead procedures (dead with that tree)
+var byte _pv_dead_shadow
+
+--------------------------------------------------------------------------------
+function _pv_dead'get() return byte is
+   return _pv_dead_shadow
+end function
+
+--------------------------------------------------------------------------------
+procedure _pv_dead'put(byte in x) is
+   _pv_dead_shadow = x
+end procedure
+
+--------------------------------------------------------------------------------
+function _live_add(byte in a, byte in b) return byte is
+   return a + b
+end function
+
+--------------------------------------------------------------------------------
+procedure _live_set(byte in v) is
+   _live_var = v
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _live_inner(byte in x) is
+   _live_set(x)
+end procedure
+
+--------------------------------------------------------------------------------
+function _live_wrap(byte in a) return byte is
+   return _live_add(a, _live_tag)
+end function
+
+-- Globals only read/written from the unreachable procedure tree (DCE targets)
+var byte _dead_global_scratch
+var byte _dead_global_arr[8]
+
+--------------------------------------------------------------------------------
+function _dead_fn_only_dead(byte in a) return byte is
+   return a + _dead_orphan_const
+end function
+
+--------------------------------------------------------------------------------
+procedure _dead_callee_deep() is
+   var byte _deep_local[4]
+
+   _deep_local[0] = _dead_orphan_const_2
+   _deep_local[3] = _deep_local[0]
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Never referenced — entire subprogram + its locals are dead-code targets.
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: No calls anywhere in this file.
+--------------------------------------------------------------------------------
+procedure _dead_proc_zero_refs() is
+   var byte _z
+
+   _z = _dead_orphan_const_2
+   _dead_global_scratch = _z
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Never referenced — dead function body.
+-- Parameters:
+-- - x - unused in practice (never called)
+-- Returns:
+-- - byte
+-- Notes: No calls anywhere in this file.
+--------------------------------------------------------------------------------
+function _dead_fn_zero_refs(byte in x) return byte is
+   return x + _dead_orphan_const
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Unreachable hoarder — arrays, volatile, pseudo, const, dead callees
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Never called from live **`_run_dead_code_checks`**.
+--------------------------------------------------------------------------------
+procedure _dead_never_called() is
+   var byte _dead_arr[32]
+   var byte _d
+   var volatile byte _dead_volatile_local
+
+   _dead_arr[0] = _dead_orphan_const
+   _d = _dead_fn_only_dead(_dead_arr[0])
+   _dead_volatile_local = _d
+   _pv_dead = 1
+   if _pv_dead != 1 then
+      _d = 0
+   end if
+   _dead_arr[31] = _dead_orphan_const
+   _dead_callee_deep()
+   _dead_global_scratch = _d
+   _dead_global_arr[0] = _dead_global_scratch
+   _dead_global_arr[7] = _dead_orphan_const_2
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Second unreachable entry — separate dead const and local array.
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Never called; uses **`_dead_orphan_const_2`** only here and in **`_dead_callee_deep`**.
+--------------------------------------------------------------------------------
+procedure _dead_never_called_alt() is
+   var byte _alt[16]
+   var byte _i
+
+   for 16 using _i loop
+      _alt[_i] = _dead_orphan_const_2
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Run live checks for dead-code regression
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _run_dead_code_checks() is
+   var byte _t
+   var byte _ix
+
+   regression_begin_run()
+
+   for 4 using _ix loop
+      _live_arr[_ix] = _ix + 1
+   end loop
+   if _live_arr[0] != 1 then
+      _check_failed = true
+   end if
+   if _live_arr[3] != 4 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _live_set(_live_magic)
+   if _live_var != _live_magic then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _t = _live_add(10, 6)
+   if _t != 16 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _pv_live = 0x3C
+   if _pv_live != 0x3C then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _vol_keep = 0x5A
+   _t = _vol_keep
+   if _t != 0x5A then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if _live_magic != 0xC5 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _live_word = 1000
+   if _live_word != 1000 then
+      _check_failed = true
+   end if
+   _live_bit = true
+   if !_live_bit then
+      _check_failed = true
+   end if
+   _vol_second = 0xA5
+   _t = _vol_second
+   if _t != 0xA5 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _live_inner(_live_magic)
+   if _live_var != _live_magic then
+      _check_failed = true
+   end if
+   _t = _live_wrap(5)
+   if _t != 47 then
+      _check_failed = true
+   end if
+   if _live_add(_live_tag, 0) != _live_tag then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_dead_code_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

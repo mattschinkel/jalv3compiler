@@ -1,0 +1,91 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — pointer-over-chunked element-type matrix
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Signed and wide element types for unescaped pointer binds over
+--    holed multibank arrays (the fix_pointer_bind_escape_analysis
+--    follow-ups): sbyte/sword/dword/sdword walk exactly like
+--    byte/word. Enabling fixes: the scalar-pointee array fold copied
+--    SIGNED onto the folded ARRAY def (every signed bind errored
+--    "type mismatch"), and dword-scale offsets need the offset-aware
+--    walk scratch. byte*N pointees parse now too (the *N width
+--    mis-parsed as a subscript before a dimension bracket) and work --
+--    byte*N is an N-BYTE wide type (see
+--    docs/investigations/byteN_bitN_domain_map_20261027.md), so their
+--    placement is correct byte-multiples; bit*N is the packed bit-field
+--    family. Scratch-probed either way.
+--
+-- @gpsim_validate begin
+-- steps: 30000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 4
+-- expect byte v__r_sbyte 109
+-- expect byte v__r_sword 57
+-- expect byte v__r_dword 233
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var word _i
+
+-- --- sbyte ---
+var sbyte _e_sbyte[100]
+var pointer _p_sbyte as var sbyte[100]
+_p_sbyte is _e_sbyte
+var volatile byte _r_sbyte = 255
+for 100 using _i loop
+   _e_sbyte[_i] = sbyte(_i % 100 - 30)
+end loop
+for 10 using _i loop
+   _p_sbyte[60 + _i] = sbyte(100 + _i)
+end loop
+_i = 69
+_r_sbyte = byte(_p_sbyte[_i])
+regression_checkpoint()                       -- 1
+
+-- --- sword ---
+var sword _e_sword[100]
+var pointer _p_sword as var sword[100]
+_p_sword is _e_sword
+var volatile byte _r_sword = 255
+for 100 using _i loop
+   _e_sword[_i] = sword(_i * 2 - 500)
+end loop
+for 10 using _i loop
+   _p_sword[60 + _i] = sword(30000 + _i)
+end loop
+_i = 69
+_r_sword = byte(_p_sword[_i])
+regression_checkpoint()                       -- 2
+
+-- --- dword ---
+var dword _e_dword[100]
+var pointer _p_dword as var dword[100]
+_p_dword is _e_dword
+var volatile byte _r_dword = 255
+for 100 using _i loop
+   _e_dword[_i] = dword(_i) * 1000
+end loop
+for 10 using _i loop
+   _p_dword[60 + _i] = dword(300000) + dword(_i)
+end loop
+_i = 69
+_r_dword = byte(_p_dword[_i])
+regression_checkpoint()                       -- 3
+
+-- --- read-back sanity through the pointer (fill regions untouched) ---
+_i = 10
+if byte(_p_sbyte[_i]) != byte(sbyte(10 % 100 - 30)) then
+   _check_failed = true
+end if
+if byte(_p_sword[_i]) != byte(sword(10 * 2 - 500)) then
+   _check_failed = true
+end if
+if byte(_p_dword[_i]) != byte(dword(10) * 1000) then
+   _check_failed = true
+end if
+regression_checkpoint()                       -- 4

@@ -1,0 +1,45 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — isr
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: pragma interrupt + EIC (software IFS0)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_isr.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 2
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+
+--------------------------------------------------------------------------------
+-- Description: IRQ0 handler used by the QEMU ISR smoke
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: Clears IFS0 bit 0 so ERET does not re-enter.
+--------------------------------------------------------------------------------
+procedure _ct_isr() is
+   pragma interrupt
+
+   IFS0CLR = 1
+   ra = ra + 1
+end procedure
+
+IPC0 = 0x1C
+IEC0SET = 1
+rb = 1
+IFS0SET = 1
+while ra == 0 loop
+end loop
+if ra == 1 then
+   rb = 2
+end if

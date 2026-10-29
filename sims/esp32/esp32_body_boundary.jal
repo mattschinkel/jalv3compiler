@@ -1,0 +1,37 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — boundary-value matrix body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared SDCC-adoption boundary matrix via `_regression_boundary_body`:
+--    byte..sdword wrap/edge arithmetic, shifts, compares, casts,
+--    inc/dec and the folded-negative divide pins.  Shared
+--    `_check_step`/result-byte expects, identical to the classic
+--    PIC wrappers.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_boundary.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 12
+-- expect byte v__bd_r_byte_wrap 1
+-- expect byte v__bd_r_byte_muldiv 1
+-- expect byte v__bd_r_sbyte_edge 1
+-- expect byte v__bd_r_word_wrap 1
+-- expect byte v__bd_r_word_shift 1
+-- expect byte v__bd_r_sword_edge 1
+-- expect byte v__bd_r_dword_edge 1
+-- expect byte v__bd_r_sdword_edge 1
+-- expect byte v__bd_r_cmp 1
+-- expect byte v__bd_r_cast 1
+-- expect byte v__bd_r_incdec 1
+-- expect byte v__bd_r_fold_div 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_boundary_body

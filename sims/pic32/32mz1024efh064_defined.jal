@@ -1,0 +1,69 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 compiler regression — defined() boolean (label/value lookup)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Port of **18f4620_compiler_regression_defined.jal** to PIC32
+--    (@sim_validate / QEMU). Guards **jal_expr.c** `defined(id)`
+--    (handles valid before **value_release** / **label_release**).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_defined.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 3
+-- @sim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_32mz1024efh064_device
+include regression_pic32
+
+var byte _bad_state = 0
+alias _bad_reads_bad is _bad
+
+const byte _GPR_EXISTING = 99
+
+--------------------------------------------------------------------------------
+-- Description: Empty procedure so **defined** can resolve a label (not only a const value).
+--------------------------------------------------------------------------------
+procedure _defined_label_probe() is
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Run **defined()** checks; each block ends with **regression_checkpoint**.
+--------------------------------------------------------------------------------
+procedure _run_defined_checks() is
+   regression_begin_run()
+
+   if defined(_GPR_EXISTING) then
+      if _GPR_EXISTING != 99 then
+         _check_failed = true
+      end if
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if defined(_GPR_DOES_NOT_EXIST_ZZZ) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if defined(_defined_label_probe) then
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   if _check_failed then
+      _bad_state = 1
+   end if
+end procedure
+
+_run_defined_checks()

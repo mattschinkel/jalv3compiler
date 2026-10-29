@@ -1,0 +1,75 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — fixed `var string[N]` assignment + `&` concat
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime coverage for fixed-capacity strings: post-declaration literal
+--    assignment (zero-filled), fixed-to-fixed `&` concatenation using
+--    effective text length (runtime scan to first zero), and overflow
+--    handling (copy truncated to N, **`_string_error`** = 2, read clears).
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 3
+-- expect byte v__fx_p1 97
+-- expect byte v__fx_p2 99
+-- expect byte v__fx_p3 0
+-- expect byte v__fx_p4 100
+-- expect byte v__fx_p5 102
+-- expect byte v__fx_p6 0
+-- expect byte v__fx_p7 56
+-- expect byte v__fx_e1 2
+-- expect byte v__fx_e2 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var string[16] _fx_s
+var string[8]  _fx_t
+var volatile byte _fx_p1 = 0
+var volatile byte _fx_p2 = 0
+var volatile byte _fx_p3 = 0
+var volatile byte _fx_p4 = 0
+var volatile byte _fx_p5 = 0
+var volatile byte _fx_p6 = 0
+var volatile byte _fx_p7 = 0
+var volatile byte _fx_e1 = 255
+var volatile byte _fx_e2 = 255
+
+procedure _fx_run() is
+   regression_begin_run()
+
+   -- 1) literal assignment: "abc" + zero fill
+   _fx_s = "abc"
+   _fx_p1 = _fx_s[0]
+   _fx_p2 = _fx_s[2]
+   _fx_p3 = _fx_s[3]
+   regression_checkpoint()
+
+   -- 2) concat: effective lengths ("abc" & "def" -> "abcdef")
+   _fx_t = "def"
+   _fx_s = _fx_s & _fx_t
+   _fx_p4 = _fx_s[3]
+   _fx_p5 = _fx_s[5]
+   _fx_p6 = _fx_s[6]
+   regression_checkpoint()
+
+   -- 3) overflow: 9 chars into capacity 8 -> truncated copy, error 2
+   _fx_t = "123456789"
+   _fx_p7 = _fx_t[7]
+   _fx_e1 = _string_error
+   _fx_e2 = _string_error
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_fx_run()
+
+forever loop
+end loop

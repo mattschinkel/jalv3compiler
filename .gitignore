@@ -5,3 +5,12 @@ src/*.a
 src/*/*.a
 src/jal/jal_build.h
 *.o
+__pycache__/
+*.asm
+*.cod
+*.hex
+*.out
+*.bin
+demo_sample/old/
+demo_sample/backup/
+!sims/golden/*.hex

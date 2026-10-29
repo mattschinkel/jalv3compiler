@@ -1,0 +1,178 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — float renderer battery
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: Runtime float->decimal renderer battery, full 34-case
+--    set ported from the ESP32 twin (byte-for-byte identical case
+--    list).  Pins the rendered CHARACTER BYTES, not just COUNT --
+--    untestable on MIPS before the float_alg cuts (truncating float)
+--    and the ofs-scratch collision (digit chars emitted as raw
+--    values).  _fb_res is a post-run copy of the bad-case flag, so
+--    expecting 0 proves every case ran AND compared clean.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_float_str.jal
+--
+-- @sim_validate begin
+-- duration_s: 20.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__fb_bad 0
+-- expect byte v__fb_res 0
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+const word _string_heap_size = 64
+pragma string index byte
+include strings_dynamic
+
+var byte _fb_buf[48]
+var byte _fb_n = 0
+var byte _fb_bad = 0
+var byte _fb_i = 0
+
+--------------------------------------------------------------------------------
+-- Description: run one battery case; _e0.._eg are the expected ASCII bytes
+--------------------------------------------------------------------------------
+procedure _fb_case(float in _fv, byte in _cid, byte in _el, byte in _e0, byte in _e1, byte in _e2, byte in _e3, byte in _e4, byte in _e5, byte in _e6, byte in _e7, byte in _e8, byte in _e9, byte in _ea, byte in _eb, byte in _ec, byte in _ed, byte in _ee, byte in _ef, byte in _eg) is
+   var byte _k = 0
+   var byte _m = 0
+   _fb_n = _string_float_str(_fv, _fb_buf)
+   if _fb_n != _el then
+      _fb_bad = _cid
+   end if
+   _fb_i = 0
+   while _fb_i < _fb_n loop
+      _k = _fb_i
+      if _k == 0 then
+         _m = _e0
+      end if
+      if _k == 1 then
+         _m = _e1
+      end if
+      if _k == 2 then
+         _m = _e2
+      end if
+      if _k == 3 then
+         _m = _e3
+      end if
+      if _k == 4 then
+         _m = _e4
+      end if
+      if _k == 5 then
+         _m = _e5
+      end if
+      if _k == 6 then
+         _m = _e6
+      end if
+      if _k == 7 then
+         _m = _e7
+      end if
+      if _k == 8 then
+         _m = _e8
+      end if
+      if _k == 9 then
+         _m = _e9
+      end if
+      if _k == 10 then
+         _m = _ea
+      end if
+      if _k == 11 then
+         _m = _eb
+      end if
+      if _k == 12 then
+         _m = _ec
+      end if
+      if _k == 13 then
+         _m = _ed
+      end if
+      if _k == 14 then
+         _m = _ee
+      end if
+      if _k == 15 then
+         _m = _ef
+      end if
+      if _k == 16 then
+         _m = _eg
+      end if
+      if _fb_buf[_fb_i] != _m then
+         _fb_bad = _cid
+      end if
+      _fb_i = _fb_i + 1
+   end loop
+end procedure
+
+var float _fb_v0 = 0.1
+_fb_case(_fb_v0, 1, 3, 48, 46, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v1 = 0.2
+_fb_case(_fb_v1, 2, 3, 48, 46, 50, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v2 = 0.5
+_fb_case(_fb_v2, 3, 3, 48, 46, 53, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v3 = 1.5
+_fb_case(_fb_v3, 4, 3, 49, 46, 53, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v4 = 2.0
+_fb_case(_fb_v4, 5, 1, 50, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v5 = 2.5
+_fb_case(_fb_v5, 6, 3, 50, 46, 53, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v6 = 3.14159
+_fb_case(_fb_v6, 7, 7, 51, 46, 49, 52, 49, 53, 57, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v7 = 7.0
+_fb_case(_fb_v7, 8, 1, 55, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v8 = 100.0
+_fb_case(_fb_v8, 9, 3, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v9 = 0.001
+_fb_case(_fb_v9, 10, 5, 48, 46, 48, 48, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v10 = 0.03125
+_fb_case(_fb_v10, 11, 7, 48, 46, 48, 51, 49, 50, 53, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v11 = 1000000.0
+_fb_case(_fb_v11, 12, 7, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v12 = 123456789.0
+_fb_case(_fb_v12, 13, 9, 49, 50, 51, 52, 53, 54, 55, 57, 50, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v13 = 1234.5678
+_fb_case(_fb_v13, 14, 9, 49, 50, 51, 52, 46, 53, 54, 55, 55, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v14 = 1234567.0
+_fb_case(_fb_v14, 15, 7, 49, 50, 51, 52, 53, 54, 55, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v15 = 100000000.0
+_fb_case(_fb_v15, 16, 9, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v16 = 10000000000.0
+_fb_case(_fb_v16, 17, 11, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v17 = 1e-08
+_fb_case(_fb_v17, 18, 10, 48, 46, 48, 48, 48, 48, 48, 48, 48, 49, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v18 = 1e-21
+_fb_case(_fb_v18, 19, 5, 49, 101, 45, 50, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v21 = 999999900.0
+_fb_case(_fb_v21, 22, 9, 57, 57, 57, 57, 57, 57, 56, 55, 50, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v25 = 1e-31
+_fb_case(_fb_v25, 26, 5, 49, 101, 45, 51, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v32 = 16777216.0
+_fb_case(_fb_v32, 33, 8, 49, 54, 55, 55, 55, 50, 49, 54, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v33 = 16777217.0
+_fb_case(_fb_v33, 34, 8, 49, 54, 55, 55, 55, 50, 49, 54, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v34 = 8388609.0
+_fb_case(_fb_v34, 35, 7, 56, 51, 56, 56, 54, 48, 57, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v35 = 2.9802322e-08
+_fb_case(_fb_v35, 36, 17, 48, 46, 48, 48, 48, 48, 48, 48, 48, 50, 57, 56, 48, 50, 51, 50, 50)
+var float _fb_v36 = -0.0
+_fb_case(_fb_v36, 37, 2, 45, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v37 = -1.5
+_fb_case(_fb_v37, 38, 4, 45, 49, 46, 53, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v38 = -0.1
+_fb_case(_fb_v38, 39, 4, 45, 48, 46, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v39 = -1e-21
+_fb_case(_fb_v39, 40, 6, 45, 49, 101, 45, 50, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v40 = -123456789.0
+_fb_case(_fb_v40, 41, 10, 45, 49, 50, 51, 52, 53, 54, 55, 57, 50, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v41 = 9.99
+_fb_case(_fb_v41, 42, 4, 57, 46, 57, 57, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v42 = 9.999999
+_fb_case(_fb_v42, 43, 8, 57, 46, 57, 57, 57, 57, 57, 57, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v43 = 0.9999999
+_fb_case(_fb_v43, 44, 9, 48, 46, 57, 57, 57, 57, 57, 57, 57, 48, 48, 48, 48, 48, 48, 48, 48)
+var float _fb_v44 = 9.999999e+38
+_fb_case(_fb_v44, 45, 3, 105, 110, 102, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
+
+var volatile byte _fb_res = _fb_bad
+forever loop
+end loop

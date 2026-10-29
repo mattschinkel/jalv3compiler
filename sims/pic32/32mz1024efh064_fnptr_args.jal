@@ -1,0 +1,40 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — fnptr args
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review: function-pointer call must marshal IN args
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_fnptr_args.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_r 8
+-- expect byte v_s 10
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte r
+var volatile byte s
+var pointer fp as function(byte in, byte in) return byte
+
+--------------------------------------------------------------------------------
+-- Description: Add two bytes (target of the function pointer)
+-- Parameters:
+-- - a - left addend
+-- - b - right addend
+-- Returns: a + b
+--------------------------------------------------------------------------------
+function _add(byte in a, byte in b) return byte is
+   return a + b
+end function
+
+r = 0
+s = 0
+fp is _add
+r = fp(3, 5)
+s = fp(1, 9)

@@ -1,0 +1,71 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — fixed string
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: fixed string[N] + flash const table
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_fixed_string.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- expect byte v_rg 1
+-- expect byte v_rh 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+var volatile byte rg = 0
+var volatile byte rh = 0
+
+const byte tbl[4] = {10, 20, 30, 40}
+var byte ix = 2
+var string[8] s
+var string[8] t
+
+s = "abc"
+if s[0] == 97 then
+   ra = 1
+end if
+if s[2] == 99 then
+   rb = 1
+end if
+if s[3] == 0 then
+   rc = 1
+end if
+
+t = "XY"
+s = s & t
+if s[3] == 88 then
+   rd = 1
+end if
+if s[4] == 89 then
+   re = 1
+end if
+
+t = "123456789"
+if t[7] == 56 then
+   rf = 1
+end if
+if _string_error == 2 then
+   rg = 1
+end if
+
+if tbl[ix] == 30 then
+   rh = 1
+end if

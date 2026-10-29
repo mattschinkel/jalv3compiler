@@ -1,0 +1,34 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — tail-transfer keeps code + values
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Port of **18f4620_compiler_regression_tail_return.jal** to PIC32
+--    (@sim_validate / QEMU). Guards **`cmd_opt_tail_return`** /
+--    **`cmd_opt_branch`**: on MIPS the deleted tail GOTO truncated the
+--    caller before its epilogue → stale-`$ra` infinite loop
+--    (****); the same body also
+--    checks the deleted side effects / wrong return values.
+--    Uses the shared body **`tests/_regression_tail_return_body.jal`**
+--    via the classic helpers (`regression_pic32`), so the checks are
+--    identical across all four suite architectures.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_tail_return_regression.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 6
+-- @sim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_32mz1024efh064_device
+include regression_pic32
+
+-- `led` / `led_pin` come from the device prelude (RAM-backed LED stub);
+-- `_usec_delay` from the device library. Classic-equivalent body below.
+
+include _regression_tail_return_body

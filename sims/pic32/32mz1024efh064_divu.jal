@@ -1,0 +1,29 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — divu
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review: unsigned dword / % must use DIVU (bit 31 set)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_divu.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect dword_le v_uc 0x40000000
+-- expect dword_le v_ud 0x00000001
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile dword ua
+var volatile dword ub
+var volatile dword uc
+var volatile dword ud
+
+ua = 0x80000001
+ub = 2
+uc = ua / ub
+ud = ua % ub

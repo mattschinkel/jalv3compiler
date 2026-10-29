@@ -1,0 +1,30 @@
+-- ------------------------------------------------------
+-- Title: PIC16F1825 compiler regression — large_array_1 only
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_large_array_body.jal`** (**`large_array_1`**, 100 bytes).
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/16f1825_compiler_regression_large_array.jal
+--
+-- @gpsim_validate begin
+-- steps: 550000
+-- frequency_hz: auto
+-- expect_hw_stkptr_le_compiler_depth: 1
+-- hw_stkptr_steps: 25000
+-- expect byte v__check_step 3
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_large_array_body

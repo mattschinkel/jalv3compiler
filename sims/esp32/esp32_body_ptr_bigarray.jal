@@ -1,0 +1,119 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — pointers bound to arrays > 4 bytes
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `p is arr` where the bound array is larger than 4 bytes used to
+--    trip `ESP32 wide operator 20: 3b follow-up`: the POINTER_ASSIGN
+--    cmd's RHS (the array, e.g. 10 bytes) made esp_is_wide route the
+--    BIND into the wide dispatch, which has no POINTER_ASSIGN case.
+--    A bind stores a 4-byte address -- the target's size is
+--    irrelevant (mips_op.c has excluded POINTER_ASSIGN from its wide
+--    test since the pointer-array work; this mirrors it). This body
+--    binds byte[10] and word[10] pointers (> 4 bytes, word = 20)
+--    and stores/loads through them with const and runtime indices,
+--    verifying the pointed-to array contents directly.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_ptr_bigarray.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 6
+-- expect byte v__pba_arr0 20
+-- expect byte v__pba_arr9 29
+-- expect word_le v__pba_w5 1205
+-- expect word_le v__pba_rsum 12045
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+
+-- > 4 bytes: the bind used to be refused by the wide misroute
+var byte _pba_arr[10]
+var pointer _pba_bp as var byte[10]
+var word _pba_warr[10]
+var pointer _pba_wp as var word[10]
+
+var volatile byte _pba_arr0
+var volatile byte _pba_arr9
+var volatile word _pba_w5
+var word _pba_rsum
+var byte _pba_i
+var word _pba_wi
+
+_pba_bp is _pba_arr
+_pba_wp is _pba_warr
+
+-- const-index store through the bound pointer (byte pointee)
+_pba_bp[0] = 17
+if _pba_arr[0] == 17 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()                             -- 1
+
+-- runtime-index fill through the pointer: arr[i] = 20 + i
+for 10 using _pba_i loop
+   _pba_bp[_pba_i] = 20 + _pba_i
+end loop
+_pba_arr0 = _pba_arr[0]
+_pba_arr9 = _pba_arr[9]
+if _pba_arr0 != 20 then
+   _check_failed = true
+end if
+if _pba_arr9 != 29 then
+   _check_failed = true
+end if
+regression_checkpoint()                             -- 2
+
+-- runtime-index loads back through the pointer: sum 20..29 = 245
+_pba_rsum = 0
+for 10 using _pba_i loop
+   _pba_rsum = _pba_rsum + _pba_bp[_pba_i]
+end loop
+if _pba_rsum != 245 then
+   _check_failed = true
+end if
+regression_checkpoint()                             -- 3
+
+-- word pointee (20 bytes): runtime-index store + load, both bytes
+-- (word loop index -- a byte index would range-warn the const add,
+-- an unrelated front-end quirk that hits direct arrays too)
+for 10 using _pba_wi loop
+   _pba_wp[_pba_wi] = 1200 + _pba_wi
+end loop
+_pba_w5 = _pba_warr[5]
+if _pba_w5 != 1205 then
+   _check_failed = true
+end if
+_pba_rsum = 0
+for 10 using _pba_wi loop
+   _pba_rsum = _pba_rsum + _pba_wp[_pba_wi]
+end loop
+if _pba_rsum != 12045 then
+   _check_failed = true
+end if
+regression_checkpoint()                             -- 4
+
+-- direct write visible through the pointer, pointer write visible
+-- directly (byte)
+_pba_arr[3] = 90
+if _pba_bp[3] != 90 then
+   _check_failed = true
+end if
+_pba_bp[3] = 95
+if _pba_arr[3] != 95 then
+   _check_failed = true
+end if
+regression_checkpoint()                             -- 5
+
+-- word const-index store through the pointer
+_pba_wp[2] = 4321
+if _pba_warr[2] != 4321 then
+   _check_failed = true
+end if
+regression_checkpoint()                             -- 6

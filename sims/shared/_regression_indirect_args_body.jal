@@ -1,0 +1,81 @@
+-- ----------------------------------------------------------------------------
+-- Title: Indirect-call parameter liveness — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the shared indirect-argument inbox fix
+--: INDIRECT-flagged procs
+--    (pointer-called, or volatile device thunks) used to have their
+--    params re-based into the one shared marshalling area, so a param
+--    live across a nested indirect call (any device write) was
+--    clobbered by that call's argument marshalling -- a pointer-called
+--    proc printing its formal printed the last UART byte instead
+--    (demo_sample/esp32_pointers "Proc A: 32" instead of 42).
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+var byte _ia_sink = 0
+var volatile byte _ia_dev at { 0 }
+procedure _ia_dev'put(byte in d) is
+   _ia_sink = d
+end procedure
+
+var byte _ia_seen = 0
+
+procedure _ia_take(volatile byte out dev, byte in v) is
+   dev = 7                       -- nested indirect call (device write)
+   _ia_seen = v                  -- pre-fix: v read the marshalling area
+end procedure
+
+procedure _ia_run(byte in v) is
+   _ia_take(_ia_dev, v)
+end procedure
+
+var pointer _ia_pp as procedure (byte in)
+
+-- direct call to a proc that is ALSO pointer-called below: both call
+-- flavors marshal through the inbox, PROC_ENTER copies to linear homes
+_ia_run(42)
+if _ia_seen == 42 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- pointer call, literal argument
+_ia_seen = 0
+_ia_pp is _ia_run
+_ia_pp(43)
+if _ia_seen == 43 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- pointer call, variable argument
+var byte _ia_arg = 44
+_ia_seen = 0
+_ia_pp(_ia_arg)
+if _ia_seen == 44 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- in out argument marshalled back through a pointer call
+procedure _ia_outp(byte in out v) is
+   v = 9
+end procedure
+var pointer _ia_po as procedure (byte in out)
+var byte _ia_io = 5
+_ia_po is _ia_outp
+_ia_po(_ia_io)
+if _ia_io == 9 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()

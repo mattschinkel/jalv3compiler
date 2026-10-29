@@ -1,0 +1,101 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — jalv2compiler #36 runtime-index variant
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `array[index].field` (RUNTIME index) passed to an open-array
+--    formal (`byte in b[]`) — the print_string shape. Const-index
+--    calls are correct; the runtime-index marshalling used to bind
+--    row 0 regardless of index (reads base + baked member offset,
+--    never adding index * record_stride).
+--
+-- Notes:
+--    From Rob's 16f1823 retest (tmp/rob_issue36.jal), reduced to a
+--    RAM checksum witness. 3 checkpoints.
+--
+-- @gpsim_validate begin
+-- steps: 4000000
+-- frequency_hz: auto
+-- expect byte v__check_step 3
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+record array_def is
+   byte a_array[3]
+   byte b_array[5]
+end record
+
+const array_def array[] = { {"a_1", "b_001"}, {"a_2", "b_002"}, {"a_3", "b_003"} }
+
+function sum_field(byte in b[]) return word is
+   var word acc
+   var byte i
+   acc = 0
+   for count(b) using i loop
+      acc = acc + b[i]
+   end loop
+   return acc
+end function
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   var word r0
+   var word r1
+   var word r2
+   var word total
+   var byte index
+
+   regression_begin_run()
+
+   -- const-index: three distinct rows, each correct
+   r0 = sum_field(array[0].a_array)
+   r1 = sum_field(array[1].a_array)
+   r2 = sum_field(array[2].a_array)
+   if r0 != 0xF1 then
+      _check_failed = true
+   end if
+   if r1 != 0xF2 then
+      _check_failed = true
+   end if
+   if r2 != 0xF3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- runtime index over a_array: the sum of the three rows must match
+   total = 0
+   for 3 using index loop
+      total = total + sum_field(array[index].a_array)
+   end loop
+   if total != (0xF1 + 0xF2 + 0xF3) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- runtime index over b_array (member offset != 0 inside the record)
+   total = 0
+   for 3 using index loop
+      total = total + sum_field(array[index].b_array)
+   end loop
+   if total != (0x152 + 0x153 + 0x154) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+led = low
+
+forever loop
+end loop

@@ -1,0 +1,53 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — multi-vector ISR table
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K) MVEC: 64 x 32-byte stubs at EBASE+0x200, selected
+--    by INTCON.MVEC + IntCtl.VS.  Two numbered ISRs (IRQ0 core timer,
+--    IRQ4 Timer1) are raised in software (QEMU does not model Timer1);
+--    each must run through its own table slot.  QEMU's VEIC forces
+--    spacing 0 and enters EBASE+0x200, so slot 0 carries a dispatcher
+--    (reads INTSTAT.VEC) that forwards to the selected slot; on silicon
+--    only IRQ0 passes through it.
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v_a 1
+-- expect byte v_b 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+var volatile byte a = 0
+var volatile byte b = 0
+
+procedure isr0() is
+   pragma interrupt 0
+
+   IFS0CLR = 1
+   a = a + 1
+end procedure
+
+procedure isr4() is
+   pragma interrupt 4
+
+   IFS0CLR = 0x10
+   b = b + 1
+end procedure
+
+IPC0 = 0x1C
+IPC1 = 0x04
+IEC0SET = 0x11
+IFS0SET = 0x11
+
+var byte guard = 0
+while ((a == 0) | (b == 0)) & (guard < 100) loop
+   guard = guard + 1
+end loop
+
+forever loop
+end loop

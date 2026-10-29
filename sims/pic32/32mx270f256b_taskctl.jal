@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — task control
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: _task_suspend / _task_resume / _task_kill / _task_restart
+--    over static task slots (shared body with the ESP32 twin).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_taskctl.jal
+--
+-- @sim_validate begin
+-- duration_s: 2.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__ctl_checks 9
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include _regression_taskctl_body

@@ -1,0 +1,42 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — fnptr ptr rec
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review follow-up: JALR overlay must size pointer members as 4 bytes
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_fnptr_ptr_rec.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_r 42
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+record rec is
+   pointer p
+   byte extra
+end record
+
+var volatile byte r
+var rec v
+var pointer fp as function(rec in) return byte
+
+--------------------------------------------------------------------------------
+-- Description: Return the trailing byte of a record that starts with a pointer
+-- Parameters:
+-- - v - record (pointer member + extra)
+-- Returns: v.extra
+--------------------------------------------------------------------------------
+function _take(rec in v) return byte is
+   return v.extra
+end function
+
+r = 0
+v.extra = 42
+fp is _take
+r = fp(v)

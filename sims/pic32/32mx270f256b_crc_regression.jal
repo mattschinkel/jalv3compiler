@@ -1,0 +1,33 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — SDCC CRC16 + sort workload
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Port of **18f4620_compiler_regression_crc.jal** to PIC32
+--    (@sim_validate / QEMU).  Shared body
+--    **`tests/_regression_crc_body.jal`**: CRC16-CCITT over
+--    several messages incl. incremental updates, plus a bubble sort
+--    with a pinned sorted image and sum invariant.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_crc_regression.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 6
+-- expect byte v__crc_r_msg9 1
+-- expect byte v__crc_r_msg1 1
+-- expect byte v__crc_r_msg5 1
+-- expect byte v__crc_r_msg03 1
+-- expect byte v__crc_r_incr 1
+-- expect byte v__crc_r_sort 1
+-- @sim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_32mx270f256b_device
+include regression_pic32
+
+include _regression_crc_body

@@ -1,0 +1,69 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — native array > 256 bytes (14H chunked)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The >256-byte native-array acceptance test for PIC_14H chunked
+--    placements (fixes the 2026-10-26 multibank break): a 300-byte
+--    byte array spans four GPR windows with chunks that avoid the
+--    shared access window (0x70-0x7F, reserved for loop scalars and
+--    state/scratch). Fills every element, REWRITES indices >= 256,
+--    reads everything back via checksums and spot bytes.
+--
+--    16f1825 is the sim proxy for the 16F1455 (JALPIC-One) geometry:
+--    the device files declare byte-identical RAM maps (same 13 GPR
+--    windows, same shared ranges); gpsim 0.32.1 has no p16f1455 model.
+--    Before the fix this shape died in codegen with up to 72
+--    "banked data op (MOVLB) ... unknown file address (_pic_temp)"
+--    errors, or refused placements in the 96-128-byte band.
+--
+-- @gpsim_validate begin
+-- steps: 12000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 5
+-- expect byte v__r1 128
+-- expect byte v__r2 127
+-- expect byte v__r3 255
+-- expect byte v__r4 0
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var byte arr[300]
+var volatile byte _r1 = 0
+var volatile byte _r2 = 0
+var volatile byte _r3 = 0
+var volatile byte _r4 = 255
+var word i
+var word sum = 0
+
+-- fill all 300 with (i*7+3) mod 256
+for 300 using i loop
+   arr[i] = byte(i * 7 + 3)
+end loop
+regression_checkpoint()                       -- 1
+
+-- rewrite everything from index 256 up: value 255-(i-256)
+for 44 using i loop
+   arr[256 + i] = 255 - byte(i)
+end loop
+regression_checkpoint()                       -- 2
+
+-- read back 0..255: (7i+3) mod 256 is a permutation of 0..255,
+-- so the byte sum is 255*256/2 = 32640 = 0x7F80
+sum = 0
+for 256 using i loop
+   sum = sum + arr[i]
+end loop
+_r1 = byte(sum)                               -- 128
+regression_checkpoint()                       -- 3
+_r2 = byte(sum >> 8)                          -- 127
+regression_checkpoint()                       -- 4
+
+-- spot-check the rewritten region: arr[256]=255, arr[299]=212
+_r3 = arr[256]
+_r4 = arr[299] - 212                          -- 0 when correct
+regression_checkpoint()                       -- 5

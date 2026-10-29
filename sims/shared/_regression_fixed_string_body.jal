@@ -1,0 +1,93 @@
+-- ----------------------------------------------------------------------------
+-- Title: Fixed string[N] assignment + & concat — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Extracted from **`16f877_gpsim_fixed_string_assign_concat.jal`** so the
+--    same coverage runs on other architectures; adds a self-append-with-
+--    overflow phase (phase 4).
+--
+-- ----------------------------------------------------------------------------
+
+var string[16] _fx_s
+var string[8]  _fx_t
+var volatile byte _fx_p1 = 0
+var volatile byte _fx_p2 = 0
+var volatile byte _fx_p3 = 0
+var volatile byte _fx_p4 = 0
+var volatile byte _fx_p5 = 0
+var volatile byte _fx_p6 = 0
+var volatile byte _fx_p7 = 0
+var volatile byte _fx_e1 = 255
+var volatile byte _fx_e2 = 255
+
+
+--------------------------------------------------------------------------------
+-- Description: 4) self-append overflow: s(16) = s(16-chars) & s -> must
+--              leave s unchanged and set error 2
+--------------------------------------------------------------------------------
+procedure _fx_self_append_overflow() is
+   var string[16] _fx_long_src
+   var volatile byte _fx_before0 = 0
+   var volatile byte _fx_before15 = 0
+   var volatile byte _fx_after0 = 0
+   var volatile byte _fx_after15 = 0
+   var volatile byte _fx_self_err = 255
+
+   _fx_long_src = "0123456789ABCDEF"
+   _fx_s = _fx_long_src & "!"
+   -- overflow: 17 chars into 16 -> s must stay unchanged
+   _fx_before0 = _fx_s[0]
+   _fx_before15 = _fx_s[15]
+   _fx_s = _fx_s & _fx_long_src
+   _fx_after0 = _fx_s[0]
+   _fx_after15 = _fx_s[15]
+   _fx_self_err = _string_error
+   if _fx_before0 != _fx_after0 then
+      _check_failed = true
+   end if
+   if _fx_before15 != _fx_after15 then
+      _check_failed = true
+   end if
+   if _fx_self_err != 2 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+end procedure
+
+procedure _fx_run() is
+   regression_begin_run()
+
+   -- 1) literal assignment: "abc" + zero fill
+   _fx_s = "abc"
+   _fx_p1 = _fx_s[0]
+   _fx_p2 = _fx_s[2]
+   _fx_p3 = _fx_s[3]
+   regression_checkpoint()
+
+   -- 2) concat: effective lengths ("abc" & "def" -> "abcdef")
+   _fx_t = "def"
+   _fx_s = _fx_s & _fx_t
+   _fx_p4 = _fx_s[3]
+   _fx_p5 = _fx_s[5]
+   _fx_p6 = _fx_s[6]
+   regression_checkpoint()
+
+   -- 3) overflow: 9 chars into capacity 8 -> truncated copy, error 2
+   _fx_t = "123456789"
+   _fx_p7 = _fx_t[7]
+   _fx_e1 = _string_error
+   _fx_e2 = _string_error
+   regression_checkpoint()
+
+   -- 4) self-append overflow
+   _fx_self_append_overflow()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_fx_run()
+
+forever loop
+end loop

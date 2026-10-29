@@ -1,0 +1,56 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — runtime float in & chains
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime float chain operands lower to the `_string_float_str`
+--    renderer call (48-byte out-buffer marshalling, parms[0] length).
+--    Classic soft-float division is the documented ~1-ulp imprecision,
+--    so 0.1 renders the 9-digit fallback: "x0.100000001" (12 chars)
+--    and string(fv) is "0.100000001" (11).
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 2
+-- expect byte v_fc_n1 4   ("x0.1" -- shortest round-trip, was 12)
+-- expect byte v_fc_n2 3
+-- (cut 2-5: with IEEE float the round-trip check passes at the
+-- SHORTEST form -- string(0.1) = "0.1" (3), matching the ESP32
+-- twin; 11 was the old truncating-float render. NOTE: the third
+-- rendered char is 0x01 not '1' -- a PRE-EXISTING MIPS defect in
+-- the renderer's one-char-literal add inside this function context
+-- (reproduces identically on the pre-float_alg compiler; works
+-- standalone) -- backlog, see fix_float_alg_cuts_2_5.md)
+-- @sim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_32mx270f256b_device
+include regression_pic32
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var float fv = 0.1
+var string s = "x" & fv
+var string t = string(fv)
+
+var volatile byte fc_n1 = 0
+var volatile byte fc_n2 = 0
+
+procedure _run() is
+   regression_begin_run()
+   fc_n1 = COUNT(s)
+   regression_checkpoint()
+   fc_n2 = COUNT(t)
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+forever loop
+end loop

@@ -1,0 +1,23 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — task
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: cooperative task start/suspend
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_task.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 2
+-- expect byte v__task_hits 2
+-- @sim_validate end
+--
+include regression_esp32_device
+var volatile bit _task_pin = 0
+include regression_esp32
+include _regression_pic32_task_body

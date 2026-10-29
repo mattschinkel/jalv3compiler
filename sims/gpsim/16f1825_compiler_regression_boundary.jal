@@ -1,0 +1,38 @@
+-- ------------------------------------------------------
+-- Title: PIC16F1825 compiler regression — boundary-value matrix (byte..sdword edges)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_boundary_body.jal`** (SDCC-suite adoption
+--    batch.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/16f1825_compiler_regression_boundary.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 12
+-- expect byte v__bd_r_byte_wrap 1
+-- expect byte v__bd_r_byte_muldiv 1
+-- expect byte v__bd_r_sbyte_edge 1
+-- expect byte v__bd_r_word_wrap 1
+-- expect byte v__bd_r_word_shift 1
+-- expect byte v__bd_r_sword_edge 1
+-- expect byte v__bd_r_dword_edge 1
+-- expect byte v__bd_r_sdword_edge 1
+-- expect byte v__bd_r_cmp 1
+-- expect byte v__bd_r_cast 1
+-- expect byte v__bd_r_incdec 1
+-- expect byte v__bd_r_fold_div 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+
+include regression
+
+include _regression_boundary_body

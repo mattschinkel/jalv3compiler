@@ -1,0 +1,76 @@
+-- Title: Shared PIC18 regression body — isr
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_isr.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+var volatile byte _isr_cnt = 0
+
+--------------------------------------------------------------------------------
+procedure _int0_isr() is
+   pragma interrupt
+
+   if !INTCON_INT0IF then
+      return
+   end if
+   INTCON_INT0IF = off
+   _isr_cnt = _isr_cnt + 1
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _run_isr_checks() is
+   var byte _i
+
+   regression_begin_run()
+
+   INTCON2_INTEDG0 = true
+   INTCON_INT0IE = off
+   INTCON_INT0IF = off
+   intcon_gie = off
+
+   pin_B0 = low
+
+   for 3 using _i loop
+      INTCON_INT0IF = off
+      INTCON_INT0IE = on
+      intcon_gie = on
+      pin_B0 = low
+      pin_B0 = high
+      while _isr_cnt != _i + 1 loop
+      end loop
+      intcon_gie = off
+      INTCON_INT0IE = off
+   end loop
+
+   if _isr_cnt != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if INTCON_INT0IE then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_isr_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

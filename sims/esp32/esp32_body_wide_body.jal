@@ -1,0 +1,29 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — wide body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    ESP32: shared `_regression_wide_integer_body` via @sim_validate
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_wide_body.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 8
+-- expect byte v__gpsim_wi_q_hi 1
+-- expect byte v__gpsim_wi_o_hi 1
+-- expect byte v__gpsim_wi_q_arr_lo 1
+-- expect byte v__gpsim_wi_q_arr_carry 1
+-- expect byte v__gpsim_wi_o_arr_lo 1
+-- expect byte v__gpsim_wi_sq_neg 1
+-- expect byte v__gpsim_wi_so_neg 1
+-- expect byte v__gpsim_wi_param_modes 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_wide_integer_body

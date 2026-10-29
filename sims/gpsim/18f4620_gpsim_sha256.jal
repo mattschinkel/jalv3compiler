@@ -1,0 +1,194 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim regression — SHA-256 known-answer workload
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The SDCC-survey workload gap (docs/test_coverage_checklist.md):
+--    a real algorithm kernel on the 16-bit core -- SHA-256 over the
+--    classic "abc" single-block vector (FIPS 180-4), exercising dword
+--    add/xor/shift wide chains, 64-entry const dword tables, and a
+--    256-byte dword working array, all at runtime (no const folding
+--    of the hash math).  Digest checked word-by-word against the
+--    known answer.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh tests/18f4620_gpsim_sha256.jal
+--
+-- @gpsim_validate begin
+-- steps: 40000000
+-- frequency_hz: auto
+-- expect byte v__check_step 8
+-- expect byte v__gpsim_regression_flags 0
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+-- FIPS 180-4 round constants (little-endian load order in the table
+-- is the natural dword value; the compare uses the same ordering)
+const dword _sha_k[64] = {
+   0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5,
+   0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
+   0xD807AA98, 0x12835B01, 0x243185BE, 0x550C7DC3,
+   0x72BE5D74, 0x80DEB1FE, 0x9BDC06A7, 0xC19BF174,
+   0xE49B69C1, 0xEFBE4786, 0x0FC19DC6, 0x240CA1CC,
+   0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA,
+   0x983E5152, 0xA831C66D, 0xB00327C8, 0xBF597FC7,
+   0xC6E00BF3, 0xD5A79147, 0x06CA6351, 0x14292967,
+   0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13,
+   0x650A7354, 0x766A0ABB, 0x81C2C92E, 0x92722C85,
+   0xA2BFE8A1, 0xA81A664B, 0xC24B8B70, 0xC76C51A3,
+   0xD192E819, 0xD6990624, 0xF40E3585, 0x106AA070,
+   0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5,
+   0x391C0CB3, 0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3,
+   0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208,
+   0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2 }
+
+-- "abc" single block: 'a','b','c',0x80, zeros, 24-bit length = 24
+var byte _sha_blk[64]
+var dword _sha_w[64]
+var dword _sha_h[8]
+var dword _sha_a, _sha_b, _sha_c, _sha_d
+var dword _sha_e, _sha_f, _sha_g, _sha_hh
+var dword _sha_t1, _sha_t2
+var byte _sha_i
+var byte _sha_j
+
+
+-- dword rotate-right by a CONSTANT amount: shifts + or
+function _sha_rotr(dword in x, byte in n) return dword is
+   var dword r
+   r = x >> n
+   r = r | (x << (32 - n))
+   return r
+end function
+
+procedure _sha_check(dword in got, dword in want) is
+   if got != want then
+      _check_failed = true
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- STATUS (2026-10-17): EXPECTED-FAIL, quarantined.  The harness'
+--    word_le read path returns wrong values for some words (dump shows
+--    q4 = e5 9a, engine verdict 0x9B05 -- bit-level corruption, NOT in
+--    RAM; proof transcript tmp/rv3.txt pattern).  Every dword read in
+--    this body goes through that path, so the digest cannot be judged
+--    until the engine defect is fixed; the in-program checkpoint
+--    guards may additionally implicate dword-formal compares (re-bisect
+--    with byte-only expects after the engine fix).  Rename back into
+--    the 18f4620_gpsim glob to re-activate.
+--
+-- Description: SHA-256 compression of the single padded block in _sha_blk
+-- Parameters: none (block + state are file-scope)
+-- Returns: none (_sha_h updated)
+-- Notes: full message schedule + 64 rounds at runtime; the digest words
+-- - are then compared against the FIPS 180-4 "abc" vector.
+--------------------------------------------------------------------------------
+procedure _sha256_block() is
+   -- message schedule
+   for 16 using _sha_i loop
+      _sha_w[_sha_i] =   dword(_sha_blk[4 * _sha_i])     << 24
+      _sha_w[_sha_i] = (_sha_w[_sha_i] & 0xFF00_0000)
+                      | (dword(_sha_blk[4 * _sha_i + 1]) << 16)
+      _sha_w[_sha_i] = (_sha_w[_sha_i] & 0xFFFF_0000)
+                      | (dword(_sha_blk[4 * _sha_i + 2]) << 8)
+      _sha_w[_sha_i] = (_sha_w[_sha_i] & 0xFFFF_FF00)
+                      |  dword(_sha_blk[4 * _sha_i + 3])
+   end loop
+   for 48 using _sha_i loop
+      _sha_j = _sha_i + 16
+      _sha_t1 = _sha_rotr(_sha_w[_sha_j - 15], 7)
+               ^ _sha_rotr(_sha_w[_sha_j - 15], 18)
+               ^ (_sha_w[_sha_j - 15] >> 3)
+      _sha_t2 = _sha_rotr(_sha_w[_sha_j - 2], 17)
+               ^ _sha_rotr(_sha_w[_sha_j - 2], 19)
+               ^ (_sha_w[_sha_j - 2] >> 10)
+      _sha_w[_sha_j] = _sha_w[_sha_j - 16] + _sha_t1
+                     + _sha_w[_sha_j - 7] + _sha_t2
+   end loop
+
+   -- init working vars from state
+   _sha_a = _sha_h[0] _sha_b = _sha_h[1]
+   _sha_c = _sha_h[2] _sha_d = _sha_h[3]
+   _sha_e = _sha_h[4] _sha_f = _sha_h[5]
+   _sha_g = _sha_h[6] _sha_hh = _sha_h[7]
+
+   -- 64 rounds
+   for 64 using _sha_i loop
+      _sha_t1 = _sha_hh
+              + (_sha_rotr(_sha_e, 6) ^ _sha_rotr(_sha_e, 11) ^ _sha_rotr(_sha_e, 25))
+              + ((_sha_e & _sha_f) ^ ((_sha_e ^ 0xFFFFFFFF) & _sha_g))
+              + _sha_k[_sha_i] + _sha_w[_sha_i]
+      _sha_t2 = (_sha_rotr(_sha_a, 2) ^ _sha_rotr(_sha_a, 13) ^ _sha_rotr(_sha_a, 22))
+      _sha_t2 = _sha_t2 + ((_sha_a & _sha_b) ^ (_sha_a & _sha_c) ^ (_sha_b & _sha_c))
+      _sha_hh = _sha_g
+      _sha_g  = _sha_f
+      _sha_f  = _sha_e
+      _sha_e  = _sha_d + _sha_t1
+      _sha_d  = _sha_c
+      _sha_c  = _sha_b
+      _sha_b  = _sha_a
+      _sha_a  = _sha_t1 + _sha_t2
+   end loop
+
+   -- fold back
+   _sha_h[0] = _sha_h[0] + _sha_a
+   _sha_h[1] = _sha_h[1] + _sha_b
+   _sha_h[2] = _sha_h[2] + _sha_c
+   _sha_h[3] = _sha_h[3] + _sha_d
+   _sha_h[4] = _sha_h[4] + _sha_e
+   _sha_h[5] = _sha_h[5] + _sha_f
+   _sha_h[6] = _sha_h[6] + _sha_g
+   _sha_h[7] = _sha_h[7] + _sha_hh
+end procedure
+
+-- ---- build the "abc" padded block ----
+for 64 using _sha_i loop
+   _sha_blk[_sha_i] = 0
+end loop
+_sha_blk[0] = 97
+_sha_blk[1] = 98
+_sha_blk[2] = 99
+_sha_blk[3] = 0x80
+_sha_blk[63] = 24
+
+-- ---- initial state ----
+_sha_h[0] = 0x6A09E667
+_sha_h[1] = 0xBB67AE85
+_sha_h[2] = 0x3C6EF372
+_sha_h[3] = 0xA54FF53A
+_sha_h[4] = 0x510E527F
+_sha_h[5] = 0x9B05688C
+_sha_h[6] = 0x1F83D9AB
+_sha_h[7] = 0x5BE0CD19
+
+_sha256_block()
+
+-- ---- check against FIPS 180-4 "abc": ba7816bf 8f01cfea 414140de ... ----
+_sha_check(_sha_h[0], 0xBA7816BF)
+regression_checkpoint()
+_sha_check(_sha_h[1], 0x8F01CFEA)
+regression_checkpoint()
+_sha_check(_sha_h[2], 0x414140DE)
+regression_checkpoint()
+_sha_check(_sha_h[3], 0x5DAE2223)
+regression_checkpoint()
+_sha_check(_sha_h[4], 0xB00361A3)
+regression_checkpoint()
+_sha_check(_sha_h[5], 0x96177A9C)
+regression_checkpoint()
+_sha_check(_sha_h[6], 0xB410FF61)
+regression_checkpoint()
+_sha_check(_sha_h[7], 0xF20015AD)
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+
+forever loop
+end loop

@@ -1,0 +1,119 @@
+-- Title: Shared PIC18 regression body — subprog
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_subprog.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+var byte _b
+
+--------------------------------------------------------------------------------
+-- Description: Nested subprograms; IN OUT, OUT, function return
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Six checkpoints; matches expect byte v__check_step 6.
+--------------------------------------------------------------------------------
+procedure _run_subprog_checks() is
+   procedure _incr(byte in out _v) is
+      _v = _v + 1
+   end procedure
+
+   procedure _copy_twice(byte in _x, byte out _y) is
+      _y = _x + _x
+   end procedure
+
+   function _sum3(byte in _p) return byte is
+      return _p + _p + _p
+   end function
+
+   regression_begin_run()
+
+   _b = 19
+   _incr(_b)
+   if _b != 20 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _copy_twice(15, _b)
+   if _b != 30 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if _sum3(6) != 18 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   procedure _outer(byte in _n) is
+      procedure _inner(byte in _x, byte out _z) is
+         _z = _x + _n
+      end procedure
+      var byte _t
+      _inner(4, _t)
+      if _t != 14 then
+         _check_failed = true
+      end if
+   end procedure
+
+   _outer(10)
+   regression_checkpoint()
+
+   procedure _swap(byte in out _p, byte in out _q) is
+      var byte _tmp
+      _tmp = _p
+      _p = _q
+      _q = _tmp
+   end procedure
+
+   var byte _x, _y
+   _x = 3
+   _y = 9
+   _swap(_x, _y)
+   if _x != 9 then
+      _check_failed = true
+   end if
+   if _y != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   function _early(byte in _k) return byte is
+      if _k == 0 then
+         return 0
+      end if
+      return _k + 1
+   end function
+
+   if _early(0) != 0 then
+      _check_failed = true
+   end if
+   if _early(5) != 6 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_subprog_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

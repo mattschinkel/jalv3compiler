@@ -1,0 +1,162 @@
+-- Title: Shared regression body — task control (_task_suspend/_task_resume/_task_kill/_task_restart)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Two counter tasks plus the four task-control statements, driven
+--    from main: pause freezes a task while others keep running, resume
+--    continues from the suspended point, kill removes the task from
+--    scheduling (it stays dead), restart re-runs it from its entry.
+--    Task slots are static (declaration order), which this body also
+--    pins: the round-robin order does not depend on start order.
+--
+-- Notes:
+--    Shared by the ESP32 and PIC32 QEMU suites (device wrapper
+--    provides the include).  Expects the check tallies below.
+--
+-- ------------------------------------------------------
+
+-- no `pragma task N`: the scheduler auto-sizes to the declared tasks
+-- (3 tasks + main = 4 slots); the pragma remains accepted for
+-- backwards compatibility / explicit sizing
+
+var volatile byte _ctl_a = 0
+var volatile byte _ctl_b = 0
+var volatile byte _ctl_c = 0
+var volatile byte _ctl_gen = 0
+var volatile byte _ctl_dgen = 0
+var volatile byte _ctl_checks = 0
+var volatile byte _ctl_frozen = 0
+var volatile byte _ctl_c_frozen = 0
+var byte _ctl_i
+
+task _ctl_ta() is
+   forever loop
+      _ctl_a = _ctl_a + 1
+      _task_yield
+   end loop
+end task
+
+task _ctl_tb() is
+   forever loop
+      _ctl_b = _ctl_b + 1
+      _task_yield
+   end loop
+end task
+
+-- restart of a task with a SAVED RESUME POINT: restart must discard
+-- the resume point and re-run from the entry (the generation counter
+-- proves how many times the body started from the top)
+task _ctl_td() is
+   _ctl_dgen = _ctl_dgen + 1
+   _task_yield
+   forever loop
+      _task_yield
+   end loop
+end task
+
+-- self-forms: the task pauses, restarts and finally kills ITSELF
+task _ctl_tc() is
+   _ctl_gen = _ctl_gen + 1
+   _ctl_c = _ctl_c + 1
+   _task_yield
+   if _ctl_gen == 1 then
+      _task_suspend _ctl_tc()
+   end if
+   _ctl_c = _ctl_c + 1
+   _task_yield
+   if _ctl_gen == 1 then
+      _task_restart _ctl_tc()
+   end if
+   _ctl_c = _ctl_c + 1
+   _task_yield
+   _task_kill _ctl_tc()
+end task
+
+_task_start _ctl_ta()
+_task_start _ctl_tb()
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+
+_task_suspend _ctl_tb()
+_ctl_frozen = _ctl_b
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_b == _ctl_frozen then
+   _ctl_checks = _ctl_checks + 1
+end if
+if _ctl_a > _ctl_frozen then
+   _ctl_checks = _ctl_checks + 1
+end if
+
+_task_resume _ctl_tb()
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_b > _ctl_frozen then
+   _ctl_checks = _ctl_checks + 1
+end if
+
+_task_kill _ctl_tb()
+_ctl_frozen = _ctl_b
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_b == _ctl_frozen then
+   _ctl_checks = _ctl_checks + 1
+end if
+
+_task_restart _ctl_tb()
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_b > _ctl_frozen then
+   _ctl_checks = _ctl_checks + 1
+end if
+
+-- restart-discard: td is suspended with a resume point after its
+-- first yield; restarting it re-enters the body (gen 2), it never
+-- continues from the saved point
+_task_start _ctl_td()
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+_task_restart _ctl_td()
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_dgen == 2 then
+   _ctl_checks = _ctl_checks + 1
+end if
+_task_kill _ctl_td()
+
+-- self-forms of tc: pause at the yield, one restart from the entry,
+-- then suicide; gen proves how many times the body ran from the top
+_task_start _ctl_tc()
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_c == 1 then
+   _ctl_checks = _ctl_checks + 1
+end if
+_task_resume _ctl_tc()
+for 8 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_gen == 2 then
+   if _ctl_c == 5 then
+      _ctl_checks = _ctl_checks + 1
+   end if
+end if
+_ctl_c_frozen = _ctl_c
+for 4 using _ctl_i loop
+   _task_yield
+end loop
+if _ctl_c == _ctl_c_frozen then
+   _ctl_checks = _ctl_checks + 1
+end if
+
+forever loop
+end loop

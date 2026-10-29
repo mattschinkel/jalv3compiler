@@ -1,0 +1,44 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — FRCDIV runtime clock re-assert
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): pic32_clock.jal's MX osc_select() FRCDIV
+--    branch -- 4 MHz = FRC/2, NOSC=7 + FRCDIV code 1 into bits 26:24.
+--    Self-contained device block (the shared wrapper pins FRC_SPLL).
+--    Silicon-proven 2026-10-25: MX270 boots FNOSC=FRCDIV ALREADY
+--    divided (clean banner at the divided-PBCLK baud -- the MZ
+--    "FRCDIV boots at 8 MHz" behavior does NOT reproduce on MX), and
+--    the re-assert returns C7 S0 K0 with a 0.5009 s cadence unchanged
+--    (fixes/fix_mx_osc_pllmult_code_const.md addenda).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_osc_select_frcdiv.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_selected 1
+-- @sim_validate end
+--
+
+include 32mx270f256b
+
+pragma target clock      4_000_000
+pragma target OSC        FRCDIV
+pragma target image      pfm
+pragma target WDT        DISABLED
+
+enable_digital_io()
+
+include pic32_clock
+
+var volatile byte selected
+
+osc_select()
+selected = 1
+
+forever loop
+end loop

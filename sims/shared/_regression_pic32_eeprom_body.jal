@@ -1,0 +1,88 @@
+-- Title: PIC32 EEPROM-pattern body (RAM-backed; MZ has no data EEPROM)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Same GitHub #26 language pattern as `_regression_eeprom_body.jal`
+--    (`buf[i] = data_eeprom(i)`), but the "EEPROM" is a RAM array so the
+--    test runs under QEMU without a data-EEPROM model.
+--
+-- ------------------------------------------------------
+
+const byte _gpsim_ee26_n = 4
+const byte _gpsim_ee26_n_m1 = 3
+
+var byte _gpsim_ee_store[_gpsim_ee26_n]
+var byte _gpsim_ee26_buf[_gpsim_ee26_n]
+var byte _gpsim_ee26_i
+
+var volatile byte _gpsim_ee26_b = 0
+var volatile byte _gpsim_ee26_c = 0
+var volatile byte _gpsim_ee26_d = 0
+
+--------------------------------------------------------------------------------
+function _ee_read(byte in addr) return byte is
+   return _gpsim_ee_store[addr]
+end function
+
+--------------------------------------------------------------------------------
+procedure data_eeprom_write(byte in addr, byte in data) is
+   _gpsim_ee_store[addr] = data
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_seed_eeprom() is
+   data_eeprom_write(0, "0")
+   data_eeprom_write(1, "B")
+   data_eeprom_write(2, "C")
+   data_eeprom_write(3, "D")
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_fill_a() is
+   for _gpsim_ee26_n using _gpsim_ee26_i loop
+      _gpsim_ee26_buf[_gpsim_ee26_i] = "A"
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_direct_eeprom_loop() is
+   for _gpsim_ee26_n_m1 using _gpsim_ee26_i loop
+      _gpsim_ee26_buf[_gpsim_ee26_i + 1] = _ee_read(_gpsim_ee26_i + 1)
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_capture_expect_vars() is
+   _gpsim_ee26_b = _gpsim_ee26_buf[1]
+   _gpsim_ee26_c = _gpsim_ee26_buf[2]
+   _gpsim_ee26_d = _gpsim_ee26_buf[3]
+end procedure
+
+regression_begin_run()
+
+_gpsim_ee26_seed_eeprom()
+_gpsim_ee26_fill_a()
+_gpsim_ee26_direct_eeprom_loop()
+_gpsim_ee26_capture_expect_vars()
+
+if (_gpsim_ee26_b != "B") | (_gpsim_ee26_c != "C") | (_gpsim_ee26_d != "D") then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

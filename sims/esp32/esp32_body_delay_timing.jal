@@ -1,0 +1,26 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — delay-timing body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    ESP32 `_usec_delay` smoke via `_regression_esp32_delay_timing_body`
+--    (SYSCLK cycle-budget loop; QEMU has no cycle-faithful timer for
+--    JAL, so this pins completion, mirroring the PIC32 variant).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_delay_timing.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 2
+-- expect byte v__dt_lo_ok 1
+-- expect byte v__dt_hi_ok 1
+-- expect byte v__dt_1ms_ok 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_esp32_delay_timing_body

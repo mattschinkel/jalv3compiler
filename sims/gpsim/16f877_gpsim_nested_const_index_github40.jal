@@ -1,0 +1,90 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — const byte[] via runtime index (GitHub jalv2compiler #40)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    **`const byte[]`** lookup with index **`var byte[]`** at a runtime subscript —
+--    same data flow as GitHub **`jalv2compiler`** **#40**
+--    (**`segment[display_value[display_index]]`**). Uses the **one-line nested**
+--    form for RAM scratch, **`PORTC`**, and a **second** index path (PIC14 emits
+--    FSR + **`movf v__ind,w`** before **`call`** **`l__lookup_*`**).
+--
+-- Notes:
+--
+--
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_nested_const_index_github40.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__gpsim_github40_nested_ram 1
+-- expect byte v__gpsim_github40_after_portc_assign 1
+-- expect byte v__gpsim_github40_second_index 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const byte _gpsim_github40_segment[] = {
+   0b_1111_1100,
+   0b_0110_0000,
+   0b_1101_1010,
+   0b_1111_0010,
+   0b_0110_0110,
+   0b_1011_0110,
+   0b_1011_1110,
+   0b_1110_0000,
+   0b_1111_1110,
+   0b_1111_0110
+}
+
+var byte _gpsim_github40_display_index
+var byte _gpsim_github40_display_value[8] = {1, 2, 3, 4, 5, 6, 7, 8}
+var volatile byte _gpsim_github40_nested_ram = 0
+var volatile byte _gpsim_github40_after_portc_assign = 0
+var volatile byte _gpsim_github40_second_index = 0
+var byte _gpsim_github40_scratch = 0
+
+TRISA = 0
+TRISB = 0
+TRISC = 0
+PORTA = 0
+PORTB = 0
+PORTC = 0
+
+regression_begin_run()
+
+_gpsim_github40_display_index = 1
+_gpsim_github40_scratch = _gpsim_github40_segment[_gpsim_github40_display_value[_gpsim_github40_display_index]]
+if _gpsim_github40_scratch == 0b_1101_1010 then
+   _gpsim_github40_nested_ram = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+PORTC = _gpsim_github40_segment[_gpsim_github40_display_value[_gpsim_github40_display_index]]
+_gpsim_github40_scratch = _gpsim_github40_segment[_gpsim_github40_display_value[_gpsim_github40_display_index]]
+if _gpsim_github40_scratch == 0b_1101_1010 then
+   _gpsim_github40_after_portc_assign = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- Second index: display_value[3] is 4 -> segment[4] is 0b_0110_0110 (regression: FSR path again).
+_gpsim_github40_display_index = 3
+_gpsim_github40_scratch = _gpsim_github40_segment[_gpsim_github40_display_value[_gpsim_github40_display_index]]
+if _gpsim_github40_scratch == 0b_0110_0110 then
+   _gpsim_github40_second_index = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()

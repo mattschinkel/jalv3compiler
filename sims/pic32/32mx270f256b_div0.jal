@@ -1,0 +1,39 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — div0
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review follow-up: runtime scalar / 0 zeros the destination
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_div0.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile dword ua = 0
+var volatile dword ub = 0
+var volatile dword uc = 0
+var volatile dword ud = 0
+
+ua = 20
+ub = 0
+uc = 99
+ud = 99
+uc = ua / ub
+ud = ua % ub
+if uc == 0 then
+   ra = 1
+end if
+if ud == 0 then
+   rb = 1
+end if

@@ -1,0 +1,406 @@
+-- Title: USART hardware control
+-- Author: Stef Mientki, Copyright (c) 2002..2025, all rights reserved.
+-- Adapted-by: Sebastien Lelong, Rob Hamerling, Rob Jansen
+-- Compiler: 2.5r9
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the ZLIB license (http://www.opensource.org/licenses/zlib-license.html)
+--
+-- Description: USART hardware control.
+-- Routines for sending and receiving through the PIC-usart,
+-- both asynchronous and synchronous are supported.
+-- Baudrate can simply be set through a human constant,
+-- because the baudrate depending registers are calculated by this unit.
+-- Baudrate is calculated, starting at the high baudrate flag,
+-- which will ensure the highest possible accuracy.
+-- This library supports old and new USART types.
+--
+-- TODO: should this be configurable ?
+-- Transmission parameters are 8 databits, 1 stopbit, no parity, no handshake.
+--
+-- Notes: - Pin selection is automatic: pin_TX and pin_RX.
+--        - For PICs using the newer USART types, make sure to remap the USART
+--          pins to their default in the main program to enable the USART pins.
+--        - Pin direction setting is taken care of by this library.
+--        - When the physical locations of pin_TX and pin_RX are configurable for
+--          a specific PIC, the device file will probably contain names like
+--          pin_TX_RB2 and pin_RX_RB1 and another pair with other pin suffixes.
+--          Depending for which pair of pins the USART is configured aliases
+--          without suffixes have to be specified, like:
+--              alias  pin_TX            is  pin_TX_RB2
+--              alias  pin_RX            is  pin_RX_RB1
+--              alias  pin_TX_direction  is  pin_TX_RB2_direction
+--              alias  pin_RX_direction  is  pin_RX_RB1_direction
+--
+
+-- Aliases to get things working for PIC with different type of usarts.
+if (defined(U1MODE) == TRUE) then
+   -- PIC32 (MIPS) UART: U1MODE/U1STA register set, 16-bit U1BRG
+   alias SPBRG       is U1BRG           -- 16-bit baud rate generator
+   alias TXSTA_BRGH  is U1MODE_BRGH     -- Baud rate speed select.
+   alias RCSTA_SPEN  is U1MODE_ON       -- Serial port enable.
+   alias TXREG       is U1TXREG         -- Transmit buffer.
+   alias RCREG       is U1RXREG         -- Receive buffer.
+   alias SERIAL_TXIF is U1STA_TRMT      -- Transmit ready (shift register empty)
+   alias SERIAL_RCIF is U1STA_URXDA     -- Receive buffer has data
+elsif (defined(U1CON0) == TRUE) then
+   alias SPBRGL      is U1BRGL           -- Baud rate generator low byte.
+   alias SPBRGH      is U1BRGH           -- Baud rate generator high byte.
+   alias TXSTA_BRGH  is U1CON0_BRGS      -- Baud rate speed select.
+  if (defined(PIE6_U1TXIE) == TRUE) then
+      alias SERIAL_TXIE  is PIE6_U1TXIE  -- Transmit interrrupt enable.
+      alias SERIAL_RCIE  is PIE6_U1RXIE  -- Receive interrupt enable.  
+   elsif (defined(PIE4_U1TXIE) == TRUE) then
+      alias SERIAL_TXIE  is PIE4_U1TXIE  -- Transmit interrrupt enable.
+      alias SERIAL_RCIE  is PIE4_U1RXIE  -- Receive interrupt enable.  
+   elsif (defined(PIE3_U1TXIE) == TRUE) then
+      alias SERIAL_TXIE  is PIE3_U1TXIE  -- Transmit interrrupt enable.
+      alias SERIAL_RCIE  is PIE3_U1RXIE  -- Receive interrupt enable.  
+   end if
+   alias SERIAL_TXIF is U1FIFO_TXBE      -- Transmit buffer empty flag. 
+   alias SERIAL_RCIF is U1FIFO_RXBE      -- Receive buffer empty flag. 
+   alias RCSTA_SPEN  is U1CON1_ON        -- Serial port enable.
+   alias TXREG       is U1TXB            -- Transmit buffer.
+   alias RCREG       is U1RXB            -- Receive buffer.
+   if (defined(BAUDCON_BRG16) == FALSE) then
+      -- Force usart_common to use 16 bit baudrate generator.
+      var bit BAUDCON_BRG16 = TRUE
+   end if
+elsif (defined(PIE1_RCIE) == TRUE) then
+   -- Aliases to make driver more generic, PIE1/PIR1
+   alias SERIAL_TXIE is PIE1_TXIE
+   alias SERIAL_TXIF is PIR1_TXIF
+   alias SERIAL_RCIE is PIE1_RCIE
+   alias SERIAL_RCIF is PIR1_RCIF
+elsif (defined(PIE3_RCIE) == TRUE) then
+   -- Aliases to make driver more generic, PIE3/PIR3
+   alias SERIAL_TXIE is PIE3_TXIE       -- Transmit interrrupt enable.
+   alias SERIAL_TXIF is TXSTA_TRMT      -- Transmit buffer empty flag.  
+   alias SERIAL_RCIE is PIE3_RCIE       -- Receive interrupt enable.
+   alias SERIAL_RCIF is PIR3_RCIF       -- Receive buffer empty flag. 
+elsif (defined(PIE4_RC1IE) == TRUE) then
+   -- Added for e.g. PIC16F13115.
+   alias SERIAL_TXIE is PIE4_TX1IE      -- Transmit interrrupt enable.
+   alias SERIAL_TXIF is PIR4_TX1IF      -- Transmit buffer empty flag.  
+   alias SERIAL_RCIE is PIE4_RC1IE      -- Receive interrupt enable.
+   alias SERIAL_RCIF is PIR4_RC1IF      -- Receive buffer empty flag. 
+else
+   _error "This library does not support this PIC, please report" 
+end if
+
+include usart_common
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Initialize the (first or only) serial port
+-- Arguments: (none)
+-- Returns:   (nothing)
+-- -----------------------------------------------------------------------
+procedure serial_hw_init() is
+
+   if (defined(U1MODE)== TRUE) then
+      -- PIC32 UART type.  Read-free SET/CLR writes only (2026-10-04,
+      -- the silicon-proven bring-up style: no read-modify-write of the
+      -- UART SFRs during early boot).  The PPS pin mux and pin
+      -- directions are board wiring -- the user program declares them
+      -- port-letter style and serial_hw_init() applies them inside one
+      -- SYSKEY window:
+      --    alias serial_hw_pin_tx is pin_F0
+      --    alias serial_hw_pin_tx_direction is pin_F0_direction
+      --    alias serial_hw_pin_rx is pin_F1
+      --    alias serial_hw_pin_rx_direction is pin_F1_direction
+      --    alias serial_hw_tx_pps is RPF0R   (the TX pin's PPS SFR)
+      --    const serial_hw_rx_pps = PPS_IN_U1RX_RPF1
+      -- (PPS_* names come from the device file; only combinations valid
+      -- for the part exist, so a wrong pin/function pair fails to compile)
+      -- Baud comes from serial_hw_baudrate over serial_hw_uart_clock
+      -- (default target_clock / 2, i.e. PBCLK2 with the reset PB2DIV).
+      if (defined(serial_hw_rx_pps) == FALSE) then
+         _error "serial_hardware(PIC32): declare serial_hw_rx_pps (U1RXR code of the board's RX pin)"
+      end if
+      if (defined(serial_hw_tx_pps) == FALSE) then
+         _error "serial_hardware(PIC32): alias serial_hw_tx_pps to the TX pin's PPS register (e.g. RPF0R)"
+      end if
+      if (defined(serial_hw_pin_tx_direction) == FALSE) then
+         _error "serial_hardware(PIC32): alias serial_hw_pin_tx_direction (e.g. is pin_F0_direction)"
+      end if
+      if (defined(serial_hw_pin_rx_direction) == FALSE) then
+         _error "serial_hardware(PIC32): alias serial_hw_pin_rx_direction (e.g. is pin_F1_direction)"
+      end if
+      if (defined(PPS_U1TX) == FALSE) then
+         _error "serial_hardware(PIC32): device file has no PPS constants (regenerate the device file with pic2jal_pic32.py)"
+      end if
+
+      -- the device file provides the (inline) key sequences
+      if defined(syskey_unlock) then
+         syskey_unlock()
+         if (defined(CFGCON_IOLOCK) == TRUE) then
+            CFGCON_IOLOCK = 0                -- clear the PPS write lock (MX)
+         end if
+         U1RXR = serial_hw_rx_pps            -- U1RX <- board RX pin
+         serial_hw_tx_pps = PPS_U1TX         -- board TX pin <- U1TX
+         syskey_lock()
+      else
+         SYSKEY = 0x00000000                 -- unlock the PPS window
+         SYSKEY = 0xAA996655
+         SYSKEY = 0x556699AA
+         if (defined(CFGCON_IOLOCK) == TRUE) then
+            CFGCON_IOLOCK = 0                -- clear the PPS write lock (MX)
+         end if
+         U1RXR = serial_hw_rx_pps            -- U1RX <- board RX pin
+         serial_hw_tx_pps = PPS_U1TX         -- board TX pin <- U1TX
+         SYSKEY = 0x00000000                 -- relock
+      end if
+      serial_hw_pin_tx_direction = OUTPUT
+      serial_hw_pin_rx_direction = INPUT
+
+      U1MODECLR = 0xFFFF_FFFF               -- reset configuration
+      U1STACLR  = 0xFFFF_FFFF               -- reset status/flags
+
+      _calculate_and_set_baudrate()         -- U1BRG + BRGH (Fpb/4)
+
+      U1MODESET = 0b1000_0000_0000_1000     -- ON + BRGH, 8 data, no
+                                             -- parity, 1 stop (PDSEL =
+                                             -- STSEL = 0 from the reset)
+      U1STASET  = 0b0001_0100_0000_0000     -- UTXEN + URXEN
+   elsif (defined(U1CON0)== TRUE) then
+      -- New USART type
+      U1CON0 = 0b0000_0000                  -- reset, 8 databits, async
+      U1CON1 = 0b0000_0000                  -- disable, normal operation
+      U1CON2 = 0b0000_0000                  -- one stop bit, flow control is off
+
+      _calculate_and_set_baudrate()         -- transmit and receive speed
+
+      SERIAL_TXIE = DISABLED                -- Disable all USART interrupts,
+      SERIAL_RCIE = DISABLED                -- including error interrupts.
+      U1ERRIE = 0b0000_0000
+      U1UIR   = 0b0000_0000
+
+      pin_RX_direction = INPUT              -- make receive pin input
+      pin_TX_direction = OUTPUT             -- make transmit pin output
+
+      U1CON0_TXEN = TRUE                    -- Enable transmitter
+      U1CON0_RXEN = TRUE                    -- Enable receive
+      U1CON1_ON   = TRUE                    -- Enable serial port
+   else
+      -- Classic USART type
+      TXSTA = 0b0000_0000                   -- reset (8 databits, async)
+      RCSTA = 0b0000_0000                   -- reset (8 databits, async)
+
+      _calculate_and_set_baudrate()         -- transmit and receive speed
+
+      SERIAL_RCIE = FALSE                   -- disable receive interrupts
+      SERIAL_TXIE = FALSE                   -- disable transmit interrupts
+   
+      pin_RX_direction = INPUT              -- make receive pin input
+      pin_TX_direction = INPUT              -- make transmit pin input!
+      -- (required by some older ..
+      --  .. PICs like 16f628)
+   
+      TXSTA_TXEN = TRUE                     -- Enable transmitter
+      -- (makes transmit pin output)
+   
+      RCSTA_SPEN = enabled                  -- activate serial port
+      RCSTA_CREN = enabled                  -- continuous receive
+   end if
+end procedure
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Disable USART
+-- Arguments: (none)
+-- Returns:   (nothing)
+-- Notes:     Allows pins to be used (temporary) for other purposes.
+--            USART can be enabled again by calling serial_hw_enable()
+-- -----------------------------------------------------------------------
+procedure serial_hw_disable() is
+   while !SERIAL_TXIF loop  end loop    -- wait while transmission pending
+   RCSTA_SPEN = FALSE                   -- disable serial port
+end procedure
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Enable USART
+-- Arguments: (none)
+-- Returns:   (nothing)
+-- Notes:     Re-enable USART after use of serial_hw_disable()
+-- -----------------------------------------------------------------------
+procedure serial_hw_enable() is
+   RCSTA_SPEN = TRUE                    -- enable serial port
+end procedure
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Transmit byte
+-- Arguments: Data (byte) to transmit
+-- Returns:   (nothing)
+-- Notes:     Hardware transmit buffer must be empty, wait if not
+-- -----------------------------------------------------------------------
+procedure serial_hw_write(byte in data) is
+   while !SERIAL_TXIF loop  end loop   -- wait while transmission pending
+   TXREG = data                        -- transfer data
+end procedure
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Transmit word
+-- Arguments: Data (word) to transmit
+-- Returns:   (nothing)
+-- Notes:     Send word as 2 bytes, Most Significant Byte first.
+--            See also serial_hw_write()
+-- -----------------------------------------------------------------------
+procedure serial_hw_write_word(word in data) is
+   var byte dx[2] at data               -- overlay
+   serial_hw_write(dx[1])
+   -- necessary for good optimized compiler, loading of TXREG2 doesn't
+   -- immediately set TX2IF
+   asm nop
+   serial_hw_write(dx[0])
+end procedure
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Receive byte
+-- Arguments: (none)
+-- Returns:   bit:
+--            -  TRUE data available
+--            -  FALSE no data available
+-- Notes:     Using this inline function for serial_hw_data'get saves a stack level
+--            With overrun error the USART is reset (error(?)byte is returned!)
+-- -----------------------------------------------------------------------
+function _serial_hw_read(byte out data) return bit is
+   pragma inline
+   if (defined(U1MODE) == TRUE) then
+      -- PIC32 UART type
+
+      if SERIAL_RCIF then                  -- check if data available
+         data = byte(RCREG)                -- pass received byte to caller
+      else
+         return FALSE                      -- no data available
+      end if
+
+      if U1STA_OERR then                   -- reset receiver after overrun
+         U1STA_URXEN = FALSE
+         U1STA_URXEN = TRUE
+         return FALSE                      -- first byte after reset is lost
+      end if
+
+      if U1STA_FERR then                   -- framing error: drop the byte
+         return FALSE
+      end if
+
+      return TRUE
+   elsif (defined(U1CON0) == TRUE) then
+      -- New USART type
+
+      if !SERIAL_RCIF then             -- check if data available
+         data = RCREG                  -- pass received byte to caller
+      else
+         return FALSE                  -- no data available
+      end if
+
+      if U1ERRIR_FERIF | U1ERRIR_RXFOIF | U1ERRIR_RXBKIF | U1ERRIR_PERIF then
+         -- reset framing and/or overflow errors
+         U1ERRIR_FERIF  = FALSE
+         U1ERRIR_RXFOIF = FALSE
+         U1ERRIR_RXBKIF = FALSE
+         U1ERRIR_PERIF  = FALSE
+         U1FIFO_RXBE = TRUE            -- clear receive bufer
+         return FALSE
+      end if
+
+      return TRUE
+   else
+      -- Classic USART type
+
+      if SERIAL_RCIF then              -- check if data available
+         data = RCREG                  -- pass received byte to caller
+         SERIAL_RCIF = FALSE           -- eur@fiwhex.nl 12-sept-08
+      else
+         return FALSE                  -- no data available
+      end if
+
+      if RCSTA_OERR then               -- reset USART after overrrun
+         RCSTA_CREN = FALSE
+         RCSTA_CREN = TRUE
+      end if
+   
+      return TRUE
+   end if
+end function
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Receive byte
+-- Arguments: (none)
+-- Returns:   bit:
+--            -  TRUE data available
+--            -  FALSE no data available
+-- -----------------------------------------------------------------------
+function serial_hw_read(byte out data) return bit is
+   return _serial_hw_read(data)
+end function
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Transmit byte
+-- Arguments: Data (byte) to be transmitted
+-- Returns:   (nothing)
+-- Notes:     This pseudo variable allows a language construct like
+--              serial_hw_data = <byte>
+--            to transmit a byte to the seial port
+-- -----------------------------------------------------------------------
+procedure serial_hw_data'put(byte in data) is
+   serial_hw_write(data)
+end procedure
+
+
+-- -----------------------------------------------------------------------
+-- Title:     Receive byte
+-- Arguments: (none)
+-- Returns:   Data (byte) received
+-- Notes:     This pseudo variable allows a language construct like
+--              databyte = serial_hw_data
+--            to receive a byte from the serial port into variable 'databyte'
+-- -----------------------------------------------------------------------
+function serial_hw_data'get() return byte is
+   var byte data
+   while !_serial_hw_read(data) loop  end loop
+   return data
+end function
+
+
+-- -----------------------------------------------------------------------
+-- raw interface
+-- -----------------------------------------------------------------------
+
+-- generic (pic-independent) variable to check if a byte is received
+function serial_hw_data_available() return bit is
+   if (defined(U1MODE) == TRUE) then
+      -- PIC32 UART type (URXDA is 1 when data available)
+      return SERIAL_RCIF
+   elsif (defined(U1CON0) == TRUE) then
+      -- New USART type
+    return !SERIAL_RCIF
+   else
+      -- Classic USART type
+      return SERIAL_RCIF
+   end if
+end function
+
+-- generic (pic-independent) variable to check if transmit buffer is empty
+function serial_hw_data_ready() return bit is
+   return SERIAL_TXIF
+end function
+
+-- These are real raw procedures, declared as pseudo variables
+-- the user is totally responsible for testing the transmit/receive
+-- flag before using these functions
+procedure serial_hw_data_raw'put(byte in data) is
+   TXREG = data
+end procedure
+
+function serial_hw_data_raw'get() return byte is
+   return byte(RCREG)
+end function
+

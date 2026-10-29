@@ -1,0 +1,81 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — bugreport 20101104 (split **256**-byte buffers + walk)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    **`bugreport_20101104/18f67j50_bug.jal`**: after a nested walk that prints from
+--    **`sd_sector_buffer_low[]` / `high[]`**, **`sd_sector_buffer_low[29]`** was not
+--    retained (**`0xDD`**). Reproduced here on **PIC18F4620** with **64**-byte shadow
+--    arrays (same index **29**), **`print_byte_hex`** in a tight loop, then RAM probes.
+--    Original also needed **`pragma target WDT CONTROL`** on modern **18f67j50** fuse
+--    defs (**`disabled`** is not a valid enum literal there).
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/18f4620_gpsim_bugreport_20101104_split_arrays_walk_print.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 1200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect byte v__bug2011_lo29_after 0xDD
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const serial_hw_baudrate = 115_200
+include serial_hardware
+include print
+
+var byte sd_low[64]
+var byte sd_high[64]
+
+--------------------------------------------------------------------------------
+-- Description: Walk indices **0..39** printing both halves (like sector hex dump)
+--------------------------------------------------------------------------------
+procedure _walk_bytes_hex(volatile byte out device) is
+   var byte step1 = 0
+   for 40 loop
+      print_byte_hex(device, sd_low[step1])
+      print_byte_hex(device, sd_high[step1])
+      step1 = step1 + 1
+   end loop
+end procedure
+
+var byte _bug2011_lo29_after = 0
+
+--------------------------------------------------------------------------------
+procedure _bug20101104_run() is
+   regression_begin_run()
+   serial_hw_init()
+
+   sd_low[28] = 0xDD
+   sd_high[28] = 0xDD
+   sd_low[29] = 0xDD
+   sd_high[29] = 0xDD
+   sd_low[30] = 0xDD
+   sd_high[30] = 0xDD
+
+   if sd_low[29] != 0xDD then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _walk_bytes_hex(serial_hw_data)
+
+   _bug2011_lo29_after = sd_low[29]
+   if _bug2011_lo29_after != 0xDD then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_bug20101104_run()
+
+forever loop
+end loop

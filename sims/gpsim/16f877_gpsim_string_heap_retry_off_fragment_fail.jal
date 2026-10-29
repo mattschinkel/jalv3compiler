@@ -1,0 +1,64 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — string heap fragmentation, retry OFF (heap full)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Five small dynamic strings pack the heap, then two non-adjacent slots are
+--    cleared (`s2` and `s4`), leaving fragmentation. A final 14-byte literal
+--    cannot be placed in any single free fragment on this **46**-byte heap, so
+--    the allocator reports **`STRING_ERROR_HEAP_FULL`**, leaves **`t`** empty,
+--    and preserves `COUNT(t) == 0`.
+--
+--    Companion (retry ON, larger heap): **`16f877_gpsim_string_heap_retry_on_fragment_recover.jal`**
+--
+-- @gpsim_validate begin
+-- allow_compiler_warnings: 1
+-- (this witness DELIBERATELY undersizes the heap to exercise the
+-- retry/fragmentation paths; the Option A heap-sizing advisory fires
+-- by design -- heap fits the literals but carries no 25% headroom)
+-- steps: 120000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__frag_err 1
+-- expect byte v__frag_len 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const word _string_heap_size = 46
+pragma string retry off
+
+var volatile byte _frag_err at 0x20
+var volatile byte _frag_len at 0x22
+
+var string _s1
+var string _s2
+var string _s3
+var string _s4
+var string _s5
+var string _t
+
+--------------------------------------------------------------------------------
+-- Description: Build checkerboard fragmentation then attempt oversized assign
+--------------------------------------------------------------------------------
+procedure _frag_retry_off_run() is
+   regression_begin_run()
+   _s1 = "11"
+   _s2 = "22"
+   _s3 = "33"
+   _s4 = "44"
+   _s5 = "55"
+   _s2 = _s2 & ""
+   _s4 = _s4 & ""
+   _t = "DDDDDDDDDDDDDD"
+   _frag_err = _string_error
+   _frag_len = COUNT(_t)
+   regression_checkpoint()
+end procedure
+
+_frag_retry_off_run()

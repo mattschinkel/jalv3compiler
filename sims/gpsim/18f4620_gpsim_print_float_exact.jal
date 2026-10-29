@@ -1,0 +1,85 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim regression — print_float_exact (exact float text)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins demo_lib/print_float_exact.jal END TO END: the wrapper is driven
+--    through a capture pseudo-device (the same 'put dispatch a real
+--    serial device uses), and the captured text must equal the exact
+--    shortest forms of the three values the stock jallib print_float
+--    renders wrong (1.4159226e-01 / 1.9634950e01 / 7.9577484e-01),
+--    plus 0.1 and 3.5. 19.634954 pins the renderer's 10-digit boundary
+--    form (value-correct, one digit past shortest -- shared-renderer probe
+--    behavior on all targets, not a classic regression).
+--
+--    Heap-free since 2026-10-21: the renderer lives in demo_lib/float_str.jal,
+--    so this body deliberately declares NO `_string_heap_size` and does NOT
+--    include `strings_dynamic` (pins the new independent contract).
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- frequency_hz: 20000000
+-- expect byte v__check_step 6
+-- expect byte v__cap0_n 10
+-- expect byte v__cap0_b0 48
+-- expect byte v__cap0_b9 52
+-- expect byte v__cap1_n 10
+-- expect byte v__cap1_b0 49
+-- expect byte v__cap1_b9 53
+-- expect byte v__cap4_n 3
+-- expect byte v__cap4_b2 53
+-- @gpsim_validate end
+
+include regression_18f4620_device
+include regression
+include 18f4620
+
+include print_float_exact
+
+-- capture pseudo-device: same 'put dispatch as serial_hw_data
+var byte _cap[64]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+var volatile byte _cap0_n = 0
+var volatile byte _cap0_b0 = 0
+var volatile byte _cap0_b9 = 0
+var volatile byte _cap1_n = 0
+var volatile byte _cap1_b0 = 0
+var volatile byte _cap1_b9 = 0
+var volatile byte _cap4_n = 0
+var volatile byte _cap4_b2 = 0
+
+procedure _chk(float in f) is
+   _capn = 0
+   print_float_exact(cap, f)
+end procedure
+
+_chk(0.14159274)   -- "0.14159274" (10 chars; stock: 1.4159226e-01)
+regression_checkpoint()
+_cap0_n = _capn    -- 10
+_cap0_b0 = _cap[0] -- '0' = 48
+_cap0_b9 = _cap[9] -- '4' = 52
+regression_checkpoint()
+
+_chk(19.634954)    -- "19.634954" (9 chars; stock: 1.9634950e01)
+_cap1_n = _capn    -- 10 (boundary form)
+_cap1_b0 = _cap[0] -- '1' = 49
+_cap1_b9 = _cap[9] -- '5' = 53 (probe lengthens this one to 10 digits; value-correct)
+regression_checkpoint()
+
+_chk(0.7957747)    -- "0.7957747" (stock: 7.9577484e-01)
+regression_checkpoint()
+
+_chk(0.1)          -- "0.1"
+regression_checkpoint()
+
+_chk(3.5)          -- "3.5"
+_cap4_n = _capn    -- 3
+_cap4_b2 = _cap[2] -- '5' = 53
+regression_checkpoint()

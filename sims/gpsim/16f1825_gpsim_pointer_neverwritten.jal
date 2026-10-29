@@ -1,0 +1,124 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — pointer stores into never-written arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `p is arr` where arr is a plain var array that is never written
+--    directly: the bind is an ADDRESS ESCAPE, so arr must stay in RAM
+--    and stores through the pointer must work. Before the fix the
+--    never-assigned array failed the assigned-and-used test in the
+--    block fixup, its def was rewritten CONST, the bind marked the
+--    pointer ROM-bound (PTR_LOOKUP), the array emitted as a retlw
+--    table, and every store through the pointer died with "Attempt to
+--    assign to a lookup table" (element-type independent). This body
+--    binds byte and word pointers to never-directly-written arrays,
+--    fills them ENTIRELY through the pointers (const and variable
+--    RHS), reads back directly and through the pointers, and
+--    interleaves one direct write/read round-trip through the pointer.
+--
+-- @gpsim_validate begin
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_regression_flags 0
+-- expect word_le v__pw_bsum 220
+-- expect word_le v__pw_wsum 3045
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+-- never written directly before the pointer fills (the point of the
+-- witness: the bind alone must keep them in RAM)
+var byte _pw_barr[10]
+var word _pw_warr[10]
+var pointer _pw_bp as var byte[10]
+var pointer _pw_wp as var word[10]
+var byte _pw_bi
+var word _pw_wi
+var word _pw_bsum = 0
+var word _pw_wsum = 0
+var volatile byte _pw_done
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   -- bind + fill the BYTE array entirely through the pointer (const RHS)
+   _pw_bp is _pw_barr
+   for 10 using _pw_bi loop
+      _pw_bp[_pw_bi] = 10 + _pw_bi
+   end loop
+   -- read back DIRECTLY (the array must be real RAM the pointer wrote)
+   _pw_bsum = 0
+   for 10 using _pw_bi loop
+      _pw_bsum = _pw_bsum + _pw_barr[_pw_bi]
+   end loop
+   if _pw_bsum != 145 then
+      _check_failed = true
+   end if
+   if _pw_barr[0] != 10 then
+      _check_failed = true
+   end if
+   if _pw_barr[9] != 19 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+
+   -- bind + fill the WORD array entirely through the pointer
+   -- (variable RHS, word pointee)
+   _pw_wp is _pw_warr
+   for 10 using _pw_wi loop
+      _pw_wp[_pw_wi] = 300 + _pw_wi
+   end loop
+   -- read back through the POINTER
+   _pw_wsum = 0
+   for 10 using _pw_wi loop
+      _pw_wsum = _pw_wsum + _pw_wp[_pw_wi]
+   end loop
+   if _pw_wsum != 3045 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 2
+
+   -- direct read of the word array (pointer-written RAM)
+   if _pw_warr[5] != 305 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 3
+
+   -- interleave: direct write visible through the pointer, and a
+   -- pointer write visible directly
+   _pw_barr[3] = 77
+   if _pw_bp[3] != 77 then
+      _check_failed = true
+   end if
+   _pw_bp[3] = 88
+   if _pw_barr[3] != 88 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 4
+
+   -- byte pointer read-back sum stays intact after the interleaves
+   -- (145 - 13 + 88 = 220; recompute honestly instead)
+   _pw_bsum = 0
+   for 10 using _pw_bi loop
+      _pw_bsum = _pw_bsum + _pw_bp[_pw_bi]
+   end loop
+   if _pw_bsum != 220 then
+      _check_failed = true
+   end if
+   _pw_done = 1
+   regression_checkpoint()                       -- 5
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

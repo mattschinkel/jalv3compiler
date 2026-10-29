@@ -1,0 +1,101 @@
+-- Title: Shared regression body — `&` concat chains in expression position
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Stage 1 of the generalized `&` plan: a concat chain evaluates into
+--    a compiler-generated heap cell (`_string_chainN`) and may appear
+--    anywhere a `var string` value fits — relation operands (either
+--    side), procedure arguments.  Six checkpoints: RHS chain `==`,
+--    chain-LHS `==`, `!=` with a chain, chain as a procedure argument
+--    (marshalled through the open byte-array formal), fixed-content
+--    equality, and a length-mismatch `!=`.  Fixed `string[N]` SOURCES
+--    are deliberately not exercised: their capacity-length semantics in
+--    heap concat predate this work (see
+--).
+--
+-- ------------------------------------------------------
+
+const word _string_heap_size = 240
+pragma string index byte
+include strings_dynamic
+
+var string greeting
+var string name
+var byte first_c
+var string num_out
+var byte u8
+var sbyte s8 = -7
+
+--------------------------------------------------------------------------------
+-- Description: record the first byte of a marshalled chain argument
+-- Parameters:
+-- - s - open byte array receiving the string content
+-- Returns:
+-- - (none)
+-- Notes: the string actual is marshalled by value into `s`
+--------------------------------------------------------------------------------
+procedure show(byte in s[]) is
+   first_c = s[0]
+end procedure
+
+regression_begin_run()
+
+name = "JALv2"
+greeting = "Hello, JALv2 ESP32!"
+
+-- 1: == with an RHS chain (three operands)
+if greeting == "Hello, " & name & " ESP32!" then
+   regression_checkpoint()
+end if
+
+-- 2: chain on the LEFT of ==
+if "Hello, " & name == "Hello, JALv2" then
+   regression_checkpoint()
+end if
+
+-- 3: != with a chain
+if greeting != "A" & name & "B" then
+   regression_checkpoint()
+end if
+
+-- 4: chain as a procedure argument
+first_c = 0
+show("prefix-" & name)
+if first_c == "p" then
+   regression_checkpoint()
+end if
+
+-- 5: equal chains on both sides of ==
+if "x" & name == "x" & name then
+   regression_checkpoint()
+end if
+
+-- 6: length mismatch must yield !=
+if "x" & name != "xJALv2!" then
+   regression_checkpoint()
+end if
+
+-- 7: numeric constant in a chain (stage 2a)
+num_out = "v=" & 32 & "!"
+if num_out == "v=32!" then
+   regression_checkpoint()
+end if
+
+-- 8: runtime unsigned + signed variables and a negative literal (2a/2b)
+u8 = 42
+num_out = "n=" & u8 & " s=" & s8 & " l=" & -42
+if num_out == "n=42 s=-7 l=-42" then
+   regression_checkpoint()
+end if
+
+-- 9: float constant, shortest-round-trip decimal (stage 2d)
+num_out = "f=" & 2.5 & " g=" & -1.25
+if num_out == "f=2.5 g=-1.25" then
+   regression_checkpoint()
+end if
+
+if _check_step != 9 then
+   _check_failed = true
+end if
+regression_pass_led_if_clean()

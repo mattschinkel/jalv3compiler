@@ -1,0 +1,30 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — float IEEE battery
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_float_ieee_body` via @sim_validate (M4K twin,
+--    soft float; the MX part has no FPU).
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: pic32mx7-explorer16
+-- compiler_args: -Wno-misc -Wno-conversion
+-- expect byte v__check_step 10
+-- expect byte v__fie_div_exact 1
+-- expect byte v__fie_div_rne 1
+-- expect byte v__fie_div_under 1
+-- expect byte v__fie_add_denorm 1
+-- expect byte v__fie_addsub 1
+-- expect byte v__fie_mul 1
+-- expect byte v__fie_inf 1
+-- expect byte v__fie_nan 1
+-- expect byte v__fie_negzero 1
+-- expect byte v__fie_conv 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_float_ieee_body

@@ -1,0 +1,121 @@
+-- Title: Shared data-pointer checks (all architectures with **`var pointer` / `is` / subscript`)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Included after **`include regression`** and a **`regression_<device>_device`**. Covers hop
+--    (**`is`** + store), byte literal through pointer, rvalue **`b = p`**, folded **`var pointer var byte p[2]`**
+--    subscripts, and ROM→RAM copy via **`var pointer const byte`** into **`_gptr_dd0..3`** (wrappers
+--    **`expect`** those four bytes). Runtime assertions live in **`_gptr_portable_gpsim_assertions`**.
+--
+-- Notes:
+--    **`const` ROM + **`_gptr_cp`** + **`_gptr_dd*`** are declared **before** the hop scalars so the
+--    pointer GPR block (and PIC18 3-byte + padding) is allocated before **`_gptr_ha`** — avoids
+--    **`v__gptr_cp+2`** sharing a file address with another user global (see
+--).
+--    Wrappers: **`18f4620_compiler_regression_pointers.jal`**, **`18f26k22_compiler_regression_pointers.jal`**,
+--    **`16f1825_…`**, **`12f1840_…`**. **`@gpsim_validate`** **`expect`** lines live in each wrapper;
+--    **`_gptr_portable_gpsim_assertions`** drives **`expect bit_clear v__bitbucket 0`** and
+--    **`expect byte v__check_step 5`** (RAM error detection in addition to golden **`expect`**s).
+
+-- ROM **`pointer is`** + **`dd*`** loads first (allocation order; PIC18 3-byte slot before hop scalars)
+const byte _gptr_rom[4] = {3, 1, 4, 11}
+-- Folded subscript array: declare before the first `var pointer … as …` (aggregate `{…}` init breaks
+-- after pointer-as syntax); zeroed explicitly after `_gptr_sp` is bound.
+var byte _gptr_sb[2]
+_gptr_sb[0] = 0
+_gptr_sb[1] = 0
+var pointer _gptr_cp as const byte[4]
+var byte _gptr_dd0 = 0
+var byte _gptr_dd1 = 0
+var byte _gptr_dd2 = 0
+var byte _gptr_dd3 = 0
+_gptr_cp is _gptr_rom
+_gptr_dd0 = _gptr_cp[0]
+_gptr_dd1 = _gptr_cp[1]
+_gptr_dd2 = _gptr_cp[2]
+_gptr_dd3 = _gptr_cp[3]
+
+-- Scalar hop ( applies to PIC14; PIC18 same JAL)
+var byte _gptr_ha = 0, _gptr_hb = 0, _gptr_hc = 0
+var pointer _gptr_hp as var byte
+_gptr_hp is _gptr_ha
+_gptr_hp = 10
+_gptr_hp is _gptr_hb
+_gptr_hp = 20
+_gptr_hp is _gptr_hc
+_gptr_hp = 30
+
+var byte _gptr_lc = 0
+var pointer _gptr_lp as var byte
+_gptr_lp is _gptr_lc
+_gptr_lp = 42
+
+var byte _gptr_ra = 0
+var byte _gptr_rb = 0
+var pointer _gptr_rp as var byte
+var pointer _gptr_rq as var byte
+_gptr_rp is _gptr_ra
+_gptr_rq is _gptr_rb
+_gptr_rp = 77
+_gptr_rb = _gptr_rp
+
+var pointer _gptr_sp as var byte[2]
+_gptr_sp is _gptr_sb
+_gptr_sp[0] = 7
+_gptr_sp[1] = 5
+
+--------------------------------------------------------------------------------
+-- Description: gpsim harness — set **`_check_failed`** / **`_check_step`** /
+-- **`_bad`** so wrappers can **`expect bit_clear v__bitbucket 0`** and
+-- **`expect byte v__check_step 5`**.
+--------------------------------------------------------------------------------
+procedure _gptr_portable_gpsim_assertions() is
+   regression_begin_run()
+   if _gptr_dd0 != 3 then
+      _check_failed = true
+   end if
+   if _gptr_dd1 != 1 then
+      _check_failed = true
+   end if
+   if _gptr_dd2 != 4 then
+      _check_failed = true
+   end if
+   if _gptr_dd3 != 11 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   if _gptr_ha != 10 then
+      _check_failed = true
+   end if
+   if _gptr_hb != 20 then
+      _check_failed = true
+   end if
+   if _gptr_hc != 30 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   if _gptr_lc != 42 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   if _gptr_ra != 77 then
+      _check_failed = true
+   end if
+   if _gptr_rb != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   if _gptr_sb[0] != 7 then
+      _check_failed = true
+   end if
+   if _gptr_sb[1] != 5 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gptr_portable_gpsim_assertions()
+
+forever loop
+end loop

@@ -1,0 +1,72 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim - native large packed bit arrays
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises a native `var bit[N]` large enough to force the packed
+--    bit-bucket across PIC16F877 RAM banks.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 4
+-- expect byte v__gpsim_lba_snap0 1
+-- expect byte v__gpsim_lba_snap_bank1 1
+-- expect byte v__gpsim_lba_snap_bank2 1
+-- expect byte v__gpsim_lba_snap_clear 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var bit _gpsim_lba_flags[1600]
+var word _gpsim_lba_index = 0
+var bit _gpsim_lba_copy
+var volatile byte _gpsim_lba_snap0 = 0
+var volatile byte _gpsim_lba_snap_bank1 = 0
+var volatile byte _gpsim_lba_snap_bank2 = 0
+var volatile byte _gpsim_lba_snap_clear = 0
+
+--------------------------------------------------------------------------------
+procedure _gpsim_lba_run() is
+   regression_begin_run()
+
+   _gpsim_lba_flags[0] = true
+   if _gpsim_lba_flags[0] then
+      _gpsim_lba_snap0 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_lba_index = 767
+   _gpsim_lba_flags[_gpsim_lba_index] = true
+   if _gpsim_lba_flags[_gpsim_lba_index] then
+      _gpsim_lba_snap_bank1 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_lba_index = 1407
+   _gpsim_lba_flags[_gpsim_lba_index] = true
+   _gpsim_lba_copy = _gpsim_lba_flags[_gpsim_lba_index]
+   if _gpsim_lba_copy then
+      _gpsim_lba_snap_bank2 = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_lba_index = 767
+   _gpsim_lba_flags[_gpsim_lba_index] = false
+   if _gpsim_lba_flags[_gpsim_lba_index] then
+      _gpsim_lba_snap_clear = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_lba_run()
+
+forever loop
+end loop

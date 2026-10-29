@@ -1,0 +1,37 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — heap string assign on a small-bank part
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `s = "literal"` runtime check: the inline heap-assign expansion's
+--    `_temp` block was 216 bytes (statement-long temp stack, no slot
+--    reuse) — multibank-chunked on 16F1825, so the assignment never
+--    completed and nothing printed. Interval-based temp placement
+--    (pfile_temp_fixup) shrinks it to ~44 bytes, single-bank.
+--
+-- @gpsim_validate begin
+-- steps: 8000000
+-- frequency_hz: auto
+-- expect byte v_sa_done 1
+-- expect byte v_sa_cnt 3
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+const word _string_heap_size = 9
+include strings_dynamic
+
+var string s
+var volatile byte sa_done = 0
+var volatile byte sa_cnt = 0
+s = "abc"
+sa_cnt = COUNT(s)
+regression_checkpoint()
+sa_done = 1
+forever loop end loop

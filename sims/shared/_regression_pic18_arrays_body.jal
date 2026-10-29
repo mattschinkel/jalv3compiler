@@ -1,0 +1,90 @@
+-- Title: PIC18 arrays regression body (include-only)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Shared test logic for native **`var byte[256]`** + **`large_array_6`** fill/sum checks.
+--    Compile only via a top-level **`.jal`** that already included **that MCU’s** device bundle
+--    (**`include regression_18f4620_device`** for PIC18F4620 only; other chips use **`include regression_<device>_device`**
+--    — a **different** **`.jal`**, not **`regression_18f4620_device.jal`**), then **`alias led`**, **`pin_…_direction`**, and **`include regression`**.
+--
+-- Notes:
+--    **`@gpsim_validate`** must stay in the top-level file (**`check-contract`** reads it there only).
+
+-- Native array max 256 bytes on baseline jalv2 (see issues_boundary.md)
+var byte _native_buf[256]
+
+const dword LARGE_ARRAY_6_SIZE = 96
+const dword LARGE_ARRAY_6_VARIABLE_SIZE = 1
+include large_array_6
+alias _la6 is large_array_6
+
+--------------------------------------------------------------------------------
+-- Description: Verify native _native_buf bytes and large_array_6 fill
+-- - compare indices 0, 128, 255 on native array; fill _la6 0..95, sum check
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Expected sum 0+…+95 = 4560; _check_step reaches 5 if every stage passes.
+--------------------------------------------------------------------------------
+procedure _run_array_checks() is
+   var byte _i
+   var word _sum
+
+   regression_begin_run()
+
+   _native_buf[0] = 0xA1
+   _native_buf[128] = 0xB2
+   _native_buf[255] = 0xC3
+
+   if _native_buf[0] != 0xA1 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if _native_buf[128] != 0xB2 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if _native_buf[255] != 0xC3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   for 96 using _i loop
+      _la6[_i] = _i
+   end loop
+   regression_checkpoint()
+
+   _sum = 0
+   for 96 using _i loop
+      if _la6[_i] != _i then
+         _check_failed = true
+      end if
+      _sum = _sum + word(_la6[_i])
+   end loop
+
+   if _sum != 4560 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_array_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

@@ -1,0 +1,71 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — caller-saved home spill at a loop label
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the 2026-10-20 print_sdword_dec hang: `print_maxvar_dec`'s
+--    `counter` local was given a CALLER-SAVED home ($t8) once the
+--    dynamic-string/float-renderer code shifted register pressure.  The
+--    loop-label dirty-home spill then re-stored that dead register on
+--    the loop back-edge (the body's `_make_tenfold_divisor()` call
+--    clobbers $t8), underflowing `counter` and zeroing the divisor, so
+--    `while data >= _print_dec_divisor` spun forever after the first
+--    digit.
+--
+--    The fix spills + colds caller-saved homes on the fall-through edge
+--    BEFORE the label node, and at every branch edge, so a label never
+--    stores a caller-saved register that an incoming back-edge may have
+--    clobbered.  See fixes/fix_mips_caller_home_label_spill.md.
+--
+--    Pre-fix this body prints `A|1.5|3` and never reaches ##DONE##;
+--    post-fix it prints the full `A|1.5|3141|` and sets `ok`.
+--
+-- @sim_validate begin
+-- duration_s: 4.0
+-- machine: pic32mx7-explorer16
+-- uart_contains: ##DONE##
+-- expect byte v_ok 1
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+
+-- UART1 on RPB0/RPB2 (same wiring as the MX sample/test kit).
+const serial_hw_baudrate  = 115_200
+alias serial_hw_pin_tx is pin_B0
+alias serial_hw_pin_tx_direction is pin_B0_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB0R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+include serial_hardware
+
+alias serial_data is serial_hw_data
+
+const PRINT_MAX_VAR_SIZE = 4
+include print
+
+const word _string_heap_size = 128
+include strings_dynamic
+include print_float_exact
+
+var volatile byte ok = 0
+var float fv = 1.5
+var sdword iv = 3141
+
+serial_hw_init()
+
+print_string(serial_data, "A|")
+print_float_exact(serial_data, fv)
+print_string(serial_data, "|")
+print_sdword_dec(serial_data, iv)       -- pre-fix: first digit then spin
+print_string(serial_data, "|")
+print_string(serial_data, "##DONE##")
+print_crlf(serial_data)
+ok = 1
+
+forever loop
+   _usec_delay(1_000_000)
+end loop

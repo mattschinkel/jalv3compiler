@@ -1,0 +1,92 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — bit formal
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: open / fixed bit-in-bits[] formals
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_bit_formal.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- expect byte v_rg 1
+-- expect byte v_rh 0
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+var volatile byte rg = 0
+var volatile byte rh = 0
+var byte ix = 2
+var bit flags[4] = {true, false, true, true}
+
+--------------------------------------------------------------------------------
+-- Description: Read a fixed-size packed bit formal
+-- Parameters:
+-- - bits - 4 packed bits (IN)
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure _use_fixed(bit in bits[4]) is
+   if bits[2] then
+      ra = 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Read an open packed bit formal (const + runtime index)
+-- Parameters:
+-- - bits - open packed bits (IN)
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure _use_open(bit in bits[]) is
+   if bits[0] then
+      rb = 1
+   end if
+   if bits[2] then
+      rc = 1
+   end if
+   if bits[ix] then
+      rd = 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Write through an IN OUT packed bit formal
+-- Parameters:
+-- - bits - 4 packed bits (IN OUT)
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure _use_inout(bit in out bits[4]) is
+   bits[1] = true
+end procedure
+
+_use_fixed(flags)
+_use_open(flags)
+_use_inout(flags)
+if flags[1] then
+   re = 1
+end if
+if flags[0] then
+   rf = 1
+end if
+if flags[3] then
+   rg = 1
+end if
+if !flags[1] then
+   rh = 1
+end if

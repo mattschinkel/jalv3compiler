@@ -1,0 +1,34 @@
+-- Title: ESP32 (Xtensa LX6) @sim_validate regression — device + harness stubs
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Single include for **`tests/esp32/esp32_*.jal`**: pulls in
+--    **`esp32_xtensa_lx6`** plus **`constants_jallib`** (the shared bodies
+--    use **`ON`**), and the LED / portA RAM stubs the shared regression
+--    bodies expect (same role as **`regression_32mz1024efh064_device.jal`**
+--    and **`regression_18f4620_device.jal`**). Edit only this file when
+--    changing the shared harness stubs.
+--
+-- Notes:
+--    **ESP32 (D0WD/S0WD/PICO) only.** Compile with **`-s 'lib;tests'`**.
+--    Body wrappers then **`include regression_esp32`** and a
+--    **`_regression_*_body.jal`**. The device file carries no
+--    **`enable_digital_io()`** and no **`pragma target clock`** (the
+--    back-end's `_usec_delay` is SYSCLK-based and defaults internally),
+--    so none is set here. LED / portA are RAM-backed stubs — QEMU has no
+--    GPIO model wiring for the suite, matching the PIC32 approach.
+
+include esp32_xtensa_lx6
+
+include constants_jallib
+
+-- Own byte so `led` does not pack into `_bitbucket` with `var bit` temps
+-- (`_ok`, CRC complete flags, …) the shared bodies allocate later.
+var volatile byte _esp32_led_byte = 0
+var volatile bit _esp32_led_stub at _esp32_led_byte : 0
+alias led is _esp32_led_stub
+alias led_pin is _esp32_led_stub
+
+-- RAM-backed portA so `pintools` (`defined(portA)`) can set/get a pin.
+var volatile byte portA = 0
+var volatile byte portA_direction = 0

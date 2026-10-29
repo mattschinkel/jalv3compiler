@@ -1,0 +1,23 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — optional parameters
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_optional_body` via @sim_validate (M4K twin).
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: pic32mx7-explorer16
+-- expect byte v_checks 14
+-- expect byte v__op_lit0 0
+-- expect byte v__op_lit2 2
+-- expect byte v__op_lit3 3
+-- expect byte v__op_lit4 4
+-- expect byte v__op_litd 4
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+const word _string_heap_size = 64
+include _regression_optional_body

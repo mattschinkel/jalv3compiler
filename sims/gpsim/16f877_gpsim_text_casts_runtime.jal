@@ -1,0 +1,90 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — text casts on RUNTIME values
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Stage 2 of the text-cast family: `hex(`/`bin(` on runtime
+--    scalars render through the base/pad-generalized number machinery
+--    into a compiler heap-string cell (the one-item-chain path).
+--    Checks content + COUNT, hex letters, pad-is-minimum, negative.
+--
+-- @gpsim_validate begin
+-- steps: 8000000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- expect byte v_cr_na 2
+-- expect byte v_cr_a0 49
+-- expect byte v_cr_a1 97
+-- expect byte v_cr_nd 2
+-- expect byte v_cr_d0 50
+-- expect byte v_cr_np 4
+-- expect byte v_cr_p0 48
+-- expect byte v_cr_p3 97
+-- expect byte v_cr_nn 2
+-- expect byte v_cr_e0 45
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const word _string_heap_size = 64
+include strings_dynamic
+
+var byte lvl = 26
+var sbyte neg = -7
+
+var string a = hex(lvl)
+var string b = string(lvl)
+var string g = hex(lvl, 4)
+var string e = string(neg)
+
+var byte buf[8]
+var volatile byte cr_na = 0
+var volatile byte cr_a0 = 0
+var volatile byte cr_a1 = 0
+var volatile byte cr_nd = 0
+var volatile byte cr_d0 = 0
+var volatile byte cr_np = 0
+var volatile byte cr_p0 = 0
+var volatile byte cr_p3 = 0
+var volatile byte cr_nn = 0
+var volatile byte cr_e0 = 0
+var bit r
+
+procedure _run() is
+   regression_begin_run()
+   cr_na = COUNT(a)
+   r = string_to_array(buf, a)
+   cr_a0 = buf[0]
+   cr_a1 = buf[1]
+   regression_checkpoint()
+   cr_nd = COUNT(b)
+   r = string_to_array(buf, b)
+   cr_d0 = buf[0]
+   regression_checkpoint()
+   cr_np = COUNT(g)
+   r = string_to_array(buf, g)
+   cr_p0 = buf[0]
+   cr_p3 = buf[3]
+   regression_checkpoint()
+   cr_nn = COUNT(e)
+   r = string_to_array(buf, e)
+   cr_e0 = buf[0]
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+led = low
+
+forever loop
+end loop

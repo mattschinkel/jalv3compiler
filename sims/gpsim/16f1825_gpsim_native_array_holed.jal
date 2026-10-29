@@ -1,0 +1,106 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — chunk-walking holed linear arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Layer 2 of the bank-spanning array work: arrays larger than one
+--    80-byte bank place across the RAM holes and every runtime-indexed
+--    access walks the chunk map (compare/subtract chain per chunk);
+--    const subscripts resolve through the map at compile time. Word
+--    elements never straddle a hole (chunks are trimmed to whole
+--    elements). This body fills and reads back a 120-byte byte array
+--    and a 100-element word array (200 bytes, 3+ chunks) entirely
+--    through RUNTIME indices, then checks const-index reads across the
+--    chunk boundaries and a runtime-indexed write in the last chunk.
+--
+-- @gpsim_validate begin
+-- steps: 12000000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_regression_flags 0
+-- expect word_le v__hb_sum 9180
+-- expect word_le v__hw_sum 9900
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+-- 120 bytes > one 80-byte bank: placed across the 0x70-0x7F hole
+var byte _hb_arr[136]
+-- 200 bytes: 3+ chunks, 2-byte elements (straddle trim)
+var word _hw_arr[100]
+var byte _hb_i
+var word _hb_sum = 0
+var word _hw_sum = 0
+var volatile byte _hb_done
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   -- byte array: runtime-index fill + read back (fill value i, sum 0..135)
+   for 136 using _hb_i loop
+      _hb_arr[_hb_i] = _hb_i
+   end loop
+   _hb_sum = 0
+   for 136 using _hb_i loop
+      _hb_sum = _hb_sum + _hb_arr[_hb_i]
+   end loop
+   _hb_done = 1
+   if _hb_sum != 9180 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+
+   -- word array: runtime-index fill + read back (fill value 2i, sum 2*(0..99))
+   for 100 using _hb_i loop
+      _hw_arr[_hb_i] = 2 * _hb_i
+   end loop
+   _hw_sum = 0
+   for 100 using _hb_i loop
+      _hw_sum = _hw_sum + _hw_arr[_hb_i]
+   end loop
+   if _hw_sum != 9900 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 2
+
+   -- const subscripts across chunk boundaries: element 79 (last of a
+   -- chunk) and 80 (first past the hole) read back the filled values
+   if _hb_arr[79] != 79 then
+      _check_failed = true
+   end if
+   if _hb_arr[80] != 80 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 3
+
+   -- word straddle safety: the last word before a boundary plus the
+   -- first after it are whole elements with correct contents
+   if _hw_arr[39] != 78 then
+      _check_failed = true
+   end if
+   if _hw_arr[40] != 80 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 4
+
+   -- runtime-indexed WRITE in the last chunk, read back const
+   _hb_i = 135
+   _hb_arr[_hb_i] = 200
+   if _hb_arr[135] != 200 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 5
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

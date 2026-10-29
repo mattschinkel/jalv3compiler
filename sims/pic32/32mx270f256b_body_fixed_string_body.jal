@@ -1,0 +1,30 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — fixed string body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: shared `_regression_fixed_string_body` via @sim_validate
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_fixed_string_body.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 4
+-- expect byte v__fx_p1 97
+-- expect byte v__fx_p2 99
+-- expect byte v__fx_p3 0
+-- expect byte v__fx_p4 100
+-- expect byte v__fx_p5 102
+-- expect byte v__fx_p6 0
+-- expect byte v__fx_p7 56
+-- expect byte v__fx_e1 2
+-- expect byte v__fx_e2 0
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_fixed_string_body

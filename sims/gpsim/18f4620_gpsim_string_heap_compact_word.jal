@@ -1,0 +1,81 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - string_heap_compact with word index
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `pragma string index word` with `string_heap_compact()` (Phase B relocation
+--    p-code: work table, sort, block moves, handle patch, free-list tail). Two
+--    small dynamic strings. Length checks after compact verify payloads;
+--    (dynamic `!=` literal is avoided here; lengths are the behavioral contract).
+--    **`checkpoint_verify: off`**: pinned **`_check_step`** at file **0x7E** can alias
+--    heap compaction traffic when **`_string_heap`** starts at **0x7F**; gpsim still
+--    validates **`_LENGTH`** results via **`expect word_le v__cptw_la`** /
+--    **`expect word_le v__cptw_lb`**.
+--
+-- @gpsim_validate begin
+-- allow_compiler_warnings: yes
+-- checkpoint_verify: off
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect word_le v__cptw_la 1
+-- expect word_le v__cptw_lb 2
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+
+const word _string_heap_size = 128
+pragma string index word
+include strings_dynamic
+
+include regression
+
+var string _cptw_a
+var string _cptw_b
+var word _cptw_la
+var word _cptw_lb
+
+--------------------------------------------------------------------------------
+-- Description: Assign one literal per procedure (compiler label reuse can
+-- break two dynamic `=` expansions in one procedure; see
+--).
+--------------------------------------------------------------------------------
+procedure _cptw_init_a() is
+   _cptw_a = "x"
+end procedure
+
+procedure _cptw_init_b() is
+   _cptw_b = "yz"
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Run compact on a word-index heap and verify success + contents
+-- Parameters: (none)
+-- Returns: (none)
+-- Notes: Checkpoints: `string_heap_compact` succeeded; `_LENGTH` matches.
+--------------------------------------------------------------------------------
+procedure _cptw_run() is
+   if string_heap_compact() then
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _cptw_la = COUNT(_cptw_a)
+   _cptw_lb = COUNT(_cptw_b)
+   if _cptw_la != 1 then
+      _check_failed = true
+   end if
+   if _cptw_lb != 2 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+end procedure
+
+regression_begin_run()
+_cptw_init_a()
+_cptw_init_b()
+_cptw_run()
+regression_pass_led_if_clean()

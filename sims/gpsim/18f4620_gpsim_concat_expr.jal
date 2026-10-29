@@ -1,0 +1,22 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim concat expression body (classic witness)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_concat_expr_body` on classic PIC18.
+--    Historically FAILED here (check_step 0x92, classic heap-accounting
+--    defect) and was parked; re-promoted once the heap fix landed.
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- frequency_hz: auto
+-- expect byte v__check_step 9
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+include _regression_concat_expr_body
+
+forever loop
+end loop

@@ -1,0 +1,39 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — wide asr
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review follow-up: variable-count wide ASR sign-fills OOB bytes
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_wide_asr.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile sqword sa = 0
+var volatile sqword sb = 0
+var volatile byte sh = 0
+
+sa = -256
+sh = 4
+sb = sa >> sh
+if sb == -16 then
+   ra = 1
+end if
+
+sa = -1
+sh = 20
+sb = sa >> sh
+if sb == -1 then
+   rb = 1
+end if

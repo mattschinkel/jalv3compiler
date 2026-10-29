@@ -1,0 +1,86 @@
+-- Title: Multi-dimensional + byte-index wide-offset regression body (include-only, 32-bit targets)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Pins the subscript offset-width fix
+--: the runtime
+--    subscript offset `index * element_size` must widen past 8 bits when
+--    (bound-1)*element_size > 255. Before the fix the offset expression
+--    took the BYTE index def through operator promotion and wrapped
+--    modulo 256, so multi-dimensional rows (16x24 grid, row 11 starts at
+--    flat 264) and 1D word arrays with byte indexes mis-addressed every
+--    element past flat offset 255. Classic cores cannot host these
+--    shapes natively; include from ESP32/PIC32 wrappers only.
+--
+-- Notes:
+--    4 checkpoints: grid checksum (40768), const-index readback past 255,
+--    runtime-index readback past 255, word-array byte-index fill.
+
+var byte _mdw_grid[16][24]
+var byte _mdw_gi
+var byte _mdw_gj
+var word _mdw_flat = 0
+var word _mdw_gsum = 0
+var word _mdw_w[200]
+var byte _mdw_wi
+
+var volatile byte _mdw_grid_ok = 0
+var volatile byte _mdw_const_ok = 0
+var volatile byte _mdw_run_ok = 0
+var volatile byte _mdw_word_ok = 0
+
+regression_begin_run()
+
+-- fill all 384 grid elements with byte(flat index); byte loop vars are
+-- the trigger: row * 24 + col exceeds 255 from row 11 on
+for 16 using _mdw_gi loop
+   for 24 using _mdw_gj loop
+      _mdw_grid[_mdw_gi][_mdw_gj] = byte(_mdw_flat)
+      _mdw_flat = _mdw_flat + 1
+   end loop
+end loop
+-- sum of byte(0..383) = 2 * sum(0..127) + sum(0..255) = 8128 + 32640
+for 16 using _mdw_gi loop
+   for 24 using _mdw_gj loop
+      _mdw_gsum = _mdw_gsum + _mdw_grid[_mdw_gi][_mdw_gj]
+   end loop
+end loop
+if _mdw_gsum == 40768 then
+   _mdw_grid_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- constant indexes cross the 255/256 boundary: flat 250 / 264 / 383
+if (_mdw_grid[10][10] == 250) & (_mdw_grid[11][0] == 8)
+   & (_mdw_grid[15][23] == 127) then
+   _mdw_const_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- runtime double index at the same boundary element
+_mdw_gi = 11
+_mdw_gj = 0
+if _mdw_grid[_mdw_gi][_mdw_gj] == 8 then
+   _mdw_run_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- 1D word array with a byte index: element offsets reach 199*2 = 398;
+-- before the fix the fill wrapped at 256 bytes and clobbered [0]
+for 200 using _mdw_wi loop
+   _mdw_w[_mdw_wi] = 3000 + word(_mdw_wi)
+end loop
+if (_mdw_w[0] == 3000) & (_mdw_w[128] == 3128) & (_mdw_w[199] == 3199) then
+   _mdw_word_ok = 1
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()

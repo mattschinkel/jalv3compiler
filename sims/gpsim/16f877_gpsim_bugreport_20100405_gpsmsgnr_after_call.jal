@@ -1,0 +1,69 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — bugreport 20100405 (**`GpsMsgNr`** after call)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Historic **`gps_converter`**: without **`volatile`**, **`GpsMsgNr = ParseMessageID()`**
+--    was optimized away and **`print_byte_dec(..., GpsMsgNr)`** saw constant **0**
+--    (**`bugreport/bugreport_20100405/bugreport.txt`**). Current tree emits a real
+--    load from **`GpsMsgNr`**; this minimal procedure mirrors the assignment-then-read
+--    shape (no GPS/serial).
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_bugreport_20100405_gpsmsgnr_after_call.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__bug200405_probe 5
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte GpsFieldNr = 0
+var byte GpsMsgNr
+
+function _parse_message_id() return byte is
+   return 5
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Same control nesting as field-0 path; assign then read **`GpsMsgNr`**
+--------------------------------------------------------------------------------
+procedure _gps_takt_min() is
+   pragma inline
+   var byte char = ","
+   var bit field_done = false
+
+   field_done = (char == ",")
+   if field_done then
+      if GpsFieldNr == 0 then
+         GpsMsgNr = _parse_message_id()
+      end if
+   end if
+end procedure
+
+var byte _bug200405_probe = 0
+
+--------------------------------------------------------------------------------
+procedure _bug20100405_run() is
+   regression_begin_run()
+   _gps_takt_min()
+   _bug200405_probe = GpsMsgNr
+   if _bug200405_probe != 5 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_bug20100405_run()
+
+forever loop
+end loop

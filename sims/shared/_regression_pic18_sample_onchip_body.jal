@@ -1,0 +1,143 @@
+-- Title: Shared PIC18 regression body — sample onchip
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_sample onchip.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+include delay
+
+const dword BIT_ARRAY_1_SIZE = 48
+include bit_array_1
+alias _bits is bit_array_1
+
+include debounce
+
+const byte queue01_size = 6
+include queue01
+
+const byte queue02_size = 5
+include queue02
+
+var bit _b0
+var bit _b1
+var bit _b2
+
+--------------------------------------------------------------------------------
+-- Description: Run on-chip sample-library checks (delay, bits, debounce, two queues)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: `timer0_poll_interval` not used — its init path does not enable TMR0 on PIC18 here.
+--------------------------------------------------------------------------------
+procedure _run_sample_onchip_checks() is
+   var word _st
+   var byte _qv
+   var byte _db
+   var bit _ok
+
+   regression_begin_run()
+
+   delay_1us()
+   delay_5us()
+   delay_10us(4)
+   delay_1ms(1)
+   regression_checkpoint()
+
+   _bits[0] = 1
+   _bits[7] = 1
+   _bits[8] = 0
+   _bits[31] = 1
+   _b0 = _bits[0]
+   _b1 = _bits[7]
+   _b2 = _bits[8]
+   if (!_b0) | (!_b1) | _b2 then
+      _check_failed = true
+   end if
+   if !_bits[31] then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _st = debounce_init(8)
+   if debounce_threshold(_st) != (8 | 3) then
+      _check_failed = true
+   end if
+   for 20 loop
+      _db = debounce(pin_C1, _st)
+   end loop
+   regression_checkpoint()
+
+   queue01_clear()
+   _ok = queue01_nb_put(0xAA)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue01_nb_put(0x55)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue01_nb_get(_qv)
+   if !_ok | (_qv != 0xAA) then
+      _check_failed = true
+   end if
+   _ok = queue01_nb_get(_qv)
+   if !_ok | (_qv != 0x55) then
+      _check_failed = true
+   end if
+   if !queue01_is_empty() then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   queue02_clear()
+   _ok = queue02_nb_put(0x10)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue02_nb_put(0x20)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue02_nb_put(0x30)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue02_nb_get(_qv)
+   if !_ok | (_qv != 0x10) then
+      _check_failed = true
+   end if
+   _ok = queue02_nb_get(_qv)
+   if !_ok | (_qv != 0x20) then
+      _check_failed = true
+   end if
+   _ok = queue02_nb_get(_qv)
+   if !_ok | (_qv != 0x30) then
+      _check_failed = true
+   end if
+   if queue02_nr_used() != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_sample_onchip_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

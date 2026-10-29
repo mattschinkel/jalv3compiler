@@ -1,0 +1,103 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — text casts dec/hex/bin/string (const)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Stage 1 of the text-cast family: `string(`/`hex(`/`bin(` are
+--    reserved casts (const operands fold to flash strings; runtime
+--    operands are a clean staged error). Checks content + COUNT of the
+--    folded strings via string_to_array, pad-is-minimum, natural hex
+--    width, byte-array pass-through, negative rendering, chain use of
+--    a cast result, and identity string(s).
+--
+-- @gpsim_validate begin
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect byte v__check_step 5
+-- expect byte v_tc_n1 2
+-- expect byte v_tc_b0 52
+-- expect byte v_tc_b1 50
+-- expect byte v_tc_n2 2
+-- expect byte v_tc_h0 49
+-- expect byte v_tc_h1 97
+-- expect byte v_tc_n3 4
+-- expect byte v_tc_p0 48
+-- expect byte v_tc_p3 97
+-- expect byte v_tc_n4 8
+-- expect byte v_tc_n5 2
+-- expect byte v_tc_s0 4
+-- expect byte v_tc_d0 45
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const string S1 = string(42)        -- "42"
+const string S2 = hex(26)        -- "1a"   (natural width 2)
+const string S3 = hex(26, 4)     -- "001a" (pad 4)
+const string S4 = bin(5)         -- "00000101" (natural 8)
+const string S5 = string(26)     -- "26" (decimal, like chains)
+const string S6 = string(-7)        -- "-7"
+const byte TBL[3] = {1, 2, 3}
+const string S7 = string(TBL)    -- bytes 1,2,3 as characters
+
+var byte buf[10]
+var volatile byte tc_n1 = 0
+var volatile byte tc_b0 = 0
+var volatile byte tc_b1 = 0
+var volatile byte tc_n2 = 0
+var volatile byte tc_h0 = 0
+var volatile byte tc_h1 = 0
+var volatile byte tc_n3 = 0
+var volatile byte tc_p0 = 0
+var volatile byte tc_p3 = 0
+var volatile byte tc_n4 = 0
+var volatile byte tc_n5 = 0
+var volatile byte tc_s0 = 0
+var volatile byte tc_d0 = 0
+var bit r
+
+procedure _run() is
+   regression_begin_run()
+   tc_n1 = COUNT(S1)
+   r = string_to_array(buf, S1)
+   tc_b0 = buf[0]
+   tc_b1 = buf[1]
+   regression_checkpoint()
+   tc_n2 = COUNT(S2)
+   r = string_to_array(buf, S2)
+   tc_h0 = buf[0]
+   tc_h1 = buf[1]
+   regression_checkpoint()
+   tc_n3 = COUNT(S3)
+   r = string_to_array(buf, S3)
+   tc_p0 = buf[0]
+   tc_p3 = buf[3]
+   tc_n4 = COUNT(S4)
+   regression_checkpoint()
+   tc_n5 = COUNT(S5)
+   r = string_to_array(buf, S6)
+   tc_d0 = buf[0]
+   tc_s0 = TBL[0] + COUNT(S7)
+   regression_checkpoint()
+   -- string() on a string-typed const is the identity
+   if string(S2) == S2 then
+      regression_checkpoint()
+   end if
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+led = low
+
+forever loop
+end loop

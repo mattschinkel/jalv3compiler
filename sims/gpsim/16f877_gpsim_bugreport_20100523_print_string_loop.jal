@@ -1,0 +1,50 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — bugreport 20100523 (**`print_string`** in a tight loop)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Jallib **2.4n-beta** (May 2010): **`print_string`** of a **`const`** string inside
+--    **`forever`** broke both serial output and LED blink (**`bugreport 20100523/bugreport.txt`**).
+--    This uses the same **`print_string` + loop** idea with **`regression_checkpoint()`**
+--    after each call (three explicit pairs so static checkpoint counting in
+--    **`run_regression_suite.py`** matches **`expect byte v__check_step 3`**).
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_bugreport_20100523_print_string_loop.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 500000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const serial_hw_baudrate = 115_200
+include serial_hardware
+include print
+
+const byte str1[] = "\r\nHi\r\n"
+
+--------------------------------------------------------------------------------
+procedure _bug200523_run() is
+   regression_begin_run()
+   serial_hw_init()
+   print_string(serial_hw_data, str1)
+   regression_checkpoint()
+   print_string(serial_hw_data, str1)
+   regression_checkpoint()
+   print_string(serial_hw_data, str1)
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_bug200523_run()
+
+forever loop
+end loop

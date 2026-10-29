@@ -1,0 +1,58 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — subscript
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: pointer subscript p[i] + WHEREIS(slots[idx])
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_subscript.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 11
+-- expect byte v_rb 40
+-- expect byte v_rc 33
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte buf[4] = {10, 20, 30, 40}
+var pointer p as var byte[4]
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte ix = 2
+
+var volatile byte ha = 1
+var volatile byte hb = 2
+var pointer slots[2] as var byte
+var volatile dword wa = 0
+var volatile dword wb = 0
+var volatile byte k = 1
+
+p is buf
+p[0] = 11
+p[1] = 22
+ra = p[0]
+rb = p[3]
+
+p[ix] = 33
+rc = p[ix]
+
+slots[0] is ha
+slots[1] is hb
+wa = WHEREIS(slots[0])
+wb = WHEREIS(slots[k])
+if wa == WHEREIS(ha) then
+   rd = 1
+end if
+if wb == WHEREIS(hb) then
+   re = 1
+end if

@@ -1,0 +1,83 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — bit*N array element access (runtime)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the runtime-indexed element access fix for `bit*N` arrays
+--    (fix_bitN_runtime_index): the 1D bit-array subscript now scales
+--    the index by the element width (bits), const subscripts compose
+--    through the same width, and the dynamic store/load emitters treat
+--    the element as an N-bit field (positioned mask/value pair with a
+--    runtime straddle arm) instead of the 1-bit set/clear the `var bit`
+--    machinery used to emit for every element width. Before: runtime
+--    writes collapsed to a single bit at the wrong position and reads
+--    returned 0/1.
+--
+--    Sizes run to 120 elements: the evening chase found the residual's
+--    root cause (the scaling MUL's byte-sized result def truncated
+--    products past bit offset 255, landing every write past element 85 in
+--    byte 0) and fixed it with the width promotion the multi-dimensional
+--    branch already uses. Verified: 88/100/120 exact, single-hot probes
+--    exact, the 300-element bitpack checksum exact. (Full-range sum
+--    loops over 300 elements hit a PRE-EXISTING always-FALSE DCE fold
+--    that equally kills var bit loops -- separate item.)
+--
+-- @gpsim_validate begin
+-- steps: 15000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 6
+-- expect byte v__r1 5
+-- expect byte v__r2 7
+-- expect byte v__r3 3
+-- expect byte v__r4 162
+-- expect byte v__r5 1
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var bit*3 a[120]
+var volatile byte _r1 = 255
+var volatile byte _r2 = 255
+var volatile byte _r3 = 255
+var volatile byte _r4 = 255
+var volatile byte _r5 = 255
+var byte k
+
+-- runtime-indexed fill (the previously-broken store path)
+for 120 using k loop
+   a[k] = k & 7
+end loop
+regression_checkpoint()                       -- 1
+
+-- runtime write into the far end
+k = 100
+a[k] = 5
+regression_checkpoint()                       -- 2
+
+-- runtime read of the rewritten element
+k = 100
+_r1 = byte(a[k])                             -- 5
+regression_checkpoint()                       -- 3
+
+-- runtime read of an untouched element (63: bit offset 189, past 128)
+k = 63
+_r2 = byte(a[k])                             -- 63&7 = 7
+regression_checkpoint()                       -- 4
+
+-- const read of a runtime-written region neighbor
+k = 118
+a[118] = 3
+_r3 = byte(a[118])                            -- 3
+regression_checkpoint()                      -- 5
+
+-- full-array checksum through the (working) accumulate loop
+var word s = 0
+for 120 using k loop
+   s = s + a[k]
+end loop
+_r4 = byte(s)                                -- 418 & 0xFF
+regression_checkpoint()                      -- 6
+_r5 = byte(s >> 8)                           -- 56

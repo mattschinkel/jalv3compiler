@@ -1,0 +1,40 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim dynstr diag
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- allow_compiler_warnings: 1
+-- expect byte v__cnt 5
+-- expect byte v__h3 72
+-- expect byte v__h4 101
+-- expect byte v__eq 1
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 64
+pragma string index byte
+include strings_dynamic
+
+var string t
+var volatile byte _cnt = 0
+var volatile byte _h3 = 0
+var volatile byte _h4 = 0
+var volatile byte _eq = 0
+
+t = "Hello"
+_cnt = COUNT(t)
+_h3 = _string_heap[3]
+_h4 = _string_heap[4]
+if t == "Hello" then
+   _eq = 1
+end if
+regression_checkpoint()
+forever loop
+   _usec_delay(100_000)
+end loop

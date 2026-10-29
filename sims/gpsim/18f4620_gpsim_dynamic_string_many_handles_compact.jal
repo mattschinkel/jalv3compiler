@@ -1,0 +1,143 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - many dynamic strings + string_heap_compact
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Thirty-two dynamic `var string` handles with `pragma string index byte`
+--    and `const word _string_heap_size = 255` so `_pfile_strc_cpt` fits one PIC18 GPR bank.
+--    Compiler summary (PIC18F4620, `bin/jalv3-x86-64 -s lib`, default
+--    `JALV2_ROM_A_STRING_LITERAL_CALL=0`): **Code area** ~45076 bytes, **Data area** ~2187 bytes
+--    (static map; heap is `_string_heap_size` at runtime). With
+--    `make -C src EXTRA_CFLAGS=-DJALV2_ROM_A_STRING_LITERAL_CALL=1`, ROM (A) uses
+--    `CALL string_from_array` only for literal length >= 2 bytes, so this file (all one-char
+--    literals) stays ~the same code size as the default build; older “CALL every literal”
+--    behaviour inflated flash here. ROM (A) targets **flash** reuse for longer literals.
+--    Uses loop to assign one-char literals (code optimization), checks `COUNT(_mh00)`
+--    before and after `string_heap_compact()`, and advances `_mh_run_step` twice on success.
+--    gpsim checks `v__mh00+1` (length byte for byte-index handle). Compiler: Phase-B
+--    heap block copy uses `pfile_cmd_op_add` into u16 temps so `src_base+k` /
+--    `dst_base+k` does not truncate past 255 before FSR setup — see
+--.
+--    `_mh_run_step` is not `at 0x01ff`: skipping duplicate dynstr registry rows
+--    () changes RAM layout;
+--    a fixed byte on the 0x1ff boundary could overlap heap traffic during compact.
+--    gpsim RAM progression: **`v__mh_run_step`** **0 → 1** after **`COUNT(_mh00)==1`**,
+--    **→ 2** after **`string_heap_compact()`** succeeds (outline **`CALL`** uses public builtin only;
+--).
+--
+-- @gpsim_validate begin
+-- allow_compiler_warnings: yes
+-- steps: 5000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__mh_run_step 2
+-- expect byte v__mh00+1 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 255
+pragma string index byte
+include strings_dynamic
+
+var string _mh00
+var string _mh01
+var string _mh02
+var string _mh03
+var string _mh04
+var string _mh05
+var string _mh06
+var string _mh07
+var string _mh08
+var string _mh09
+var string _mh10
+var string _mh11
+var string _mh12
+var string _mh13
+var string _mh14
+var string _mh15
+var string _mh16
+var string _mh17
+var string _mh18
+var string _mh19
+var string _mh20
+var string _mh21
+var string _mh22
+var string _mh23
+var string _mh24
+var string _mh25
+var string _mh26
+var string _mh27
+var string _mh28
+var string _mh29
+var string _mh30
+var string _mh31
+
+var volatile byte _mh_run_step
+
+--------------------------------------------------------------------------------
+-- Description: Fill handles, probe one length, compact, advance step counter
+--------------------------------------------------------------------------------
+procedure _mh_many_run() is
+   -- Assign strings via explicit pointers (more compact than unrolled assignments)
+   _mh00 = "0"
+   _mh01 = "1"
+   _mh02 = "2"
+   _mh03 = "3"
+   _mh04 = "4"
+   _mh05 = "5"
+   _mh06 = "6"
+   _mh07 = "7"
+   _mh08 = "8"
+   _mh09 = "9"
+   _mh10 = "a"
+   _mh11 = "b"
+   _mh12 = "c"
+   _mh13 = "d"
+   _mh14 = "e"
+   _mh15 = "f"
+   _mh16 = "g"
+   _mh17 = "h"
+   _mh18 = "i"
+   _mh19 = "j"
+   _mh20 = "k"
+   _mh21 = "l"
+   _mh22 = "m"
+   _mh23 = "n"
+   _mh24 = "o"
+   _mh25 = "p"
+   _mh26 = "q"
+   _mh27 = "r"
+   _mh28 = "s"
+   _mh29 = "t"
+   _mh30 = "u"
+   _mh31 = "v"
+
+   if COUNT(_mh00) != word(1) then
+      _check_failed = true
+   end if
+   if !_check_failed then
+      _mh_run_step = _mh_run_step + 1
+   end if
+   if !string_heap_compact() then
+      _check_failed = true
+   end if
+   if !_check_failed then
+      _mh_run_step = _mh_run_step + 1
+   end if
+   if !_check_failed then
+      if COUNT(_mh00) != word(1) then
+         _check_failed = true
+      end if
+   end if
+end procedure
+
+regression_begin_run()
+_mh_run_step = 0
+_mh_many_run()
+regression_pass_led_if_clean()

@@ -1,0 +1,23 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — indirect-call parameter liveness
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_indirect_args_body` via @sim_validate:
+--    params of INDIRECT-flagged procs must survive nested indirect
+--    calls (device writes marshal through the shared inbox).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_indirect_args.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 4
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_indirect_args_body

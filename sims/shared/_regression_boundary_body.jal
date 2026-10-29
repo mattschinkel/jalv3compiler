@@ -1,0 +1,328 @@
+-- ----------------------------------------------------------------------------
+-- Title: Boundary-value matrix (byte..sdword edges) — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Per-type boundary sweeps adapted from the SDCC regression-suite survey
+--: 0/1/MIN/
+--    MAX per type, wrap/carry/borrow edges, div/mod edges, arithmetic vs
+--    logical shifts, same-type compares, width casts, ++/-- at the edges.
+--    All out-of-range values are produced at RUNTIME from variables — the
+--    constant folder mis-folds negative-constant division (separate defect,
+--    see), so such values must
+--    never appear as folded constants here.
+--
+-- Semantics pinned by gpsim probe 2026-09-14: runtime `/` and `%` on signed
+-- types truncate toward zero (-7/2 == -3, -7%2 == -1); `>>` on signed types
+-- is arithmetic (-32 >> 2 == -8); `>>` on unsigned wide types is logical.
+-- ----------------------------------------------------------------------------
+
+var byte _bd_b
+var sbyte _bd_sb
+var word _bd_w
+var sword _bd_sw
+var dword _bd_dw
+var sdword _bd_sdw
+
+-- one volatile result byte per check group (1 = all sub-checks passed)
+var volatile byte _bd_r_byte_wrap
+var volatile byte _bd_r_byte_muldiv
+var volatile byte _bd_r_sbyte_edge
+var volatile byte _bd_r_word_wrap
+var volatile byte _bd_r_word_shift
+var volatile byte _bd_r_sword_edge
+var volatile byte _bd_r_dword_edge
+var volatile byte _bd_r_sdword_edge
+var volatile byte _bd_r_cmp
+var volatile byte _bd_r_cast
+var volatile byte _bd_r_incdec
+var volatile byte _bd_r_fold_div
+
+--------------------------------------------------------------------------------
+procedure _bd_run() is
+   regression_begin_run()
+
+   -- byte wrap at 0x00 / 0x7F / 0xFF
+   _bd_r_byte_wrap = 1
+   _bd_b = 0xFF
+   _bd_b = _bd_b + 1
+   if _bd_b != 0x00 then
+      _bd_r_byte_wrap = 0
+   end if
+   _bd_b = 0x00
+   _bd_b = _bd_b - 1
+   if _bd_b != 0xFF then
+      _bd_r_byte_wrap = 0
+   end if
+   _bd_b = 0x7F
+   _bd_b = _bd_b + 1
+   if _bd_b != 0x80 then
+      _bd_r_byte_wrap = 0
+   end if
+   regression_checkpoint()
+
+   -- byte mul/div/mod edges (var / const follows the signed runtime path)
+   _bd_r_byte_muldiv = 1
+   _bd_b = 0xFF
+   if _bd_b * 2 != 0xFE then
+      _bd_r_byte_muldiv = 0
+   end if
+   if _bd_b / 0x0F != 0x11 then
+      _bd_r_byte_muldiv = 0
+   end if
+   if _bd_b % 0x0F != 0x00 then
+      _bd_r_byte_muldiv = 0
+   end if
+   if _bd_b / 0x01 != 0xFF then
+      _bd_r_byte_muldiv = 0
+   end if
+   regression_checkpoint()
+
+   -- sbyte MIN/MAX edges
+   _bd_r_sbyte_edge = 1
+   _bd_sb = 127
+   _bd_sb = _bd_sb + 1
+   if _bd_sb != -128 then
+      _bd_r_sbyte_edge = 0
+   end if
+   _bd_sb = -128
+   _bd_sb = _bd_sb - 1
+   if _bd_sb != 127 then
+      _bd_r_sbyte_edge = 0
+   end if
+   _bd_sb = -128
+   _bd_sb = _bd_sb / 2
+   if _bd_sb != -64 then
+      _bd_r_sbyte_edge = 0
+   end if
+   _bd_sb = -1
+   if byte(_bd_sb) != 0xFF then
+      _bd_r_sbyte_edge = 0
+   end if
+   regression_checkpoint()
+
+   -- word wrap at 0x0000 / 0xFFFF
+   _bd_r_word_wrap = 1
+   _bd_w = 0xFFFF
+   _bd_w = _bd_w + 1
+   if _bd_w != 0x0000 then
+      _bd_r_word_wrap = 0
+   end if
+   _bd_w = 0x0000
+   _bd_w = _bd_w - 1
+   if _bd_w != 0xFFFF then
+      _bd_r_word_wrap = 0
+   end if
+   _bd_w = 0xFFFF
+   if _bd_w * 2 != 0xFFFE then
+      _bd_r_word_wrap = 0
+   end if
+   regression_checkpoint()
+
+   -- word shift edges (logical, unsigned)
+   _bd_r_word_shift = 1
+   _bd_w = 0x8000
+   if _bd_w >> 15 != 0x0001 then
+      _bd_r_word_shift = 0
+   end if
+   if _bd_w >> 8 != 0x0080 then
+      _bd_r_word_shift = 0
+   end if
+   _bd_w = 0x0001
+   if _bd_w << 15 != 0x8000 then
+      _bd_r_word_shift = 0
+   end if
+   _bd_w = 0xFFFF
+   if _bd_w << 4 != 0xFFF0 then
+      _bd_r_word_shift = 0
+   end if
+   regression_checkpoint()
+
+   -- sword MIN/MAX edges (division truncates toward zero)
+   _bd_r_sword_edge = 1
+   _bd_sw = 32767
+   _bd_sw = _bd_sw + 1
+   if _bd_sw != -32768 then
+      _bd_r_sword_edge = 0
+   end if
+   _bd_sw = -32768
+   _bd_sw = _bd_sw / 2
+   if _bd_sw != -16384 then
+      _bd_r_sword_edge = 0
+   end if
+   _bd_sw = -32768
+   _bd_sw = _bd_sw >> 8
+   if _bd_sw != -128 then
+      _bd_r_sword_edge = 0
+   end if
+   _bd_sw = -7
+   if _bd_sw / 2 != -3 then
+      _bd_r_sword_edge = 0
+   end if
+   if _bd_sw % 2 != -1 then
+      _bd_r_sword_edge = 0
+   end if
+   regression_checkpoint()
+
+   -- dword wrap + shift + div edges
+   _bd_r_dword_edge = 1
+   _bd_dw = 0xFFFF_FFFF
+   _bd_dw = _bd_dw + 1
+   if _bd_dw != 0x0000_0000 then
+      _bd_r_dword_edge = 0
+   end if
+   _bd_dw = 0x0000_0000
+   _bd_dw = _bd_dw - 1
+   if _bd_dw != 0xFFFF_FFFF then
+      _bd_r_dword_edge = 0
+   end if
+   _bd_dw = 0x8000_0000
+   if _bd_dw >> 31 != 0x0000_0001 then
+      _bd_r_dword_edge = 0
+   end if
+   _bd_dw = 0xFFFF_FFFF
+   if _bd_dw / 0x0F != 0x1111_1111 then
+      _bd_r_dword_edge = 0
+   end if
+   if _bd_dw % 0x0F != 0x0000_0000 then
+      _bd_r_dword_edge = 0
+   end if
+   regression_checkpoint()
+
+   -- sdword MIN/MAX edges (arithmetic shift, truncating division)
+   _bd_r_sdword_edge = 1
+   _bd_sdw = 2147483647
+   _bd_sdw = _bd_sdw + 1
+   if _bd_sdw != -2147483648 then
+      _bd_r_sdword_edge = 0
+   end if
+   _bd_sdw = -2147483648
+   _bd_sdw = _bd_sdw / 2
+   if _bd_sdw != -1073741824 then
+      _bd_r_sdword_edge = 0
+   end if
+   _bd_sdw = -2147483648
+   _bd_sdw = _bd_sdw >> 16
+   if _bd_sdw != -32768 then
+      _bd_r_sdword_edge = 0
+   end if
+   _bd_sdw = -7
+   if _bd_sdw / 2 != -3 then
+      _bd_r_sdword_edge = 0
+   end if
+   regression_checkpoint()
+
+   -- same-type compares around zero / MIN / MAX
+   _bd_r_cmp = 1
+   _bd_b = 0
+   if !(_bd_b < 1) then
+      _bd_r_cmp = 0
+   end if
+   _bd_b = 0xFF
+   if !(_bd_b > 0x01) then
+      _bd_r_cmp = 0
+   end if
+   _bd_sb = -1
+   if !(_bd_sb < 0) then
+      _bd_r_cmp = 0
+   end if
+   _bd_sw = -32768
+   if !(_bd_sw < 32767) then
+      _bd_r_cmp = 0
+   end if
+   _bd_dw = 0x8000_0000
+   if !(_bd_dw > 0x7FFF_FFFF) then
+      _bd_r_cmp = 0
+   end if
+   _bd_sdw = -2147483648
+   if !(_bd_sdw < 0) then
+      _bd_r_cmp = 0
+   end if
+   regression_checkpoint()
+
+   -- width casts truncate to the low part
+   _bd_r_cast = 1
+   _bd_dw = 0x1234_5678
+   if byte(_bd_dw) != 0x78 then
+      _bd_r_cast = 0
+   end if
+   if word(_bd_dw) != 0x5678 then
+      _bd_r_cast = 0
+   end if
+   _bd_w = 0x1234
+   if byte(_bd_w) != 0x34 then
+      _bd_r_cast = 0
+   end if
+   _bd_dw = 0x0000_0000
+   _bd_dw = _bd_dw - 1
+   if byte(_bd_dw) != 0xFF then
+      _bd_r_cast = 0
+   end if
+   _bd_sdw = -1
+   if byte(_bd_sdw) != 0xFF then
+      _bd_r_cast = 0
+   end if
+   regression_checkpoint()
+
+   -- increment/decrement at the wrap edges (JALv2 has no ++/-- operator)
+   _bd_r_incdec = 1
+   _bd_b = 0xFF
+   _bd_b = _bd_b + 1
+   if _bd_b != 0x00 then
+      _bd_r_incdec = 0
+   end if
+   _bd_b = _bd_b - 1
+   if _bd_b != 0xFF then
+      _bd_r_incdec = 0
+   end if
+   _bd_w = 0xFFFF
+   _bd_w = _bd_w + 1
+   if _bd_w != 0x0000 then
+      _bd_r_incdec = 0
+   end if
+   _bd_dw = 0xFFFF_FFFF
+   _bd_dw = _bd_dw + 1
+   if _bd_dw != 0x0000_0000 then
+      _bd_r_incdec = 0
+   end if
+   _bd_sdw = 2147483647
+   _bd_sdw = _bd_sdw + 1
+   if _bd_sdw != -2147483648 then
+      _bd_r_incdec = 0
+   end if
+   regression_checkpoint()
+
+   -- folded negative-constant division/modulo (const-fold sign fix,
+   --): these are compile-time
+   -- folds, unlike the runtime paths exercised above
+   _bd_r_fold_div = 1
+   if -7 / 2 != -3 then
+      _bd_r_fold_div = 0
+   end if
+   if -7 % 2 != -1 then
+      _bd_r_fold_div = 0
+   end if
+   if 10 / -2 != -5 then
+      _bd_r_fold_div = 0
+   end if
+   if -7 / -2 != 3 then
+      _bd_r_fold_div = 0
+   end if
+   _bd_sb = -100 / 10
+   if _bd_sb != -10 then
+      _bd_r_fold_div = 0
+   end if
+   _bd_sw = -32768 / 2
+   if _bd_sw != -16384 then
+      _bd_r_fold_div = 0
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_bd_run()
+
+forever loop
+end loop

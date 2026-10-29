@@ -1,0 +1,66 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — runtime-indexed pointer-slot access + fn-ptr calls
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the runtime-indexed pointer-array primitives on classic cores:
+--    element reads and writes through slots[k] (double indirection: load
+--    slot k's own pointer, then dereference), and indirect calls through
+--    fn-ptr array elements fps[k](x) (FSR = &slot[k], load the address,
+--    call). Both previously staged *slot0 + k*esz (slot 0's VALUE as the
+--    data base) -- silently wrong addresses after any bind.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_slot_runtime.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__psr_snap 42
+-- expect byte v__psr_v2 66
+-- expect byte v__psr_sum 8
+-- expect byte v__psr_bind_ok 13
+-- expect byte v__psr_v3 13
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+
+var volatile byte _psr_v2 = 0
+var volatile byte _psr_snap = 0
+var volatile byte _psr_sum = 0
+var byte _psr_k = 1
+
+function _psr_fnc(byte in v) return byte is
+   return v + 1
+end function
+
+var pointer _psr_slots[2] as var byte
+var pointer _psr_fps[2] as function(byte in) return byte
+
+var volatile byte _psr_v3 = 0
+var volatile byte _psr_bind_ok = 0
+
+regression_begin_run()
+_psr_slots[1] is _psr_v2
+_psr_fps[0] is _psr_fnc
+_psr_v2 = 42
+_psr_snap = _psr_slots[_psr_k]
+_psr_slots[_psr_k] = 66
+_psr_k = 0
+_psr_sum = _psr_fps[_psr_k](7)
+-- runtime-index BIND (was a silent no-op on both classic cores):
+-- retarget slot 1 at a runtime index, then read through it
+_psr_k = 1
+_psr_slots[_psr_k] is _psr_v3
+_psr_v3 = 13
+_psr_bind_ok = _psr_slots[_psr_k]
+regression_checkpoint()
+regression_pass_led_if_clean()

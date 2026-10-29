@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 compiler regression — sample onchip
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: sample onchip (delay / bits / debounce poll / queues)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_sample_onchip.jal
+--
+-- @sim_validate begin
+-- duration_s: 2.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 5
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _regression_pic32_sample_onchip_body

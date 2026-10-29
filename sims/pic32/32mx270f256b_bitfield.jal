@@ -1,0 +1,103 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — bitfield
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: multi-bit packed fields
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_bitfield.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- expect byte v_rg 1
+-- expect byte v_rh 1
+-- expect byte v_ri 1
+-- expect byte v_rj 1
+-- expect byte v_rk 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+var volatile byte rg = 0
+var volatile byte rh = 0
+var volatile byte ri = 0
+var volatile byte rj = 0
+var volatile byte rk = 0
+
+var bit*2 pair
+var byte host
+var bit*4 lo at host : 0
+var bit*4 hi at host : 4
+var word hostw
+var bit*5 span at hostw : 6
+var bit*24 widef
+var dword wx
+var bit*4 nibs[4]
+var byte n0 = 0
+var byte n1 = 1
+
+pair = 3
+if pair == 3 then
+   ra = 1
+end if
+
+lo = 0x0A
+hi = 0x05
+if host == 0x5A then
+   rb = 1
+end if
+if lo == 0x0A then
+   rc = 1
+end if
+if hi == 0x05 then
+   rd = 1
+end if
+
+host = 0xFF
+lo = 0
+if host == 0xF0 then
+   re = 1
+end if
+
+span = 0x1F
+if span == 0x1F then
+   rf = 1
+end if
+if hostw == 0x07C0 then
+   rg = 1
+end if
+
+pair = pair + 1
+if pair == 0 then
+   rh = 1
+end if
+
+widef = 0x123456
+wx = dword(widef)
+if wx == 0x123456 then
+   ri = 1
+end if
+
+nibs[n0] = 0x05
+nibs[n1] = 0x0A
+if nibs[n0] == 0x05 then
+   rj = 1
+end if
+if nibs[n1] == 0x0A then
+   rk = 1
+end if

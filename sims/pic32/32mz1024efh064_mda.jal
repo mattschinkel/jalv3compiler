@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — mda
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: 2-D array aggregate init + runtime index
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_mda.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 42
+-- expect byte v_rc 42
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte matrix[2][3] = {{1, 2, 3}, {4, 5, 6}}
+var volatile byte row = 1
+var volatile byte col = 2
+
+ra = matrix[0][0]
+matrix[1][2] = 42
+rb = matrix[1][2]
+rc = matrix[row][col]

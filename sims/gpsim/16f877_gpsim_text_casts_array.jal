@@ -1,0 +1,80 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — text casts on RUNTIME arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Stage 2b of the text-cast family: `hex(`/`bin(`/`string(`
+--    on runtime arrays. Numeric bases render each element unrolled
+--    through the generalized number machinery (pad raised to the
+--    element's natural width, matching the const semantics);
+--    `string()` copies the bytes verbatim via a STRING-flagged def
+--    clone. hex({1,26,255}) = "011aff", string = 3 bytes,
+--    hex({700,65535} as word) = "02bcffff".
+--
+-- @gpsim_validate begin
+-- steps: 8000000
+-- frequency_hz: auto
+-- expect byte v__check_step 3
+-- expect byte v_ca_nh 6
+-- expect byte v_ca_h0 48
+-- expect byte v_ca_h2 49
+-- expect byte v_ca_h3 97
+-- expect byte v_ca_h4 102
+-- expect byte v_ca_ns 3
+-- expect byte v_ca_s2 255
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const word _string_heap_size = 48
+include strings_dynamic
+
+var byte tbl[3] = {1, 26, 255}
+
+var string a = hex(tbl)
+var string c = string(tbl)
+
+var byte buf[6]
+var volatile byte ca_nh = 0
+var volatile byte ca_h0 = 0
+var volatile byte ca_h2 = 0
+var volatile byte ca_h3 = 0
+var volatile byte ca_h4 = 0
+var volatile byte ca_ns = 0
+var volatile byte ca_s2 = 0
+var bit r
+
+procedure _run() is
+   regression_begin_run()
+   ca_nh = COUNT(a)            -- "011aff"
+   r = string_to_array(buf, a)
+   ca_h0 = buf[0]
+   ca_h2 = buf[2]
+   ca_h3 = buf[3]
+   ca_h4 = buf[4]
+   regression_checkpoint()
+   ca_ns = COUNT(c)            -- bytes 1, 26, 255 verbatim
+   r = string_to_array(buf, c)
+   ca_s2 = buf[2]
+   regression_checkpoint()
+   if a == hex(tbl) then
+      regression_checkpoint()
+   end if
+   regression_pass_led_if_clean()
+end procedure
+
+_run()
+
+led = low
+
+forever loop
+end loop

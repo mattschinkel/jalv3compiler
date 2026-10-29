@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — tasks (START / SUSPEND)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_pic18_task_body.jal`**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/18f4620_compiler_regression_task.jal
+--
+-- @gpsim_validate begin
+-- compiler_args: -task 2
+-- steps: 120000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+pragma task 2
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+pin_B0_direction = OUTPUT
+
+include regression
+
+include _regression_pic18_task_body

@@ -1,0 +1,25 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — pointer slots
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_ptr_slots_body` via @sim_validate:
+--    store/load through indexed data-pointer slots must select the
+--    bound slot's target (const + runtime index, cross-bound
+--    discrimination, WHEREIS), and a pointer-called function's scalar
+--    return must survive its OUT marshalling.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_ptr_slots.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 10
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_ptr_slots_body

@@ -1,0 +1,188 @@
+-- Title: Stopwatch library - PIC32 (T2/T3 32-bit timer pair)
+-- Author: Matthew Schinkel - borntechi.com, copyright (c) 2009..2025, all rights reserved.
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the ZLIB license (http://www.opensource.org/licenses/zlib-license.html)
+--
+-- Description: PIC32 stopwatch, backed by the Timer2+Timer3 32-bit pair
+-- in free-run mode at PBCLK, prescale 1:1 (the boot PB3DIV = /2, so one
+-- tick = 2 CPU cycles at any SYSCLK; 10 ns at 200 MHz). Because both
+-- the tick source and the CPU derive from SYSCLK, tick counts are exact
+-- ratios of CPU time regardless of the FRC/SPLL absolute accuracy.
+--
+-- `stopwatch_read_cycles` returns PBCLK ticks. `stopwatch_read_time`
+-- converts ticks via target_clock (assumes PBCLK = target_clock/2 --
+-- the standard configuration, same convention as
+-- serial_hw_uart_clock), so it reports real seconds.
+--
+-- Sources:
+--
+-- Notes:
+-- You do not need to define any constants in your program. Stopwatch will
+-- choose these default values for you.
+--
+-- const STOPWATCH_VAR_SIZE = 4
+-- const STOPWATCH_MIN_VALUE = STOPWATCH_NS
+--
+-- Uses Timer2+Timer3: do not combine with other users of those timers.
+-- The 32-bit tick count wraps after 2^32 PBCLK ticks (42.9 s at the
+-- 100 MHz boot PBCLK; 1.6 ms if STOPWATCH_VAR_SIZE = 2 truncates).
+
+--
+if !defined(STOPWATCH_VAR_SIZE) then
+   const STOPWATCH_VAR_SIZE = 4
+end if
+if !defined(STOPWATCH_MIN_VALUE) then
+   const STOPWATCH_MIN_VALUE = STOPWATCH_NS
+end if
+
+-- guarded 32-bit read result (filled by _stopwatch_read32)
+var dword _stopwatch_ticks
+
+--------------------------------------------------------------------------------
+-- Description: read the T2/T3 32-bit counter coherently
+-- Parameters: none
+-- Returns: none (_stopwatch_ticks)
+-- Notes: reads TMR3 (high) - TMR2 (low) - TMR3 again; retries when the
+-- - high word moved across the low-word read (the MZ family HOLD
+-- - register is not declared in the device file, so this classic guard
+-- - replaces it)
+--------------------------------------------------------------------------------
+procedure _stopwatch_read32() is
+   var dword hi1
+   var dword lo
+   var dword hi2
+   forever loop
+      hi1 = TMR3
+      lo  = TMR2
+      hi2 = TMR3
+      if hi1 == hi2 then
+         _stopwatch_ticks = (hi1 << 16) | (lo & 0xFFFF)
+         exit loop
+      end if
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: initialize the stopwatch
+-- Parameters: none
+-- Returns: none
+-- Notes: T2+T3 32-bit free-run, PBCLK source, 1:1 prescale
+--------------------------------------------------------------------------------
+procedure stopwatch_init() is
+   T2CON   = 0x0000          -- off while configuring
+   TMR3    = 0
+   TMR2    = 0
+   PR3     = 0xFFFF
+   PR2     = 0xFFFF
+   T2CON   = 0x8008          -- ON | T32 | TCKPS 1:1 | TCS PBCLK
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: start the stopwatch at time = 0
+-- Parameters: none
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure stopwatch_start() is
+   pragma inline
+   TMR3 = 0
+   TMR2 = 0
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: continue running the stopwatch at it's current value.
+--------------------------------------------------------------------------------
+procedure stopwatch_continue() is
+   pragma inline
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: stop the stopwatch
+-- Notes: the free-run counter keeps ticking; the next start() re-zeros it
+--------------------------------------------------------------------------------
+procedure stopwatch_stop() is
+   pragma inline
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: read the stopwatch. Returns PBCLK ticks since start
+-- (2 CPU cycles per tick with the boot PB3DIV = /2).
+--------------------------------------------------------------------------------
+function stopwatch_read_cycles() return byte*STOPWATCH_VAR_SIZE is
+   _stopwatch_read32()
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(_stopwatch_ticks)
+   else
+      return dword(_stopwatch_ticks)
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- Description: read the stopwatch as time, returns value in STOPWATCH_MIN_VALUE
+-- Notes: tick period = 2 / target_clock seconds (PBCLK = target_clock/2);
+-- 8-byte intermediate math
+--------------------------------------------------------------------------------
+function stopwatch_read_time() return byte*STOPWATCH_VAR_SIZE is
+   var byte*8 _stopwatch_time
+   _stopwatch_read32()
+
+   -- nanoseconds per tick = 2_000_000_000 / target_clock
+   _stopwatch_time = (_stopwatch_ticks * 2_000_000_000) / target_clock
+   if STOPWATCH_MIN_VALUE == STOPWATCH_US then
+      _stopwatch_time = _stopwatch_time / 1_000
+   elsif STOPWATCH_MIN_VALUE == STOPWATCH_MS then
+      _stopwatch_time = _stopwatch_time / 1_000_000
+   elsif STOPWATCH_MIN_VALUE == STOPWATCH_S then
+      _stopwatch_time = _stopwatch_time / 1_000_000_000
+   end if
+
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(_stopwatch_time)
+   else
+      return dword(_stopwatch_time)
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- read the stopwatch (pseudo variable): time in STOPWATCH_MIN_VALUE
+--------------------------------------------------------------------------------
+function stopwatch'get() return byte*STOPWATCH_VAR_SIZE is
+   pragma inline
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(stopwatch_read_time())
+   else
+      return dword(stopwatch_read_time())
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- read the stopwatch cycles (pseudo variable): PBCLK ticks since start
+--------------------------------------------------------------------------------
+function stopwatch_cycles'get() return byte*STOPWATCH_VAR_SIZE is
+   pragma inline
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(stopwatch_read_cycles())
+   else
+      return dword(stopwatch_read_cycles())
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- check stopwatch tick count overflowed
+--------------------------------------------------------------------------------
+function stopwatch_cycle_overflow'get() return bit is
+   _stopwatch_read32()
+   if STOPWATCH_VAR_SIZE == 2 then
+      return _stopwatch_ticks > 0xFFFF
+   else
+      return FALSE
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- check if stopwatch time counter has overflowed
+--------------------------------------------------------------------------------
+function stopwatch_time_overflow'get() return bit is
+   return stopwatch_cycle_overflow
+end function

@@ -1,0 +1,31 @@
+-- ------------------------------------------------------
+-- Title: PIC12F1840 compiler regression — sample PWM (on-chip CCP only)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_pic14_sample_pwm_body.jal`**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/12f1840_compiler_regression_sample_pwm.jal
+--
+-- @gpsim_validate begin
+-- steps: 150000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_12f1840_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+alias pin_CCP1_direction is pin_CCP1_RA2_direction
+pin_CCP1_direction = OUTPUT
+
+include _regression_pic14_sample_pwm_body

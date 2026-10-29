@@ -1,0 +1,52 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — native array that fits one bank
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Bank-spanning linear arrays are refused since 2026-10-05 (the
+--    in-the-wild `var word array[100]` overlap); this body pins the
+--    positive side: the largest array that fits one contiguous bank
+--    fills and checksums correctly, with the loop index and other
+--    scalars placed by the access-window fast path around it.
+--
+-- @gpsim_validate begin
+-- steps: 8000000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect byte v_nb_done 1
+-- expect word_le v_nb_sum 3160
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+var byte _gpsim_nb_arr[80]
+var byte _gpsim_nb_i
+var word _gpsim_nb_sum = 0
+var volatile byte nb_done = 0
+var volatile word nb_sum = 0
+
+procedure _gpsim_nb_run() is
+   regression_begin_run()
+   for 80 using _gpsim_nb_i loop
+      _gpsim_nb_arr[_gpsim_nb_i] = _gpsim_nb_i
+   end loop
+   regression_checkpoint()
+   for 80 using _gpsim_nb_i loop
+      _gpsim_nb_sum = _gpsim_nb_sum + _gpsim_nb_arr[_gpsim_nb_i]
+   end loop
+   nb_sum = _gpsim_nb_sum
+   nb_done = 1
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_nb_run()
+
+forever loop
+end loop

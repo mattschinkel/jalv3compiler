@@ -1,0 +1,109 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — heap-string subscripts (str[i])
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `str[i]` on a heap `var string` reads and writes the i-th
+--    CHARACTER (heap payload through the handle). Before this, the
+--    subscript silently read the HANDLE's storage (offset/cap/len
+--    bytes) — and with byte(str) rejected there was no character
+--    access at all. Const and runtime indices, char-literal writes,
+--    COUNT unchanged by writes, and equality compares after writes.
+--
+-- Notes:
+--    Unchecked, exactly like array subscripts: an index at or past the
+--    effective length reads/writes whatever shares the block.
+--
+-- @gpsim_validate begin
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect byte v__check_step 6
+-- expect byte v__gpsim_regression_flags 0
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var string _ss_s
+var byte _ss_i
+var byte _ss_b
+var byte _ss_buf[12]
+var bit _ss_r
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   _ss_s = "hello world"
+   -- const-index reads
+   _ss_b = _ss_s[0]
+   if _ss_b != "h" then
+      _check_failed = true
+   end if
+   if _ss_s[6] != "w" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+
+   -- runtime-index reads
+   _ss_i = 4
+   _ss_b = _ss_s[_ss_i]
+   if _ss_b != "o" then
+      _check_failed = true
+   end if
+   _ss_i = 10
+   if _ss_s[_ss_i] != "d" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 2
+
+   -- writes: char literal and byte value, const and runtime index
+   _ss_s[6] = "W"
+   _ss_i = 4
+   _ss_s[_ss_i] = "O"
+   if _ss_s[6] != "W" then
+      _check_failed = true
+   end if
+   if _ss_s[4] != "O" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 3
+
+   -- writes leave the length alone
+   if COUNT(_ss_s) != 11 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 4
+
+   -- subscript result composes with == (byte vs 1-char literal)
+   if ! (_ss_s[0] == "h") then
+      _check_failed = true
+   end if
+   if _ss_s[6] == "w" then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 5
+
+   -- round-trip through string_to_array agrees with the subscripts
+   _ss_r = string_to_array(_ss_buf, _ss_s)
+   if _ss_buf[0] != _ss_s[0] then
+      _check_failed = true
+   end if
+   if _ss_buf[6] != _ss_s[6] then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 6
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

@@ -1,0 +1,98 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — software I2C master init
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Port of **16f877_gpsim_i2c_software_smoke.jal** to PIC32. Exercises
+--    **`demo_lib/i2c_software.jal`** (bit-banged master): `i2c_initialize` /
+--    `i2c_start` / `i2c_stop` plus a full address+data transaction and
+--    ACK slot against RAM-backed open-drain style pin stubs (QEMU
+--    the QEMU PIC32 models have no GPIO peripheral model, so real PORTC/TRISC SFR
+--    reads are not available; same stub pattern as the device file's
+--    portA).  The byte transfer is the library's own
+--    `i2c_transmit_byte` (which also covers `_i2c_bit_out` packed-bit
+--    formals); the call-tail codegen bug that used to hang it is fixed
+--    in `cmd_opt_tail_return` / `cmd_opt_branch`
+--    ().
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_i2c_software.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- uart_out: I2C_OK
+-- expect byte v__check_step 1
+-- expect byte v__i2c_done 1
+-- @sim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_32mx270f256b_device
+include regression_pic32
+
+-- RAM-backed SCL/SDA stubs: direction high = released (reads back high),
+-- direction low = driving low. This mirrors open-drain behavior closely
+-- enough for the library's clock-stretch timeout logic.
+var volatile byte _i2c_scl_stub = 1
+var volatile byte _i2c_scl_dir_stub = 1
+var volatile byte _i2c_sda_stub = 1
+var volatile byte _i2c_sda_dir_stub = 1
+
+var bit i2c_scl at _i2c_scl_stub : 0
+var bit i2c_sda at _i2c_sda_stub : 0
+
+alias i2c_scl_direction           is _i2c_scl_dir_stub
+alias i2c_sda_direction           is _i2c_sda_dir_stub
+
+const word _i2c_bus_speed = 255
+const bit  _i2c_level     = true
+-- Timeout so a stuck-low stub read cannot hang the QEMU run.
+const byte _i2c_scl_timeout = 100
+
+include i2c_software
+
+-- setup serial library for the pass/fail marker (board wiring
+-- RPB0 = U1TX, RPB2 = U1RX; library applies PPS + directions)
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_B0
+alias serial_hw_pin_tx_direction is pin_B0_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB0R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+include serial_hardware
+serial_hw_init()
+
+var volatile byte _i2c_done = 0
+
+--------------------------------------------------------------------------------
+-- Description: Initialize the bit-bang master and run one start/address/stop
+-- - transaction via the library's `i2c_transmit_byte` (covers the packed-bit
+-- - `_i2c_bit_out` formal path too); on success prints the **I2C_OK** marker
+-- - over UART1 and advances the regression checkpoint.
+--------------------------------------------------------------------------------
+procedure _i2c_sw_smoke_run() is
+   regression_begin_run()
+   i2c_initialize()
+   i2c_start()
+   var bit ack = false
+   ack = i2c_transmit_byte(0xA0)            -- address 0x50, write
+   i2c_stop()
+   regression_checkpoint()
+   if !_check_failed then
+      serial_hw_write("I")
+      serial_hw_write("2")
+      serial_hw_write("C")
+      serial_hw_write("_")
+      serial_hw_write("O")
+      serial_hw_write("K")
+      _i2c_done = 1
+   end if
+end procedure
+
+_i2c_sw_smoke_run()
+
+forever loop
+end loop

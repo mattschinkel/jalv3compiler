@@ -1,0 +1,39 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — SDCC boundary-value matrix
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Port of **18f4620_compiler_regression_boundary.jal** to PIC32
+--    (@sim_validate / QEMU).  Shared body
+--    **`tests/_regression_boundary_body.jal`** (SDCC-suite
+--    adoption batch): byte..sdword wrap/edge arithmetic, shifts,
+--    compares, casts, inc/dec, folded-negative divide pins.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_boundary_regression.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 12
+-- expect byte v__bd_r_byte_wrap 1
+-- expect byte v__bd_r_byte_muldiv 1
+-- expect byte v__bd_r_sbyte_edge 1
+-- expect byte v__bd_r_word_wrap 1
+-- expect byte v__bd_r_word_shift 1
+-- expect byte v__bd_r_sword_edge 1
+-- expect byte v__bd_r_dword_edge 1
+-- expect byte v__bd_r_sdword_edge 1
+-- expect byte v__bd_r_cmp 1
+-- expect byte v__bd_r_cast 1
+-- expect byte v__bd_r_incdec 1
+-- expect byte v__bd_r_fold_div 1
+-- @sim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_32mz1024efh064_device
+include regression_pic32
+
+include _regression_boundary_body

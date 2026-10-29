@@ -1,0 +1,36 @@
+-- ------------------------------------------------------
+-- Title: PIC12F1840 compiler regression — tasks (START / SUSPEND)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_pic14_task_body.jal`**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/12f1840_compiler_regression_task.jal
+--
+-- @gpsim_validate begin
+-- allow_compiler_warnings: 1
+-- (PIC14H **pragma task**: backend **pclath** branch diagnostics; see **progress.md**.)
+-- compiler_args: -task 2
+-- steps: 120000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_12f1840_device
+
+pragma task 2
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+alias _task_pin is pin_A2
+pin_A2_direction = OUTPUT
+
+include _regression_pic14_task_body

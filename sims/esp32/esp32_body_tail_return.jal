@@ -1,0 +1,24 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — tail-transfer body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared tail-call/return guards via `_regression_tail_return_body`
+--    (classic helpers): the deleted tail GOTO must keep the caller's
+--    epilogue and every side effect / return value — the ESP32
+--    tail-call frame fix.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_tail_return.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 6
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_tail_return_body

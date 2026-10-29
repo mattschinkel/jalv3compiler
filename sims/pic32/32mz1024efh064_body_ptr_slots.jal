@@ -1,0 +1,24 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — pointer slots
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_ptr_slots_body` via @sim_validate:
+--    store/load through indexed data-pointer slots must select the
+--    bound slot's target (const + runtime index, cross-bound
+--    discrimination, WHEREIS) -- the MIPS twin of the ESP32 slot fix.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_ptr_slots.jal
+--
+-- @sim_validate begin
+-- duration_s: 3.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 10
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _regression_ptr_slots_body

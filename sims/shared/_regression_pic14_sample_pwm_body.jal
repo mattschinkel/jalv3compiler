@@ -1,0 +1,47 @@
+-- Title: Shared PIC14 regression body — sample pwm
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_sample pwm.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+-- **12F1840** wrapper adds **alias pin_CCP1_direction is pin_CCP1_RA2_direction** before **pin_CCP1_direction = OUTPUT**.
+
+include pwm_hardware
+
+--------------------------------------------------------------------------------
+-- Description: Configure CCP1 PWM and set duty cycle (sample pwm_led pattern)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _run_pwm_sample_checks() is
+   regression_begin_run()
+
+   pwm_max_resolution(1)
+   pwm1_on()
+   regression_checkpoint()
+
+   pwm1_set_dutycycle_percent(40)
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_pwm_sample_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

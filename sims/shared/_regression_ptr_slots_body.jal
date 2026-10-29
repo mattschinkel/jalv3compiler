@@ -1,0 +1,187 @@
+-- ----------------------------------------------------------------------------
+-- Title: Pointer-array slot store/load + fn-ptr out/return — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins data-pointer-slot access on the 32-bit back ends
+--    (`var pointer slots[N] as var byte`): store-through and
+--    load-through with const and runtime indices must select the
+--    BOUND SLOT's target. Pre-fix, ESP32 stores through indexed slots
+--    were silent no-ops (the value landed in the slot bytes) and
+--    loads read through slot 0 plus a byte offset; the MIPS twin
+--    always loaded slot 0's pointer and added the scaled index. Both
+--    read "correct" when slots were bound in order to 4-byte-spaced
+--    variables -- the cross-bound checkpoints here (slot0 -> one var,
+--    slot2 -> another) defeat that coincidence. Also pins the ESP32
+--    pointer-called function whose OUT marshalling clobbered a2
+--    before the scalar return was stored (rr read the out formal's
+--    value instead of the return).
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+regression_begin_run()
+
+-- data slots, bound in order (const + runtime index store/load)
+var byte _ps_a = 1
+var byte _ps_b = 2
+var byte _ps_c = 3
+var pointer _ps_slots[3] as var byte
+
+_ps_slots[0] is _ps_a
+_ps_slots[1] is _ps_b
+_ps_slots[2] is _ps_c
+
+-- const-indexed store-through
+_ps_slots[0] = 44
+if _ps_a == 44 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- runtime-indexed store-through
+var byte _ps_i = 1
+_ps_slots[_ps_i] = 55
+if _ps_b == 55 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- const + runtime indexed load-through
+var byte _ps_r = _ps_slots[0]
+_ps_i = 2
+var byte _ps_r2 = _ps_slots[_ps_i]
+if _ps_r == 44 then
+   if _ps_r2 == 3 then
+   else
+      _check_failed = true
+   end if
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- cross-bound slots: slot 0 and slot 2 point at DIFFERENT variables,
+-- so the pre-fix "slot 0 pointer + index" addressing cannot pass
+var byte _ps_x = 200
+var byte _ps_y = 100
+var pointer _ps_xslots[3] as var byte
+_ps_xslots[0] is _ps_y
+_ps_xslots[2] is _ps_x
+if _ps_xslots[0] == 100 then
+   if _ps_xslots[2] == 200 then
+   else
+      _check_failed = true
+   end if
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- WHEREIS through a slot equals WHEREIS of the bound variable
+var dword _ps_addr_slot
+var dword _ps_addr_var
+_ps_addr_slot = WHEREIS(_ps_xslots[0])
+_ps_addr_var = WHEREIS(_ps_y)
+if _ps_addr_slot == _ps_addr_var then
+   if _ps_addr_slot != 0 then
+   else
+      _check_failed = true
+   end if
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- word pointee through a slot (store + load, runtime index)
+var word _ps_wv = 0
+var pointer _ps_wslots[2] as var word
+_ps_wslots[0] is _ps_wv
+_ps_wslots[1] is _ps_wv
+_ps_i = 1
+_ps_wslots[_ps_i] = 4242
+if _ps_wv == 4242 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- pointer-called function with an out formal: the scalar return must
+-- not read the out formal's value (ESP32 pre-fix: rr == 42)
+function _ps_f2(byte in x, byte out y) return byte is
+   y = x + 1
+   return x + 2
+end function
+
+var pointer _ps_fp as function (byte in, byte out) return byte
+var byte _ps_yy = 0
+var byte _ps_rr = 0
+_ps_fp is _ps_f2
+_ps_rr = _ps_fp(41, _ps_yy)
+if _ps_rr == 43 then
+   if _ps_yy == 42 then
+   else
+      _check_failed = true
+   end if
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- same call shape with the return unused (out marshalling alone)
+_ps_yy = 0
+_ps_fp(5, _ps_yy)
+if _ps_yy == 6 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- procedure-pointer slot dispatch by runtime index (kept green by the
+-- same slot machinery)
+var byte _ps_disp = 0
+procedure _ps_pc(byte in t) is
+   _ps_disp = 11
+end procedure
+procedure _ps_pd(byte in t) is
+   _ps_disp = 22
+end procedure
+var pointer _ps_pslots[2] as procedure (byte in)
+_ps_pslots[0] is _ps_pc
+_ps_pslots[1] is _ps_pd
+var byte _ps_step = 0
+while _ps_step < 2 loop
+   _ps_pslots[_ps_step](0)
+   _ps_step = _ps_step + 1
+end loop
+if _ps_disp == 22 then
+else
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- `p = arr` equal-sign bind: stores the array's ADDRESS into the slot
+-- (ESP32 pre-fix loaded the array's first bytes AS the pointer -- a
+-- silent corrupted bind; reads/writes through it hit garbage
+-- addresses; MIPS always had the branch)
+var byte _ps_abuf[4]
+var pointer _ps_ap as var byte[4]
+var byte _ps_ar
+
+_ps_abuf[0] = 7
+_ps_abuf[1] = 8
+_ps_ap = _ps_abuf
+_ps_ar = _ps_ap[1]
+if _ps_ar != 8 then
+   _check_failed = true
+end if
+_ps_ap[1] = 9
+if _ps_abuf[1] != 9 then
+   _check_failed = true
+end if
+regression_checkpoint()

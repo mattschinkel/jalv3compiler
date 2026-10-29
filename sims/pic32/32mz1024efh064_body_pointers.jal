@@ -1,0 +1,31 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 compiler regression — pointers
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: pointer body (portable ROM `p is const` + `p[i]`)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_pointers.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 5
+-- expect byte v__gptr_ha 10
+-- expect byte v__gptr_hb 20
+-- expect byte v__gptr_hc 30
+-- expect byte v__gptr_lc 42
+-- expect byte v__gptr_ra 77
+-- expect byte v__gptr_rb 77
+-- expect byte v__gptr_dd0 3
+-- expect byte v__gptr_dd1 1
+-- expect byte v__gptr_dd2 4
+-- expect byte v__gptr_dd3 11
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _gpsim_pointer_portable_body

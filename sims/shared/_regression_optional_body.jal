@@ -1,0 +1,90 @@
+-- ------------------------------------------------------
+-- JALv3 regression test (sims suite)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+-- ------------------------------------------------------
+-- shared body: optional parameters (scalar word/byte/bit defaults +
+-- open-array string default incl. hidden COUNT) at every call arity
+include regression
+
+var volatile byte _sink = 0
+var volatile byte _op_bit = 0
+var volatile byte _op_bit_t = 0
+var volatile byte _op_arr0 = 0
+var volatile byte _op_arrn = 0
+var byte checks = 0
+procedure _mix(byte in base, optional word in scale default 5,
+    optional byte in bias default 1) is
+   _sink = byte(word(base) + word(scale) + word(bias))
+end procedure
+
+procedure _switch(optional bit in on default true) is
+   if on then
+      _op_bit = 1
+   else
+      _op_bit = 2
+   end if
+end procedure
+
+procedure _tag(optional byte in txt[] default "tag!") is
+   _op_arr0 = txt[0]
+   _op_arrn = byte(COUNT(txt))
+end procedure
+
+
+_mix(2, 3, 1)          -- 6
+if _sink == 6 then checks = checks + 1 end if
+_mix(10, 10)           -- 21
+if _sink == 21 then checks = checks + 1 end if
+_mix(16)               -- 22
+if _sink == 22 then checks = checks + 1 end if
+_switch()
+_op_bit_t = _op_bit
+_switch(false)
+if (_op_bit_t == 1) & (_op_bit == 2) then checks = checks + 1 end if
+_tag("abcd")           -- 'a', 4
+if (_op_arr0 == 97) & (_op_arrn == 4) then checks = checks + 1 end if
+_tag()                 -- 't', 4
+if (_op_arr0 == 116) & (_op_arrn == 4) then checks = checks + 1 end if
+
+-- empty-string sentinel: `""` on a NON-string optional formal means
+-- OMITTED -- the declared default fills exactly as a missing argument
+-- would (print-style "" = "nothing here" placeholder; only the EMPTY
+-- const literal is the sentinel)
+_mix(20, "")           -- scale -> default 5, bias -> default 1: 26
+if _sink == 26 then checks = checks + 1 end if
+_mix(20, "", 9)        -- sentinel mid-argument-list: 20 + 5 + 9 = 34
+if _sink == 34 then checks = checks + 1 end if
+_tag("")               -- open-array default "tag!" fills: 't', 4
+if (_op_arr0 == 116) & (_op_arrn == 4) then checks = checks + 1 end if
+
+-- DYNAMIC-string formal takes literals of ANY length (including
+-- empty): the actual stages into a compiler string cell. Pre-fix only
+-- 3-char literals passed -- by the count==handle-size coincidence;
+-- "ab"/"abcd"/"" were all "type mismatch".
+var volatile byte _op_litn = 255
+var volatile byte _op_lit0 = 99
+var volatile byte _op_lit2 = 99
+var volatile byte _op_lit3 = 99
+var volatile byte _op_lit4 = 99
+var volatile byte _op_litd = 99
+procedure _litlen(optional string in s default "dflt") is
+   _op_litn = byte(COUNT(s))
+end procedure
+_litlen("")            -- 0
+_op_lit0 = _op_litn
+if _op_litn == 0 then checks = checks + 1 end if
+_litlen("ab")          -- 2
+_op_lit2 = _op_litn
+if _op_litn == 2 then checks = checks + 1 end if
+_litlen("abc")         -- 3 (the old coincidence shape still works)
+_op_lit3 = _op_litn
+if _op_litn == 3 then checks = checks + 1 end if
+_litlen("abcd")        -- 4
+_op_lit4 = _op_litn
+if _op_litn == 4 then checks = checks + 1 end if
+_litlen()              -- default "dflt": 4
+_op_litd = _op_litn
+if _op_litn == 4 then checks = checks + 1 end if
+
+regression_checkpoint()

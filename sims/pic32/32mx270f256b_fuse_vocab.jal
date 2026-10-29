@@ -1,0 +1,57 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — device-file fuse vocabulary
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `pragma target <DEVCFG field> <value>` through the device-file
+--    fuse_def vocabulary (classic-jallib ergonomics on PIC32): the
+--    fields merge into the solved DEVCFG words at hex-write time.
+--    The bit-level proof of the merged words is the compile gate
+--    (scripts/test_pic32mx_clock_words.py, fuse_* cases); this witness
+--    proves the runtime side -- the image still boots and runs with
+--    non-owned fuse fields set -- and exercises the PinList
+--    fixed-function pin aliases: writes through pin_PGED3/pin_PGEC3
+--    (RA0/RA1 shares) land in LATA.  PORT reads are pin state and
+--    TRIS writes do not persist in the pic32mx7 QEMU model (verified
+--    byte-identical against the pre-change device file), so the LAT
+--    is the provable surface here.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_fuse_vocab.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.3
+-- machine: pic32mx7-explorer16
+-- expect byte v_fuse_vocab 2
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+-- non-owned DEVCFG fields via the device-file vocabulary (the solver
+-- keeps FNOSC/POSCMOD/FCKSM/FPLL*/FWDTEN/FSOSCEN/IESO/DEBUG)
+pragma target WDTPS     PS1048576
+pragma target FPBDIV    DIV_1
+pragma target WINDIS    OFF
+pragma target JTAGEN    OFF
+pragma target ICESEL    ICS_PGX1
+pragma target PMDL1WAY  OFF
+pragma target FUSBIDIO  OFF
+pragma target FVBUSONIO OFF
+
+var volatile byte fuse_vocab = 0
+
+-- fixed-function pin aliases resolve to their port pins: write
+-- through the alias, verify in the underlying LAT
+pin_PGED3 = 1                     -- alias of pin_A0 (PGED3 shares RA0)
+if (LATA & 0x1) == 1 then
+   fuse_vocab = fuse_vocab + 1
+end if
+pin_PGEC3 = 1                     -- alias of pin_A1
+if (LATA & 0x2) == 2 then
+   fuse_vocab = fuse_vocab + 1
+end if
+
+forever loop
+end loop

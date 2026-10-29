@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 compiler regression — arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: arrays + large_array_6 (flat PIC32 path)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_arrays.jal
+--
+-- @sim_validate begin
+-- duration_s: 2.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 5
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _regression_pic18_arrays_body

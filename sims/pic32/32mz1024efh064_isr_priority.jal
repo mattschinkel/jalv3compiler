@@ -1,0 +1,80 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — ISR priority + dual source
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Dual-source single-vector ISR with IPC priority programming:
+--    IRQ0 (external int 0) at IPC0 priority 7 sub 3, IRQ1 (change
+--    notify) at IPC1 priority 1 sub 0.  Both flags set before the
+--    first dispatch; the shared vector handler reads IFS0 to
+--    distinguish sources, servicing the high-priority bit first
+--    (matching the hardware resolver order).  QEMU dispatches
+--    sequentially through the shared vector (one EIC stub); true
+--    priority preemption needs MVEC on silicon.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_isr_priority.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_po_order 1
+-- expect byte v_po_hi 1
+-- expect byte v_po_lo 1
+-- expect byte v_po_done 1
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte po_hi = 0
+var volatile byte po_lo = 0
+var volatile byte po_order = 0
+var volatile byte po_done = 0
+
+--------------------------------------------------------------------------------
+-- Description: shared vector handler — distinguishes IRQ0/IRQ1 by IFS0
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: Checks the high-priority source (IFS0 bit 0 = IRQ0 at IPC0
+-- - pri 7) first, then the low (bit 4 = CN at IPC1 pri 1), matching
+-- - the hardware resolver's ordering for simultaneously pending IRQs.
+--------------------------------------------------------------------------------
+procedure _po_shared_isr() is
+   pragma interrupt
+
+   if (IFS0 & 1) != 0 then
+      IFS0CLR = 1
+      po_hi = po_hi + 1
+      if po_lo == 0 then
+         po_order = 1
+      end if
+   end if
+   if (IFS0 & 0x10) != 0 then
+      IFS0CLR = 0x10
+      po_lo = po_lo + 1
+      if po_order == 0 then
+         po_order = 2
+      end if
+   end if
+end procedure
+
+-- IPC programming: IRQ0 = priority 7 sub 3, CN = priority 1 sub 0
+IPC0 = 0x1F
+IPC1 = 0x04
+-- enable both
+IEC0SET = 0x11
+-- set both flags simultaneously: handler services both in order
+IFS0SET = 0x11
+
+-- wait for both to run
+var byte guard = 0
+while ((po_hi == 0) | (po_lo == 0)) & (guard < 255) loop
+   guard = guard + 1
+end loop
+if (po_hi == 1) & (po_lo == 1) then
+   po_done = 1
+end if
+
+forever loop
+end loop

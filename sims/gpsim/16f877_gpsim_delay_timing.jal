@@ -1,0 +1,33 @@
+-- ------------------------------------------------------
+-- Title: 16f877 compiler regression — delay timing (TMR1 cycles)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_delay_timing_body.jal`**.
+--    Measures `_usec_delay(1000)` elapsed TMR1 cycles at Fosc/4 and
+--    verifies the count within a 50%-200% window (twice).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'third_party/jallib/lib;tests' tests/16f877_gpsim_delay_timing.jal
+--
+-- @gpsim_validate begin
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v__dt_lo_ok 1
+-- expect byte v__dt_hi_ok 1
+-- expect byte v__dt_1ms_ok 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_delay_timing_body

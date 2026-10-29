@@ -1,0 +1,31 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — task control (classic core)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_taskctl_body.jal`** —
+--    _task_suspend / _task_resume / _task_kill / _task_restart over
+--    static slots, incl. the self forms (classic-core port).
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/18f4620_compiler_regression_taskctl.jal
+--
+-- @gpsim_validate begin
+-- checkpoint_verify: off
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect byte v__ctl_checks 9
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_taskctl_body

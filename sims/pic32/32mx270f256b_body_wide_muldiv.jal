@@ -1,0 +1,19 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — wide mul/div/mod
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_wide_muldiv_body` via @sim_validate (M4K twin;
+--    the wide kernel is shared libcore code).
+--
+-- @sim_validate begin
+-- duration_s: 10.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 17
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_wide_muldiv_body

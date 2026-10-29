@@ -1,0 +1,173 @@
+-- ----------------------------------------------------------------------------
+-- Title: Wide integer MUL / DIV / MOD / NEG + runtime-count shifts — shared
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--        runtime body
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime-operand coverage for the wide operators that used to be
+--    compile errors on the ESP32 back-end ("3b follow-up") and for
+--    shifts whose count is only known at run time.  Expected values are
+--    pre-computed (Python) and pinned by full-width equality compares.
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+var volatile qword _gpsim_wmd_a = 0x1122334455667788
+var volatile qword _gpsim_wmd_b = 0x100000001
+var volatile qword _gpsim_wmd_den = 0x1234
+var volatile qword _gpsim_wmd_zero = 0
+var volatile qword _gpsim_wmd_q
+var volatile qword _gpsim_wmd_r
+var volatile sqword _gpsim_wmd_sqa = -1000
+var volatile sqword _gpsim_wmd_sqd = 7
+var volatile sqword _gpsim_wmd_sq
+var volatile byte _gpsim_wmd_x = 4
+var volatile byte _gpsim_wmd_k
+
+var volatile byte _gpsim_wmd_mul
+var volatile byte _gpsim_wmd_mul_self
+var volatile byte _gpsim_wmd_mul_alias
+var volatile byte _gpsim_wmd_div
+var volatile byte _gpsim_wmd_mod
+var volatile byte _gpsim_wmd_div_neg
+var volatile byte _gpsim_wmd_mod_neg
+var volatile byte _gpsim_wmd_div_negden
+var volatile byte _gpsim_wmd_mod_negden
+var volatile byte _gpsim_wmd_div_negboth
+var volatile byte _gpsim_wmd_mod_negboth
+var volatile byte _gpsim_wmd_neg
+var volatile byte _gpsim_wmd_shl
+var volatile byte _gpsim_wmd_shr
+var volatile byte _gpsim_wmd_sar
+var volatile byte _gpsim_wmd_sar_const
+var volatile byte _gpsim_wmd_divzero
+
+--------------------------------------------------------------------------------
+procedure _gpsim_wmd_run() is
+   regression_begin_run()
+
+   -- unsigned multiply, distinct runtime operands
+   _gpsim_wmd_q = _gpsim_wmd_a * _gpsim_wmd_b
+   if _gpsim_wmd_q == 0x6688AACC55667788 then
+      _gpsim_wmd_mul = 1
+   end if
+   regression_checkpoint()
+
+   -- v1 == v2
+   _gpsim_wmd_q = _gpsim_wmd_a * _gpsim_wmd_a
+   if _gpsim_wmd_q == 0x1EACE4A3C82FB840 then
+      _gpsim_wmd_mul_self = 1
+   end if
+   regression_checkpoint()
+
+   -- dst aliases v1 (operand must be copied before dst is zeroed)
+   _gpsim_wmd_q = _gpsim_wmd_a
+   _gpsim_wmd_q = _gpsim_wmd_q * 2
+   if _gpsim_wmd_q == 0x22446688AACCEF10 then
+      _gpsim_wmd_mul_alias = 1
+   end if
+   regression_checkpoint()
+
+   -- unsigned divide / modulo by a runtime divisor
+   _gpsim_wmd_q = _gpsim_wmd_a / _gpsim_wmd_den
+   if _gpsim_wmd_q == 0x0000F0F5697EA60A then
+      _gpsim_wmd_div = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_wmd_r = _gpsim_wmd_a % _gpsim_wmd_den
+   if _gpsim_wmd_r == 0x0000000000000980 then
+      _gpsim_wmd_mod = 1
+   end if
+   regression_checkpoint()
+
+   -- signed: -1000 / 7 = -142 rem -6 (truncation toward zero)
+   _gpsim_wmd_sq = _gpsim_wmd_sqa / _gpsim_wmd_sqd
+   if _gpsim_wmd_sq == -142 then
+      _gpsim_wmd_div_neg = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_wmd_sq = _gpsim_wmd_sqa % _gpsim_wmd_sqd
+   if _gpsim_wmd_sq == -6 then
+      _gpsim_wmd_mod_neg = 1
+   end if
+   regression_checkpoint()
+
+   -- negative divisor: 1000 / -7 = -142 rem 6
+   _gpsim_wmd_sq = 1000 / -7
+   if _gpsim_wmd_sq == -142 then
+      _gpsim_wmd_div_negden = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_wmd_sq = 1000 % -7
+   if _gpsim_wmd_sq == 6 then
+      _gpsim_wmd_mod_negden = 1
+   end if
+   regression_checkpoint()
+
+   -- both negative: -1000 / -7 = 142 rem -6
+   _gpsim_wmd_sq = _gpsim_wmd_sqa / -7
+   if _gpsim_wmd_sq == 142 then
+      _gpsim_wmd_div_negboth = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_wmd_sq = _gpsim_wmd_sqa % -7
+   if _gpsim_wmd_sq == -6 then
+      _gpsim_wmd_mod_negboth = 1
+   end if
+   regression_checkpoint()
+
+   -- wide negation
+   _gpsim_wmd_sq = -_gpsim_wmd_sqa
+   if _gpsim_wmd_sq == 1000 then
+      _gpsim_wmd_neg = 1
+   end if
+   regression_checkpoint()
+
+   -- runtime shift counts (k built from a volatile byte: no const-prop)
+   _gpsim_wmd_k = _gpsim_wmd_x + 9          -- 13
+   _gpsim_wmd_q = _gpsim_wmd_a << _gpsim_wmd_k
+   if _gpsim_wmd_q == 0x46688AACCEF10000 then
+      _gpsim_wmd_shl = 1
+   end if
+   regression_checkpoint()
+
+   _gpsim_wmd_q = _gpsim_wmd_a >> _gpsim_wmd_k
+   if _gpsim_wmd_q == 0x000089119A22AB33 then
+      _gpsim_wmd_shr = 1
+   end if
+   regression_checkpoint()
+
+   -- arithmetic right shift, runtime count (-1000 >> 3 = -125)
+   _gpsim_wmd_k = _gpsim_wmd_x - 1          -- 3
+   _gpsim_wmd_sq = _gpsim_wmd_sqa >> _gpsim_wmd_k
+   if _gpsim_wmd_sq == -125 then
+      _gpsim_wmd_sar = 1
+   end if
+   regression_checkpoint()
+
+   -- arithmetic right shift, const count (sign fill past the top byte)
+   _gpsim_wmd_sq = _gpsim_wmd_sqa >> 1
+   if _gpsim_wmd_sq == -500 then
+      _gpsim_wmd_sar_const = 1
+   end if
+   regression_checkpoint()
+
+   -- runtime zero divisor skips the computation (dst stays 0)
+   _gpsim_wmd_q = 0
+   _gpsim_wmd_q = _gpsim_wmd_a / _gpsim_wmd_zero
+   if _gpsim_wmd_q == 0 then
+      _gpsim_wmd_divzero = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_wmd_run()

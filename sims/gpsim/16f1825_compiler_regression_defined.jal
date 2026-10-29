@@ -1,0 +1,90 @@
+-- ------------------------------------------------------
+-- Title: PIC16F1825 compiler regression — defined() boolean (label/value lookup)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Guards **jal_expr.c** `defined(id)`: the result must use **(label | value)** handles
+--    *before* **value_release** / **label_release**. A use-after-release can fold the
+--    wrong branch and break libraries that rely on **defined(...)** in **if** / **elsif**.
+--    Same logic as **18f4620** / **18f26k22** / **12f1840** ***_compiler_regression_defined.jal**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/16f1825_compiler_regression_defined.jal
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect_hw_stkptr_le_compiler_depth: 1
+-- hw_stkptr_steps: 25000
+-- expect byte v__check_step 3
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+
+alias led is pin_A0
+alias led_pin is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const byte _GPR_EXISTING = 99
+
+--------------------------------------------------------------------------------
+-- Description: Empty procedure so **defined** can resolve a label (not only a const value).
+--------------------------------------------------------------------------------
+procedure _defined_label_probe() is
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Run **defined()** checks; each block ends with **regression_checkpoint**.
+--------------------------------------------------------------------------------
+procedure _run_defined_checks() is
+   regression_begin_run()
+
+   -- Value path: constant exists → branch must be taken.
+   if defined(_GPR_EXISTING) then
+      if _GPR_EXISTING != 99 then
+         _check_failed = true
+      end if
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- Missing symbol → **defined** is false; must not enter the **then** body.
+   if defined(_GPR_DOES_NOT_EXIST_ZZZ) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- Label path: procedure name → **defined** should be true.
+   if defined(_defined_label_probe) then
+      -- ok
+   else
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led_pin = low
+end procedure
+
+_run_defined_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

@@ -1,0 +1,182 @@
+-- ----------------------------------------------------------------------------
+-- Title: Known-answer algorithm workload (CRC16-CCITT + sort) — shared body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Self-contained end-to-end known-answer workload, following the SDCC
+--    regression-suite workload pattern (lonesha256/sieve/tinyaes).
+--    SHA-256 does not fit the small PIC14 parts (64-word schedule), so the
+--    algorithm is CRC16-CCITT (poly 0x1021, init 0x0000, no reflection) —
+--    the classic check string "123456789" must give 0x31C3 — plus a 16-byte
+--    bubble sort with a pinned sorted image and a sum invariant.
+--
+-- Reference vectors (bitwise CCITT/XModem, computed independently):
+--   "123456789" -> 0x31C3   "A" -> 0x58E5   "JALv2" -> 0x93CC
+--   00 01 02 03 -> 0x6131   ""  -> 0x0000
+-- ----------------------------------------------------------------------------
+
+const byte _crc_msg9[9] = "123456789"
+const byte _crc_msg1[1] = "A"
+const byte _crc_msg5[5] = "JALv2"
+const byte _crc_sorted[16] = {
+   0, 1, 7, 7, 7, 13, 42, 42,
+   64, 83, 99, 128, 180, 199, 250, 255}
+
+var byte _crc_buf[16]
+var word _crc_state
+var word _crc_sum
+
+var volatile byte _crc_r_msg9
+var volatile byte _crc_r_msg1
+var volatile byte _crc_r_msg5
+var volatile byte _crc_r_msg03
+var volatile byte _crc_r_incr
+var volatile byte _crc_r_sort
+
+--------------------------------------------------------------------------------
+procedure _crc_init() is
+   _crc_state = 0x0000
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _crc_update(byte in _b) is
+   var byte _i
+   _crc_state = _crc_state ^ (word(_b) << 8)
+   for 8 using _i loop
+      if (_crc_state & 0x8000) != 0 then
+         _crc_state = (_crc_state << 1) ^ 0x1021
+      else
+         _crc_state = _crc_state << 1
+      end if
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- One-shot CRC over the first _len bytes of _data (open array)
+function _crc_oneshot(byte in _data[], word in _len) return word is
+   var word _i
+   _crc_init()
+   for _len using _i loop
+      _crc_update(_data[_i])
+   end loop
+   return _crc_state
+end function
+
+--------------------------------------------------------------------------------
+-- Copy a const array into _crc_buf, then CRC it there (const open arrays
+-- are avoided on purpose so every architecture takes the same path)
+function _crc_of_const(byte in _src[], word in _len) return word is
+   var word _i
+   for _len using _i loop
+      _crc_buf[_i] = _src[_i]
+   end loop
+   return _crc_oneshot(_crc_buf, _len)
+end function
+
+--------------------------------------------------------------------------------
+-- 15 passes x 15 comparisons: complete bubble sort for 16 elements
+procedure _crc_sort16() is
+   var byte _i
+   var byte _j
+   var byte _tmp
+   for 15 using _j loop
+      for 15 using _i loop
+         if _crc_buf[_i] > _crc_buf[_i + 1] then
+            _tmp = _crc_buf[_i]
+            _crc_buf[_i] = _crc_buf[_i + 1]
+            _crc_buf[_i + 1] = _tmp
+         end if
+      end loop
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _crc_run() is
+   var word _r
+   var byte _i
+   regression_begin_run()
+
+   -- classic check string
+   _r = _crc_of_const(_crc_msg9, 9)
+   if _r == 0x31C3 then
+      _crc_r_msg9 = 1
+   end if
+   regression_checkpoint()
+
+   -- single byte
+   _r = _crc_of_const(_crc_msg1, 1)
+   if _r == 0x58E5 then
+      _crc_r_msg1 = 1
+   end if
+   regression_checkpoint()
+
+   -- mixed alnum
+   _r = _crc_of_const(_crc_msg5, 5)
+   if _r == 0x93CC then
+      _crc_r_msg5 = 1
+   end if
+   regression_checkpoint()
+
+   -- low-value bytes incl. 0x00 (filled at runtime)
+   _crc_buf[0] = 0
+   _crc_buf[1] = 1
+   _crc_buf[2] = 2
+   _crc_buf[3] = 3
+   _r = _crc_oneshot(_crc_buf, 4)
+   if _r == 0x6131 then
+      _crc_r_msg03 = 1
+   end if
+   regression_checkpoint()
+
+   -- incremental update over msg9 must match the one-shot 0x31C3
+   for 9 using _i loop
+      _crc_buf[_i] = _crc_msg9[_i]
+   end loop
+   _crc_init()
+   for 9 using _i loop
+      _crc_update(_crc_buf[_i])
+   end loop
+   if _crc_state == 0x31C3 then
+      _crc_r_incr = 1
+   end if
+   regression_checkpoint()
+
+   -- sort a fixed unsorted image; require the pinned sorted content
+   _crc_buf[0] = 83
+   _crc_buf[1] = 7
+   _crc_buf[2] = 199
+   _crc_buf[3] = 42
+   _crc_buf[4] = 0
+   _crc_buf[5] = 255
+   _crc_buf[6] = 13
+   _crc_buf[7] = 7
+   _crc_buf[8] = 64
+   _crc_buf[9] = 128
+   _crc_buf[10] = 250
+   _crc_buf[11] = 1
+   _crc_buf[12] = 99
+   _crc_buf[13] = 42
+   _crc_buf[14] = 7
+   _crc_buf[15] = 180
+   _crc_sort16()
+   _crc_r_sort = 1
+   _crc_sum = 0
+   for 16 using _i loop
+      if _crc_buf[_i] != _crc_sorted[_i] then
+         _crc_r_sort = 0
+      end if
+      _crc_sum = _crc_sum + _crc_buf[_i]
+   end loop
+   if _crc_sum != 1377 then
+      _crc_r_sort = 0
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_crc_run()
+
+forever loop
+end loop

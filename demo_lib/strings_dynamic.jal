@@ -1,0 +1,168 @@
+-- Title: Dynamic Strings Library
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: Helper API for heap-backed dynamic strings.
+--
+-- Notes:
+-- - Heap byte count is **`const word _string_heap_size = N`** (compile-time constant).
+--   **`pragma string heap N`** is accepted for compatibility and **ignored** (no diagnostic).
+--   Put it **before** other **`pragma string …`** lines that depend on heap size
+--   (e.g. **`pragma string index auto`**) and **before** **`include strings_dynamic`**
+--   / the first dynamic **`var string`** (see **`docs/language.md`**).
+-- - `include strings_dynamic` pulls in JAL **`string_*`** wrappers; **`_string_*`**
+--   builtins are recognized by the compiler whenever spelled (**`jal_string_builtin_is`**
+--   in **`src/jal/jal_string.c`**).
+-- - **Canonical builtin token**: **`_string_*`** (one underscore before the public
+--   name). **`string_*`** here are normal JAL **`function`** entries.
+-- - **`string_append`**, **`string_heap_compact`**, and the other **`string_*`**
+--   wrappers are **not** **`pragma inline`**: each JAL **`call`** hits one shared
+--   forwarder body that delegates to **`_string_*`** builtins (PIC18 ROM **B/C**).
+--   **`string_heap_compact()`** is still parsed as a **compiler builtin** (deferred
+--   pcode expand), so Phase-B compact logic is **not** a separate machine **`call`**
+--   block in **`-asm`** the way a normal outlined JAL procedure is — see
+-- § Broader ROM plan.
+--   **`string_from_array`**, **`string_from_array_truncate`**,
+--   **`string_to_array`**, and **`string_to_array_truncate`** are the same pattern;
+--   the compiler accepts open-array formals for the byte-array
+--   operand of these builtins.
+--
+-- Compiler-backed helper signatures (wrappers below):
+--
+-- function string_append(string in out dst, string in src) return bit
+-- function string_append_truncate(string in out dst, string in src, word in max_len) return bit
+-- function string_truncate(string in out dst, word in max_len) return bit
+-- function string_from_array(string in out dst, byte in src_array[]) return bit
+-- function string_from_array_truncate(string in out dst, byte in src_array[], word in max_len) return bit
+-- function string_to_array(byte out dst_array[], string in src) return bit
+-- function string_to_array_truncate(byte out dst_array[], string in src, word in max_len) return bit
+-- function string_heap_compact() return bit
+--
+-- Truncating helpers return FALSE when bytes are dropped. They do not set
+-- _string_error merely because truncation occurred.
+-- string_heap_compact() (Phase B): pack the string heap, patch all dynamic
+--    handles, rebuild the free list; supports pragma string index byte|word.
+--    Fails (FALSE) if the work table would exceed the compiler’s array-size
+--    limit (see fix_string_heap_compact_work_table_rows.md) or the heap
+--    runtime is missing. On PIC18, the work buffer is one GPR array of
+--    4×(dynamic-string count)×(index width) bytes; with pragma string index
+--    word and many handles it may not fit a single 256-byte bank (byte index
+--    keeps rows 4 bytes each for the same handle count).
+
+--------------------------------------------------------------------------------
+-- Description: Append dynamic string src to dst (delegates to builtin).
+-- Parameters:
+-- - dst - destination dynamic string (in out)
+-- - src - source string (dynamic or fixed-capacity)
+-- Returns:
+-- - bit - result from _string_append
+-- Notes: Outlined (not pragma inline) so ROM is one **`call`** per use; see.
+--------------------------------------------------------------------------------
+function string_append(string in out dst, string in src) return bit is
+   return _string_append(dst, src)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Append with maximum resulting length (delegates to builtin).
+-- Parameters:
+-- - dst     - destination dynamic string (in out)
+-- - src     - source string
+-- - max_len - maximum length after append (byte actuals are promoted)
+-- Returns:
+-- - bit - result from _string_append_truncate
+-- Notes: Outlined — single ROM body; **`call`** at each use.
+--------------------------------------------------------------------------------
+function string_append_truncate(string in out dst, string in src,word in max_len) return bit is
+   return _string_append_truncate(dst, src, max_len)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Truncate dynamic string to max_len (delegates to builtin).
+-- Parameters:
+-- - dst     - destination dynamic string (in out)
+-- - max_len - new maximum length
+-- Returns:
+-- - bit - result from _string_truncate
+-- Notes: Outlined — single ROM body.
+--------------------------------------------------------------------------------
+function string_truncate(string in out dst, word in max_len) return bit is
+   return _string_truncate(dst, max_len)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Copy bytes from a byte array into a dynamic string (delegates to builtin).
+-- Parameters:
+-- - dst       - destination dynamic string (in out)
+-- - src_array - source byte array (open array / fixed)
+-- Returns:
+-- - bit - result from _string_from_array
+-- Notes: Outlined — single ROM body.
+--------------------------------------------------------------------------------
+function string_from_array(string in out dst, byte in src_array[]) return bit is
+   return _string_from_array(dst, src_array)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Copy from byte array into dynamic string with max length (delegates to builtin).
+-- Parameters:
+-- - dst       - destination dynamic string (in out)
+-- - src_array - source byte array
+-- - max_len   - maximum bytes to copy
+-- Returns:
+-- - bit - result from _string_from_array_truncate
+-- Notes: Outlined; returns FALSE if truncated.
+--------------------------------------------------------------------------------
+function string_from_array_truncate(string in out dst, byte in src_array[], word in max_len) return bit is
+   return _string_from_array_truncate(dst, src_array, max_len)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Copy dynamic string into a byte array (delegates to builtin).
+-- Parameters:
+-- - dst_array - destination byte array (open array / fixed)
+-- - src       - source string (dynamic or fixed-capacity)
+-- Returns:
+-- - bit - result from _string_to_array
+-- Notes: Outlined — single ROM body.
+--------------------------------------------------------------------------------
+function string_to_array(byte out dst_array[], string in src) return bit is
+   return _string_to_array(dst_array, src)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Copy string into byte array with max bytes written (delegates to builtin).
+-- Parameters:
+-- - dst_array - destination byte array
+-- - src       - source string
+-- - max_len   - maximum bytes to write
+-- Returns:
+-- - bit - result from _string_to_array_truncate
+-- Notes: Outlined; returns FALSE if truncated.
+--------------------------------------------------------------------------------
+function string_to_array_truncate(byte out dst_array[], string in src, word in max_len) return bit is
+   return _string_to_array_truncate(dst_array, src, max_len)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Pack string heap and relocate handles (delegates to builtin).
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - bit - result from _string_heap_compact
+-- Notes: Outlined — Phase B **`_string_heap_compact`** is large; **`call`** here avoids duplicating it at every call site (**`progress.md`** PIC18 ROM **B**).
+--------------------------------------------------------------------------------
+function string_heap_compact() return bit is
+   return _string_heap_compact()
+end function
+
+
+
+--------------------------------------------------------------------------------
+-- Float -> text renderer: lives in its own heap-free file so that callers
+-- that only need float formatting (print_float_exact) do not pull the heap.
+-- The function body is unchanged (moved 2026-10-21).
+--------------------------------------------------------------------------------
+include float_str

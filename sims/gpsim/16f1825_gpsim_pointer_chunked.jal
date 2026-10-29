@@ -1,0 +1,87 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — unescaped pointer over chunked array
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the pointer-bind escape analysis over holed multibank arrays
+--    (fix_pointer_bind_escape_analysis): a pointer that is ONLY ever
+--    dereferenced with a plain variable subscript walks the target's
+--    chunk map -- fill and read-back entirely through p[k]. A pointer
+--    that escapes (re-bound, stored, passed, const/computed subscript)
+--    keeps the clean refusal (pins in
+--    scripts/test_openarray_chunked_pins.sh).
+--
+--    The DCE counter fix is load-bearing here: pointer-only usage used
+--    to drop the array from the fixup set entirely, binding 0xFFFF and
+--    silently corrupting through every dereference.
+--
+-- @gpsim_validate begin
+-- steps: 12000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 7
+-- expect byte v__r1 50
+-- expect byte v__r2 131
+-- expect byte v__r3 7
+-- expect byte v__r4 0
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var byte arr[300]
+var pointer p as var byte[300]
+p is arr
+var volatile byte _r1 = 0
+var volatile byte _r2 = 0
+var volatile byte _r3 = 255
+var volatile byte _r4 = 255
+var word i
+var word s = 0
+
+-- fill entirely through the pointer: (i mod 256) over 0..299
+for 300 using i loop
+   p[i] = byte(i)
+end loop
+regression_checkpoint()                       -- 1
+
+-- read back through the pointer: 32640 + 946 = 33586 = 0x8332
+s = 0
+for 300 using i loop
+   s = s + p[i]
+end loop
+_r1 = byte(s)                                 -- 50
+_r2 = byte(s >> 8)                            -- 131
+regression_checkpoint()                       -- 2
+
+-- plain-variable subscript far into chunk 4: byte(280) = 24
+i = 280
+_r3 = p[i]
+regression_checkpoint()                       -- 3
+
+-- and a plain-variable-subscript store far out, verified directly
+i = 295
+p[i] = 7
+regression_checkpoint()                       -- 4 (arr[295] read below)
+_r3 = arr[295]
+
+-- const subscript: p[279] resolved through the target's chunk map
+-- (fill value byte(279) = 23... index 279 is inside the REWROTE
+-- region? no -- this witness's fill is byte(i); 279 < 295 was
+-- overwritten to 7 by the store above only at 295; p[279] = 279&0xFF
+if p[279] != 23 then
+   _check_failed = true
+end if
+regression_checkpoint()                       -- 5
+
+-- folded-offset subscript: p[240 + k] writes through the offset-aware
+-- walk scratch, verified directly
+for 8 using i loop
+   p[240 + i] = 40
+end loop
+regression_checkpoint()                       -- 6
+
+i = 243
+_r4 = p[i] - 40                               -- 0 when correct
+regression_checkpoint()                       -- 7

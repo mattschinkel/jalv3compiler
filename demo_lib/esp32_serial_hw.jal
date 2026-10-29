@@ -1,0 +1,68 @@
+-- ------------------------------------------------------
+-- Title: ESP32 hardware UART0 transmit (polled)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Minimal polled TX driver for UART0, the port wired to the USB
+--    serial bridge on common ESP32 dev boards. Call serial_hw_putc()
+--    to send bytes; text on the serial line proves the program runs.
+--
+-- Notes:
+--    - Uses the UART0 registers from esp32_xtensa_lx6: UART0_FIFO
+--      (0x3FF40000, TX byte in bits 7:0) and UART0_STATUS (0x3FF4001C,
+--      TXFIFO_CNT field bits 23:16).
+--    - Do NOT rewrite UART0_CLKDIV from application code: the boot ROM
+--      already programs UART0 for 115200 8N1 (register reset default
+--      694 @ 80 MHz APB). Empirically an application CLKDIV write
+--      wedges the USB-serial bridge into a continuous garbage flood.
+--
+--    - serial_hw_putc() waits while the TX FIFO holds more than 120 of
+--      its 128 bytes, so arbitrarily long messages cannot overrun it.
+--    - RX is not handled.
+
+--------------------------------------------------------------------------------
+-- Description: Send one byte over UART0 (blocking)
+-- Parameters:
+-- - ch - byte to transmit
+-- Returns:
+-- - (none)
+-- Notes: waits while TXFIFO_CNT exceeds 120 (FIFO depth is 128);
+-- - the boot ROM leaves UART0 at 115200 8N1, ready to use.
+--------------------------------------------------------------------------------
+procedure serial_hw_putc(byte in ch) is
+   while ((UART0_STATUS >> 16) & 0x000000FF) > 120 loop
+   end loop
+   UART0_FIFO = ch
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Transmit byte (pseudo-variable form)
+-- Parameters:
+-- - data - byte to transmit
+-- Returns: (none)
+-- Notes: allows `serial_hw_data = <byte>` like the PIC serial_hardware
+-- - library; pair with `alias serial_data is serial_hw_data` so
+-- - print.jal and friends work unchanged.
+--------------------------------------------------------------------------------
+var volatile byte serial_hw_data at { 0 }   -- name anchor; put/get below
+
+procedure serial_hw_data'put(byte in data) is
+   serial_hw_putc(data)
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Receive byte (pseudo-variable form, blocking)
+-- Parameters: (none)
+-- Returns: byte received on UART0
+-- Notes: allows `databyte = serial_hw_data`; blocks until a byte sits in
+-- - the RX FIFO (RXFIFO_CNT bits 7:0 of UART0_STATUS).
+--------------------------------------------------------------------------------
+function serial_hw_data'get() return byte is
+   while ((UART0_STATUS >> 0) & 0x000000FF) == 0 loop
+   end loop
+   return byte(UART0_FIFO & 0xFF)
+end function

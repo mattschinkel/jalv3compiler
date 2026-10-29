@@ -1,0 +1,29 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 compiler regression — native multidimensional arrays
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_multidim_array_body.jal`**
+--    (from **`16f877_gpsim_native_multidim_array.jal`**) — 2D/3D arrays,
+--    nested init, const arrays, runtime-indexed reads, WHEREIS offsets.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect byte v__check_step 6
+-- expect byte v__gpsim_mda_len_ok 1
+-- expect byte v__gpsim_mda_const_ok 1
+-- expect byte v__gpsim_mda_write_ok 1
+-- expect byte v__gpsim_mda_dyn_ok 1
+-- expect byte v__gpsim_mda_whereis_ok 1
+-- expect byte v__gpsim_mda_whereis_dyn_ok 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+include _regression_multidim_array_body

@@ -1,0 +1,176 @@
+-- Title: Stopwatch library - ESP32 (TIMG0)
+-- Author: Matthew Schinkel - borntechi.com, copyright (c) 2009..2025, all rights reserved.
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the ZLIB license (http://www.opensource.org/licenses/zlib-license.html)
+--
+-- Description: ESP32 stopwatch, backed by TIMG0 timer 0 with divider 2:
+-- one tick per 25 ns of REAL time (APB domain -- exact on silicon,
+-- independent of flash fetch costs and the CPU delay-loop calibration).
+--
+-- `stopwatch_read_cycles` returns these 25 ns ticks. At a 240 MHz CPU one
+-- tick = 6 CPU cycles, at 80 MHz one tick = 2 CPU cycles (scale by
+-- target_clock / 40 MHz for nominal CPU cycles). `stopwatch_read_time`
+-- converts ticks directly (25 ns each), so it reports REAL seconds --
+-- unlike the classic library, whose read_time is derived from the target
+-- clock.
+--
+-- Sources:
+--
+-- Notes:
+-- You do not need to define any constants in your program. Stopwatch will
+-- choose these default values for you.
+--
+-- const STOPWATCH_VAR_SIZE = 4
+-- const STOPWATCH_MIN_VALUE = STOPWATCH_NS
+--
+-- Uses TIMG0 timer 0: do not combine with a TIMG0 interrupt source.
+-- The 32-bit tick count wraps after 107 seconds (STOPWATCH_VAR_SIZE = 4)
+-- or 1.6 ms (STOPWATCH_VAR_SIZE = 2).
+
+if !defined(STOPWATCH_VAR_SIZE) then
+   const STOPWATCH_VAR_SIZE = 4
+end if
+if !defined(STOPWATCH_MIN_VALUE) then
+   const STOPWATCH_MIN_VALUE = STOPWATCH_NS
+end if
+
+-- TIMG0 timer 0 (base 0x3FF5F000)
+var volatile dword _stopwatch_t0config at { 0x3FF5F000 }
+var volatile dword _stopwatch_t0lo      at { 0x3FF5F004 }
+var volatile dword _stopwatch_t0hi      at { 0x3FF5F008 }
+var volatile dword _stopwatch_t0update  at { 0x3FF5F00C }
+var volatile dword _stopwatch_t0loadlo  at { 0x3FF5F018 }
+var volatile dword _stopwatch_t0loadhi  at { 0x3FF5F01C }
+var volatile dword _stopwatch_t0load    at { 0x3FF5F020 }
+
+--------------------------------------------------------------------------------
+-- Description: initialize the stopwatch
+-- Parameters: none
+-- Returns: none
+-- Notes: TIMG0 T0: EN|INCREASE, divider 2, alarm off -> tick = APB/2 = 25 ns
+--------------------------------------------------------------------------------
+procedure stopwatch_init() is
+   _stopwatch_t0config = 0xC0004000
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: start the stopwatch at time = 0
+-- Parameters: none
+-- Returns: none
+-- Notes: reloads the hardware counter to 0; it keeps free-running
+--------------------------------------------------------------------------------
+procedure stopwatch_start() is
+   pragma inline
+   _stopwatch_t0loadlo = 0
+   _stopwatch_t0loadhi = 0
+   _stopwatch_t0load = 0          -- any write reloads the counter to 0
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: continue running the stopwatch at it's current value.
+-- Parameters: none
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure stopwatch_continue() is
+   pragma inline
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: stop the stopwatch
+-- Parameters: none
+-- Returns: none
+-- Notes: the free-run counter keeps ticking; the next start() re-zeros it
+--------------------------------------------------------------------------------
+procedure stopwatch_stop() is
+   pragma inline
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: read the stopwatch. Returns the number of 25 ns timer ticks
+-- run since start (REAL time; = 2 CPU cycles per tick at 80 MHz, 6 at 240).
+-- Parameters: none
+-- Returns: ticks since start (STOPWATCH_VAR_SIZE bytes)
+--------------------------------------------------------------------------------
+function stopwatch_read_cycles() return byte*STOPWATCH_VAR_SIZE is
+   _stopwatch_t0update = 0        -- latch the counter into T0LO/T0HI
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(_stopwatch_t0lo)
+   else
+      return dword(_stopwatch_t0lo)
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- Description: read the stopwatch as time, returns value in STOPWATCH_MIN_VALUE
+-- Parameters: none
+-- Returns: elapsed real time (STOPWATCH_VAR_SIZE bytes)
+-- Notes: one tick = 25 ns (APB domain); 8-byte intermediate math
+--------------------------------------------------------------------------------
+function stopwatch_read_time() return byte*STOPWATCH_VAR_SIZE is
+   var byte*8 _stopwatch_time
+   _stopwatch_t0update = 0
+
+   if STOPWATCH_MIN_VALUE == STOPWATCH_NS then
+      _stopwatch_time = dword(_stopwatch_t0lo) * 25
+   elsif STOPWATCH_MIN_VALUE == STOPWATCH_US then
+      _stopwatch_time = (dword(_stopwatch_t0lo) * 25) / 1_000
+   elsif STOPWATCH_MIN_VALUE == STOPWATCH_MS then
+      _stopwatch_time = (dword(_stopwatch_t0lo) * 25) / 1_000_000
+   else
+      _stopwatch_time = (dword(_stopwatch_t0lo) * 25) / 1_000_000_000
+   end if
+
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(_stopwatch_time)
+   else
+      return dword(_stopwatch_time)
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- Description: read the stopwatch (pseudo variable): real time in
+-- STOPWATCH_MIN_VALUE
+--------------------------------------------------------------------------------
+function stopwatch'get() return byte*STOPWATCH_VAR_SIZE is
+   pragma inline
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(stopwatch_read_time())
+   else
+      return dword(stopwatch_read_time())
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- Description: read the stopwatch cycles (pseudo variable): 25 ns ticks
+-- since start
+--------------------------------------------------------------------------------
+function stopwatch_cycles'get() return byte*STOPWATCH_VAR_SIZE is
+   pragma inline
+   if STOPWATCH_VAR_SIZE == 2 then
+      return word(stopwatch_read_cycles())
+   else
+      return dword(stopwatch_read_cycles())
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- Description: check stopwatch tick count overflowed (VAR_SIZE=2 wraps at
+-- 65 535 ticks = 1.6 ms; VAR_SIZE=4 wraps at 107 s)
+--------------------------------------------------------------------------------
+function stopwatch_cycle_overflow'get() return bit is
+   _stopwatch_t0update = 0
+   if STOPWATCH_VAR_SIZE == 2 then
+      return _stopwatch_t0lo > 0xFFFF
+   else
+      return _stopwatch_t0hi != 0
+   end if
+end function
+
+--------------------------------------------------------------------------------
+-- Description: check if stopwatch time counter has overflowed
+--------------------------------------------------------------------------------
+function stopwatch_time_overflow'get() return bit is
+   return stopwatch_cycle_overflow
+end function

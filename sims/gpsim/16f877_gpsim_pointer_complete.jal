@@ -1,0 +1,129 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — focused pointer completion regressions
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Covers dynamic pointer-to-array far-element indexing (89 of 90;
+--    the >255-element variant lives in 18f4620_gpsim_pointer_index256),
+--    scalar and indexed function
+--    pointer calls, pointer-to-array binding, WHEREIS(pointer), and pointer
+--    rvalue through pseudo GET.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_complete.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_ptrc_zero_snap 11
+-- expect byte v__gpsim_ptrc_index_snap 99
+-- expect byte v__gpsim_ptrc_scalar 41
+-- expect byte v__gpsim_ptrc_indexed 42
+-- expect byte v__gpsim_ptrc_pseudo_shadow 88
+-- expect byte v__gpsim_ptrc_pseudo_snap 77
+-- expect word_le v__gpsim_ptrc_unbound_addr 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte _gpsim_ptrc_arr[90]
+var pointer _gpsim_ptrc_ptr as var byte[90]
+var word _gpsim_ptrc_idx = 89
+var byte _gpsim_ptrc_zero_snap = 0
+var byte _gpsim_ptrc_index_snap = 0
+
+var pointer _gpsim_ptrc_fn as function(byte in) return byte
+var pointer _gpsim_ptrc_fn_slots[2] as function(byte in) return byte
+var byte _gpsim_ptrc_scalar = 0
+var byte _gpsim_ptrc_indexed = 0
+
+var pointer _gpsim_ptrc_unbound as var byte
+var word _gpsim_ptrc_unbound_addr = 99
+var word _gpsim_ptrc_arr_addr = 0
+var word _gpsim_ptrc_ptr_addr = 0
+
+var byte _gpsim_ptrc_pseudo_shadow = 0
+var byte _gpsim_ptrc_pseudo_snap = 0
+var pointer _gpsim_ptrc_pseudo_ptr as var byte
+
+function _gpsim_ptrc_pseudo'get return byte is
+   return _gpsim_ptrc_pseudo_shadow
+end function
+
+procedure _gpsim_ptrc_pseudo'put(byte in v) is
+   _gpsim_ptrc_pseudo_shadow = v
+end procedure
+
+function _gpsim_ptrc_add_one(byte in v) return byte is
+   return v + 1
+end function
+
+function _gpsim_ptrc_add_two(byte in v) return byte is
+   return v + 2
+end function
+
+procedure _gpsim_ptrc_run() is
+   regression_begin_run()
+   _gpsim_ptrc_arr[0] = 11
+   _gpsim_ptrc_ptr is _gpsim_ptrc_arr
+   _gpsim_ptrc_ptr[_gpsim_ptrc_idx] = 99
+   _gpsim_ptrc_zero_snap = _gpsim_ptrc_arr[0]
+   _gpsim_ptrc_index_snap = _gpsim_ptrc_ptr[_gpsim_ptrc_idx]
+   if _gpsim_ptrc_zero_snap != 11 then
+      _check_failed = true
+   end if
+   if _gpsim_ptrc_index_snap != 99 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_ptrc_fn is _gpsim_ptrc_add_one
+   _gpsim_ptrc_fn_slots[0] is _gpsim_ptrc_add_one
+   _gpsim_ptrc_fn_slots[1] is _gpsim_ptrc_add_two
+   _gpsim_ptrc_scalar = _gpsim_ptrc_fn(40)
+   _gpsim_ptrc_indexed = _gpsim_ptrc_fn_slots[1](40)
+   if _gpsim_ptrc_scalar != 41 then
+      _check_failed = true
+   end if
+   if _gpsim_ptrc_indexed != 42 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_ptrc_unbound_addr = whereis(_gpsim_ptrc_unbound)
+   _gpsim_ptrc_arr_addr = whereis(_gpsim_ptrc_arr)
+   _gpsim_ptrc_ptr_addr = whereis(_gpsim_ptrc_ptr)
+   if _gpsim_ptrc_unbound_addr != 0 then
+      _check_failed = true
+   end if
+   if _gpsim_ptrc_arr_addr == 0 then
+      _check_failed = true
+   end if
+   if _gpsim_ptrc_ptr_addr != _gpsim_ptrc_arr_addr then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_ptrc_pseudo_shadow = 77
+   _gpsim_ptrc_pseudo_ptr is _gpsim_ptrc_pseudo
+   _gpsim_ptrc_pseudo_snap = _gpsim_ptrc_pseudo_ptr
+   if _gpsim_ptrc_pseudo_snap != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   -- write through the bound pointer routes to the pseudo's PUT
+   -- (write-side mirror of the rvalue GET link above)
+   _gpsim_ptrc_pseudo_ptr = 88
+   if _gpsim_ptrc_pseudo_shadow != 88 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_ptrc_run()
+
+forever loop
+end loop

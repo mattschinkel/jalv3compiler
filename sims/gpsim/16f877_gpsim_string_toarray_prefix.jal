@@ -1,0 +1,58 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim regression — string_to_array prefix copy
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the too-small-destination semantics of the BASE
+--    string_to_array: the prefix that fits IS copied and the result is
+--    FALSE (bytes dropped) -- the buffer is never left untouched.
+--    Fitting string: TRUE + full copy (unchanged behavior).
+--
+-- @gpsim_validate begin
+-- steps: 30000
+-- frequency_hz: 20000000
+-- expect byte v__check_step 2
+-- expect byte v__fit_r 1
+-- expect byte v__fit_b0 72
+-- expect byte v__fit_b10 100
+-- expect byte v__small_r 0
+-- expect byte v__small_b0 72
+-- expect byte v__small_b7 111
+-- @gpsim_validate end
+
+include regression_16f877_device
+include regression
+include 16f877
+const word _string_heap_size = 64
+include strings_dynamic
+
+var byte big[16]
+var byte small[8]
+var volatile byte _fit_r = 2
+var volatile byte _fit_b0 = 0
+var volatile byte _fit_b10 = 0
+var volatile byte _small_r = 2
+var volatile byte _small_b0 = 0
+var volatile byte _small_b7 = 0
+var string s
+
+s = "Hello world"                      -- 11 chars
+if string_to_array(big, s) then        -- fits: TRUE, 11 bytes
+   _fit_r = 1
+else
+   _fit_r = 0
+end if
+_fit_b0 = big[0]                       -- 'H'
+_fit_b10 = big[10]                     -- 'd'
+regression_checkpoint()
+
+if string_to_array(small, s) then      -- 11 into 8: prefix + FALSE
+   _small_r = 1
+else
+   _small_r = 0
+end if
+_small_b0 = small[0]                   -- 'H'
+_small_b7 = small[7]                   -- 'o' = 0x6f (8th char of "Hello wo")
+regression_checkpoint()

@@ -1,0 +1,133 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 print_shadow suite — print.jal shadow, default body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the demo_lib/print.jal fork shadow (fix_print_jal_shadow):
+--    with NO opt-in constant, `include print` must resolve to the
+--    shadow and print_float must render through the COMPACT body
+--    (same text as demo_lib/print_float_compact.jal). Also pins that
+--    the rest of the shadowed print.jal is intact: print_byte_dec is
+--    driven through the same capture pseudo-device first.
+--
+--    This is the include-path proof: the compile must pick
+--    demo_lib/print.jal over third_party/jallib/lib/print.jal
+--    (first-match-wins), so the output format IS the shadow's.
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- frequency_hz: 20000000
+-- expect byte v__check_step 8
+-- expect byte v__sib_n 2
+-- expect byte v__sib_b0 52
+-- expect byte v__sib_b1 50
+-- expect byte v__c0_n 3
+-- expect byte v__c0_b0 48
+-- expect byte v__c0_b2 49
+-- expect byte v__c1_n 3
+-- expect byte v__c1_b2 53
+-- expect byte v__c2_n 9
+-- expect byte v__c2_b0 49
+-- expect byte v__c2_b8 50
+-- expect byte v__c3_n 5
+-- expect byte v__c3_b0 49
+-- expect byte v__c3_b4 56
+-- expect byte v__c4_n 5
+-- expect byte v__c4_b0 45
+-- expect byte v__c4_b4 53
+-- expect byte v__c6_n 3
+-- expect byte v__c8_n 2
+-- @gpsim_validate end
+
+include regression_18f4620_device
+include regression
+include 18f4620
+
+include print
+
+-- capture pseudo-device: same 'put dispatch as serial_hw_data
+var byte _cap[32]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+var volatile byte _sib_n = 0
+var volatile byte _sib_b0 = 0
+var volatile byte _sib_b1 = 0
+var volatile byte _c0_n = 0
+var volatile byte _c0_b0 = 0
+var volatile byte _c0_b2 = 0
+var volatile byte _c1_n = 0
+var volatile byte _c1_b2 = 0
+var volatile byte _c2_n = 0
+var volatile byte _c2_b0 = 0
+var volatile byte _c2_b8 = 0
+var volatile byte _c3_n = 0
+var volatile byte _c3_b0 = 0
+var volatile byte _c3_b4 = 0
+var volatile byte _c4_n = 0
+var volatile byte _c4_b0 = 0
+var volatile byte _c4_b4 = 0
+var volatile byte _c6_n = 0
+var volatile byte _c8_n = 0
+
+var float _infv = 0.0
+var dword _infb at _infv
+var float _negzv = 0.0
+var dword _negzb at _negzv
+
+procedure _chk(float in f) is
+   _capn = 0
+   print_float(cap, f)
+end procedure
+
+-- sibling sanity: the rest of the shadowed print.jal works unchanged
+_capn = 0
+print_byte_dec(cap, 42)  -- "42"
+regression_checkpoint()
+_sib_n = _capn            -- 2
+_sib_b0 = _cap[0]         -- '4' = 52
+_sib_b1 = _cap[1]         -- '2' = 50
+
+_chk(0.1)                 -- "0.1"
+regression_checkpoint()
+_c0_n = _capn             -- 3
+_c0_b0 = _cap[0]          -- '0' = 48
+_c0_b2 = _cap[2]          -- '1' = 49
+
+_chk(3.5)                 -- "3.5"
+regression_checkpoint()
+_c1_n = _capn             -- 3
+_c1_b2 = _cap[2]          -- '5' = 53
+
+_chk(19.634954)           -- classic "19.634952" (8-digit extraction)
+regression_checkpoint()
+_c2_n = _capn             -- 9
+_c2_b0 = _cap[0]          -- '1' = 49
+_c2_b8 = _cap[8]          -- '2' = 50
+
+_chk(100000000.0)         -- "1e+08" (exactly representable)
+regression_checkpoint()
+_c3_n = _capn             -- 5
+_c3_b0 = _cap[0]          -- '1' = 49
+_c3_b4 = _cap[4]          -- '8' = 56
+
+_chk(-2.75)               -- "-2.75"
+regression_checkpoint()
+_c4_n = _capn             -- 5
+_c4_b0 = _cap[0]          -- '-' = 45
+_c4_b4 = _cap[4]          -- '5' = 53
+
+_infb = 0x7F800000        -- +inf: the STOCK body hangs here forever
+_chk(_infv)               -- "inf"
+regression_checkpoint()
+_c6_n = _capn             -- 3
+
+_negzb = 0x80000000       -- -0.0
+_chk(_negzv)              -- "-0"
+regression_checkpoint()
+_c8_n = _capn             -- 2

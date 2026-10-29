@@ -1,0 +1,60 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — UART receive
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K) UART receive path: serial_hw_init (U1MODE/U1STA +
+--    PPS), then poll U1STA.URXDA and collect three received bytes.  The
+--    QEMU MX UART model has a single-byte RX holding register, so the
+--    harness feeds the input one byte at a time (uart_input directive);
+--    a real UART would FIFO/buffer it.
+--
+-- @sim_validate begin
+-- duration_s: 5.0
+-- machine: pic32mx7-explorer16
+-- uart_input: abc
+-- expect byte v_c0 97
+-- expect byte v_c1 98
+-- expect byte v_c2 99
+-- expect byte v_n 3
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_B0
+alias serial_hw_pin_tx_direction is pin_B0_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB0R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+
+include serial_hardware
+serial_hw_init()
+
+var volatile byte c0 = 0
+var volatile byte c1 = 0
+var volatile byte c2 = 0
+var volatile byte n = 0
+var byte ch
+
+while n < 3 loop
+   if U1STA_URXDA then
+      ch = byte(U1RXREG)
+      if n == 0 then
+         c0 = ch
+      end if
+      if n == 1 then
+         c1 = ch
+      end if
+      if n == 2 then
+         c2 = ch
+      end if
+      n = n + 1
+   end if
+end loop
+
+forever loop
+end loop

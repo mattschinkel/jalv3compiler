@@ -1,0 +1,225 @@
+-- ----------------------------------------------------------------------------
+-- Title: Optimizer-semantics checks — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Adversarial-but-portable programs in the style of SDCC's cse/arithcse/
+--    preserves_regs/stack-restore regression tests: function
+--    side effects must survive CSE, loop-carried wraps must wrap, bits and
+--    caller variables must survive a register-churning call, argument
+--    expressions must each call their function, branch arms must invert
+--    cleanly, CSE must not span writes to the operand, and volatile reads
+--    must not be cached.
+-- ----------------------------------------------------------------------------
+
+var byte _os_cnt = 0
+var volatile byte _os_sink = 0
+var byte _os_a
+var byte _os_x
+var byte _os_y
+var byte _os_acc
+var byte _os_bv = 0xA5
+var bit _os_bf = true
+var word _os_wv = 0xBEEF
+var dword _os_dv = 0xDEAD_BEEF
+
+var volatile byte _os_r_fn_side
+var volatile byte _os_r_loop_wrap
+var volatile byte _os_r_bits_call
+var volatile byte _os_r_arg_order
+var volatile byte _os_r_branch_inv
+var volatile byte _os_r_nocse
+var volatile byte _os_r_volatile
+var volatile byte _os_r_preserve
+
+--------------------------------------------------------------------------------
+-- Side-effecting function: increments the shared counter, returns it
+function _os_f_inc() return byte is
+   _os_cnt = _os_cnt + 1
+   return _os_cnt
+end function
+
+--------------------------------------------------------------------------------
+-- Side-effecting function returning 10x the call index
+function _os_f_tagged() return byte is
+   _os_cnt = _os_cnt + 1
+   return _os_cnt * 10
+end function
+
+--------------------------------------------------------------------------------
+function _os_f_add(byte in _p, byte in _q) return byte is
+   return _p + _q
+end function
+
+--------------------------------------------------------------------------------
+procedure _os_sink_add(byte in _v) is
+   _os_sink = _os_sink + _v
+end procedure
+
+--------------------------------------------------------------------------------
+-- Register-churning callee: six locals plus a nested call
+procedure _os_heavy() is
+   var byte _h1
+   var byte _h2
+   var byte _h3
+   var byte _h4
+   var byte _h5
+   var byte _h6
+   _h1 = 11
+   _h2 = 22
+   _h3 = 33
+   _h4 = 44
+   _h5 = 55
+   _h6 = 66
+   _os_sink_add(_h1 + _h2)
+   _os_sink_add(_h3 * 2)
+   _h4 = _h4 + _h5
+   _h6 = _h6 - _h1
+   _os_sink_add(_h4 + _h6)
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _os_run() is
+   var byte _i
+   var word _n
+   regression_begin_run()
+
+   -- a CSE must not merge two side-effecting calls (1 + 2 == 3, cnt == 2)
+   _os_r_fn_side = 1
+   _os_cnt = 0
+   _os_a = _os_f_inc() + _os_f_inc()
+   if _os_a != 3 then
+      _os_r_fn_side = 0
+   end if
+   if _os_cnt != 2 then
+      _os_r_fn_side = 0
+   end if
+   regression_checkpoint()
+
+   -- loop-carried byte arithmetic wraps (300 up: 44; 300 down from 0: 212)
+   _os_r_loop_wrap = 1
+   _os_a = 0
+   for 300 using _n loop
+      _os_a = _os_a + 1
+   end loop
+   if _os_a != 44 then
+      _os_r_loop_wrap = 0
+   end if
+   _os_a = 0
+   for 300 using _n loop
+      _os_a = _os_a - 1
+   end loop
+   if _os_a != 212 then
+      _os_r_loop_wrap = 0
+   end if
+   regression_checkpoint()
+
+   -- bits and multi-byte variables survive a register-churning call
+   _os_r_bits_call = 1
+   _os_bv = 0xA5
+   _os_bf = true
+   _os_wv = 0xBEEF
+   _os_dv = 0xDEAD_BEEF
+   _os_heavy()
+   if _os_bv != 0xA5 then
+      _os_r_bits_call = 0
+   end if
+   if !_os_bf then
+      _os_r_bits_call = 0
+   end if
+   if _os_wv != 0xBEEF then
+      _os_r_bits_call = 0
+   end if
+   if _os_dv != 0xDEAD_BEEF then
+      _os_r_bits_call = 0
+   end if
+   regression_checkpoint()
+
+   -- both argument expressions must call their function exactly once each
+   _os_r_arg_order = 1
+   _os_cnt = 0
+   _os_a = _os_f_add(_os_f_tagged(), _os_f_tagged())
+   if _os_a != 30 then
+      _os_r_arg_order = 0
+   end if
+   if _os_cnt != 2 then
+      _os_r_arg_order = 0
+   end if
+   regression_checkpoint()
+
+   -- branch arms invert cleanly over even/odd iterations (acc becomes 0b0101)
+   _os_r_branch_inv = 1
+   _os_acc = 0
+   for 4 using _i loop
+      if (_i & 0x01) == 0 then
+         _os_acc = _os_acc << 1
+      else
+         _os_acc = (_os_acc << 1) | 1
+      end if
+   end loop
+   if _os_acc != 0x05 then
+      _os_r_branch_inv = 0
+   end if
+   _os_a = 0
+   for 4 using _i loop
+      if !(_i == 0) then
+         _os_a = _os_a | 0x01
+      end if
+      if _i != 3 then
+         _os_a = _os_a << 1
+      end if
+   end loop
+   if _os_a != 0x07 then
+      _os_r_branch_inv = 0
+   end if
+   regression_checkpoint()
+
+   -- CSE must not span a write to the operand (15 stays 15, 21 follows)
+   _os_r_nocse = 1
+   _os_a = 5
+   _os_x = _os_a * 3
+   _os_a = 7
+   _os_y = _os_a * 3
+   if _os_x != 15 then
+      _os_r_nocse = 0
+   end if
+   if _os_y != 21 then
+      _os_r_nocse = 0
+   end if
+   regression_checkpoint()
+
+   -- volatile reads must not be cached across writes
+   _os_r_volatile = 1
+   _os_sink = 5
+   _os_x = _os_sink
+   _os_sink = 9
+   _os_y = _os_sink
+   if _os_x != 5 then
+      _os_r_volatile = 0
+   end if
+   if _os_y != 9 then
+      _os_r_volatile = 0
+   end if
+   regression_checkpoint()
+
+   -- caller data preserved through a call whose result is discarded
+   _os_r_preserve = 1
+   _os_a = 137
+   _os_bv = 0x5A
+   _os_heavy()
+   if _os_a != 137 then
+      _os_r_preserve = 0
+   end if
+   if _os_bv != 0x5A then
+      _os_r_preserve = 0
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_os_run()
+
+forever loop
+end loop

@@ -1,0 +1,125 @@
+-- Title: Shared PIC32 regression body — misc (pseudo vars + volatile IN)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pseudo-variable / pseudo-array checks plus volatile IN formals
+--    (`_sum_vol`).  PIC `assembler` is replaced with a plain assign.
+--
+-- ------------------------------------------------------
+
+var byte _cell_shadow
+var byte _ro_shadow
+var byte _wo_shadow
+var byte _parr_backing[4]
+
+--------------------------------------------------------------------------------
+function _cell'get() return byte is
+   return _cell_shadow
+end function
+
+--------------------------------------------------------------------------------
+procedure _cell'put(byte in x) is
+   _cell_shadow = x
+end procedure
+
+--------------------------------------------------------------------------------
+function _ro'get() return byte is
+   return _ro_shadow
+end function
+
+--------------------------------------------------------------------------------
+procedure _wo'put(byte in x) is
+   _wo_shadow = x
+end procedure
+
+--------------------------------------------------------------------------------
+function _parr'get(byte in i) return byte is
+   return _parr_backing[i]
+end function
+
+--------------------------------------------------------------------------------
+procedure _parr'put(byte in i, byte in x) is
+   _parr_backing[i] = x
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _sum_vol(volatile byte in a, volatile byte in b, byte out s) is
+   s = a + b
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _run_misc_checks() is
+   var byte _u
+   var byte _v
+   var byte _s
+   var byte _qq
+   var byte _ix
+   regression_begin_run()
+
+   _cell = 99
+   if _cell != 99 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _u = 5
+   _v = 9
+   _sum_vol(_u, _v, _s)
+   if _s != 14 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _qq = 55
+   if _qq != 55 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _ro_shadow = 33
+   if _ro != 33 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _wo = 77
+   if _wo_shadow != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _parr[0] = 10
+   _parr[1] = 20
+   _ix = 2
+   _parr[_ix] = 30
+   if _parr[0] != 10 then
+      _check_failed = true
+   end if
+   if _parr[1] != 20 then
+      _check_failed = true
+   end if
+   if _parr[2] != 30 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_misc_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

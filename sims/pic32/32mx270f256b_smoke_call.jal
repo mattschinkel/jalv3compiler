@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — smoke call
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 smoke: procedure / function call + return
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_smoke_call.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_r 8
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte r
+
+procedure p_add(byte in a, byte in b, byte out c) is
+  c = a + b
+end procedure
+
+function f_inc(byte in a) return byte is
+  return a + 1
+end function
+
+r = 0
+p_add(3, 4, r)
+r = f_inc(r)

@@ -1,0 +1,30 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — dead code elimination (live vs unreachable)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_dead_code_body.jal`**.
+--
+-- Notes:
+--    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/18f4620_compiler_regression_dead_code.jal
+--
+-- @gpsim_validate begin
+-- steps: 120000
+-- frequency_hz: auto
+-- expect_hw_stkptr_le_compiler_depth: 1
+-- hw_stkptr_steps: 25000
+-- expect byte v__check_step 8
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_dead_code_body

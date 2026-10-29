@@ -1,0 +1,61 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — smoke branch
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 smoke: compare + if / while
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_smoke_branch.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_vb 1
+-- expect byte v_vc 2
+-- expect byte v_vd 3
+-- expect byte v_ve 10
+-- expect byte v_vg 7
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte va
+var volatile byte vb
+var volatile byte vc
+var volatile byte vd
+var volatile byte ve
+var volatile byte vf
+var volatile byte vg
+
+va = 8
+if va == 8 then
+  vb = 1
+else
+  vb = 2
+end if
+
+if va != 8 then
+  vc = 1
+else
+  vc = 2
+end if
+
+vd = 0
+while vd < 3 loop
+  vd = vd + 1
+end loop
+
+ve = 0
+vf = 1
+while vf <= 4 loop
+  ve = ve + vf
+  vf = vf + 1
+end loop
+
+va = 20
+vg = 0
+if va > 5 then
+  vg = 7
+end if

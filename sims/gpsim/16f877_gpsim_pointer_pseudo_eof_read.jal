@@ -1,0 +1,54 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — pointer-to-pseudo READ as the last statement
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Companion to 16f877_gpsim_pointer_pseudo_eof_write.jal: the READ
+--    through a pseudo-bound pointer as the FINAL statement of the file
+--    (EOF next token) never routed to 'get before the token-guard fix --
+--    the rvalue GET swap's link lookup silently returned not-found and
+--    the read fell through to a slot dereference of the GET code
+--    address. The final read must see the shadow (77); snapE's address
+--    is escaped through a dummy pointer bind so the terminal store
+--    cannot be dead-eliminated.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_pseudo_eof_read.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__ppe_shadow 77
+-- expect byte v__ppe_snap3 77
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var volatile byte _ppe_shadow = 0
+var volatile byte _ppe_snap3 = 0
+var pointer _ppe_p as var byte
+var pointer _ppe_obs as var byte
+
+function _ppe_pv'get return byte is
+   return _ppe_shadow
+end function
+
+procedure _ppe_pv'put(byte in v) is
+   _ppe_shadow = v
+end procedure
+
+_ppe_shadow = 77
+_ppe_p is _ppe_pv
+_ppe_obs is _ppe_snap3
+if _ppe_obs != 0 then
+   _ppe_shadow = 0
+end if
+regression_checkpoint()
+-- last statement of the file: EOF next token, the read-side defect shape
+_ppe_snap3 = _ppe_p

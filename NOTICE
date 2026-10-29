@@ -1,0 +1,29 @@
+JALv2 compiler fork ("jalv3compiler") — attribution notice
+=====================================================
+
+The compiler sources in src/ are a fork of:
+
+    JAL V2 compiler — https://github.com/jallib/jalv2compiler
+    Original author: Kyle A. York (2005–2018), all rights reserved.
+
+The original copyright notices are retained verbatim in every derived
+source file. Source files that carry Kyle York's code and were modified
+by the fork are marked with a "Co-author: Matthew Schinkel" line inside
+the original header block; files byte-identical to the jalv25r9 baseline
+are unmodified. The upstream repository publishes no LICENSE file; its
+files are redistributed here with their original notices intact.
+
+The JAL libraries under demo_lib/ originate from jallib 2.1
+(https://github.com/jallib/jallib, ZLIB license) and the upstream
+compiler distribution; authorship is stated in each file's own header.
+The same applies to the sample corpora under demo_sample/ and the
+libraries/samples created for the fork's own test and demo work. These
+files are not modified by this notice.
+
+Fork extensions — the ESP32 (Xtensa LX6) and PIC32 (MIPS32) back ends,
+the dynamic string heap, pointers, native bit arrays, wide integers, the
+shared algorithm kernels, and related work — are
+
+    Copyright (c) 2026 Matthew Schinkel, all rights reserved.
+
+and are marked per file.

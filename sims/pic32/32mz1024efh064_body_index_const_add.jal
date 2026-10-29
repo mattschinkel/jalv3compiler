@@ -1,0 +1,88 @@
+-- ------------------------------------------------------
+-- Title: PIC32 compiler regression — runtime-index + const arithmetic
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the ofs-scratch fix (fix_mips_ofs_scratch_collision):
+--    `arr[i] + const` with a RUNTIME index loaded the const into
+--    the same register the element's index load used, so the add
+--    computed arr[i] + i (the float->string renderer emitted 0x01
+--    where '1' belongs).  Defect as old as the back end; no prior
+--    test used the shape (the jallib corpus is classic-only).
+--    Checks the idiom in every operand position plus the char-code
+--    add the renderer relies on.
+--
+-- @sim_validate begin
+-- duration_s: 3.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 1
+-- expect byte v__ica_r1 49
+-- expect byte v__ica_r2 55
+-- expect byte v__ica_r3 8
+-- expect byte v__ica_r4 46
+-- expect byte v__ica_c2 49
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression
+
+var byte _ica_dig[4]
+var byte _ica_i
+var volatile byte _ica_r1 = 0
+var volatile byte _ica_r2 = 0
+var volatile byte _ica_r3 = 0
+var volatile byte _ica_r4 = 0
+var volatile byte _ica_c2 = 0
+
+--------------------------------------------------------------------------------
+procedure _run_checks() is
+   regression_begin_run()
+
+   _ica_dig[0] = 1
+   _ica_dig[1] = 7
+   _ica_dig[2] = 3
+
+   -- the renderer idiom: runtime-index element + char-code literal
+   _ica_i = 0
+   _ica_r1 = _ica_dig[_ica_i] + "0"     -- 1 + 48 = 49 ('1')
+   if _ica_r1 != 49 then
+      _check_failed = true
+   end if
+   _ica_i = 1
+   _ica_r2 = _ica_dig[_ica_i] + "0"     -- 7 + 48 = 55 ('7')
+   if _ica_r2 != 55 then
+      _check_failed = true
+   end if
+
+   -- const on the LEFT (operand order symmetry)
+   _ica_i = 2
+   _ica_r3 = 5 + _ica_dig[_ica_i]       -- 5 + 3 = 8
+   if _ica_r3 != 8 then
+      _check_failed = true
+   end if
+
+   -- non-char const too
+   _ica_i = 0
+   _ica_r4 = _ica_dig[_ica_i] + 45      -- 1 + 45 = 46 ('.')
+   if _ica_r4 != 46 then
+      _check_failed = true
+   end if
+
+   -- and through a loop (the renderer's shape)
+   for 3 using _ica_i loop
+      _ica_dig[_ica_i] = _ica_dig[_ica_i] + "0"
+   end loop
+   _ica_c2 = _ica_dig[0]                -- '1'
+   if _ica_c2 != 49 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 1
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

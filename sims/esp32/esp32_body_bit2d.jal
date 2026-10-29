@@ -1,0 +1,30 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — multidim bit arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_bit2d_body` via @sim_validate: 2D bit-array
+--    subscript strides (runtime/const index mixes, 16-bit and 20-bit
+--    row strides).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_bit2d.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 7
+-- expect byte v__bt2d_fill_ok 1
+-- expect byte v__bt2d_const_ok 1
+-- expect byte v__bt2d_run_ok 1
+-- expect byte v__bt2d_wide_ok 1
+-- expect byte v__bt2d_stride20_ok 1
+-- expect byte v__bt2d_nd4_ok 1
+-- expect byte v__bt2d_nd3b_ok 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_bit2d_body

@@ -1,0 +1,57 @@
+-- Title: PIC32 regression helpers (@sim_validate)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Same API as `regression.jal` (`regression_begin_run` /
+--    `regression_checkpoint` / `regression_pass_led_if_clean`, `_bad`,
+--    `_check_failed`, `_check_step`) but **without** absolute `at 0x77/0x78`
+--    pins. PIC32 linear allocation would otherwise overlap those addresses
+--    and corrupt the checkpoint counter (seen with wide-integer bodies).
+--
+-- Notes:
+--    Use from `tests/pic32/` wrappers via `include regression_pic32`
+--    after `include regression_32mz1024efh064_device`. Expect `v__check_step` as usual.
+
+var byte _gpsim_regression_flags = 0
+var bit _bad at _gpsim_regression_flags : 0 = true
+var bit _check_failed at _gpsim_regression_flags : 1 = false
+var byte _check_step = 0
+
+--------------------------------------------------------------------------------
+-- Description: Start a regression check run (call once at entry to your runner)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure regression_begin_run() is
+   _check_failed = false
+   _check_step = 0
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Record that the current checkpoint succeeded
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure regression_checkpoint() is
+   if !_check_failed then
+      _check_step = _check_step + 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Clear `_bad` if the run had no failures
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure regression_pass_led_if_clean() is
+   if !_check_failed then
+      _bad = false
+   end if
+end procedure

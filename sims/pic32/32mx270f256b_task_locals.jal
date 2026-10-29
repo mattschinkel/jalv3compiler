@@ -1,0 +1,27 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — task-local variables
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_task_locals_body` via @sim_validate: two
+--    tasks with same-shaped locals + yields + a shared callee between
+--    slices — per-task isolation on the unique-linear-homes model.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_task_locals.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 2
+-- expect byte v__tl_a_final 48
+-- expect byte v__tl_b_final 50
+-- expect byte v__tl_a_hits 4
+-- expect byte v__tl_b_hits 4
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression
+include _regression_task_locals_body

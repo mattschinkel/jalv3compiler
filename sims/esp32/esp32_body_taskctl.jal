@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — task control
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    ESP32: _task_suspend / _task_resume / _task_kill / _task_restart
+--    over static task slots (shared body with the PIC32 twin).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_taskctl.jal
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: esp32
+-- expect byte v__ctl_checks 9
+-- @sim_validate end
+--
+include regression_esp32_device
+include _regression_taskctl_body

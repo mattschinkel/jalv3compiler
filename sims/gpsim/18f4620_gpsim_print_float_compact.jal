@@ -1,0 +1,138 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim regression — print_float_compact (heap-free pretty float)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins demo_lib/print_float_compact.jal: human-readable float text with
+--    NO string heap, NO print.jal dependency and NO 128-bit renderer.
+--    Checks 0.1 / 3.5 / 19.634954 / 1e8 / 1e7 / -2.75 / inf / nan / -0
+--    through a capture pseudo-device (the real 'put dispatch).
+--
+--    Deliberately not shortest-round-trip: on classic 19.634954 renders
+--    "19.634952" (8-digit extraction rounding; PIC32 gives "19.634955");
+--    print_float_exact is the exact variant.
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- frequency_hz: 20000000
+-- expect byte v__check_step 9
+-- expect byte v__c0_n 3
+-- expect byte v__c0_b0 48
+-- expect byte v__c0_b2 49
+-- expect byte v__c1_n 3
+-- expect byte v__c1_b0 51
+-- expect byte v__c1_b2 53
+-- expect byte v__c2_n 9
+-- expect byte v__c2_b0 49
+-- expect byte v__c2_b8 50
+-- expect byte v__c3_n 5
+-- expect byte v__c3_b0 49
+-- expect byte v__c3_b4 56
+-- expect byte v__c4_n 8
+-- expect byte v__c4_b7 48
+-- expect byte v__c5_n 5
+-- expect byte v__c5_b0 45
+-- expect byte v__c5_b4 53
+-- expect byte v__c6_n 3
+-- expect byte v__c7_n 3
+-- expect byte v__c8_n 2
+-- @gpsim_validate end
+
+include regression_18f4620_device
+include regression
+include 18f4620
+
+include print_float_compact
+
+-- capture pseudo-device: same 'put dispatch as serial_hw_data
+var byte _cap[32]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+var volatile byte _c0_n = 0
+var volatile byte _c0_b0 = 0
+var volatile byte _c0_b2 = 0
+var volatile byte _c1_n = 0
+var volatile byte _c1_b0 = 0
+var volatile byte _c1_b2 = 0
+var volatile byte _c2_n = 0
+var volatile byte _c2_b0 = 0
+var volatile byte _c2_b8 = 0
+var volatile byte _c3_n = 0
+var volatile byte _c3_b0 = 0
+var volatile byte _c3_b4 = 0
+var volatile byte _c4_n = 0
+var volatile byte _c4_b7 = 0
+var volatile byte _c5_n = 0
+var volatile byte _c5_b0 = 0
+var volatile byte _c5_b4 = 0
+var volatile byte _c6_n = 0
+var volatile byte _c7_n = 0
+var volatile byte _c8_n = 0
+
+var float _infv = 0.0
+var dword _infb at _infv
+var float _nanv = 0.0
+var dword _nanb at _nanv
+var float _negzv = 0.0
+var dword _negzb at _negzv
+
+procedure _chk(float in f) is
+   _capn = 0
+   print_float_compact(cap, f)
+end procedure
+
+_chk(0.1)                 -- "0.1"
+regression_checkpoint()
+_c0_n = _capn
+_c0_b0 = _cap[0]
+_c0_b2 = _cap[2]
+
+_chk(3.5)                 -- "3.5"
+regression_checkpoint()
+_c1_n = _capn
+_c1_b0 = _cap[0]
+_c1_b2 = _cap[2]
+
+_chk(19.634954)           -- classic "19.634952" (8-digit extraction)
+regression_checkpoint()
+_c2_n = _capn
+_c2_b0 = _cap[0]
+_c2_b8 = _cap[8]
+
+_chk(100000000.0)         -- "1e+08" (exactly representable)
+regression_checkpoint()
+_c3_n = _capn
+_c3_b0 = _cap[0]
+_c3_b4 = _cap[4]
+
+_chk(10000000.0)          -- "10000000"
+regression_checkpoint()
+_c4_n = _capn
+_c4_b7 = _cap[7]
+
+_chk(-2.75)               -- "-2.75"
+regression_checkpoint()
+_c5_n = _capn
+_c5_b0 = _cap[0]
+_c5_b4 = _cap[4]
+
+_infb = 0x7F800000        -- +inf
+_chk(_infv)               -- "inf"
+regression_checkpoint()
+_c6_n = _capn
+
+_nanb = 0x7FC00000        -- quiet NaN
+_chk(_nanv)               -- "nan"
+regression_checkpoint()
+_c7_n = _capn
+
+_negzb = 0x80000000       -- -0.0
+_chk(_negzv)              -- "-0"
+regression_checkpoint()
+_c8_n = _capn

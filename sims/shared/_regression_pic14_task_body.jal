@@ -1,0 +1,42 @@
+-- Title: Shared PIC14 regression body — task
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_task.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+--------------------------------------------------------------------------------
+task _worker() is
+   _task_pin = high
+   _task_yield
+   _task_pin = low
+end task
+
+regression_begin_run()
+
+_task_pin = low
+_task_start _worker()
+_task_yield
+regression_checkpoint()
+
+_task_yield
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+led = low
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

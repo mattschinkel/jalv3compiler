@@ -1,0 +1,150 @@
+-- --------------------------------------------------------------
+-- Title:     PIC32 clock selection support
+-- Author:    Matthew Schinkel, Copyright (c) 2026, all rights reserved
+-- Compiler:  3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Runtime half of `pragma target OSC` / `pragma target clock`
+--    (docs/investigations/pic32_clock_select_plan.md).  The compiler
+--    solves the clock tree at compile time and OVERWRITES the _osc_*
+--    defaults below; include this file ONLY when you actually call
+--    osc_select() -- the defaults cost a few RAM bytes / zero-init
+--    stores, which is why they live here instead of the device file
+--    (every image includes the device file).
+--
+--    Two register layouts are supported:
+--      MZ EF (PIC32MZ...): SPLLCON + a single RMW OSCCON write
+--      MX1/2 (PIC32MX...): PLLMULT/PLLODIV live in OSCCON, FPLLIDIV is
+--                          fuse-only; the device file declares
+--                          `_MIPS_FAMILY = 2` and selects the MX body
+--    Both keep the proven recipe: SYSKEY window, then ONE RMW OSCCON
+--    write (NOSC + OSWEN) and wait for OSWEN to self-clear.
+--    NEVER gate on CLKSTAT DIVSPLLRDY -- it never reads set on MZ; the
+--    PLL locks during the wait (proven recipe,
+--    fixes/fix_pic32_runtime_clock_switch.md).
+--
+-- Notes:
+--    - pragma order vs this include does not matter for the consts
+--      (the solver updates them in place), but the DEVICE file must be
+--      included first so `_MIPS_FAMILY` selects the right body.
+--    - with FRC_SPLL / POSC_SPLL the boot fuses already run at the
+--      solved speed; osc_select() re-asserts it.
+--    - MX runtime switching can only change FPLLMUL/FPLLODIV and the
+--      NOSC source; FPLLIDIV comes from the fuse word, and FCKSM must
+--      be CSECMD (the compiler's MX fuse base is).
+-- --------------------------------------------------------------
+--
+
+-- compiler-solved fields (do not edit -- defaults are inert; the
+-- solver has already defined them when `pragma target OSC` preceded
+-- this include):
+--
+if ! defined(_osc_nosc) then
+const dword _osc_nosc       = 0 -- runtime OSCCON.NOSC for the solved mode
+const dword _osc_frcdiv     = 0 -- FRCDIV divide (power of two), 0 = n/a
+const dword _osc_spll_iclk  = 1 -- SPLL input: 1 = FRC, 0 = POSC
+const dword _osc_spll_ready = 0 -- 1 = the solve produced a PLL configuration
+const dword _osc_pllrange   = 0 -- SPLLCON PLLRANGE bit
+const dword _osc_pllidiv    = 0 -- SPLL input divider field (div - 1 on MZ,
+                                --   code index on MX)
+const dword _osc_pllmult    = 0 -- SPLL multiplier field (SFR form: the mult
+                                --   on MZ, the 3-bit FPLLMUL code on MX --
+                                --   same code as the DEVCFG2 fuse field)
+const dword _osc_pllodiv    = 1 -- SPLL output divider code
+end if
+
+if defined(_MIPS_FAMILY) then
+   -- PIC32MX1/2: OSCCON.PLLMULT<18:16> / PLLODIV<29:27> / NOSC<10:8>.
+   -- FPLLIDIV is fuse-only, so a runtime switch is only legal when the
+   -- fuse IDIV already matches the target input; the solved fuse words
+   -- guarantee that for the compiler's own configuration.
+   --
+   -- The PLL field bits may ONLY be written while the system clock is
+   -- NOT derived from the PLL (DS60001168 OSCCON).  Writing them in
+   -- one OSCCON RMW while executing from FRCPLL was refused by
+   -- silicon (2026-10-24 bench: post-switch UART arrived as baud
+   -- shifted garbage and never recovered -- the switch happened but
+   -- landed on a broken tree).  A PLL target therefore stages: switch
+   -- to plain FRC first (OSWEN, bounded wait), program the divider
+   -- bits while on FRC (no OSWEN), then switch to the target and
+   -- wait again.  The same-target re-apply stages the same way -- the
+   -- divider write of identical values is harmless once off the PLL.
+   -- Non-PLL targets never touch the divider bits at all.
+   procedure osc_select() is
+      var dword osc_new
+      var word  osc_wait
+      syskey_unlock()
+      if _osc_spll_ready != 0 then
+         -- stage 1: off the PLL before touching the divider bits
+         if ((OSCCON >> 12) & 7) == 1 then
+            OSCCON = (OSCCON & 0xFFFF_F8FE) | 0x01
+            osc_wait = 0
+            while (OSCCON_OSWEN != 0) & (osc_wait < 60_000) loop
+               osc_wait = osc_wait + 1
+            end loop
+         end if
+         -- stage 2: divider bits while the clock comes from FRC
+         OSCCON = ((OSCCON & 0xC7F8_FFFF)
+                   | (dword(_osc_pllmult) << 16)
+                   | (dword(_osc_pllodiv) << 27))
+         -- wait for the PLL to relock before selecting it: switching to
+         -- FRCPLL with the dividers mid-transition lands on a broken
+         -- tree (2026-10-24 bench: back-to-back stages garbled the
+         -- UART forever; the same writes with a print between stages
+         -- -- accidentally enough relock time -- ended clean).
+         osc_wait = 0
+         while (OSCCON_SLOCK == 0) & (osc_wait < 60_000) loop
+            osc_wait = osc_wait + 1
+         end loop
+         -- stage 3: switch to the PLL target
+         OSCCON = ((OSCCON & 0xFFFF_F8FE)
+                   | (dword(_osc_nosc) << 8) | 0x01)
+      else
+         -- non-PLL target: NOSC (+ FRCDIV for NOSC==7) only
+         osc_new = (OSCCON & 0xFFFF_F8FE) |
+                   (dword(_osc_nosc) << 8) | 0x01
+         if _osc_nosc == 7 then
+            osc_new = (osc_new & 0xF8FF_FFFF) |
+                      (dword(_osc_frcdiv) << 24)
+         end if
+         OSCCON = osc_new
+      end if
+      -- OSWEN self-clears on silicon.  The bound keeps simulation (and a
+      -- refused switch) from hanging forever.
+      osc_wait = 0
+      while (OSCCON_OSWEN != 0) & (osc_wait < 60_000) loop
+         osc_wait = osc_wait + 1
+      end loop
+      syskey_lock()
+   end procedure
+else
+   procedure osc_select() is
+      var dword osc_new
+      var word  osc_wait
+      syskey_unlock()
+      if _osc_spll_ready != 0 then
+         SPLLCON = (dword(_osc_pllrange) |
+                    (dword(_osc_spll_iclk) << 7) |
+                    (dword(_osc_pllidiv) << 8) |
+                    (dword(_osc_pllmult) << 16) |
+                    (dword(_osc_pllodiv) << 24))
+      end if
+      -- ONE RMW OSCCON write: set NOSC(10:8) + OSWEN(0); COSC(14:12) is
+      -- read-only (writes ignored), FRCDIV(26:24) preserved here
+      osc_new = (OSCCON & 0xFFFF_F8FE) |
+                (dword(_osc_nosc) << 8) | 0x01
+      if _osc_nosc == 7 then
+         osc_new = (osc_new & 0xF8FF_FFFF) |
+                   (dword(_osc_frcdiv) << 24)   -- FRCDIV bits 26:24
+      end if
+      OSCCON = osc_new
+      osc_wait = 0
+      while (OSCCON_OSWEN != 0) & (osc_wait < 60_000) loop
+         osc_wait = osc_wait + 1
+      end loop
+      syskey_lock()
+   end procedure
+end if

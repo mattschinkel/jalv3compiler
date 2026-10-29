@@ -1,0 +1,44 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — heap `var string` self-concat through bound pointer (`p is a` then `p = p & …`)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    After `p is a`, `p = p & "c"` must leave the heap string as `"abc"`.
+--    Covers same-backing concat (`jal_string_concat_emit` + `old_off`) and
+--    operand deref for `&` length snapshots; LENGTH store uses a temp copy so
+--    allocate cannot clobber the summed byte count (pointer LHS).
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__pds_self_ok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var volatile byte _pds_self_ok = 0
+var string _pds_a
+var pointer _pds_p as var string
+
+procedure _pds_self_run() is
+   regression_begin_run()
+
+   _pds_a = "ab"
+   _pds_p is _pds_a
+   _pds_p = _pds_p & "c"
+   if (_pds_a == "abc") & (COUNT(_pds_a) == 3) then
+      _pds_self_ok = 1
+   end if
+   regression_checkpoint()
+end procedure
+
+_pds_self_run()

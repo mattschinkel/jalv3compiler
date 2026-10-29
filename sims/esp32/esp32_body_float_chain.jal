@@ -1,0 +1,38 @@
+-- ------------------------------------------------------
+-- Title: ESP32 QEMU body — runtime float in & chains (stage 2d v2)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `"h=" & fv` with a RUNTIME float lowers to the battery-validated
+--    `_string_float_str` renderer call (the stage-2d-v2 wiring);
+--    const-vs-runtime parity on the IEEE-pinned target: "h=0.1".
+--
+-- @sim_validate begin
+-- duration_s: 20.0
+-- machine: esp32
+-- expect byte v_which 1
+-- @sim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_esp32_device
+include regression
+
+const word _string_heap_size = 96
+pragma string index byte
+include strings_dynamic
+
+var float fv = 0.1
+var string s = "h=" & fv
+var volatile byte which = 0
+
+if s == "h=0.1" then
+   which = 1
+end if
+if s == "h=0.100000001" then
+   which = 2
+end if
+
+forever loop end loop

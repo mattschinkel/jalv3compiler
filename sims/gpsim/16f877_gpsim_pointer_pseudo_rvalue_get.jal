@@ -1,0 +1,59 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — pointer rvalue after `p is <pseudo>` uses `'get`
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    After **`p is pv`**, scalar rvalue **`_ptr_pseudo_rv_x = p`** loads via the
+--    pointee pseudo **`pv'get`** ().
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_pointer_pseudo_rvalue_get.jal`**
+--    Minimal compile-only sibling of the pointer repro workload:
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect byte v__ptr_pseudo_rv_shadow 77
+-- expect byte v__ptr_pseudo_rv_x 77
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte _ptr_pseudo_rv_shadow
+var byte _ptr_pseudo_rv_x
+
+function pv'get return byte is
+   return _ptr_pseudo_rv_shadow
+end function
+
+procedure pv'put(byte in v) is
+   _ptr_pseudo_rv_shadow = v
+end procedure
+
+var pointer p as var byte
+
+procedure _ptr_pseudo_rv_run() is
+   regression_begin_run()
+   _ptr_pseudo_rv_shadow = 77
+   p is pv
+   _ptr_pseudo_rv_x = p
+   if _ptr_pseudo_rv_x != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   if _ptr_pseudo_rv_shadow != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_ptr_pseudo_rv_run()
+
+forever loop
+end loop

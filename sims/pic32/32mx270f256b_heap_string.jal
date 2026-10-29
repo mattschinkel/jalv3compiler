@@ -1,0 +1,108 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — heap string
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: heap var string assign/concat/compare/full
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_heap_string.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- expect byte v_rg 1
+-- expect byte v_rh 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+const word _string_heap_size = 32
+
+
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+var volatile byte rg = 0
+var volatile byte rh = 0
+
+var string first
+var string second
+var string third
+var string empty
+
+first = "abc"
+if _string_heap[3] == 97 then
+   if _string_heap[4] == 98 then
+      if _string_heap[5] == 99 then
+         ra = 1
+      end if
+   end if
+end if
+
+second = first
+if _string_heap[9] == 97 then
+   if _string_heap[10] == 98 then
+      if _string_heap[11] == 99 then
+         rb = 1
+      end if
+   end if
+end if
+
+third = first & "!" & second
+if COUNT(third) == 7 then
+   if _string_heap[15] == 97 then
+      if _string_heap[21] == 99 then
+         rc = 1
+      end if
+   end if
+end if
+
+if (third == "abc!abc") & (second != third) then
+   rd = 1
+end if
+
+third = empty
+if COUNT(third) == 0 then
+   if _string_free_head == 12 then
+      re = 1
+   end if
+end if
+
+second = "abcdefghijkl"
+if _string_error == STRING_ERROR_NONE then
+   if COUNT(second) == 12 then
+      if _string_heap[15] == 97 then
+         if _string_heap[26] == 108 then
+            rf = 1
+         end if
+      end if
+   end if
+end if
+
+if COUNT(first) == 3 then
+   if COUNT(second) == 12 then
+      rg = 1
+   end if
+end if
+
+second = "abcdefghijklm"
+if _string_error == STRING_ERROR_HEAP_FULL then
+   if COUNT(second) == 12 then
+      if _string_heap[15] == 97 then
+         if _string_heap[26] == 108 then
+            rh = 1
+         end if
+      end if
+   end if
+end if

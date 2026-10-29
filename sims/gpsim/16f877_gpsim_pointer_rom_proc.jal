@@ -1,0 +1,131 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — const pointer reads + ROM subscript + **`COUNT`** formal
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv2-original)
+--
+-- Description:
+--    Merged **`…_const_read.jal`**, **`…_const_subscript.jal`**, **`…_count_formal.jal`**:
+--,.
+--    **`regression_*`** RAM error hooks.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_pointer_rom_proc.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- allow_compiler_warnings: yes
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__gpsim_prp_r0 11
+-- expect byte v__gpsim_prp_r1 22
+-- expect byte v__gpsim_prp_r2 33
+-- expect dword_le v__gpsim_prp_dst 184811779
+-- expect byte v__gpsim_prp_cf_arr 4
+-- expect word_le v__gpsim_prp_cf_arr 2308
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const byte _gpsim_prp_buf_a[3] = {11, 22, 33}
+const byte _gpsim_prp_buf_b[3] = {44, 55, 66}
+
+var pointer _gpsim_prp_ptr as const byte[3]
+
+var byte _gpsim_prp_I
+var byte _gpsim_prp_x
+var byte _gpsim_prp_r0
+var byte _gpsim_prp_r1
+var byte _gpsim_prp_r2
+
+const byte _gpsim_prp_rom[4] = {3, 1, 4, 11}
+var pointer _gpsim_prp_cp as const byte[4]
+var byte _gpsim_prp_dst[4]
+_gpsim_prp_dst[0] = 0
+_gpsim_prp_dst[1] = 0
+_gpsim_prp_dst[2] = 0
+_gpsim_prp_dst[3] = 0
+
+var byte _gpsim_prp_cf_arr[4]
+_gpsim_prp_cf_arr[0] = 9
+_gpsim_prp_cf_arr[1] = 9
+_gpsim_prp_cf_arr[2] = 9
+_gpsim_prp_cf_arr[3] = 9
+
+--------------------------------------------------------------------------------
+procedure _gpsim_prp_take(byte in _gpsim_prp_cf_buf[]) is
+   _gpsim_prp_cf_buf[0] = COUNT(_gpsim_prp_cf_buf)
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_prp_main() is
+   _gpsim_prp_take(_gpsim_prp_cf_arr)
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _gpsim_prp_run() is
+   regression_begin_run()
+   _gpsim_prp_ptr is _gpsim_prp_buf_a
+   for 3 using _gpsim_prp_I loop
+      _gpsim_prp_x = _gpsim_prp_ptr[_gpsim_prp_I]
+   end loop
+   _gpsim_prp_r0 = _gpsim_prp_ptr[0]
+   _gpsim_prp_r1 = _gpsim_prp_ptr[1]
+   _gpsim_prp_r2 = _gpsim_prp_ptr[2]
+   _gpsim_prp_x = _gpsim_prp_r0 + _gpsim_prp_r1 + _gpsim_prp_r2 - 66
+   if _gpsim_prp_r0 != 11 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_r1 != 22 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_r2 != 33 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_prp_ptr is _gpsim_prp_buf_b
+   for 3 using _gpsim_prp_I loop
+      _gpsim_prp_x = _gpsim_prp_ptr[_gpsim_prp_I]
+   end loop
+   _gpsim_prp_cp is _gpsim_prp_rom
+   _gpsim_prp_dst[0] = _gpsim_prp_cp[0]
+   _gpsim_prp_dst[1] = _gpsim_prp_cp[1]
+   _gpsim_prp_dst[2] = _gpsim_prp_cp[2]
+   _gpsim_prp_dst[3] = _gpsim_prp_cp[3]
+   if _gpsim_prp_dst[0] != 3 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_dst[1] != 1 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_dst[2] != 4 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_dst[3] != 11 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   _gpsim_prp_main()
+   if _gpsim_prp_cf_arr[0] != 4 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_cf_arr[1] != 9 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_cf_arr[2] != 9 then
+      _check_failed = true
+   end if
+   if _gpsim_prp_cf_arr[3] != 9 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_prp_run()
+
+forever loop
+end loop

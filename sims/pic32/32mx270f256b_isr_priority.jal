@@ -1,0 +1,66 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — ISR priority + dual source
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Dual-source single-vector ISR with IPC priority programming on the
+--    M4K (MX1/2) controller: IRQ0 (CT) at IPC0 priority 7 sub 3, IRQ4
+--    (T1) at IPC1 priority 1 sub 0.  Both flags are set in software
+--    before the first dispatch (QEMU does not model Timer1, but the
+--    EIC resolver only sees IFS0/IEC0/IPC).  The shared handler reads
+--    IFS0 to distinguish sources and services the high-priority bit
+--    first, matching the hardware resolver order.  True preemption in
+--    the ISR needs MVEC, which this QEMU VEIC model cannot gate.
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v_po_order 1
+-- expect byte v_po_hi 1
+-- expect byte v_po_lo 1
+-- expect byte v_po_done 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte po_hi = 0
+var volatile byte po_lo = 0
+var volatile byte po_order = 0
+var volatile byte po_done = 0
+
+procedure _po_shared_isr() is
+   pragma interrupt
+
+   if (IFS0 & 1) != 0 then
+      IFS0CLR = 1
+      po_hi = po_hi + 1
+      if po_lo == 0 then
+         po_order = 1
+      end if
+   end if
+   if (IFS0 & 0x10) != 0 then
+      IFS0CLR = 0x10
+      po_lo = po_lo + 1
+      if po_order == 0 then
+         po_order = 2
+      end if
+   end if
+end procedure
+
+-- IRQ0 = priority 7 sub 3, IRQ4 (T1) = priority 1 sub 0
+IPC0 = 0x1F
+IPC1 = 0x04
+IEC0SET = 0x11
+IFS0SET = 0x11
+
+var byte guard = 0
+while ((po_hi == 0) | (po_lo == 0)) & (guard < 255) loop
+   guard = guard + 1
+end loop
+if (po_hi == 1) & (po_lo == 1) then
+   po_done = 1
+end if
+
+forever loop
+end loop

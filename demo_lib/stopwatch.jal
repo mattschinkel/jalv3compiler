@@ -1,0 +1,19 @@
+-- Title: Stopwatch library - target dispatcher
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the ZLIB license (http://www.opensource.org/licenses/zlib-license.html)
+--
+-- Description:
+--    Target dispatcher: includes the matching stopwatch implementation
+--    (stopwatch_esp32 / stopwatch_pic32 / stopwatch_classic) so user
+--    code just does `include stopwatch`.
+--
+if defined(ESP32_PERIPH_BASE) then
+   include stopwatch_esp32
+elsif target_cpu == PIC_32 then
+   include stopwatch_pic32
+else
+   include stopwatch_classic
+end if

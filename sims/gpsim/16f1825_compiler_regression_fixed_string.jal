@@ -1,0 +1,33 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 compiler regression — fixed string assign + concat
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_fixed_string_body.jal`**
+--    (from **`16f877_gpsim_fixed_string_assign_concat.jal`** + self-append
+--    overflow phase) — literal assign, `&` concat with effective length,
+--    overflow → `_string_error` 2, dst unchanged on concat overflow.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- expect byte v__fx_p1 97
+-- expect byte v__fx_p2 99
+-- expect byte v__fx_p3 0
+-- expect byte v__fx_p4 100
+-- expect byte v__fx_p5 102
+-- expect byte v__fx_p6 0
+-- expect byte v__fx_p7 56
+-- expect byte v__fx_e1 2
+-- expect byte v__fx_e2 0
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+include _regression_fixed_string_body

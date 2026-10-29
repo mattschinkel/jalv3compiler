@@ -1,0 +1,78 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — for-loop counts vs counter range
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Runtime half of the loop-count range check
+--    (fix_for_loop_count_range): `for N using var` now ERRORS at the
+--    for line when the counter can never reach N (300 into a byte
+--    counter -- the universal-literal hole in the old size-only
+--    check; 130 into an sbyte; 70000 into a word; compile pins in
+--    the negative table). Before, the loop-exit relation
+--    const-folded to "always FALSE", the back edge became
+--    unconditional, and the dead-code pass silently removed
+--    everything after the never-exiting loop -- the 2026-10-27
+--    "always FALSE kills full-range sum loops" item, inherited from
+--    jalv25r9 byte-for-byte. Here: counts past 255 with a WORD
+--    counter and the power-of-two storage-wrap special (256 with a
+--    byte counter) run exactly N iterations, and the reported
+--    fill+sum shape over a 300-element array works with a word
+--    counter (checksum 1042 = 0x0412).
+--
+-- @gpsim_validate begin
+-- steps: 12000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 3
+-- expect byte v__r1 44
+-- expect byte v__r2 1
+-- expect byte v__r3 0
+-- expect byte v__r4 1
+-- expect byte v__r5 18
+-- expect byte v__r6 4
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+
+var byte a[300]
+var volatile byte _r1 = 255
+var volatile byte _r2 = 255
+var volatile byte _r3 = 255
+var volatile byte _r4 = 255
+var volatile byte _r5 = 255
+var volatile byte _r6 = 255
+var byte kb
+var word kw
+var word s
+
+-- 300 iterations with a word counter: the counter reaches 300 and exits
+s = 0
+for 300 using kw loop
+   s = s + 1
+end loop
+_r1 = byte(s)                                 -- 300 & 0xFF = 44
+_r2 = byte(s >> 8)                            -- 1
+regression_checkpoint()                       -- 1
+
+-- 256 iterations with a byte counter: the power-of-two storage wrap
+s = 0
+for 256 using kb loop
+   s = s + 1
+end loop
+_r3 = byte(s)                                 -- 256 & 0xFF = 0
+_r4 = byte(s >> 8)                            -- 1
+regression_checkpoint()                       -- 2
+
+-- the reported shape: fill + sum a 300-element array with a word counter
+for 300 using kw loop
+   a[kw] = byte(kw & 7)
+end loop
+s = 0
+for 300 using kw loop
+   s = s + a[kw]
+end loop
+_r5 = byte(s)                                 -- 1042 & 0xFF = 18
+_r6 = byte(s >> 8)                            -- 4
+regression_checkpoint()                       -- 3

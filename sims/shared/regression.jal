@@ -1,0 +1,79 @@
+-- Title: Regression test helpers (gpsim_validate, LED pass/fail)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: Shared state and procedures for compiler/runtime regression `.jal`
+--              files in `tests/`. Compile with -s 'lib;tests' (from repo root; quote for shell).
+--              Use with `tests/jal_gpsim_validate.sh` and `expect byte v__check_step N`
+--              in `@gpsim_validate` blocks. See `instructions_gpsim_test.txt` (repo root).
+--
+-- Notes:
+-- - Include after your suite’s `include regression_<device>_device` (e.g. `regression_18f4620_device` for PIC18F4620;
+--   other MCUs use a different `regression_*_device.jal`, not the 4620 file). PIC18F4620 bundle calls `enable_digital_io()`.
+-- - `_bad` true until `regression_pass_led_if_clean()` runs with no prior failure.
+-- - Call `regression_checkpoint()` once after each logical checkpoint; N calls must
+--   match the `expect byte v__check_step N` value in the `.jal`.
+-- - `_check_step` counts CLEAN checkpoints only (`regression_checkpoint` skips the
+--   increment once `_check_failed` is set), so on failure it reads N-1 (or less) —
+--   indistinguishable from a stalled program in a RAM dump. Recommended for new
+--   witnesses: also `expect byte v__gpsim_regression_flags 0`. Failure modes then:
+--   * flags bit1 set (0x02/0x03): a guard genuinely FAILED (suspect the expect
+--     values in the last checkpoint before anything else);
+--   * flags bit0 only (0x01, `_bad` never cleared): the program never reached
+--     `regression_pass_led_if_clean()` — a genuine stall/reset mid-run;
+--   * flags 0x00 + `_check_step` short: `regression_begin_run()` re-ran (reset).
+--   gpsim_validate prints a hint automatically when `_check_step == expect-1`.
+
+-- Pinned shared GPR (file 0x7D/0x7E) so PIC14H regression RAM stays in gpsim-mapped
+-- file space: gpsim 0.31 `p16f1825` omits / rejects high-bank GPR around 0x620+ even
+-- though the device `pragma data` includes 0x620-0x64F (see
+--).
+var byte _gpsim_regression_flags at 0x77 = 0
+-- Fail-safe pass/fail for LED blink pattern (bit 0 of `v__bitbucket` / flags byte)
+var bit _bad at _gpsim_regression_flags : 0 = true
+-- Set true when any assertion in the current run fails
+var bit _check_failed at _gpsim_regression_flags : 1 = false
+-- Progress counter read by gpsim_validate `expect byte v__check_step …`
+var byte _check_step at 0x78 = 0
+
+--------------------------------------------------------------------------------
+-- Description: Start a regression check run (call once at entry to your runner)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Clears `_check_failed` and resets `_check_step` to 0.
+--------------------------------------------------------------------------------
+procedure regression_begin_run() is
+   _check_failed = false
+   _check_step = 0
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Record that the current checkpoint succeeded
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Increments `_check_step` only if `_check_failed` is still false. Call once
+-- - after each checkpoint, even following a failed check (then increment is skipped).
+--------------------------------------------------------------------------------
+procedure regression_checkpoint() is
+   if !_check_failed then
+      _check_step = _check_step + 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Clear `_bad` if the run had no failures (slow-blink / pass LED)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Call after all checkpoints; if `_check_failed` is true, `_bad` stays true.
+--------------------------------------------------------------------------------
+procedure regression_pass_led_if_clean() is
+   if !_check_failed then
+      _bad = false
+   end if
+end procedure

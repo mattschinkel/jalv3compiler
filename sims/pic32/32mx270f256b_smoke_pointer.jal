@@ -1,0 +1,42 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — smoke pointer
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 smoke: 32-bit pointers + indirect load/store
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_smoke_pointer.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ha 10
+-- expect byte v_hb 20
+-- expect byte v_hc 5
+-- expect byte v_ra 5
+-- expect byte v_rb 5
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ha = 0
+var volatile byte hb = 0
+var volatile byte hc = 5
+var pointer p as var byte
+var volatile byte ra = 0
+var volatile byte rb = 0
+
+p is ha
+p = 10
+
+p is hb
+p = 20
+
+p is hc
+ra = p
+
+var pointer q as var byte
+q is ra
+rb = q

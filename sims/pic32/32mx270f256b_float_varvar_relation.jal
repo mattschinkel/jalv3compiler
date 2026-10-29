@@ -1,0 +1,100 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B float var-vs-var relation regression
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Regression for the float-compare operand-staging clobber
+--    (2026-10-24): mips_load_value's home-fill copy overwrote the
+--    first operand staged in $t8 when the second operand's register
+--    home was also $t8, so `pi > radius` compared pi with pi (false).
+--    The print machinery in this witness creates exactly the register
+--    pressure that homed pi->$t8 / radius->$t9 at declaration time;
+--    pre-fix ALL FIVE checks read 0, post-fix all read 1.
+--
+-- Notes:
+--    Pre-fix evidence: r1..r5 = 0,0,0,0,0 (QEMU, identical to MZ +
+--    MX270 silicon failing `pi > radius` 7/8 in the float_math
+--    sample); post-fix 1,1,1,1,1.
+--
+-- @sim_validate begin
+-- duration_s: 5
+-- machine: pic32mx7-explorer16
+-- expect byte v_r1 1
+-- expect byte v_r2 1
+-- expect byte v_r3 1
+-- expect byte v_r4 1
+-- expect byte v_r5 1
+-- uart_contains: phase5
+-- @sim_validate end
+--
+include 32mx270f256b
+pragma target clock 40_000_000
+pragma target OSC FRC_SPLL
+pragma target image pfm
+pragma target WDT DISABLED
+
+const serial_hw_baudrate  = 115_200
+alias serial_hw_pin_tx is pin_B3
+alias serial_hw_pin_tx_direction is pin_B3_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB3R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+include serial_hardware
+serial_hw_init()
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+include print
+
+var float pi = 3.14159265
+var float radius = 2.5
+var float area
+var float ratio
+var float mean
+var sdword scaled
+var volatile byte r1 = 0
+var volatile byte r2 = 0
+var volatile byte r3 = 0
+var volatile byte r4 = 0
+var volatile byte r5 = 0
+
+procedure print_flt(float in v) is
+   pragma inline
+   print_float(serial_data, v)
+end procedure
+
+if pi > radius then r1 = 1 end if
+print_string(serial_data, "phase1\r\n")
+
+area = pi * radius * radius
+print_string(serial_data, "area = ")
+print_flt(area)
+print_string(serial_data, "\r\n")
+if area > 19.6 then
+   if area < 19.7 then
+      if pi > radius then r2 = 1 end if
+   end if
+end if
+print_string(serial_data, "phase2\r\n")
+
+ratio = radius / pi
+print_string(serial_data, "ratio = ")
+print_flt(ratio)
+print_string(serial_data, "\r\n")
+if pi > radius then r3 = 1 end if
+print_string(serial_data, "phase3\r\n")
+
+mean = pi - 4.0 + 1.0
+print_string(serial_data, "mean = ")
+print_flt(mean)
+print_string(serial_data, "\r\n")
+if pi > radius then r4 = 1 end if
+print_string(serial_data, "phase4\r\n")
+
+scaled = sdword(pi * 1000.0)
+print_string(serial_data, "scaled = ")
+print_dword_dec(serial_data, dword(scaled))
+print_string(serial_data, "\r\n")
+if pi > radius then r5 = 1 end if
+print_string(serial_data, "phase5\r\n")

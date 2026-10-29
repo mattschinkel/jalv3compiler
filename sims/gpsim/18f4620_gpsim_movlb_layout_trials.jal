@@ -1,0 +1,66 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - MOVLB layout trials (access-window selection)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the default-on layout-trials feature
+--: a hot scalar interleaved
+--    with banked array traffic. The plain declaration-order placement
+--    leaves the hot byte outside the 0x00-0x5f access window; the
+--    trial selector swaps it in (a=0, MOVLB-free) when measured
+--    smaller. Checkpoints verify the computed values at runtime under
+--    whichever layout wins, guarding against selection bugs of the
+--    aliasing class caught during development. Compile both ways to
+--    confirm the flip:
+--      ./bin/jalv3-x86-64 -s lib ...            (trials: smaller Code area,
+--                                                 hot byte listed v__access)
+--      JALV2_NO_LAYOUT_TRIALS=1 ./bin/jalv3-x86-64 ...   (baseline)
+--
+-- @gpsim_validate begin
+-- steps: 800000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_v__mt_probe_a 71
+-- expect byte v_v__mt_probe_b 88
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+-- enough live data to push plain allocation past the access window
+var byte v__mt_banked_a[64]
+var byte v__mt_banked_b[64]
+var byte v__mt_filler[48]
+var volatile byte v__mt_probe_a = 0
+var volatile byte v__mt_probe_b = 0
+
+-- the hot byte: read/written between every banked access
+var byte v__mt_hot = 7
+
+procedure _mt_run() is
+   var byte ix
+   ix = 0
+   while ix < 32 loop
+      v__mt_banked_a[ix] = ix + v__mt_hot
+      v__mt_hot = v__mt_hot + 1
+      v__mt_banked_b[ix] = v__mt_banked_a[ix] ^ v__mt_hot
+      v__mt_hot = v__mt_hot + 1
+      ix = ix + 1
+   end loop
+end procedure
+
+regression_begin_run()
+_mt_run()
+v__mt_probe_a = v__mt_hot
+regression_checkpoint()
+_mt_run()
+v__mt_probe_b = v__mt_banked_b[31] ^ v__mt_banked_a[17]
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+
+forever loop
+end loop

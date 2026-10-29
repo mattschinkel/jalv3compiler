@@ -1,0 +1,23 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — pointer to pseudo-variable
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_ptr_pseudo_body` via @sim_validate:
+--    `p is pv` reads route to 'get and writes route to 'put on a
+--    pointer bound to a pseudo-variable.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_ptr_pseudo.jal
+--
+-- @sim_validate begin
+-- duration_s: 3.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 4
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_ptr_pseudo_body

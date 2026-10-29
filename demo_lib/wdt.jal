@@ -1,0 +1,120 @@
+-- --------------------------------------------------------------
+-- Title:     WDT runtime control (CONTROL mode) for PIC32MX1/2 + MZ EF
+-- Author:    Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler:  3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    The 32-bit equivalent of the classic-core `pragma target WDT
+--    CONTROL` fuse value: keep the FWDTEN fuse OFF (every sample's
+--    `pragma target WDT DISABLED` is exactly that precondition -- no
+--    power-cycle latching involved) and switch the watchdog on/off at
+--    RUNTIME through WDTCON.  A runtime-enabled WDT must be serviced
+--    (wdt_clear) once per loop pass, or it resets the chip.
+--
+--    MX1/2 (DS60001168): WDTCON.ON<15> software enable (plain write,
+--    no SYSKEY), WDTCLR<0> clear -- a plain bit write works (probe-
+--    proven 2026-10-26: a tight WDTCLR=1 hammer loop survives past
+--    12 s with the WDT armed).  The SWDTPS<6:2> postscaler field is
+--    READ-ONLY on silicon (DFP EDC access 'rrrrr'; writes are no-ops
+--    plain AND inside a SYSKEY window) -- it MIRRORS the DEVCFG1
+--    WDTPS fuse code, so the MX runtime period is fixed at program
+--    time exactly like the MZ: pair this include with
+--        pragma target WDTPS PSxxxx
+--    (device-file fuse vocabulary; PS4096 measures ~3.9 s on the
+--    bench MX270; the fuse default is PS1 = ~1 ms -- enabling the
+--    WDT without a WDTPS pragma arms a ~1 ms watchdog).
+--    MZ EF (DS60001191): same model -- ON plain write, period from
+--    the DEVCFG1 WDTPS fuse (RUNDIV<12:8> is its READ-ONLY mirror,
+--    EDC 'rrrrr'; writes rejected even inside a SYSKEY window,
+--    probe-proven 2026-10-25) -- and clearing through the
+--    WDTCLRKEY<31:16> key takes a 16-bit store of 0x5743 to WDTCON+2
+--    (word-width key writes are ignored; the device file's
+--    WDTCON_WDTCLRKEY word alias emits exactly that).
+--    Both WDTs count from the internal LPRC (~32 kHz); the base
+--    period measures ~1 ms on both families (bench, 2026-10-25/26),
+--    so the period is approximately 1 ms << divider everywhere.
+--
+-- Notes:
+--    - Include AFTER the device file (the WDTCON names come from it).
+--    - QEMU does not model the WDT: wdt_enable/wdt_clear execute as
+--      plain SFR stores and no reset ever fires there -- the hang
+--      recovery is a silicon-only property.
+--    - Classic cores: use the device file's `pragma target WDT CONTROL`
+--      fuse value and the `clrwdt` asm opcode instead.
+--
+-- --------------------------------------------------------------
+
+if defined(_MIPS_FAMILY) then
+   -- PIC32MX1/2
+
+--------------------------------------------------------------------------------
+-- Description: Enable the watchdog at runtime (fuse stays DISABLED)
+-- Parameters:
+-- - div_pow2 - IGNORED on MX: the SWDTPS divider is read-only (a mirror
+--              of the DEVCFG1 WDTPS fuse).  Set the period with
+--              `pragma target WDTPS PSxxxx` instead (PS4096 -> ~4 s).
+-- Notes:
+-- - ON is a plain write -- no SYSKEY unlock (probe-proven 2026-10-26)
+-- - the fuse default WDTPS is PS1: enabling without a WDTPS pragma
+--   arms a ~1 ms watchdog
+--------------------------------------------------------------------------------
+   procedure wdt_enable(byte in div_pow2) is
+      WDTCON_ON = 1
+   end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Service the watchdog (call once per loop pass)
+-- Notes:
+-- - WDTCLR is self-clearing
+--------------------------------------------------------------------------------
+   procedure wdt_clear() is
+      WDTCON_WDTCLR = 1
+   end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Disable the runtime watchdog
+--------------------------------------------------------------------------------
+   procedure wdt_disable() is
+      WDTCON_ON = 0
+   end procedure
+
+else
+   -- PIC32MZ EF
+
+--------------------------------------------------------------------------------
+-- Description: Enable the watchdog at runtime (fuse stays DISABLED)
+-- Parameters:
+-- - div_pow2 - IGNORED on MZ: the RUNDIV divider is read-only (a mirror
+--              of the DEVCFG1 WDTPS fuse).  Set the period with
+--              `pragma target WDTPS PSxxxx` instead (PS4096 -> ~4 s).
+-- Notes:
+-- - ON is a plain write -- no SYSKEY unlock (probe-proven 2026-10-25)
+--------------------------------------------------------------------------------
+   procedure wdt_enable(byte in div_pow2) is
+      WDTCON_ON = 1
+   end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Service the watchdog (call once per loop pass)
+-- Notes:
+-- - MZ latches the key ONLY on a 16-bit store to WDTCON+2 (the
+--   device file's WDTCON_WDTCLRKEY word alias); word-width writes of
+--   the key -- direct RMW on WDTCON or the WDTCONSET portal -- are
+--   silently ignored (silicon-proven 2026-10-25: reset fires exactly
+--   one period after ON=1 regardless of word-form clears).
+--------------------------------------------------------------------------------
+   procedure wdt_clear() is
+      WDTCON_WDTCLRKEY = 0x5743
+   end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Disable the runtime watchdog
+--------------------------------------------------------------------------------
+   procedure wdt_disable() is
+      WDTCON_ON = 0
+   end procedure
+
+end if

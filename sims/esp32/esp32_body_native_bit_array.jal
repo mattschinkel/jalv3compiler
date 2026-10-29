@@ -1,0 +1,36 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — native bit array
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    ESP32: shared `_regression_native_bit_array_body` via @sim_validate
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_native_bit_array.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 17
+-- expect byte v__gpsim_ba_snap0 1
+-- expect byte v__gpsim_ba_snap3 1
+-- expect byte v__gpsim_ba_snap8 1
+-- expect byte v__gpsim_ba_snap9 0
+-- expect byte v__gpsim_ba_dyn6 1
+-- expect byte v__gpsim_ba_dyn9 1
+-- expect byte v__gpsim_ba_dyn6_clear 0
+-- expect byte v__gpsim_ba_init_snap0 1
+-- expect byte v__gpsim_ba_init_snap1 0
+-- expect byte v__gpsim_ba_const_snap2 1
+-- expect byte v__gpsim_ba_fixed_formal 1
+-- expect byte v__gpsim_ba_open_formal 1
+-- expect byte v__gpsim_ba_cast_snap 1
+-- expect byte v__gpsim_ba_logic_snap 1
+-- expect byte v__gpsim_ba_notl_snap 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_native_bit_array_body

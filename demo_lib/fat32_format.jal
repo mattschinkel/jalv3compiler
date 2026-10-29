@@ -1,0 +1,339 @@
+-- ------------------------------------------------------
+-- Title: FAT32 on-board formatter (MBR + single FAT32 partition)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of the jalv3compiler demo_lib overlay.
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Formats the storage medium with an MBR carrying one FAT32 (LBA,
+--    type 0x0C) partition and a complete, mountable FAT32 volume:
+--    VBR + backup, FSInfo + backup, two FATs with the three reserved
+--    entries, and a zeroed root-directory cluster. Works over any
+--    storage driver that provides the storage_* aliases
+--    (sd_card, pata_hard_disk through storage_drivers.jal).
+--
+--    DESTRUCTIVE: every sector of the medium's new partition map is
+--    overwritten. Call fat32_format() only on purpose.
+--
+-- Notes:
+--    - Metadata sectors are written through a write-verify-retry
+--      helper (shadow copy -> write -> read-back compare -> up to
+--      4 attempts; prints "V!" per retry, "VFAIL@<lba>" if a sector
+--      never verifies).
+--    - The FAT + root region is normally prepared by a card-side
+--      ERASE (CMD32/33/38 when the driver provides storage_erase_range),
+--      verified to read back as zeros; cards that erase to 0xFF fall
+--      back to zero-writing the region (progress dot every
+--      FAT32_FORMAT_DOT_SECTORS sectors).
+--    - Override the geometry consts BEFORE the include to change them.
+--------------------------------------------------------------------------------
+
+include print
+include storage_drivers
+
+-- partition geometry (override before include if needed)
+if !defined(FAT32_FORMAT_PART_LBA) then
+   const dword FAT32_FORMAT_PART_LBA = 2048     -- 1 MB aligned partition start
+end if
+if !defined(FAT32_FORMAT_SECTORS_PER_CLUSTER) then
+   const byte FAT32_FORMAT_SECTORS_PER_CLUSTER = 64   -- 32 KB clusters
+end if
+if !defined(FAT32_FORMAT_RESERVED) then
+   const word FAT32_FORMAT_RESERVED = 32        -- reserved sectors before FATs
+end if
+const dword _FAT32_FMT_ROOT_CLUSTER = 2         -- cluster 2 = root directory
+const dword _FAT32_FMT_DOT_SECTORS  = 2048      -- progress dot interval
+
+var byte _fat32_fmt_check[512]
+
+--------------------------------------------------------------------------------
+-- Description: Fill the storage sector buffer with one byte value
+-- Parameters:
+-- - v - byte to write to all 512 buffer positions
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure _fat32_fmt_fill(byte in v) is
+   var word _i = 0
+   for 512 loop
+      storage_sector_buffer[_i] = v
+      _i = _i + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Store a little-endian word into the sector buffer
+-- Parameters:
+-- - off - buffer offset
+-- - v   - value to store
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure _fat32_fmt_put_word(word in off, word in v) is
+   storage_sector_buffer[off] = byte(v & 0xFF)
+   storage_sector_buffer[off + 1] = byte((v >> 8) & 0xFF)
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Store a little-endian dword into the sector buffer
+-- Parameters:
+-- - off - buffer offset
+-- - v   - value to store
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure _fat32_fmt_put_dword(word in off, dword in v) is
+   storage_sector_buffer[off] = byte(v & 0xFF)
+   storage_sector_buffer[off + 1] = byte((v >> 8) & 0xFF)
+   storage_sector_buffer[off + 2] = byte((v >> 16) & 0xFF)
+   storage_sector_buffer[off + 3] = byte((v >> 24) & 0xFF)
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Copy text into the sector buffer
+-- Parameters:
+-- - off - buffer offset
+-- - len - number of characters
+-- - txt - text to copy (byte array)
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure _fat32_fmt_put_text(word in off, word in len, byte in txt[]) is
+   var word _i = 0
+   for len loop
+      storage_sector_buffer[off + _i] = txt[_i]
+      _i = _i + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Write one sector and verify it reads back identical
+-- Parameters:
+-- - lba - sector to write (from the storage sector buffer)
+-- Returns: (none)
+-- Notes: the read-back overwrites the sector buffer, so the sector is
+-- - shadow-copied first and restored before any retry.
+--------------------------------------------------------------------------------
+procedure _fat32_fmt_write_verified(volatile byte out device, dword in lba) is
+   var word _i = 0
+   sd_has_error = 0
+   for 512 loop
+      _fat32_fmt_check[_i] = storage_sector_buffer[_i]
+      _i = _i + 1
+   end loop
+   var byte _tries = 0
+   var bit   _ok = FALSE
+   while _tries < 4 loop
+      if _tries > 0 then
+         print_string(device, "V!")
+      end if
+      storage_raw_write_sector_address(lba)
+      storage_raw_read_sector_address(lba)
+      _ok = TRUE
+      _i = 0
+      for 512 loop
+         if storage_sector_buffer[_i] != _fat32_fmt_check[_i] then
+            _ok = FALSE
+         end if
+         _i = _i + 1
+      end loop
+      if _ok then
+         exit loop
+      end if
+      _i = 0
+      for 512 loop
+         storage_sector_buffer[_i] = _fat32_fmt_check[_i]
+         _i = _i + 1
+      end loop
+      _tries = _tries + 1
+   end loop
+   if _ok != TRUE then
+      print_string(device, "VFAIL@")
+      print_dword_dec(device, lba)
+      print_string(device, " ")
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Format the storage medium as one FAT32 partition
+-- Parameters: (none; uses the driver's reported sector count)
+-- Returns: (none; prints geometry + progress, VFAIL on verify errors)
+-- Notes: DESTRUCTIVE -- erases the medium's partition structures and
+-- - FAT area. The MBR is written (verified) last so an interrupted
+-- - format leaves an unmountable card rather than a half-mounted one.
+--------------------------------------------------------------------------------
+procedure fat32_format(volatile byte out device) is
+   if storage_number_of_sectors < 8_192 then
+      print_string(device, "format: storage not initialized (sector count bogus)\r\n")
+      return
+   end if
+   var dword total_secs = storage_number_of_sectors - FAT32_FORMAT_PART_LBA
+
+   -- solve FAT size: fat_secs must cover (clusters + 2 reserved entries) * 4
+   var dword fat_secs = 1
+   var dword clusters = 0
+   var byte  rounds   = 0
+   while rounds < 8 loop
+      clusters = (total_secs - FAT32_FORMAT_RESERVED - (fat_secs * 2)) / FAT32_FORMAT_SECTORS_PER_CLUSTER
+      var dword need = (((clusters + 3) * 4) + 511) / 512
+      if need <= fat_secs then
+         exit loop
+      end if
+      fat_secs = need
+      rounds = rounds + 1
+   end loop
+   clusters = (total_secs - FAT32_FORMAT_RESERVED - (fat_secs * 2)) / FAT32_FORMAT_SECTORS_PER_CLUSTER
+
+   -- settle read: a write as the first transaction after sd_init wedges
+   -- this card family's state machine and every later read times out
+   -- (bench-proven 18F67J50 + SDXC 2026-10-28; the corpus samples always
+   -- read before their first write, which is why jallib never saw it)
+   storage_raw_read_sector_address(0)
+
+   print_string(device, "format: total=")
+   print_dword_dec(device, total_secs)
+   print_string(device, " fat_secs=")
+   print_dword_dec(device, fat_secs)
+   print_string(device, " clusters=")
+   print_dword_dec(device, clusters)
+   print_crlf(device)
+
+   -- FAT32 volume boot record (also written as the backup at +6)
+   _fat32_fmt_fill(0)
+   storage_sector_buffer[0] = 0xEB           -- jmp short + nop
+   storage_sector_buffer[1] = 0x58
+   storage_sector_buffer[2] = 0x90
+   _fat32_fmt_put_text(3, 8, "MSDOS5.0")     -- OEM name
+   _fat32_fmt_put_word(11, 512)              -- bytes per sector
+   storage_sector_buffer[13] = FAT32_FORMAT_SECTORS_PER_CLUSTER
+   _fat32_fmt_put_word(14, FAT32_FORMAT_RESERVED)
+   storage_sector_buffer[16] = 2             -- FAT copies
+   _fat32_fmt_put_word(17, 0)                -- root entries (FAT32: 0)
+   _fat32_fmt_put_word(19, 0)                -- total sectors 16 (0: use 32-bit)
+   storage_sector_buffer[21] = 0xF8          -- media descriptor
+   _fat32_fmt_put_word(22, 0)                -- sectors per FAT (FAT16 field: 0)
+   _fat32_fmt_put_word(24, 63)               -- sectors per track (cosmetic)
+   storage_sector_buffer[26] = 255           -- heads (cosmetic)
+   _fat32_fmt_put_dword(28, FAT32_FORMAT_PART_LBA)   -- hidden sectors
+   _fat32_fmt_put_dword(32, total_secs)      -- total sectors 32
+   _fat32_fmt_put_dword(36, fat_secs)        -- sectors per FAT32
+   _fat32_fmt_put_word(40, 0)                -- ext flags (mirror both FATs)
+   _fat32_fmt_put_word(42, 0)                -- FS version
+   _fat32_fmt_put_dword(44, _FAT32_FMT_ROOT_CLUSTER) -- root directory cluster
+   _fat32_fmt_put_word(48, 1)                -- FSInfo sector
+   _fat32_fmt_put_word(50, 6)                -- backup boot sector
+   storage_sector_buffer[64] = 0x80          -- drive number
+   storage_sector_buffer[66] = 0x29          -- extended boot signature
+   _fat32_fmt_put_dword(67, 0x2026_10_27)    -- volume id (format date)
+   _fat32_fmt_put_text(71, 11, "NO NAME    ") -- volume label
+   _fat32_fmt_put_text(82, 8, "FAT32   ")    -- FS type
+   storage_sector_buffer[510] = 0x55
+   storage_sector_buffer[511] = 0xAA
+   _fat32_fmt_write_verified(device, FAT32_FORMAT_PART_LBA)
+   _fat32_fmt_write_verified(device, FAT32_FORMAT_PART_LBA + 6)
+
+   -- FSInfo sector (primary at +1, backup at +7)
+   _fat32_fmt_fill(0)
+   _fat32_fmt_put_dword(0,   0x4161_5252)    -- lead signature
+   _fat32_fmt_put_dword(484, 0x6141_7272)    -- structure signature
+   _fat32_fmt_put_dword(488, clusters - 1)   -- free cluster count
+   _fat32_fmt_put_dword(492, 3)              -- next free hint
+   storage_sector_buffer[510] = 0x55
+   storage_sector_buffer[511] = 0xAA
+   _fat32_fmt_write_verified(device, FAT32_FORMAT_PART_LBA + 1)
+   _fat32_fmt_write_verified(device, FAT32_FORMAT_PART_LBA + 7)
+
+   -- FAT + root area preparation. FAST PATH: a card-side erase
+   -- (CMD32/33/38) of the whole FAT + root region, verified by reading
+   -- a probe sector -- erased sectors read 0x00 on this card (SD allows
+   -- 0x00 or 0xFF). FALLBACK: zero-write the same region (minutes at
+   -- slow bus clocks; the erase is card-internal and near-instant).
+   var dword fat_lba = FAT32_FORMAT_PART_LBA + FAT32_FORMAT_RESERVED
+   var dword data_lba = FAT32_FORMAT_PART_LBA + FAT32_FORMAT_RESERVED + (fat_secs * 2)
+   var dword root_end = data_lba + FAT32_FORMAT_SECTORS_PER_CLUSTER - 1
+   var bit    erased_ok = FALSE
+
+   if defined(storage_erase_range) then
+      print_string(device, "erase...\r\n")
+      storage_erase_range(fat_lba, root_end)
+      if sd_has_error == 0 then
+         -- probe one sector mid-FAT: must read as all zeros
+         storage_raw_read_sector_address(fat_lba + (fat_secs / 2))
+         var word _p = 0
+         erased_ok = TRUE
+         for 512 loop
+            if storage_sector_buffer[_p] != 0 then
+               erased_ok = FALSE
+            end if
+            _p = _p + 1
+         end loop
+      end if
+      if erased_ok then
+         print_string(device, "erased-as-zero ok\r\n")
+      else
+         print_string(device, "erase not zero (probe:")
+         var word _q = 0
+         for 8 loop
+            print_byte_hex(device, storage_sector_buffer[_q])
+            print_string(device, " ")
+            _q = _q + 1
+         end loop
+         print_string(device, ") -- falling back to zero-write\r\n")
+      end if
+   end if
+
+   -- both FATs: first sector carries FAT[0..2]; the rest must be zeros
+   -- (already zero everywhere on the erase fast path)
+   for 2 loop
+      _fat32_fmt_fill(0)
+      _fat32_fmt_put_dword(0, 0x0FFF_FFF8)   -- FAT[0]: media byte
+      _fat32_fmt_put_dword(4, 0xFFFF_FFFF)   -- FAT[1]: EOC flag
+      _fat32_fmt_put_dword(8, 0x0FFF_FFFF)   -- FAT[2]: root dir cluster EOC (exact 0x0FFFFFFF matches the chain walker)
+      _fat32_fmt_write_verified(device, fat_lba)
+      if erased_ok != TRUE then
+         _fat32_fmt_fill(0)
+         storage_start_write(fat_lba + 1)
+         var dword _n = 1
+         var word  _dots = 0
+         while _n < fat_secs loop
+            storage_raw_write_sector()
+            _n = _n + 1
+            _dots = _dots + 1
+            if _dots == _FAT32_FMT_DOT_SECTORS then
+               print_string(device, ".")
+               _dots = 0
+            end if
+         end loop
+         storage_stop_write()
+      end if
+      fat_lba = fat_lba + fat_secs
+   end loop
+
+   -- root-directory cluster: first sector carries the end-of-directory
+   -- marker (all zeros); the erase zeroed the rest on the fast path
+   _fat32_fmt_fill(0)
+   _fat32_fmt_write_verified(device, data_lba)
+   if erased_ok != TRUE then
+      storage_start_write(data_lba + 1)
+      for FAT32_FORMAT_SECTORS_PER_CLUSTER - 1 loop
+         storage_raw_write_sector()
+      end loop
+      storage_stop_write()
+   end if
+
+   -- MBR with one FAT32 (LBA) partition entry, written and verified LAST
+   _fat32_fmt_fill(0)
+   storage_sector_buffer[446] = 0x80         -- bootable
+   storage_sector_buffer[447] = 0x01         -- CHS start (conventional)
+   storage_sector_buffer[448] = 0x01
+   storage_sector_buffer[449] = 0x00
+   storage_sector_buffer[450] = 0x0C         -- FAT32 LBA
+   storage_sector_buffer[451] = 0xFE         -- CHS end (max)
+   storage_sector_buffer[452] = 0xFF
+   storage_sector_buffer[453] = 0xFF
+   _fat32_fmt_put_dword(454, FAT32_FORMAT_PART_LBA)  -- partition start LBA
+   _fat32_fmt_put_dword(458, total_secs)     -- partition size in sectors
+   storage_sector_buffer[510] = 0x55
+   storage_sector_buffer[511] = 0xAA
+   _fat32_fmt_write_verified(device, 0)
+
+   print_string(device, "\r\nformat complete\r\n")
+end procedure

@@ -1,0 +1,23 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — indirect-call parameter liveness
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_indirect_args_body` via @sim_validate:
+--    params of INDIRECT-flagged procs must survive nested indirect
+--    calls (the mips twin of the ESP32 inbox fix).
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_indirect_args.jal
+--
+-- @sim_validate begin
+-- duration_s: 3.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 4
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+include _regression_indirect_args_body

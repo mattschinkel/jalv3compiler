@@ -1,0 +1,49 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — isr fast (SRS)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: pragma interrupt fast — no software GPR save/restore in
+--    the vector stub (shadow register set on silicon via INTCON.SS0,
+--    which the enable emits).  Phase 3j sim-verified the shape in
+--    tmp/ but it had no suite body.  Keeps live state in RAM across
+--    the IRQ so QEMU is fine even when SRS is not fully modeled.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_isr_fast.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 2
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+
+--------------------------------------------------------------------------------
+-- Description: fast IRQ handler (SRS on silicon)
+-- Parameters: none (pragma interrupt fast)
+-- Returns: none
+-- Notes: Clears IFS0 bit 0 so ERET does not re-enter.
+--------------------------------------------------------------------------------
+procedure _ct_fast_isr() is
+   pragma interrupt fast
+
+   IFS0CLR = 1
+   ra = ra + 1
+end procedure
+
+IPC0 = 0x1C
+IEC0SET = 1
+rb = 1
+IFS0SET = 1
+while ra == 0 loop
+end loop
+if ra == 1 then
+   rb = 2
+end if

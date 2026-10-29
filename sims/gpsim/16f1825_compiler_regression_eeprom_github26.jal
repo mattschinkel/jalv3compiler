@@ -1,0 +1,132 @@
+-- ------------------------------------------------------
+-- Title: PIC16F1825 gpsim — EEPROM indexed assign (GitHub jalv2compiler #26)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Minimal behavioural check for upstream **#26**: **`third_party/jallib/lib/pic_data_eeprom.jal`**
+--    **`data_eeprom()`** is **`pragma inline`**, so its body expands into the
+--    caller (**`_gpsim_ee26_direct_eeprom_loop`**). The assignment
+--    **`buf[index+1] = data_eeprom(index+1)`** must not corrupt **`_temp`** layout
+--    (inline **`STATEMENT_END`** vs **`pfile_temp_fixup`** / **`CMD_FLAG_INLINE_DUP_BLOCK`**),
+--    so RAM stays **`'B'`**, **`'C'`**, **`'D'`** after filling with **`'A'`**. EEPROM is
+--    seeded at runtime with **`data_eeprom_write`** so **gpsim** sees known
+--    data without relying on **`.hex`** **EEDATA** alone.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64
+--    -s 'lib;tests' tests/16f1825_compiler_regression_eeprom_github26.jal`**
+--
+--
+-- @gpsim_validate begin
+-- steps: 500000
+-- frequency_hz: auto
+-- expect bit_clear v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_v_gpsim_ee26_b 66
+-- expect byte v_v_gpsim_ee26_c 67
+-- expect byte v_v_gpsim_ee26_d 68
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include pic_data_eeprom
+
+const byte _gpsim_ee26_n = 4
+
+var byte _gpsim_ee26_buf[_gpsim_ee26_n]
+var byte _gpsim_ee26_i
+
+var volatile byte v_gpsim_ee26_b = 0
+var volatile byte v_gpsim_ee26_c = 0
+var volatile byte v_gpsim_ee26_d = 0
+
+--------------------------------------------------------------------------------
+-- Description: Seed simulated data EEPROM with known bytes (offset 1..3 B/C/D)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Offset 0 written as digit zero for sanity; reads under test use 1..3.
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_seed_eeprom() is
+   data_eeprom_write(0, "0")
+   data_eeprom_write(1, "B")
+   data_eeprom_write(2, "C")
+   data_eeprom_write(3, "D")
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Fill RAM buffer with letter A (GitHub #26 repro setup)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_fill_a() is
+   for _gpsim_ee26_n using _gpsim_ee26_i loop
+      _gpsim_ee26_buf[_gpsim_ee26_i] = "A"
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Buggy pattern from #26 — direct assign from data_eeprom()
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_direct_eeprom_loop() is
+   for (_gpsim_ee26_n - 1) using _gpsim_ee26_i loop
+      _gpsim_ee26_buf[_gpsim_ee26_i + 1] = data_eeprom(_gpsim_ee26_i + 1)
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Copy buffer bytes to volatile vars for gpsim RAM expect
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _gpsim_ee26_capture_expect_vars() is
+   v_gpsim_ee26_b = _gpsim_ee26_buf[1]
+   v_gpsim_ee26_c = _gpsim_ee26_buf[2]
+   v_gpsim_ee26_d = _gpsim_ee26_buf[3]
+end procedure
+
+regression_begin_run()
+
+_gpsim_ee26_seed_eeprom()
+_gpsim_ee26_fill_a()
+_gpsim_ee26_direct_eeprom_loop()
+_gpsim_ee26_capture_expect_vars()
+
+if (v_gpsim_ee26_b != "B") | (v_gpsim_ee26_c != "C") | (v_gpsim_ee26_d != "D") then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

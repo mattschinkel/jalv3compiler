@@ -1,0 +1,51 @@
+-- ----------------------------------------------------------------------------
+-- Title: Pointer-to-array bound to a pseudo ARRAY — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `p is parr` where parr is an indexed pseudo-variable (the
+--    jallib pseudo-array idiom: 'get takes the index as its first in
+--    formal, 'put takes index+value). Reads and writes through the
+--    bound pointer-to-array route to the accessors, const and runtime
+--    indices alike.
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+regression_begin_run()
+
+var byte _par_mem[8]
+var byte _par_snap1 = 0
+var byte _par_snap2 = 0
+var word _par_i = 5
+
+function _par_parr'get(word in idx) return byte is
+   return _par_mem[idx]
+end function
+
+procedure _par_parr'put(word in idx, byte in v) is
+   _par_mem[idx] = v
+end procedure
+
+var pointer _par_p as var byte[8]
+
+_par_p is _par_parr
+_par_mem[3] = 33
+_par_mem[5] = 55
+_par_snap1 = _par_p[3]
+_par_snap2 = _par_p[_par_i]
+_par_p[3] = 44
+_par_p[_par_i] = 66
+if (_par_snap1 != 33) | (_par_snap2 != 55) then
+   _check_failed = true
+end if
+regression_checkpoint()
+if (_par_mem[3] != 44) | (_par_mem[5] != 66) then
+   _check_failed = true
+end if
+regression_checkpoint()
+-- EOF-tail shape: the write's put-routing must not depend on the token
+-- after the statement (the body include ends here in the wrapper's file)

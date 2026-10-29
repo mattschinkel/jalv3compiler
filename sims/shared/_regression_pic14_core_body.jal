@@ -1,0 +1,133 @@
+-- Title: Shared PIC14 regression body — core
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_core.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+var byte _b
+var byte _b2
+var word _w
+-- _d: dword checked by gpsim_validate expect dword_le v__d (jal var _d -> asm v__d)
+var dword _d
+
+--------------------------------------------------------------------------------
+procedure _dup_byte(byte in x, byte out y) is
+   y = x + x
+end procedure
+
+--------------------------------------------------------------------------------
+function _mul2(byte in x) return byte is
+   return x * 2
+end function
+
+--------------------------------------------------------------------------------
+procedure _run_core_checks() is
+   var word _acc
+   var byte _i
+
+   regression_begin_run()
+   _b2 = 0
+
+   _b = 200 + 55
+   if _b != 255 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w = 1000 + 234
+   if _w != 1234 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _d = 50_000_000 + 1
+   if _d != 50_000_001 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w = 100 * 7 / 5
+   if _w != 140 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w = word(1) << 10
+   if _w != 1024 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = byte(0x12)
+   if _b != 18 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _dup_byte(20, _b)
+   if _b != 40 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = _mul2(21)
+   if _b != 42 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _acc = 0
+   -- for N using _i: _i is 0 .. N-1 (10 iterations here)
+   for 10 using _i loop
+      _acc = _acc + word(_i + 1)
+   end loop
+   if _acc != 55 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = 3
+   if _b == 0 then
+      _check_failed = true
+   elsif _b == 1 then
+      _check_failed = true
+   elsif _b == 3 then
+      _b2 = 1
+   else
+      _check_failed = true
+   end if
+   if _b2 != 1 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   const byte _CB = 40 + 2
+   if _CB != 42 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+
+   -- Drive LED low; do not read pin vs LAT here — simulators often keep PORT != LATA.
+   led_pin = low
+end procedure
+
+_run_core_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

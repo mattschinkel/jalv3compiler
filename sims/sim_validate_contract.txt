@@ -1,0 +1,37 @@
+# @sim_validate contract (PIC32 / QEMU)
+
+Comment block in the .jal under test (case-insensitive markers):
+
+```
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- uart_out: A
+-- expect byte v_ra 1
+-- expect word_le v_w 0x1234
+-- expect dword_le v_d 0x11223344
+-- expect bit_set v_flags 0
+-- expect bit_clear v_flags 1
+-- @sim_validate end
+```
+
+## Directives
+
+| Line | Meaning |
+|------|---------|
+| `duration_s: <float>` | Free-run wall time before dump (default 0.5). Replaces gpsim `steps:`. |
+| `machine: <name>` | QEMU `-M` (default `pic32mz-explorer16`). |
+| `compiler_args: …` | Extra tokens after `-s` (same idea as gpsim). |
+| `uart_out: <text>` | Exact UART output the run must produce (leading/trailing whitespace stripped). When present, `jal_sim_validate.sh` pipes QEMU's first serial port through a unix socket and compares the captured bytes. Absent → `-serial none` as before. |
+| `uart_contains: <text>` | Substring variant of `uart_out`: the captured UART stream must contain `<text>`. Needed on ESP32, where the boot ROM prints its banner on the same UART before user code runs (same on real hardware). |
+| `uart_input: <text>` | Feed `<text>` into the guest's first UART (QEMU `-serial stdio`; `\n`/`\r` escapes accepted). The QEMU PIC32 UART model has a single-byte RX holding register, so bytes are paced ~1 s apart — give `duration_s` at least `1 + 1.2 × len(text)`. When input is present, captured output has QEMU's banner/log lines stripped. |
+| `expect byte <sym> <val>` | Byte at EQU address == val |
+| `expect word_le <sym> <val>` | Little-endian 16-bit |
+| `expect dword_le <sym> <val>` | Little-endian 32-bit |
+| `expect bit_set\|bit_clear <sym> <bit>` | Bit in the byte at EQU |
+
+Symbols are assembler names from the PIC32 EQU dump (`v_va`, `v_ra`, …) —
+offsets from `MIPS_RAM_BASE` / phys 0, matching QEMU `xp /Nbx 0`.
+
+Require at least one `expect` line. Used by `tests/jal_sim_validate.sh`
+and `tests/sim_validate_engine.py`.

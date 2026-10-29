@@ -1,0 +1,34 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — float IEEE body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Soft-float IEEE-754 semantics via `_regression_esp32_float_ieee`:
+--    round-to-nearest-even DIV/MUL/ADD/SUB, denormals, inf/NaN,
+--    -0, saturating F2I.  Shared `_check_step`/result-byte expects.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_float_ieee.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- compiler_args: -Wno-misc -Wno-conversion
+-- expect byte v__check_step 10
+-- expect byte v__fie_div_exact 1
+-- expect byte v__fie_div_rne 1
+-- expect byte v__fie_div_under 1
+-- expect byte v__fie_add_denorm 1
+-- expect byte v__fie_addsub 1
+-- expect byte v__fie_mul 1
+-- expect byte v__fie_inf 1
+-- expect byte v__fie_nan 1
+-- expect byte v__fie_negzero 1
+-- expect byte v__fie_conv 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_float_ieee_body

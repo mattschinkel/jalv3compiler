@@ -1,0 +1,75 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — float
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: IEEE754 soft-float smoke
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_float.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ok_div 1
+-- expect byte v_ok_lt 1
+-- expect byte v_ok_gt 1
+-- expect byte v_ok_add 1
+-- expect byte v_ok_i2f 1
+-- expect byte v_ok_f2i 1
+-- expect byte v_bi 5
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ok_div = 0
+var volatile byte ok_lt  = 0
+var volatile byte ok_gt  = 0
+var volatile byte ok_add = 0
+var volatile byte ok_i2f = 0
+var volatile byte ok_f2i = 0
+var volatile byte bi     = 0
+
+var volatile float fv
+var volatile float fa
+var volatile float fb
+
+fa = float(10)
+fb = float(4)
+fv = fa / fb
+if fv > float(2) then
+  ok_gt = 1
+end if
+if fv < float(3) then
+  ok_lt = 1
+end if
+if ok_gt == 1 then
+  if ok_lt == 1 then
+    ok_div = 1
+  end if
+end if
+
+fa = float(1)
+fb = float(2)
+fv = fa + fb
+if fv > float(2) then
+  if fv < float(4) then
+    ok_add = 1
+  end if
+end if
+
+fv = float(7)
+if fv > float(6) then
+  if fv < float(8) then
+    ok_i2f = 1
+  end if
+end if
+
+fa = float(5)
+fb = float(0)
+fv = fa + fb
+bi = byte(fv)
+if bi == 5 then
+  ok_f2i = 1
+end if

@@ -1,0 +1,33 @@
+-- ------------------------------------------------------
+-- JALv3 regression test (sims suite)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+-- ------------------------------------------------------
+-- overlay-to-overlay dword compare over float hosts: bit-equal dwords must compare equal
+-- @sim_validate begin
+-- machine: esp32
+-- duration_s: 20.0
+-- expect byte v__ovl_eq 1
+-- expect byte v__plain_eq 1
+-- expect dword_le v__da 0x3F000000
+-- @sim_validate end
+
+include regression_esp32_device
+include regression
+
+var float f1 = 0.5
+var float f2 = 0.5
+var dword a at f1
+var dword b at f2
+var volatile byte _ovl_eq = 0
+var volatile byte _plain_eq = 0
+var volatile dword _da = 0
+
+_da = a
+if a == b then
+   _ovl_eq = 1
+end if
+if _da == 0x3F000000 then
+   _plain_eq = 1
+end if
+regression_checkpoint()

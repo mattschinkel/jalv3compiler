@@ -1,0 +1,71 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — smoke bits
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 smoke: packed bit scalar + array
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_smoke_bits.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 0
+-- expect byte v_rf 1
+-- expect byte v_rg 1
+-- expect byte v_rh 1
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+var volatile byte rg = 0
+var volatile byte rh = 0
+var byte ix = 6
+var bit flag
+var bit flags[10]
+var bit cpy
+
+flag = true
+flags[0] = true
+flags[3] = true
+flags[8] = true
+flags[9] = false
+flags[ix] = true
+cpy = flags[0]
+
+if flag then
+   ra = 1
+end if
+if flags[0] then
+   rb = 1
+end if
+if flags[3] then
+   rc = 1
+end if
+if flags[8] then
+   rd = 1
+end if
+if flags[9] then
+   re = 1
+end if
+if flags[ix] then
+   rf = 1
+end if
+if !flags[9] then
+   rg = 1
+end if
+if cpy then
+   rh = 1
+end if

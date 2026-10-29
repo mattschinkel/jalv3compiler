@@ -1,0 +1,48 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — alloc local
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 Phase-B: local caller-saved GPR homes (write-through)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_alloc_local.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_out1 8
+-- expect byte v_out2 11
+-- expect byte v_out3 16
+-- expect byte v_out4 8
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+var volatile byte out1
+var volatile byte out2
+var volatile byte out3
+var volatile byte out4
+
+procedure _run_alloc_local() is
+  var byte xa
+  var byte xb
+  var byte xc
+  var byte xd
+  var byte xe
+  var byte xf
+
+  xa = 3
+  xb = 5
+  xc = xa + xb
+  xd = xa + xc
+  xe = xb + xd
+  xf = xc
+  out1 = xc
+  out2 = xd
+  out3 = xe
+  out4 = xf
+end procedure
+
+_run_alloc_local()

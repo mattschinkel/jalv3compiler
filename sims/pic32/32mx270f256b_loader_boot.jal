@@ -1,0 +1,34 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — loader boot init
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K) loader-mode image (`pragma bootloader pic32`)
+--    carrying the compiler-emitted boot-flash init block.  The MX boot
+--    flash is 3 KB, so the boot block must stay below the config words
+--    at 0xBFC00BF0 and the app runs from program flash at 0x9D000000
+--    with its EBASE/vector page in the top 4 KB of program flash.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_loader_boot.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_loader_probe 42
+-- @sim_validate end
+--
+include 32mx270f256b
+
+pragma target clock 40_000_000
+pragma target OSC   FRC_SPLL
+pragma bootloader pic32
+
+var volatile byte loader_probe
+
+loader_probe = 42
+
+forever loop
+end loop

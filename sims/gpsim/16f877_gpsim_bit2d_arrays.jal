@@ -1,0 +1,31 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim - multi-dimensional bit arrays
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_bit2d_body`: 2D bit-array subscript strides
+--    (runtime/const index mixes, 16-bit and 20-bit row strides) on a
+--    classic core, where native bit arrays pack into GPR bytes behind
+--    the reserved bitbucket bit 0.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 7
+-- expect byte v__bt2d_fill_ok 1
+-- expect byte v__bt2d_const_ok 1
+-- expect byte v__bt2d_run_ok 1
+-- expect byte v__bt2d_wide_ok 1
+-- expect byte v__bt2d_stride20_ok 1
+-- expect byte v__bt2d_nd4_ok 1
+-- expect byte v__bt2d_nd3b_ok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+include _regression_bit2d_body

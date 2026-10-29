@@ -1,0 +1,125 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — timer0 ISR + pointer into multi-bank array (IRP)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2 (jalv3-x86-64)
+--
+-- Description:
+--    Behavioral coverage for the residual compare deltas on the
+--    **`*_timer0_interval`** family: classic PIC14 timer0 **`pragma interrupt`**
+--    plus data-pointer access to an array that spans RAM banks, so indirect
+--    reads/writes must set **`STATUS<IRP>`** from the pointer slot MSB
+--    ( era IRP work;
+--    compare growth attribution: only non-bank-select growth left).
+--    Merged into the **`16f877`** suite glob.
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_timer0_pointer_irp.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__irp_w0 17
+-- expect byte v__irp_w60 77
+-- expect byte v__irp_r0 17
+-- expect byte v__irp_r60 204
+-- expect byte v__irp_after_isr 204
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+-- force the target array out of bank 0: a filler consumes the bank-0 GPR
+-- window first, so _irp_buf is allocated in bank 1 and pointer traffic to it
+-- must set STATUS<IRP> from the pointer slot MSB.
+var volatile byte _irp_buf[96]
+
+var pointer _irp_p as var byte[96]
+
+var volatile byte _irp_ticks = 0
+
+var byte _irp_w0 = 0, _irp_w60 = 0, _irp_r0 = 0, _irp_r60 = 0
+var byte _irp_after_isr = 0
+var byte _irp_ticks_ge5 = 0
+
+--------------------------------------------------------------------------------
+-- Description: timer0 overflow ISR — increments a volatile tick counter.
+--------------------------------------------------------------------------------
+procedure _irp_isr() is
+   pragma interrupt
+   if intcon_t0if then
+      intcon_t0if = false
+      _irp_ticks = _irp_ticks + 1
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: pointer-into-bank-1 read/write checks, then timer0 ISR period
+--              with a pointer read after interrupts have fired.
+--------------------------------------------------------------------------------
+procedure _irp_run() is
+   var byte idx
+   var word guard
+
+   regression_begin_run()
+
+   -- 1) write pattern directly; read it back through the pointer (IRP path)
+   _irp_p is _irp_buf
+   for 96 using idx loop
+      _irp_buf[idx] = idx + 17
+   end loop
+   _irp_w0 = _irp_p[0]
+   _irp_w60 = _irp_p[60]
+   if _irp_w0 != 17 then
+      _check_failed = true
+   end if
+   if _irp_w60 != 77 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- 2) write through the pointer at a bank-crossing index; read directly
+   _irp_p[60] = 204
+   _irp_r0 = _irp_p[0]
+   _irp_r60 = _irp_buf[60]
+   if _irp_r0 != 17 then
+      _check_failed = true
+   end if
+   if _irp_r60 != 204 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   -- 3) timer0 interrupt period: ISR ticks while we idle; afterwards a
+   --    pointer read must still return the bank-1 data
+   option_reg_psa = true            -- prescaler to WDT -> TMR0 ticks fast
+   option_reg_t0cs = false          -- internal clock
+   intcon_t0ie = true
+   intcon_gie = true
+   guard = 0
+   while (_irp_ticks < 5) & (guard < 60000) loop
+      guard = guard + 1
+   end loop
+   intcon_gie = false
+   intcon_t0ie = false
+   if _irp_ticks >= 5 then
+      _irp_ticks_ge5 = 1
+   else
+      _check_failed = true
+   end if
+   _irp_after_isr = _irp_p[60]
+   if _irp_after_isr != 204 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_irp_run()
+
+forever loop
+end loop

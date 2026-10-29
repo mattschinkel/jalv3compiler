@@ -1,0 +1,112 @@
+-- Title: Shared PIC18 regression body — queues more
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_queues more.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+const byte queue03_size = 5
+include queue03
+
+const byte queue04_size = 5
+include queue04
+
+const byte queue05_size = 5
+include queue05
+
+var byte _qb
+var bit _ok
+
+--------------------------------------------------------------------------------
+-- Description: Put/get for queue03, queue04, queue05
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+--------------------------------------------------------------------------------
+procedure _run_queues_more_checks() is
+   regression_begin_run()
+
+   queue03_clear()
+   _ok = queue03_nb_put(0xC3)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue03_nb_get(_qb)
+   if !_ok | (_qb != 0xC3) then
+      _check_failed = true
+   end if
+   if !queue03_is_empty() then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   queue04_clear()
+   _ok = queue04_nb_put(0x77)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue04_nb_put(0x88)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue04_nb_get(_qb)
+   if !_ok | (_qb != 0x77) then
+      _check_failed = true
+   end if
+   _ok = queue04_nb_get(_qb)
+   if !_ok | (_qb != 0x88) then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   queue05_clear()
+   _ok = queue05_nb_put(0x01)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue05_nb_put(0x02)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue05_nb_put(0x03)
+   if !_ok then
+      _check_failed = true
+   end if
+   _ok = queue05_nb_get(_qb)
+   if !_ok | (_qb != 0x01) then
+      _check_failed = true
+   end if
+   _ok = queue05_nb_get(_qb)
+   if !_ok | (_qb != 0x02) then
+      _check_failed = true
+   end if
+   _ok = queue05_nb_get(_qb)
+   if !_ok | (_qb != 0x03) then
+      _check_failed = true
+   end if
+   if queue05_nr_used() != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_queues_more_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

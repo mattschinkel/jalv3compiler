@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — loader boot init
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Loader-mode image (`pragma bootloader pic32`) carrying the
+--    compiler-emitted boot-flash init (mips_loader_boot_init_emit):
+--    proves the ORG-placed bring-up block executes under QEMU and
+--    enters the PFM app at 0x9D000000.  Silicon-proven sequence
+--    (10/10 power cycles, 2026-10-04); this body is the QEMU gate.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_loader_boot.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_loader_probe 42
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+
+pragma bootloader pic32
+
+var volatile byte loader_probe
+
+loader_probe = 42
+
+forever loop
+end loop

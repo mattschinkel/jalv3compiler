@@ -1,0 +1,46 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — fnptr qword
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review follow-up: qword return through a function pointer
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_fnptr_qword.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile qword q = 0
+var volatile qword r = 0
+var pointer fp as function(qword in) return qword
+
+--------------------------------------------------------------------------------
+-- Description: Return qword + 1 (wide function-pointer return)
+-- Parameters:
+-- - q - input qword
+-- Returns: q + 1
+--------------------------------------------------------------------------------
+function _qinc(qword in q) return qword is
+   return q + 1
+end function
+
+q = 0x00000001000000FF
+r = 0
+fp is _qinc
+r = fp(q)
+if byte(r) == 0 then
+   ra = 1
+end if
+if byte(r >> 32) == 1 then
+   rb = 1
+end if

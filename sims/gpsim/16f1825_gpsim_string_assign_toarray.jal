@@ -1,0 +1,44 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — heap assign + string_to_array (Rob's shape)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Rob's 16F1825 silicon-report shape reduced: heap 24, `s = "Hello"`,
+--    then `string_to_array(buf, s)` and buffer-content checks. Before
+--    the temp-placement fix the 216-byte `_temp` spanned three banks and
+--    the program never reached any print.
+--
+-- @gpsim_validate begin
+-- steps: 8000000
+-- frequency_hz: auto
+-- expect byte v_sb_done 1
+-- expect byte v_sb_len 5
+-- expect byte v_sb_b0 72
+-- expect byte v_sb_b1 101
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+const word _string_heap_size = 24
+include strings_dynamic
+var string s
+var byte buf[8]
+var bit _r
+var volatile byte sb_done = 0
+var volatile byte sb_len = 0
+var volatile byte sb_b0 = 0
+var volatile byte sb_b1 = 0
+s = "Hello"
+_r = string_to_array(buf, s)
+sb_len = COUNT(s)
+sb_b0 = buf[0]
+sb_b1 = buf[1]
+regression_checkpoint()
+sb_done = 1
+forever loop end loop

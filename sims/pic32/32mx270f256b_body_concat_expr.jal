@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — concat in expression position
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `&` concat chains as general expressions (== operands, args)
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_body_concat_expr.jal
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 9
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+include _regression_concat_expr_body

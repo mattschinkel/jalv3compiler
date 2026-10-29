@@ -1,0 +1,137 @@
+-- Title: Shared PIC18 regression body — types
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_types.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+record _reg_point is
+   byte  _rx
+   word  _ry
+end record
+
+const byte _lut[4] = { 1, 3, 9, 27 }
+
+var _reg_point _rp
+var sbyte _sb
+var sword _sw
+var word _w
+var word _w_expect
+var byte _b
+
+--------------------------------------------------------------------------------
+-- Description: RECORD fields, mod, bitwise, signed types, !!, const table, shifts
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: v__w_expect 0xA55A is second gpsim golden; keep in sync with assignment below.
+--------------------------------------------------------------------------------
+procedure _run_types_checks() is
+   var byte _t
+
+   regression_begin_run()
+
+   _rp._rx = 7
+   _rp._ry = 500
+   if _rp._rx != 7 then
+      _check_failed = true
+   end if
+   if _rp._ry != 500 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w = 23 % 5
+   if _w != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = 0x0F & 0xF0
+   if _b != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = 0x01 | 0x02
+   if _b != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = 0xCC ^ 0xCC
+   if _b != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _sb = -4
+   _t = byte(sword(_sb) + 4)
+   if _t != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _sw = -100
+   _sw = _sw + 50
+   if _sw != -50 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = 0
+   if !!_b != 0 then
+      _check_failed = true
+   end if
+   _b = 8
+   if !!_b != 1 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _b = _lut[2]
+   if _b != 9 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w = word(200) * word(200)
+   if _w != 40_000 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _sw = -16
+   _sw = _sw >> 1
+   if _sw != -8 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   _w_expect = 0xA55A
+   if _w_expect != 0xA55A then
+      _check_failed = true
+   end if
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_types_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

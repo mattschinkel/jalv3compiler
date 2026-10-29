@@ -1,0 +1,86 @@
+-- Title: Large-array-only gpsim regression body (include-only)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Exercises **`large_array_1`** pseudo-array access only (no native oversized **`var byte[]`**).
+--    **`LARGE_ARRAY_1_SIZE`** / **`LARGE_ARRAY_1_VARIABLE_SIZE`** stay in this file per project
+--    convention. Three **`regression_checkpoint()`** calls; top-level **`.jal`** must set
+--    **`expect byte v__check_step 3`**.
+--
+-- Notes:
+--    Include after **`include regression_<device>_device`**, **`alias led`**, **`pin_A0_direction`**, **`include regression`**.
+--    **`@gpsim_validate`** lives only in the top-level wrapper.
+
+const dword LARGE_ARRAY_1_SIZE = 100
+const dword LARGE_ARRAY_1_VARIABLE_SIZE = 1
+include large_array_1
+alias _la1 is large_array_1
+
+--------------------------------------------------------------------------------
+-- Description: Spot-check, fill, and sum **`large_array_1`** (indices 0..99)
+-- Parameters:
+-- - (none)
+-- Returns:
+-- - (none)
+-- Notes: Sum 0+…+99 = 4950; three checkpoints before **`regression_pass_led_if_clean`**.
+--------------------------------------------------------------------------------
+procedure _run_large_array_checks() is
+   var byte _i
+   var word _sum
+
+   regression_begin_run()
+
+   _la1[0] = 0x11
+   _la1[50] = 0x22
+   _la1[99] = 0x33
+
+   if _la1[0] != 0x11 then
+      _check_failed = true
+   end if
+   if _la1[50] != 0x22 then
+      _check_failed = true
+   end if
+   if _la1[99] != 0x33 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   for 100 using _i loop
+      _la1[_i] = _i
+   end loop
+
+   for 100 using _i loop
+      if _la1[_i] != _i then
+         _check_failed = true
+      end if
+   end loop
+   regression_checkpoint()
+
+   _sum = 0
+   for 100 using _i loop
+      _sum = _sum + word(_la1[_i])
+   end loop
+
+   if _sum != 4950 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_run_large_array_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

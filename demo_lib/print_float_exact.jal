@@ -1,0 +1,48 @@
+-- ------------------------------------------------------
+-- Title: Exact float printing (shortest round-trip text)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Drop-in exact replacement for the jallib print_float (~6 reliable
+--    significant digits): renders through the compiler's battery-proven
+--    `_string_float_str` (shortest-round-trip decimal, <= 9 significant
+--    digits, integral floats lose the point -- "2" not "2.0") and emits
+--    the text on any print device. Fixes the mantissa-digit noise the
+--    stock renderer shows (0.14159274 printed as 1.4159226e-01 etc).
+--
+--    Requires nothing but this include: the renderer now lives in the
+--    heap-free demo_lib/float_str.jal (no `_string_heap_size`, no
+--    `strings_dynamic`), so it is usable in float-only programs.
+--
+-- Sources:
+--  - fixes/fix_float_literal_parser_and_runtime_renderer.md (renderer)
+--  - fixes/fix_open_defects_20261007.md (classic division exactness)
+-- ------------------------------------------------------
+--
+
+--
+include float_str
+
+var byte _pfe_buf[48]
+
+--------------------------------------------------------------------------------
+-- Description: Print a float as its shortest round-trip decimal text
+-- Parameters:
+-- - device - print device (volatile byte out, e.g. serial_hw_data)
+-- - f      - float value to render
+-- Returns:
+-- - nothing (text length = the rendered digit count)
+-- Notes: shares one file-scope buffer; not reentrant (like all printing).
+--------------------------------------------------------------------------------
+procedure print_float_exact(volatile byte out device, float in f) is
+   var byte _pfe_n
+   var byte _pfe_i
+   _pfe_n = _string_float_str(f, _pfe_buf)
+   for _pfe_n using _pfe_i loop
+      device = _pfe_buf[_pfe_i]
+   end loop
+end procedure

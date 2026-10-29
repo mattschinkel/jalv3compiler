@@ -1,0 +1,35 @@
+-- ------------------------------------------------------
+-- Title: Blink both on-board LEDs of the chipKIT Uno32 at 80 MHz
+--
+-- Target: PIC32MX320F128H (Digilent chipKIT Uno32)
+--
+-- LD4 = chipKIT digital pin 13 = RG6
+-- LD5 = chipKIT digital pin 43 = RF0
+-- (mapping per chipKIT-core Uno32 Board_Data.c)
+--
+-- This file is part of the jalv2 fork demo samples.
+-- ------------------------------------------------------
+include 32mx320f128h                -- target device (PIC32MX3xx, MIPS32 M4K)
+
+pragma target clock 80_000_000      -- 80 MHz (the chipKIT-documented full speed)
+pragma target OSC    FRC_SPLL       -- internal 8 MHz FRC through the PLL (/2 x20 /1)
+pragma target image pfm             -- PFM app + boot block (MX270-proven shape)
+pragma target WDT   DISABLED        -- watchdog off
+
+enable_digital_io()
+_usec_delay(100_000)                -- wait for power to stabilize
+
+alias led4 is pin_G6                -- LD4, chipKIT pin 13
+alias led5 is pin_F0                -- LD5, chipKIT pin 43
+
+pin_G6_direction = OUTPUT
+pin_F0_direction = OUTPUT
+
+forever loop
+   led4 = ON
+   led5 = OFF
+   _usec_delay(500_000)
+   led4 = OFF
+   led5 = ON
+   _usec_delay(500_000)
+end loop

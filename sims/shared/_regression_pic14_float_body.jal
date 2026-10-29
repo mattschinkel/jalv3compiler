@@ -1,0 +1,43 @@
+-- Title: Shared PIC14 regression body — float
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Included by slim `*_float.jal` wrappers after `include regression`.
+--
+-- ------------------------------------------------------
+
+--------------------------------------------------------------------------------
+procedure _run_float_checks() is
+   var float _f
+
+   regression_begin_run()
+
+   _f = float(10) / float(4)
+   if _f < float(2) then
+      _check_failed = true
+   end if
+   if _f > float(3) then
+      _check_failed = true
+   end if
+
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_float_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

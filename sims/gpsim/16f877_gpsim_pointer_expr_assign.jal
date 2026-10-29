@@ -1,0 +1,91 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — pointer dereference assignment with expression RHS
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    `p = <runtime expression>` must STORE THROUGH the pointer (deref
+--    assignment), not write the expression result into the pointer slot.
+--    Before the fix, pfile_temp_reduction folded `_t = expr; p = _t' into
+--    `expr dst = p', clobbering the address with the value (wild pointer
+--    after one iteration -- the 16f18857 user report).
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_expr_assign.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_pea_target 44
+-- expect byte v__gpsim_pea_other 5
+-- expect word_le v__gpsim_pea_word_target 490
+-- expect byte v__gpsim_regression_flags 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte  _gpsim_pea_target = 7
+var byte  _gpsim_pea_other  = 5
+var pointer _gpsim_pea_p as var byte
+var pointer _gpsim_pea_w as var word
+var word _gpsim_pea_word_target = 0
+var word _gpsim_pea_word_src = 480
+
+
+procedure _gpsim_pea_run() is
+   regression_begin_run()
+
+   -- const RHS through the pointer (regression anchor: always worked)
+   _gpsim_pea_p is _gpsim_pea_target
+   _gpsim_pea_p = 42
+   if _gpsim_pea_target == 42 then
+      regression_checkpoint()
+   else
+      _check_failed = true
+   end if
+
+   -- expression RHS: p = other + 1 must write 6 through the pointer
+   -- and leave the address intact (the pre-fix clobber shape)
+   _gpsim_pea_p = _gpsim_pea_other + 1
+   if _gpsim_pea_target == 6 & _gpsim_pea_other == 5 then
+      regression_checkpoint()
+   else
+      _check_failed = true
+   end if
+
+   -- self-referencing walk step: p = p + 1 reads the pointee, bumps it,
+   -- stores back through the pointer (the user's loop shape)
+   _gpsim_pea_p = _gpsim_pea_p + 1
+   if _gpsim_pea_target == 7 then
+      regression_checkpoint()
+   else
+      _check_failed = true
+   end if
+
+   -- word pointee, word-width expression RHS
+   _gpsim_pea_w is _gpsim_pea_word_target
+   _gpsim_pea_w = _gpsim_pea_word_src + 10
+   if _gpsim_pea_word_target == 490 then
+      regression_checkpoint()
+   else
+      _check_failed = true
+   end if
+
+   -- the pointer still points where it did (all writes went through)
+   _gpsim_pea_p = 44
+   if _gpsim_pea_target == 44 then
+      regression_checkpoint()
+   else
+      _check_failed = true
+   end if
+
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_pea_run()
+forever loop
+end loop

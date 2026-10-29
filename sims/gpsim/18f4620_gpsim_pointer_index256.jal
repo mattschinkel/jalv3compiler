@@ -1,0 +1,48 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — pointer-to-array index > 255 (moved off 16f877)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Dynamic pointer-to-array indexing past element 255 needs a
+--    >256-byte array; on 16f877 no contiguous run that large exists
+--    (bank-spanning linear arrays are refused since 2026-10-05), so
+--    the >255-index coverage lives here where linear runs span banks.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var byte _gpsim_pi2_arr[260]
+var pointer _gpsim_pi2_ptr as var byte[260]
+var word _gpsim_pi2_idx = 256
+var byte _gpsim_pi2_snap = 0
+
+procedure _gpsim_pi2_run() is
+   regression_begin_run()
+   _gpsim_pi2_arr[0] = 11
+   _gpsim_pi2_ptr is _gpsim_pi2_arr
+   _gpsim_pi2_ptr[_gpsim_pi2_idx] = 99
+   if _gpsim_pi2_arr[0] != 11 then
+      _check_failed = true
+   end if
+   _gpsim_pi2_snap = _gpsim_pi2_ptr[_gpsim_pi2_idx]
+   if _gpsim_pi2_snap != 99 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_gpsim_pi2_run()
+
+forever loop
+end loop

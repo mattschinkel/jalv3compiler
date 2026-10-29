@@ -1,0 +1,53 @@
+-- Title: PIC18F4620 gpsim regression — device + pragma targets + SFR init + @config_expect
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Single include for **`18f4620_compiler_regression_*.jal`**: pulls in **`18f4620`**, then the
+--    canonical **`pragma target`** block, oscillator-related SFR setup, **`enable_digital_io()`**,
+--    and **`@config_expect`** golden **`__config`** bytes for **`check-config`**. Edit only this file
+--    when changing chip options or updating golden config bytes.
+--
+-- Notes:
+--    **`18f4620_compiler_regression_task.jal`** adds **`pragma task 2`** immediately after
+--    **`include regression_18f4620_device`**.
+--    **PIC18F4620 only.** Other MCUs use a **different** file (e.g. **`regression_18f26k22_device.jal`**,
+--    **`regression_16f1825_device.jal`**, **`regression_12f1840_device.jal`**),
+--    not this one — each part gets its own **`regression_<device>_device.jal`** with matching
+--    **`include`**, **`pragma target`**, **`@config_expect`**, and SFR setup for that silicon.
+
+include 18f4620
+
+-- @config_expect begin
+-- 0x00300000 0xff
+-- 0x00300001 0x06
+-- 0x00300002 0x19
+-- 0x00300003 0x1e
+-- 0x00300004 0xff
+-- 0x00300005 0x83
+-- 0x00300006 0x81
+-- 0x00300007 0xff
+-- 0x00300008 0x0f
+-- 0x00300009 0xc0
+-- 0x0030000a 0x0f
+-- 0x0030000b 0xe0
+-- 0x0030000c 0x0f
+-- 0x0030000d 0x40
+-- @config_expect end
+
+pragma target clock 40_000_000
+
+pragma target OSC      HS_PLL
+pragma target WDT      CONTROL
+pragma target XINST    DISABLED
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCTUNE_PLLEN = TRUE
+
+enable_digital_io()

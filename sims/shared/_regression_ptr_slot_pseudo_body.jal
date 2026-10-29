@@ -1,0 +1,52 @@
+-- ----------------------------------------------------------------------------
+-- Title: Pseudo-variable bound into a pointer-slot array — shared runtime body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `slots[k] is pv` on a const index (stage 1): reads and writes
+--    through the pseudo-bound element dispatch statically to 'get/'put,
+--    while plain-bound elements of the same array keep the ordinary
+--    slot dereference.
+--
+-- Sources:
+--
+--
+-- ----------------------------------------------------------------------------
+
+regression_begin_run()
+
+var byte _slp_shadow = 0
+var byte _slp_v2 = 0
+var byte _slp_snap1 = 0
+var byte _slp_snap2 = 0
+
+function _slp_pv'get return byte is
+   return _slp_shadow
+end function
+
+procedure _slp_pv'put(byte in v) is
+   _slp_shadow = v
+end procedure
+
+var pointer _slp_slots[2] as var byte
+
+_slp_slots[0] is _slp_pv
+_slp_slots[1] is _slp_v2
+_slp_shadow = 41
+_slp_v2 = 42
+_slp_snap1 = _slp_slots[0]
+_slp_snap2 = _slp_slots[1]
+_slp_slots[0] = 55
+if (_slp_snap1 != 41) | (_slp_snap2 != 42) then
+   _check_failed = true
+end if
+regression_checkpoint()
+if (_slp_shadow != 55) | (_slp_v2 != 42) then
+   _check_failed = true
+end if
+regression_checkpoint()
+-- NOTE: stage-2 runtime-indexed dispatch (`slots[k]` with runtime k)
+-- is currently CLASSIC-ONLY (the hand-built dispatch pcode is tuned
+-- for the 14-bit back end; 32-bit QEMU check_step falls short). The
+-- full runtime matrix lives in 16f877_gpsim_pointer_slot_pseudo.jal.

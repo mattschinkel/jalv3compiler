@@ -1,0 +1,45 @@
+-- Title: PIC32MZ1024EFH064 @sim_validate regression — device + pragma targets + stubs
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Single include for **`tests/pic32/32mz1024efh064_*.jal`**: pulls in
+--    **`32mz1024efh064`**, then the canonical **`pragma target clock`**,
+--    **`enable_digital_io()`**, LED / PORTA stubs for shared regression bodies,
+--    and notes for DEVCFG. Edit only this file when changing chip clock or
+--    shared harness stubs.
+--
+-- Notes:
+--    **PIC32MZ1024EFH064 only.** Same role as **`regression_18f4620_device.jal`**.
+--    Compile with **`-s 'lib;tests'`**. Body wrappers then
+--    **`include regression_pic32`** and a **`_regression_*_body.jal`**.
+--    PIC32 has no **`fuse_def`** enums yet (no **`pragma target OSC`** / WDT
+--    spellings). DEVCFG defaults live in the device **`_FUSES`** array;
+--    override with **`pragma target fuses <index> <dword>`** when needed.
+--    **`@config_expect`** is not used here (**`jal_sim_validate`** does not
+--    run gpsim **`check-config`**).
+
+include 32mz1024efh064
+
+-- SYSCLK (Hz) for `_usec_delay` / baud — not set in the device file
+pragma target clock 200_000_000
+
+-- Configuration: device `_FUSES` erased-style defaults are enough for QEMU.
+-- Silicon (MINI-32 24 MHz POSC → PLL) may need explicit DEVCFG overrides:
+--    pragma target fuses 3 <devcfg0>   -- @ 0xBFC0FFC0
+--    pragma target fuses 2 <devcfg1>   -- @ 0xBFC0FFC4
+--    pragma target fuses 1 <devcfg2>   -- @ 0xBFC0FFC8
+--    pragma target fuses 0 <devcfg3>   -- @ 0xBFC0FFCC
+
+enable_digital_io()
+
+-- Own byte so `led` does not pack into `_bitbucket` with `var bit` temps
+-- (`_ok`, CRC complete flags, …) the shared bodies allocate later.
+var volatile byte _pic32_led_byte = 0
+var volatile bit _pic32_led_stub at _pic32_led_byte : 0
+alias led is _pic32_led_stub
+alias led_pin is _pic32_led_stub
+
+-- RAM-backed PORTA so `pintools` (`defined(portA)`) can set/get a pin.
+-- Not the hardware SFR; QEMU has no full GPIO peripheral model.
+var volatile byte portA = 0
+var volatile byte portA_direction = 0

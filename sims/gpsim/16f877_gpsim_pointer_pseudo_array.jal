@@ -1,0 +1,81 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — pointer-to-array bound to a pseudo ARRAY
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins `p is parr` where parr is an indexed pseudo-variable (the
+--    jallib pseudo-array idiom: 'get takes the index as its first in
+--    formal, 'put takes index+value -- fat32_cluster / network_byte /
+--    large_array_6). Reads AND writes through the bound pointer route
+--    to the accessors, const and runtime indices, including the
+--    write as the last statement of the file (EOF tail).
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh --compiler ./bin/jalv3-x86-64 tests/16f877_gpsim_pointer_pseudo_array.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__ppa_chk 0
+-- expect byte v__ppa_snap1 33
+-- expect byte v__ppa_snap2 55
+-- expect byte v__ppa_rb3 44
+-- expect byte v__ppa_rb5 66
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var volatile byte _ppa_mem[8]
+var volatile byte _ppa_snap1 = 0
+var volatile byte _ppa_snap2 = 0
+var volatile byte _ppa_rb3 = 0
+var volatile byte _ppa_rb5 = 0
+var volatile byte _ppa_chk = 0
+var byte _ppa_k = 3
+var word _ppa_i = 5
+
+function _ppa_parr'get(word in idx) return byte is
+   return _ppa_mem[idx]
+end function
+
+procedure _ppa_parr'put(word in idx, byte in v) is
+   _ppa_mem[idx] = v
+end procedure
+
+var pointer _ppa_p as var byte[8]
+
+regression_begin_run()
+
+_ppa_p is _ppa_parr
+_ppa_mem[3] = 33
+_ppa_mem[5] = 55
+_ppa_snap1 = _ppa_p[3]
+_ppa_snap2 = _ppa_p[_ppa_i]
+_ppa_p[3] = 44
+_ppa_p[_ppa_i] = 66
+regression_checkpoint()
+if _ppa_snap1 != 33 then
+   _ppa_chk = 1
+end if
+if _ppa_snap2 != 55 then
+   _ppa_chk = 1
+end if
+if _ppa_mem[3] != 44 then
+   _ppa_chk = 1
+end if
+if _ppa_mem[5] != 66 then
+   _ppa_chk = 1
+end if
+_ppa_rb3 = _ppa_mem[3]
+_ppa_rb5 = _ppa_mem[5]
+regression_checkpoint()
+regression_pass_led_if_clean()
+-- last statement of the file: EOF next token, the write-side tail shape
+_ppa_p[7] = 77

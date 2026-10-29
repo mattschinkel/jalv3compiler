@@ -1,0 +1,66 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim regression — const-fold negative division (per-bug pin)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Minimal regression pin for the const-fold signed division defect
+--: `OPERATOR_NEG`-folded
+--    constants carried unsigned defs, so `OPERATOR_DIV`/`OPERATOR_MOD`
+--    constant folds skipped the sign fix-up and divided unsigned over the
+--    full constant — `-7 / 2` folded to 2^127-4 (low byte 0xFC) with a
+--    spurious out-of-range warning instead of -3.
+--
+-- Notes:
+--    ./tests/jal_gpsim_validate.sh tests/18f4620_gpsim_constfold_neg_div.jal
+--
+-- @gpsim_validate begin
+-- steps: 20000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v__cfd_q 253
+-- expect byte v__cfd_r 255
+-- expect byte v__cfd_p 251
+-- expect byte v__cfd_w 252
+-- expect byte v__cfd_flags 0x07
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+include regression
+
+var volatile sbyte _cfd_q
+var volatile sbyte _cfd_r
+var volatile sbyte _cfd_p
+var volatile sword _cfd_w
+var volatile byte _cfd_flags = 0
+
+procedure _cfd_run() is
+   regression_begin_run()
+
+   _cfd_q = -7 / 2       -- trunc toward zero: -3 (0xFD); was 0xFC + warning
+   _cfd_r = -7 % 2       -- -1 (0xFF); was +1 (folded unsigned)
+   _cfd_p = 10 / -2      -- -5 (0xFB); was 0 (unsigned divide by huge const)
+   _cfd_w = -8 / 2       -- -4 (0xFFFC)
+
+   if -7 / -2 == 3 then
+      _cfd_flags = _cfd_flags | 0x01
+   end if
+   if -9 % 4 == -1 then
+      _cfd_flags = _cfd_flags | 0x02
+   end if
+   if _cfd_w == -4 then
+      _cfd_flags = _cfd_flags | 0x04
+   end if
+
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_cfd_run()
+
+forever loop
+end loop

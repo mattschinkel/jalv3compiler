@@ -1,0 +1,46 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — boot-flash smoke
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32MX1/2 (M4K): PFM app + compiler boot block (the MX boot flash
+--    is only 3 KB, so boot-flash-only images are rejected), proving the
+--    compiler-emitted startup.  Runs at the part maximum 40 MHz
+--    (FRC /2 x20 /2) via the solved fuses.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_smoke.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_loop_count 3
+-- expect byte v_sum 3
+-- expect dword_le v_acc 0x00010002
+-- @sim_validate end
+--
+include 32mx270f256b
+
+pragma target clock 40_000_000
+pragma target OSC   FRC_SPLL
+pragma target image pfm
+
+enable_digital_io()
+
+var volatile byte loop_count = 0
+var volatile byte sum = 0
+var volatile dword acc = 0
+var byte i
+
+for 3 loop
+   loop_count = loop_count + 1
+end loop
+for 3 loop
+   sum = sum + i
+   i = i + 1
+end loop
+acc = 0x0001_0002
+forever loop
+end loop

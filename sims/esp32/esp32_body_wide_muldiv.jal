@@ -1,0 +1,41 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — wide MUL/DIV/MOD body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared `_regression_wide_muldiv_body` via @sim_validate:
+--    runtime-operand qword multiply / divide / modulo, signed
+--    division cases, wide negation, runtime-count and arithmetic
+--    shifts.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_wide_muldiv.jal
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 17
+-- expect byte v__gpsim_wmd_mul 1
+-- expect byte v__gpsim_wmd_mul_self 1
+-- expect byte v__gpsim_wmd_mul_alias 1
+-- expect byte v__gpsim_wmd_div 1
+-- expect byte v__gpsim_wmd_mod 1
+-- expect byte v__gpsim_wmd_div_neg 1
+-- expect byte v__gpsim_wmd_mod_neg 1
+-- expect byte v__gpsim_wmd_div_negden 1
+-- expect byte v__gpsim_wmd_mod_negden 1
+-- expect byte v__gpsim_wmd_div_negboth 1
+-- expect byte v__gpsim_wmd_mod_negboth 1
+-- expect byte v__gpsim_wmd_neg 1
+-- expect byte v__gpsim_wmd_shl 1
+-- expect byte v__gpsim_wmd_shr 1
+-- expect byte v__gpsim_wmd_sar 1
+-- expect byte v__gpsim_wmd_sar_const 1
+-- expect byte v__gpsim_wmd_divzero 1
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_wide_muldiv_body

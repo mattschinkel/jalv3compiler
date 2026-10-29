@@ -1,0 +1,57 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — bugreport 20100407 (block-local **`var word`**)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Historical **`wrong_tank.jal`**: **`var word temp = LeftEye`** inside a nested
+--    **`if`** caused bogus **`print_word_dec`** values (**`fixes`** context in
+--). Current compiler
+--    keeps **`LeftEye`** / **`RightEye`** intact; this file locks that in without
+--    ADC/PWM (constants only).
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_bugreport_20100407_block_local_word.jal`**
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var word LeftEye = 1000
+var word RightEye = 300
+
+--------------------------------------------------------------------------------
+-- Description: Run block-local temp pattern from historic **`wrong_tank.jal`**
+--------------------------------------------------------------------------------
+procedure _bug20100407_run() is
+   regression_begin_run()
+
+   if RightEye > 200 then
+      var word temp = LeftEye
+      if temp > 255 then
+         temp = 255
+      end if
+   end if
+
+   if LeftEye != 1000 then
+      _check_failed = true
+   end if
+   if RightEye != 300 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_bug20100407_run()
+
+forever loop
+end loop

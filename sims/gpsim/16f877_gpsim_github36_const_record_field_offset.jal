@@ -1,0 +1,45 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim github36 const record field offset
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Reorder record fields: **a_array** not at offset 0 (GitHub #36-style).
+include regression_16f877_device
+include regression
+
+record array_def is
+   byte b_array[5]
+   byte a_array[3]
+end record
+
+const array_def array[] = {
+   {"b_001", "a_1"},
+   {"b_002", "a_2"},
+   {"b_003", "a_3"}
+}
+
+var volatile byte v_sw0 = 0
+var volatile byte v_sw1 = 0
+var volatile byte v_sw2 = 0
+
+-- Third char of **a_n** strings: '1', '2', '3' -> 49, 50, 51
+-- @gpsim_validate begin
+-- steps: 80000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v_v_sw0 49
+-- expect byte v_v_sw1 50
+-- expect byte v_v_sw2 51
+-- @gpsim_validate end
+
+procedure pick_third(byte in s[], volatile byte out o) is
+   o = s[2]
+end procedure
+
+regression_begin_run()
+pick_third(array[0].a_array, v_sw0)
+pick_third(array[1].a_array, v_sw1)
+pick_third(array[2].a_array, v_sw2)
+regression_checkpoint()
+regression_pass_led_if_clean()

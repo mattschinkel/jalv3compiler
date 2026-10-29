@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — delay
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32: short _usec_delay completes
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_delay.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_before 1
+-- expect byte v_mid 2
+-- expect byte v_after 3
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+
+
+var volatile byte before = 0
+var volatile byte mid = 0
+var volatile byte after = 0
+
+before = 1
+_usec_delay(1)
+mid = 2
+_usec_delay(10)
+after = 3

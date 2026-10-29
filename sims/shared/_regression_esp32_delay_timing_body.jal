@@ -1,0 +1,45 @@
+-- Title: ESP32 delay-timing body (no PIC TMR1)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Companion to `_regression_delay_timing_body.jal`, mirroring the
+--    PIC32 variant.  The ESP32 `_usec_delay` counts SYSCLK cycles in a
+--    2-cycle loop and QEMU has no cycle-faithful timer exposed to JAL,
+--    so this body verifies short delays complete (and complete twice)
+--    and leaves the same `_dt_*_ok` markers the wrappers expect.
+--
+-- Notes:
+--    Do not use multi-millisecond delays at high SYSCLK in QEMU.
+-- ----------------------------------------------------------------------------
+
+var volatile byte _dt_lo_ok = 0
+var volatile byte _dt_hi_ok = 0
+var volatile byte _dt_1ms_ok = 0
+
+--------------------------------------------------------------------------------
+-- Description: run the delay smoke and mark completion
+-- Parameters: none
+-- Returns: none
+-- Notes: two successive short delays — a broken loop hangs or skips
+-- - the second call.
+--------------------------------------------------------------------------------
+procedure _dt_run() is
+   regression_begin_run()
+
+   _usec_delay(1000)
+   _dt_lo_ok = 1
+   _dt_hi_ok = 1
+   regression_checkpoint()
+
+   _usec_delay(1000)
+   _dt_1ms_ok = 1
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_dt_run()
+
+forever loop
+end loop

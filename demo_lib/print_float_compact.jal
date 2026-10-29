@@ -1,0 +1,167 @@
+-- ------------------------------------------------------
+-- Title: Compact float printing (heap-free, human-readable)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    print_float_compact(device, f) — heap-free companion for jallib's
+--    print_float. Prints decimal text without the dynamic-string heap and
+--    without the large 128-bit exact renderer: trailing zero digits are
+--    trimmed, fixed notation is used for exponents -4..7, scientific
+--    notation outside that range, integral values carry no decimal point,
+--    and inf / nan / -0 are handled (the stock printer hangs on inf and
+--    prints NaN as 0.0000000e00).
+--
+--    NOT shortest-round-trip: the digits still come from the stock
+--    normalize/extract path (8 significant digits, truncating), so a
+--    boundary value can differ from print_float_exact in the last digit
+--    (19.634954 -> "19.634955"). Use demo_lib/print_float_exact.jal when
+--    the output must round-trip exactly. Very small/subnormal inputs
+--    inherit the stock normalization error.
+--
+--    Footprint vs stock print_float (one float print, measured): +246
+--    words / +16 B on 16F877, +305 words / +16 B on 16F1825, +672 B / +16 B
+--    on 18F4620 — fits every part the stock printer fits on.
+--
+--    Requires nothing: no heap, no strings_dynamic, no other include.
+--
+-- Sources:
+--  - fixes/fix_print_float_compact.md
+-- ------------------------------------------------------
+--
+
+--
+procedure print_float_compact(volatile byte out device, float in data) is
+   var dword  _pfc_bits at data
+   var byte   _pfc_d[9]
+   var byte   _pfc_nd
+   var byte   _pfc_i
+   var byte   _pfc_j
+   var sbyte  _pfc_exp
+   var bit    _pfc_done
+
+   _pfc_done = false
+   _pfc_exp = 0
+
+   -- sign (bit test also catches -0.0 and -inf)
+   if (_pfc_bits >> 31) != 0 then
+      device = "-"
+      data = -data
+   end if
+
+   -- specials by bit pattern (no float equality warnings):
+   -- exponent all ones => inf (mantissa 0) or nan (mantissa != 0);
+   -- magnitude 0 => zero (sign already emitted, so -0 prints "-0").
+   if (_pfc_bits & 0x7FFFFFFF) == 0 then
+      device = "0"
+      _pfc_done = true
+   end if
+
+   if !_pfc_done then
+      if (_pfc_bits & 0x7F800000) == 0x7F800000 then
+         if (_pfc_bits & 0x007FFFFF) == 0 then
+            device = "i"
+            device = "n"
+            device = "f"
+         else
+            device = "n"
+            device = "a"
+            device = "n"
+         end if
+         _pfc_done = true
+      end if
+   end if
+
+   if !_pfc_done then
+      while data >= 10.0 loop
+         _pfc_exp = _pfc_exp + 1
+         data = data / 10.0
+      end loop
+      while data < 1.0 loop
+         _pfc_exp = _pfc_exp - 1
+         data = data * 10.0
+      end loop
+
+      -- 8 significant digits (1 integer + 7 fraction)
+      _pfc_d[0] = byte(data)
+      data = data - byte(data)
+      _pfc_nd = 1
+      while _pfc_nd < 8 loop
+         data = data * 10.0
+         _pfc_d[_pfc_nd] = byte(data)
+         data = data - byte(data)
+         _pfc_nd = _pfc_nd + 1
+      end loop
+
+      -- trim trailing zero digits (keep the leading one)
+      _pfc_i = _pfc_nd - 1
+      while _pfc_i > 0 loop
+         if _pfc_d[_pfc_i] == 0 then
+            _pfc_nd = _pfc_nd - 1
+            _pfc_i = _pfc_i - 1
+         else
+            _pfc_i = 0
+         end if
+      end loop
+
+      if (_pfc_exp >= -4) & (_pfc_exp <= 7) then
+         if _pfc_exp >= 0 then
+            -- dddd.ddd
+            _pfc_i = 0
+            while _pfc_i <= byte(_pfc_exp) loop
+               if _pfc_i < _pfc_nd then
+                  device = _pfc_d[_pfc_i] + "0"
+               else
+                  device = "0"
+               end if
+               _pfc_i = _pfc_i + 1
+            end loop
+            if _pfc_nd > (byte(_pfc_exp) + 1) then
+               device = "."
+               _pfc_i = byte(_pfc_exp) + 1
+               while _pfc_i < _pfc_nd loop
+                  device = _pfc_d[_pfc_i] + "0"
+                  _pfc_i = _pfc_i + 1
+               end loop
+            end if
+         else
+            -- 0.000ddd
+            device = "0"
+            device = "."
+            _pfc_j = byte(-_pfc_exp) - 1
+            while _pfc_j > 0 loop
+               device = "0"
+               _pfc_j = _pfc_j - 1
+            end loop
+            _pfc_i = 0
+            while _pfc_i < _pfc_nd loop
+               device = _pfc_d[_pfc_i] + "0"
+               _pfc_i = _pfc_i + 1
+            end loop
+         end if
+      else
+         -- scientific: d.ddde[+-]NN
+         device = _pfc_d[0] + "0"
+         if _pfc_nd > 1 then
+            device = "."
+            _pfc_i = 1
+            while _pfc_i < _pfc_nd loop
+               device = _pfc_d[_pfc_i] + "0"
+               _pfc_i = _pfc_i + 1
+            end loop
+         end if
+         device = "e"
+         if _pfc_exp < 0 then
+            device = "-"
+            _pfc_exp = -_pfc_exp
+         else
+            device = "+"
+         end if
+         device = (byte(_pfc_exp) / 10) + "0"
+         device = (byte(_pfc_exp) % 10) + "0"
+      end if
+   end if
+end procedure

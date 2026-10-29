@@ -1,0 +1,87 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — var string declaration-initializer
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var string s = <expr>` at declaration: single literal (previously
+--    warned "more initializers than expected" and clipped the text to
+--    the handle size), `&` chains with runtime numbers, copy from
+--    another dynamic string, and a pointer operand. The fresh handle is
+--    zeroed before the runtime assign so a power-on garbage CAP cannot
+--    redirect the copy (classic cores do not zero RAM).
+--
+-- @gpsim_validate begin
+-- steps: 6000000
+-- frequency_hz: auto
+-- expect byte v_di_step 113
+-- expect byte v__check_step 2
+-- expect byte v_di_na 5
+-- expect byte v_di_nb 5
+-- expect byte v_di_nd 5
+-- expect byte v_di_b0 118
+-- expect byte v_di_b3 50
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+const word _string_heap_size = 64
+include strings_dynamic
+
+var byte lvl = 42
+var byte val = 9
+var pointer p as var byte
+p is val
+
+var string a = "hello"
+var string b = "v=" & lvl & "!"
+var string d = a
+var string e = "p=" & p
+
+var byte buf[10]
+var volatile byte di_step = 0
+var volatile byte di_na = 0
+var volatile byte di_nb = 0
+var volatile byte di_nd = 0
+var volatile byte di_b0 = 0
+var volatile byte di_b3 = 0
+
+var byte r
+
+di_na = COUNT(a)
+di_nb = COUNT(b)
+di_nd = COUNT(d)
+regression_checkpoint()
+
+r = string_to_array(buf, b)
+di_b0 = buf[0]
+di_b3 = buf[3]
+regression_checkpoint()
+
+-- chained equality on a declaration-initialized string
+if a == "hello" then
+   di_step = di_step + 1
+end if
+-- re-assign after init still works (in-place reuse path)
+a = "second"
+if COUNT(a) == 6 then
+   di_step = di_step + 10
+end if
+-- e renders the pointee: "p=9"
+if COUNT(e) == 3 then
+   di_step = di_step + 100
+end if
+di_step = di_step + 2
+
+regression_pass_led_if_clean()
+led = low
+
+forever loop end loop

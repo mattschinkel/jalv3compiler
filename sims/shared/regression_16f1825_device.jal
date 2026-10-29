@@ -1,0 +1,30 @@
+-- Title: PIC16F1825 gpsim regression — device defaults + @config_expect
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    PIC16 enhanced (**sample/** **`16f1825_blink_intosc.jal`** pattern): **`include 16f1825`**,
+--    **`pragma target clock`**, **`enable_digital_io()`**, **`@config_expect`** for **`check-config`**.
+--    **`pic16f1825`** is available in **gpsim 0.31** (unlike **16F18877**).
+--
+-- Notes:
+--    **`pragma target WDT DISABLED`** so **gpsim** long **`step`** runs do not reset on WDT.
+--    **`@config_expect`** matches **`__config`** after WDT off; other fuse pragmas omitted like **jallib**
+--    **`_FUSES`** defaults except WDT field. **PIC16F1825 only.**
+
+include 16f1825
+
+-- gpsim 0.31 pic16f1825: direct file access to linear GPR 0x620-0x64F is rejected
+-- (invalid file register) and dump r omits rows in that span; silicon still has
+-- this block (DS40001440E). Trim from the compiler alloc pool for regression only.
+pragma data_remove 0x620-0x64F
+
+-- @config_expect begin
+-- 0x8007 0x3fe7
+-- 0x8008 0x3fff
+-- @config_expect end
+
+pragma target WDT DISABLED
+
+pragma target clock 4_000_000
+
+enable_digital_io()

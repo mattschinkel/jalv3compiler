@@ -1,0 +1,32 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — known-answer workload (CRC16-CCITT + sort)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Shared logic: **`tests/_regression_crc_body.jal`** (SDCC-suite adoption
+--    batch.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/18f4620_compiler_regression_crc.jal
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 6
+-- expect byte v__crc_r_msg9 1
+-- expect byte v__crc_r_msg1 1
+-- expect byte v__crc_r_msg5 1
+-- expect byte v__crc_r_msg03 1
+-- expect byte v__crc_r_incr 1
+-- expect byte v__crc_r_sort 1
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+include regression
+
+include _regression_crc_body

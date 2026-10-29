@@ -1,0 +1,73 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — tail return
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 review: tail-return must pop $s5/$s4/$s3 then $ra
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_tail_return.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mz-explorer16
+-- expect byte v_r 8
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- @sim_validate end
+
+include regression_32mz1024efh064_device
+var volatile byte r
+var volatile byte ra
+var volatile byte rb
+var volatile byte rc
+
+--------------------------------------------------------------------------------
+-- Description: Increment a byte (callee of the tail-return wrapper)
+-- Parameters:
+-- - a - value to increment
+-- Returns: a + 1
+--------------------------------------------------------------------------------
+function _inc(byte in a) return byte is
+   return a + 1
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Tail-return through _inc (cmd_opt_tail_return)
+-- Parameters:
+-- - a - value passed through
+-- Returns: a + 1
+--------------------------------------------------------------------------------
+function _tail(byte in a) return byte is
+   return _inc(a)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Nested locals live across the tail-return call
+-- Parameters: none
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure _nest is
+   var byte a = 11
+   var byte b = 22
+   var byte c = 33
+   r = _tail(7)
+   if a == 11 then
+      ra = 1
+   end if
+   if b == 22 then
+      rb = 1
+   end if
+   if c == 33 then
+      rc = 1
+   end if
+end procedure
+
+r = 0
+ra = 0
+rb = 0
+rc = 0
+_nest
