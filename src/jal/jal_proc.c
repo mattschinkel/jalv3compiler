@@ -1206,6 +1206,444 @@ static value_t jal_volatile_function_create(pfile_t *pf,
  * NOTES
  *   This will automatically deference val.
  */
+/* function-pointer formal: bind the caller's _get/_put (or synthesize
+ * the volatile accessor); an IN|OUT pair consumes the next formal
+ * slot (advances ii and the member walk) */
+static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, value_t *parms, size_t param_ct, size_t *pii, variable_def_member_t *pmbr)
+{
+  size_t               ii  = *pii;
+  variable_def_member_t mbr = *pmbr;
+  value_t              val;
+
+  /* this *must be* a function reference. this means a volatile
+     parameter. look at the function defintion flags, they'll
+     either be:
+       IN     -- the _get function is needed
+       IN|OUT -- the _get + _put functions are needed
+       OUT    -- the _put function is needed */
+  value_t        jvals[JAL_VAL_TYPE_CT];
+  variable_def_t fn_def;
+  variable_def_t fn_def2;
+
+  jal_value_find(pf, ptr, jvals);
+
+  fn_def = variable_def_member_def_get( variable_def_member_get(def));
+  if (variable_def_flag_test(fn_def, VARIABLE_DEF_FLAG_IN)) {
+    if (jvals[JAL_VAL_TYPE_GET]) {
+      val = jvals[JAL_VAL_TYPE_GET];
+      value_lock(val);
+    } else if (jvals[JAL_VAL_TYPE_IGET]) {
+      val = jvals[JAL_VAL_TYPE_IGET];
+      value_lock(val);
+    } else {
+      /* nb: the name might have changed (via alias), so if there's
+             a found entry, use its name instead */
+      size_t valn;
+
+      for (valn = JAL_VAL_TYPE_MIN;
+           (valn < JAL_VAL_TYPE_CT) && (VALUE_NONE == jvals[valn]);
+           valn++)
+        ; /* empty body */
+      if (valn < JAL_VAL_TYPE_CT) {
+        ptr = value_name_get(jvals[valn]);
+      }
+      val = jal_volatile_function_create(pf, JAL_VOLATILE_FN_GET, 
+          ptr);
+    }
+
+    fn_def2 = value_def_get(val);
+    if (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(fn_def2)) {
+      fn_def2 = variable_def_member_def_get(
+        variable_def_member_get(fn_def2));
+    }
+    if (!variable_def_is_same(fn_def, fn_def2)) {
+      pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
+      value_release(val);
+      val = VALUE_NONE;
+    }
+    if (parms && (ii < param_ct)) {
+      parms[ii] = val;
+    } else {
+      value_release(val);
+    }
+  }
+  if (variable_def_flag_test(fn_def, VARIABLE_DEF_FLAG_OUT)) {
+    if (variable_def_flag_test(fn_def, VARIABLE_DEF_FLAG_IN)) {
+      /* this is an in/out so the next parameter must be the OUT
+         parameter */
+      ii++;
+      mbr = variable_def_member_link_get(mbr);
+      fn_def = variable_def_member_def_get(
+        variable_def_member_get(
+          variable_def_member_def_get(mbr)));
+    }
+
+    if (jvals[JAL_VAL_TYPE_PUT]) {
+      val = jvals[JAL_VAL_TYPE_PUT];
+      value_lock(val);
+    } else if (jvals[JAL_VAL_TYPE_IPUT]) {
+      val = jvals[JAL_VAL_TYPE_IPUT];
+      value_lock(val);
+    } else {
+      val = jal_volatile_function_create(pf, JAL_VOLATILE_FN_PUT, ptr);
+    }
+    fn_def2 = value_def_get(val);
+    if (VARIABLE_DEF_TYPE_POINTER
+      == variable_def_type_get(fn_def2)) {
+      fn_def2 = variable_def_member_def_get(
+        variable_def_member_get(fn_def2));
+    }
+    if (!variable_def_is_same(fn_def, fn_def2)) {
+      pfile_log(pf, PFILE_LOG_ERR, "parameter %u type mismatch",
+        (unsigned) ii);
+      value_release(val);
+      val = VALUE_NONE;
+    }
+    if (parms && (ii < param_ct)) {
+      parms[ii] = val;
+    } else {
+      value_release(val);
+    }
+  }
+  jal_value_release(jvals);
+  pf_token_get(pf, PF_TOKEN_NEXT);
+
+  *pii = ii;
+  *pmbr = mbr;
+}
+
+/* OUT formal: a PUT procedure (its 'put is called after the callee
+ * returns, value in tow) or a plain lvalue */
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms)
+{
+  value_t val;
+
+  /* this needs to be a simple variable or PUT procedure */
+  value_t jvals[JAL_VAL_TYPE_CT];
+
+  jal_value_find(pf, ptr, jvals);
+
+  if (jvals[JAL_VAL_TYPE_PUT]) {
+    variable_def_t        put_def;
+    variable_def_member_t put_mbr;
+    value_t               tval;
+
+    val = jvals[JAL_VAL_TYPE_PUT];
+    value_lock(val);
+    tval = variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+      ? jal_parse_value(pf, JAL_PARSE_VALUE_TYPE_RVALUE)
+      : VALUE_NONE;
+    if (put_parms && (ii < param_ct)) {
+      put_parms[ii] = val;
+    } else {
+      value_release(val);
+    }
+    if (!tval || !value_is_temp(tval)) {
+      put_def = value_def_get(val); /* this should be a function */
+      put_mbr = variable_def_member_get(put_def);
+      put_mbr = variable_def_member_link_get(put_mbr);
+      put_def = variable_def_member_def_get(put_mbr);
+      val = pfile_value_temp_get_from_def(pf, put_def);
+      if (tval) {
+        pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &val, tval, VALUE_NONE);
+        value_release(tval);
+      }
+    } else {
+      val = tval;
+    }
+    put_def = value_def_get(val);
+    put_def = variable_def_flags_change(put_def,
+        variable_def_flags_get_all(put_def)
+        | VARIABLE_DEF_FLAG_OUT);
+    value_def_set(val, put_def);
+    if (!tval) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
+  } else {
+    val = jal_parse_value(pf, JAL_PARSE_VALUE_TYPE_LVALUE);
+    if (value_is_const(val)) {
+      pfile_log(pf, PFILE_LOG_ERR, "%s cannot be a constant",
+          value_name_get(val));
+    } else if (value_vflag_test(val, VARIABLE_FLAG_READ)
+      && !value_vflag_test(val, VARIABLE_FLAG_WRITE)) {
+      pfile_log(pf, PFILE_LOG_ERR, "cannot read %s",
+        value_name_get(val));
+    }
+    while (jal_parse_structure(pf, &val)
+      || jal_parse_subscript(pf, &val, NULL))
+      ; /* null body */
+  }
+  if (!((variable_def_type_is_number(variable_def_type_get(def))
+      && value_is_number(val))
+      || variable_def_is_same(def, value_def_get(val)))) {
+    pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
+    value_release(val);
+    val = VALUE_NONE;
+  }
+  if (parms && (ii < param_ct)) {
+    parms[ii] = val;
+  } else {
+    value_release(val);
+  }
+  jal_value_release(jvals);
+
+}
+
+/* IN formal: parse the expression, apply the optional-empty-string
+ * sentinel, marshal string actuals (byte-buffer + runtime length,
+ * literal staging), type-check, and fill the hidden _count slot */
+static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, boolean_t need_ct, flag_t flags, value_t call_val)
+{
+  value_t val;
+
+  /* this must be IN only! */
+  boolean_t      ok;
+  variable_def_t vdef;
+  boolean_t      suppress_ptr_deref;
+  boolean_t      opt_sentinel;
+  value_t        str_rt_len = VALUE_NONE;
+
+  opt_sentinel = BOOLEAN_FALSE;
+  suppress_ptr_deref = jal_formal_def_is_data_pointer_non_callable(
+      def);
+  if (suppress_ptr_deref) {
+    pfile_parse_call_data_ptr_arg_push(pf);
+  }
+  val = jal_parse_expr(pf);
+  if (suppress_ptr_deref) {
+    pfile_parse_call_data_ptr_arg_pop(pf);
+  }
+  /* Optional-formal empty-string sentinel: `report("")` on a
+   * NON-string OPTIONAL formal means OMITTED -- fill the
+   * registered default exactly as a missing trailing argument
+   * would (print-style callers pass position-preserving
+   * "nothing here" placeholders).  Only the empty const string
+   * is the sentinel: a non-empty string keeps the normal type
+   * error, a REQUIRED formal never gets the idiom (no
+   * registered default), and STRING-typed formals take "" as a
+   * real empty string. */
+  if (val
+      && (ii < param_ct)
+      && !(flags & (JAL_PARSE_CALL_FLAG_PUT
+          | JAL_PARSE_CALL_FLAG_GET))
+      && call_val
+      && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))
+      && value_is_const(val)
+      && value_is_array(val)
+      && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+      && (0 == value_ct_get(val))
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)) {
+    jal_opt_default_t *oent;
+
+    oent = jal_opt_default_find(value_def_get(call_val));
+    if (oent) {
+      jal_opt_default_resolve(pf, oent);
+      if ((ii < oent->member_ct) && oent->by_member[ii]) {
+        value_t dv;
+
+        dv = value_clone(oent->by_member[ii]);
+        if (dv) {
+          value_lock(dv);
+        }
+        value_release(val);
+        val         = dv;
+        opt_sentinel = BOOLEAN_TRUE;
+        if (need_ct && (ii >= 1)
+            && ((ii - 1) < oent->member_ct)
+            && oent->by_member[ii - 1]) {
+          /* open-array formal: the hidden count slot takes the
+           * default's registered count (the generic path would
+           * rebuild it from the value name) */
+          value_t ctv;
+
+          ctv = value_clone(oent->by_member[ii - 1]);
+          if (ctv) {
+            value_lock(ctv);
+          }
+          if (parms) {
+            value_release(parms[ii - 1]);
+            parms[ii - 1] = ctv;
+          } else {
+            value_release(ctv);
+          }
+        }
+      }
+    }
+  }
+  /* String actual into an open byte-array formal (e.g.
+   * print_string(serial, s) with `var string s`): marshal the
+   * CONTENT -- copy it into a temp byte buffer, and remember
+   * the runtime length for the hidden count parameter (the
+   * buffer capacity would over-report). */
+  if (val
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)) {
+    value_t sbuf = jal_string_arg_byte_array(pf, val);
+
+    if (sbuf) {
+      str_rt_len = jal_string_length_value_get(pf, val);
+      value_release(val);
+      val = sbuf;
+    }
+  }
+  if (value_vflag_test(val, VARIABLE_FLAG_WRITE)
+    && !value_vflag_test(val, VARIABLE_FLAG_READ)) {
+    pfile_log(pf, PFILE_LOG_ERR, "cannot read from %s",
+      value_name_get(val));
+  }
+  /* Const/fixed string LITERAL actual into a DYNAMIC-string
+   * formal: stage the text into a compiler string cell (the
+   * chain-cell machinery) and pass the cell -- the formal's
+   * def is a heap HANDLE, which a raw literal's plain array
+   * def never matches (a 3-char literal only passed by the
+   * count==handle-size coincidence; "abc" worked while
+   * "ab"/"abcd"/"" all errored). Empty literal: the assign's
+   * len-0 path clears the cell -- COUNT(formal) sees 0. */
+  if (val
+      && (ii < param_ct)
+      && value_is_const(val)
+      && !jal_string_is_dynamic(val)
+      && jal_string_is_source(val)
+      && variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)) {
+    value_t cell;
+
+    if (variable_def_flag_test(def,
+          VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+      cell = jal_string_stage_source_cell(pf, val);
+    } else if (VARIABLE_DEF_TYPE_ARRAY
+        == variable_def_type_get(def)) {
+      cell = jal_string_stage_fixed_cell(pf, val,
+          (variable_sz_t) variable_def_member_ct_get(
+            variable_def_member_get(def)));
+    } else {
+      cell = VALUE_NONE;
+    }
+    if (cell) {
+      value_release(val);
+      val = cell;
+    }
+  }
+  if (ii < param_ct) {
+    vdef = value_def_get(val);
+    ok = variable_def_type_is_number(variable_def_type_get(def))
+            && value_is_number(val);
+    if (ok) {
+      pfile_value_def_type_check(pf, OPERATOR_ASSIGN, def, val,
+        VALUE_NONE);
+      if (value_is_universal(val)) {
+        pfile_value_def_overflow_check(pf, OPERATOR_ASSIGN, def, val);
+      }
+    }
+    ok = ok || variable_def_is_same(def, vdef);
+    /*
+     * allow the assignment of an array to a pointer
+     */
+    ok = ok 
+      || ((VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+            && (VARIABLE_DEF_TYPE_ARRAY 
+              == variable_def_type_get(vdef))
+            && variable_def_is_same(
+              variable_def_member_def_get(
+                variable_def_member_get(def)
+                ),
+              variable_def_member_def_get(
+                variable_def_member_get(vdef)
+                )
+              )
+            );
+    /*
+     * if vdef is a one element array, and def is a single element
+     * of the same type, allow this
+     */
+    ok = ok
+      || ((VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(vdef))
+        && variable_def_type_is_number(
+          variable_def_type_get(def))
+        && variable_def_type_is_number(
+             variable_def_type_get(
+               variable_def_member_def_get(
+                 variable_def_member_get(vdef))))
+        && (1 == variable_def_member_ct_get(
+          variable_def_member_get(vdef))));
+    if (!val || !ok) {
+      if (val) {
+        pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
+        value_release(val);
+        val = VALUE_NONE;
+      }
+    }
+  }
+  if (parms && (ii < param_ct)) {
+    parms[ii] = val;
+    if (val && need_ct && !opt_sentinel) {
+      char *ct_name;
+
+      ptr     = value_name_get(val);
+      ct_name = MALLOC(8 + strlen(ptr));
+      if (!ct_name) {
+        pfile_log_syserr(pf, ENOMEM);
+      } else {
+        value_t ct_val;
+
+        sprintf(ct_name, "_%s_count", ptr);
+        ct_val = pfile_value_find(pf, PFILE_LOG_NONE, ct_name);
+        if (!ct_val) {
+          ct_val = pfile_constant_get(pf, value_ct_get(val),
+            VARIABLE_DEF_NONE);
+        }
+        if (str_rt_len) {
+          /* string coercion: the count is the runtime length */
+          value_release(ct_val);
+          ct_val = str_rt_len;
+          str_rt_len = VALUE_NONE;
+        }
+        parms[ii - 1] = ct_val;
+        FREE(ct_name);
+      }
+    }
+  } else {
+    value_release(val);
+  }
+
+}
+
+/* fill omitted trailing arguments from the callee's registered
+ * defaults (direct calls only -- signatures carry no defaults, so
+ * pointer-called procs keep full arity) */
+static void jal_call_optional_defaults_fill(pfile_t *pf, value_t call_val, flag_t flags, value_t *parms, size_t param_ct, size_t *pii)
+{
+  size_t ii = *pii;
+
+  jal_opt_default_t *entry;
+
+  entry = (call_val
+      && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))
+      && !(flags & (JAL_PARSE_CALL_FLAG_PUT | JAL_PARSE_CALL_FLAG_GET)))
+    ? jal_opt_default_find(value_def_get(call_val))
+    : 0;
+  if (entry) {
+    size_t kk;
+
+    jal_opt_default_resolve(pf, entry);
+    for (kk = ii; kk < param_ct; kk++) {
+      if ((kk < entry->member_ct) && entry->by_member[kk]) {
+        value_t dv;
+
+        dv = value_clone(entry->by_member[kk]);
+        if (dv) {
+          value_lock(dv);
+        }
+        parms[kk] = dv;
+        ii++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  *pii = ii;
+}
+
 value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
 {
   value_t              *parms;
@@ -1395,376 +1833,14 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
                     )
                   )
                 )) {
-            /* this *must be* a function reference. this means a volatile
-               parameter. look at the function defintion flags, they'll
-               either be:
-                 IN     -- the _get function is needed
-                 IN|OUT -- the _get + _put functions are needed
-                 OUT    -- the _put function is needed */
-            value_t        jvals[JAL_VAL_TYPE_CT];
-            variable_def_t fn_def;
-            variable_def_t fn_def2;
-
-            jal_value_find(pf, ptr, jvals);
-
-            fn_def = variable_def_member_def_get( variable_def_member_get(def));
-            if (variable_def_flag_test(fn_def, VARIABLE_DEF_FLAG_IN)) {
-              if (jvals[JAL_VAL_TYPE_GET]) {
-                val = jvals[JAL_VAL_TYPE_GET];
-                value_lock(val);
-              } else if (jvals[JAL_VAL_TYPE_IGET]) {
-                val = jvals[JAL_VAL_TYPE_IGET];
-                value_lock(val);
-              } else {
-                /* nb: the name might have changed (via alias), so if there's
-                       a found entry, use its name instead */
-                size_t valn;
-
-                for (valn = JAL_VAL_TYPE_MIN;
-                     (valn < JAL_VAL_TYPE_CT) && (VALUE_NONE == jvals[valn]);
-                     valn++)
-                  ; /* empty body */
-                if (valn < JAL_VAL_TYPE_CT) {
-                  ptr = value_name_get(jvals[valn]);
-                }
-                val = jal_volatile_function_create(pf, JAL_VOLATILE_FN_GET, 
-                    ptr);
-              }
-                
-              fn_def2 = value_def_get(val);
-              if (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(fn_def2)) {
-                fn_def2 = variable_def_member_def_get(
-                  variable_def_member_get(fn_def2));
-              }
-              if (!variable_def_is_same(fn_def, fn_def2)) {
-                pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
-                value_release(val);
-                val = VALUE_NONE;
-              }
-              if (parms && (ii < param_ct)) {
-                parms[ii] = val;
-              } else {
-                value_release(val);
-              }
-            }
-            if (variable_def_flag_test(fn_def, VARIABLE_DEF_FLAG_OUT)) {
-              if (variable_def_flag_test(fn_def, VARIABLE_DEF_FLAG_IN)) {
-                /* this is an in/out so the next parameter must be the OUT
-                   parameter */
-                ii++;
-                mbr = variable_def_member_link_get(mbr);
-                fn_def = variable_def_member_def_get(
-                  variable_def_member_get(
-                    variable_def_member_def_get(mbr)));
-              }
-
-              if (jvals[JAL_VAL_TYPE_PUT]) {
-                val = jvals[JAL_VAL_TYPE_PUT];
-                value_lock(val);
-              } else if (jvals[JAL_VAL_TYPE_IPUT]) {
-                val = jvals[JAL_VAL_TYPE_IPUT];
-                value_lock(val);
-              } else {
-                val = jal_volatile_function_create(pf, JAL_VOLATILE_FN_PUT, ptr);
-              }
-              fn_def2 = value_def_get(val);
-              if (VARIABLE_DEF_TYPE_POINTER
-                == variable_def_type_get(fn_def2)) {
-                fn_def2 = variable_def_member_def_get(
-                  variable_def_member_get(fn_def2));
-              }
-              if (!variable_def_is_same(fn_def, fn_def2)) {
-                pfile_log(pf, PFILE_LOG_ERR, "parameter %u type mismatch",
-                  (unsigned) ii);
-                value_release(val);
-                val = VALUE_NONE;
-              }
-              if (parms && (ii < param_ct)) {
-                parms[ii] = val;
-              } else {
-                value_release(val);
-              }
-            }
-            jal_value_release(jvals);
-            pf_token_get(pf, PF_TOKEN_NEXT);
+            jal_call_fnptr_param_parse(pf, ptr, def, parms, param_ct,
+                &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
-            /* this needs to be a simple variable or PUT procedure */
-            value_t jvals[JAL_VAL_TYPE_CT];
-
-            jal_value_find(pf, ptr, jvals);
-
-            if (jvals[JAL_VAL_TYPE_PUT]) {
-              variable_def_t        put_def;
-              variable_def_member_t put_mbr;
-              value_t               tval;
-
-              val = jvals[JAL_VAL_TYPE_PUT];
-              value_lock(val);
-              tval = variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
-                ? jal_parse_value(pf, JAL_PARSE_VALUE_TYPE_RVALUE)
-                : VALUE_NONE;
-              if (put_parms && (ii < param_ct)) {
-                put_parms[ii] = val;
-              } else {
-                value_release(val);
-              }
-              if (!tval || !value_is_temp(tval)) {
-                put_def = value_def_get(val); /* this should be a function */
-                put_mbr = variable_def_member_get(put_def);
-                put_mbr = variable_def_member_link_get(put_mbr);
-                put_def = variable_def_member_def_get(put_mbr);
-                val = pfile_value_temp_get_from_def(pf, put_def);
-                if (tval) {
-                  pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &val, tval, VALUE_NONE);
-                  value_release(tval);
-                }
-              } else {
-                val = tval;
-              }
-              put_def = value_def_get(val);
-              put_def = variable_def_flags_change(put_def,
-                  variable_def_flags_get_all(put_def)
-                  | VARIABLE_DEF_FLAG_OUT);
-              value_def_set(val, put_def);
-              if (!tval) {
-                pf_token_get(pf, PF_TOKEN_NEXT);
-              }
-            } else {
-              val = jal_parse_value(pf, JAL_PARSE_VALUE_TYPE_LVALUE);
-              if (value_is_const(val)) {
-                pfile_log(pf, PFILE_LOG_ERR, "%s cannot be a constant",
-                    value_name_get(val));
-              } else if (value_vflag_test(val, VARIABLE_FLAG_READ)
-                && !value_vflag_test(val, VARIABLE_FLAG_WRITE)) {
-                pfile_log(pf, PFILE_LOG_ERR, "cannot read %s",
-                  value_name_get(val));
-              }
-              while (jal_parse_structure(pf, &val)
-                || jal_parse_subscript(pf, &val, NULL))
-                ; /* null body */
-            }
-            if (!((variable_def_type_is_number(variable_def_type_get(def))
-                && value_is_number(val))
-                || variable_def_is_same(def, value_def_get(val)))) {
-              pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
-              value_release(val);
-              val = VALUE_NONE;
-            }
-            if (parms && (ii < param_ct)) {
-              parms[ii] = val;
-            } else {
-              value_release(val);
-            }
-            jal_value_release(jvals);
+            jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
+                put_parms);
           } else {
-            /* this must be IN only! */
-            boolean_t      ok;
-            variable_def_t vdef;
-            boolean_t      suppress_ptr_deref;
-            boolean_t      opt_sentinel;
-            value_t        str_rt_len = VALUE_NONE;
-
-            opt_sentinel = BOOLEAN_FALSE;
-            suppress_ptr_deref = jal_formal_def_is_data_pointer_non_callable(
-                def);
-            if (suppress_ptr_deref) {
-              pfile_parse_call_data_ptr_arg_push(pf);
-            }
-            val = jal_parse_expr(pf);
-            if (suppress_ptr_deref) {
-              pfile_parse_call_data_ptr_arg_pop(pf);
-            }
-            /* Optional-formal empty-string sentinel: `report("")` on a
-             * NON-string OPTIONAL formal means OMITTED -- fill the
-             * registered default exactly as a missing trailing argument
-             * would (print-style callers pass position-preserving
-             * "nothing here" placeholders).  Only the empty const string
-             * is the sentinel: a non-empty string keeps the normal type
-             * error, a REQUIRED formal never gets the idiom (no
-             * registered default), and STRING-typed formals take "" as a
-             * real empty string. */
-            if (val
-                && (ii < param_ct)
-                && !(flags & (JAL_PARSE_CALL_FLAG_PUT
-                    | JAL_PARSE_CALL_FLAG_GET))
-                && call_val
-                && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))
-                && value_is_const(val)
-                && value_is_array(val)
-                && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
-                && (0 == value_ct_get(val))
-                && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)) {
-              jal_opt_default_t *oent;
-
-              oent = jal_opt_default_find(value_def_get(call_val));
-              if (oent) {
-                jal_opt_default_resolve(pf, oent);
-                if ((ii < oent->member_ct) && oent->by_member[ii]) {
-                  value_t dv;
-
-                  dv = value_clone(oent->by_member[ii]);
-                  if (dv) {
-                    value_lock(dv);
-                  }
-                  value_release(val);
-                  val         = dv;
-                  opt_sentinel = BOOLEAN_TRUE;
-                  if (need_ct && (ii >= 1)
-                      && ((ii - 1) < oent->member_ct)
-                      && oent->by_member[ii - 1]) {
-                    /* open-array formal: the hidden count slot takes the
-                     * default's registered count (the generic path would
-                     * rebuild it from the value name) */
-                    value_t ctv;
-
-                    ctv = value_clone(oent->by_member[ii - 1]);
-                    if (ctv) {
-                      value_lock(ctv);
-                    }
-                    if (parms) {
-                      value_release(parms[ii - 1]);
-                      parms[ii - 1] = ctv;
-                    } else {
-                      value_release(ctv);
-                    }
-                  }
-                }
-              }
-            }
-            /* String actual into an open byte-array formal (e.g.
-             * print_string(serial, s) with `var string s`): marshal the
-             * CONTENT -- copy it into a temp byte buffer, and remember
-             * the runtime length for the hidden count parameter (the
-             * buffer capacity would over-report). */
-            if (val
-                && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
-                && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)) {
-              value_t sbuf = jal_string_arg_byte_array(pf, val);
-
-              if (sbuf) {
-                str_rt_len = jal_string_length_value_get(pf, val);
-                value_release(val);
-                val = sbuf;
-              }
-            }
-            if (value_vflag_test(val, VARIABLE_FLAG_WRITE)
-              && !value_vflag_test(val, VARIABLE_FLAG_READ)) {
-              pfile_log(pf, PFILE_LOG_ERR, "cannot read from %s",
-                value_name_get(val));
-            }
-            /* Const/fixed string LITERAL actual into a DYNAMIC-string
-             * formal: stage the text into a compiler string cell (the
-             * chain-cell machinery) and pass the cell -- the formal's
-             * def is a heap HANDLE, which a raw literal's plain array
-             * def never matches (a 3-char literal only passed by the
-             * count==handle-size coincidence; "abc" worked while
-             * "ab"/"abcd"/"" all errored). Empty literal: the assign's
-             * len-0 path clears the cell -- COUNT(formal) sees 0. */
-            if (val
-                && (ii < param_ct)
-                && value_is_const(val)
-                && !jal_string_is_dynamic(val)
-                && jal_string_is_source(val)
-                && variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)) {
-              value_t cell;
-
-              if (variable_def_flag_test(def,
-                    VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
-                cell = jal_string_stage_source_cell(pf, val);
-              } else if (VARIABLE_DEF_TYPE_ARRAY
-                  == variable_def_type_get(def)) {
-                cell = jal_string_stage_fixed_cell(pf, val,
-                    (variable_sz_t) variable_def_member_ct_get(
-                      variable_def_member_get(def)));
-              } else {
-                cell = VALUE_NONE;
-              }
-              if (cell) {
-                value_release(val);
-                val = cell;
-              }
-            }
-            if (ii < param_ct) {
-              vdef = value_def_get(val);
-              ok = variable_def_type_is_number(variable_def_type_get(def))
-                      && value_is_number(val);
-              if (ok) {
-                pfile_value_def_type_check(pf, OPERATOR_ASSIGN, def, val,
-                  VALUE_NONE);
-                if (value_is_universal(val)) {
-                  pfile_value_def_overflow_check(pf, OPERATOR_ASSIGN, def, val);
-                }
-              }
-              ok = ok || variable_def_is_same(def, vdef);
-              /*
-               * allow the assignment of an array to a pointer
-               */
-              ok = ok 
-                || ((VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
-                      && (VARIABLE_DEF_TYPE_ARRAY 
-                        == variable_def_type_get(vdef))
-                      && variable_def_is_same(
-                        variable_def_member_def_get(
-                          variable_def_member_get(def)
-                          ),
-                        variable_def_member_def_get(
-                          variable_def_member_get(vdef)
-                          )
-                        )
-                      );
-              /*
-               * if vdef is a one element array, and def is a single element
-               * of the same type, allow this
-               */
-              ok = ok
-                || ((VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(vdef))
-                  && variable_def_type_is_number(
-                    variable_def_type_get(def))
-                  && variable_def_type_is_number(
-                       variable_def_type_get(
-                         variable_def_member_def_get(
-                           variable_def_member_get(vdef))))
-                  && (1 == variable_def_member_ct_get(
-                    variable_def_member_get(vdef))));
-              if (!val || !ok) {
-                if (val) {
-                  pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
-                  value_release(val);
-                  val = VALUE_NONE;
-                }
-              }
-            }
-            if (parms && (ii < param_ct)) {
-              parms[ii] = val;
-              if (val && need_ct && !opt_sentinel) {
-                char *ct_name;
-
-                ptr     = value_name_get(val);
-                ct_name = MALLOC(8 + strlen(ptr));
-                if (!ct_name) {
-                  pfile_log_syserr(pf, ENOMEM);
-                } else {
-                  value_t ct_val;
-
-                  sprintf(ct_name, "_%s_count", ptr);
-                  ct_val = pfile_value_find(pf, PFILE_LOG_NONE, ct_name);
-                  if (!ct_val) {
-                    ct_val = pfile_constant_get(pf, value_ct_get(val),
-                      VARIABLE_DEF_NONE);
-                  }
-                  if (str_rt_len) {
-                    /* string coercion: the count is the runtime length */
-                    value_release(ct_val);
-                    ct_val = str_rt_len;
-                    str_rt_len = VALUE_NONE;
-                  }
-                  parms[ii - 1] = ct_val;
-                  FREE(ct_name);
-                }
-              }
-            } else {
-              value_release(val);
-            }
+            jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
+                need_ct, flags, call_val);
           }
         }
       }
@@ -1778,32 +1854,8 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
     /* optional parameters: fill the omitted trailing arguments from the
      * callee's registered defaults (direct calls only -- signatures
      * carry no defaults, so pointer-called procs keep full arity) */
-    jal_opt_default_t *entry;
-
-    entry = (call_val
-        && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))
-        && !(flags & (JAL_PARSE_CALL_FLAG_PUT | JAL_PARSE_CALL_FLAG_GET)))
-      ? jal_opt_default_find(value_def_get(call_val))
-      : 0;
-    if (entry) {
-      size_t kk;
-
-      jal_opt_default_resolve(pf, entry);
-      for (kk = ii; kk < param_ct; kk++) {
-        if ((kk < entry->member_ct) && entry->by_member[kk]) {
-          value_t dv;
-
-          dv = value_clone(entry->by_member[kk]);
-          if (dv) {
-            value_lock(dv);
-          }
-          parms[kk] = dv;
-          ii++;
-        } else {
-          break;
-        }
-      }
-    }
+    jal_call_optional_defaults_fill(pf, call_val, flags, parms,
+        param_ct, &ii);
   }
   if (ii != param_ct) {
     pfile_log(pf, PFILE_LOG_ERR,
