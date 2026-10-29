@@ -54,3 +54,4 @@ demo_sample/backup/
 tmp/
 .zcodeignore
 bin/jalv3-x86-64-san
+unit-tests/.cache/

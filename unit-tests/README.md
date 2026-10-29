@@ -19,3 +19,15 @@ Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 L1 runtime suites + compile-pin tests, L2 unit/compare + HEX manifest,
 L3 second QEMU suite + ASan corpus). `run_compile_pin_tests.sh` runs the
 `test_*` pin scripts in this folder.
+
+`jaldbg.py` — the bug-investigation harness (2026-10-29, born from the
+proc-entry-BSR chase). Diagnosis layer only: the suites above stay the
+detection layer and always run first. Subcommands: `compile`, `symbols`,
+`watch` (PC-attributed write timeline on named variables under gpsim;
+final-RAM snapshot on the 32-bit QEMU targets), `trace` (disassembly
+annotated with symbols and the a/d bits — opcode table parsed live from
+src/libpic12/pic16.c so it cannot disagree with the compiler),
+`uart` (TXREG capture), `build REF` (clean out-of-tree git-worktree
+build, cached), `pin-check WITNESS --old REF` (prove a witness fails
+the pre-fix build — the j50 lesson), `cost --old REF` (compile-time
+canary on the corpus giants — the 13x lesson).
