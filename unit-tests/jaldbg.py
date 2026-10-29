@@ -345,9 +345,18 @@ def run_witness(witness: Path, compiler: Path) -> tuple[int, str]:
     if witness.suffix == ".py":
         r = subprocess.run([sys.executable, str(witness), "--compiler", str(compiler)],
                            capture_output=True, text=True, cwd=str(REPO))
+    elif witness.suffix == ".sh":
+        r = subprocess.run(["bash", str(witness), str(compiler)],
+                           capture_output=True, text=True, cwd=str(REPO))
     else:
+        # pick the validate harness by suite family
+        fam = witness.parent.name
+        harness = {
+            "pic32": "sims/jal_sim_validate.sh",
+            "esp32": "sims/jal_esp32_validate.sh",
+        }.get(fam, "sims/jal_gpsim_validate.sh")
         r = subprocess.run(
-            [str(REPO / "sims/jal_gpsim_validate.sh"), "--compiler", str(compiler),
+            [str(REPO / harness), "--compiler", str(compiler),
              str(witness)], capture_output=True, text=True, cwd=str(REPO))
     return r.returncode, (r.stdout + r.stderr)[-1500:]
 
@@ -361,9 +370,12 @@ def cmd_pin_check(args):
     if rc_new != 0:
         print("\nnew output tail:\n" + out_new)
     if rc_old == 0:
-        print("\nVERDICT: witness does NOT pin the fix "
-              "(passes on the old build) -- same class as the j50 "
-              "stale-print witness gap")
+        print("\nVERDICT: witness does NOT pin anything between the builds "
+              "(passes on old). Either it never exercised the difference "
+              "(the j50 stale-print witness gap), or the fix it pins "
+              "predates the old ref -- this repo's history begins at the "
+              "source squash, so pre-2026-10-29 fixes have no pre-fix ref "
+              "here and stay held by the suites, not pin-check.")
         return 1
     if rc_new != 0:
         print("\nVERDICT: witness fails on BOTH builds -- the new build "
