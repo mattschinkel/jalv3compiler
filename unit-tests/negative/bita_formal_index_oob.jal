@@ -1,0 +1,11 @@
+-- negative: const subscript beyond a fixed bit-array formal's count
+include 16f877
+pragma target clock 20_000_000
+var bit flags[4]
+procedure probe(bit in f[4]) is
+   var byte x
+   x = f[9]
+end procedure
+probe(flags)
+forever loop
+end loop

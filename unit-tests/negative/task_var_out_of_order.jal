@@ -1,0 +1,7 @@
+-- negative: optional parameter before a required parameter
+include 16f877
+pragma target clock 20_000_000
+procedure p(optional byte in level default 7, byte in tag) is
+end procedure
+forever loop
+end loop

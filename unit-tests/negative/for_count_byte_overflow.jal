@@ -1,0 +1,7 @@
+-- negative: for-loop count the counter can never reach (byte counter,
+-- universal literal -- the hole in the old size-only fit check)
+include 16f877
+pragma target clock 20_000_000
+var byte k
+for 300 using k loop
+end loop

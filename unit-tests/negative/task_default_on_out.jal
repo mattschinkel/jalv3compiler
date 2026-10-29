@@ -1,0 +1,8 @@
+-- negative: default is only allowed on IN parameters
+include 16f877
+pragma target clock 20_000_000
+procedure p(byte out status default 3) is
+end procedure
+p(1)
+forever loop
+end loop

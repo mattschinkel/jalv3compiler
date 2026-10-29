@@ -1,0 +1,9 @@
+-- negative: constant passed to an OUT formal
+include 16f877
+pragma target clock 20_000_000
+procedure p(byte out x) is
+   x = 1
+end procedure
+p(7)
+forever loop
+end loop

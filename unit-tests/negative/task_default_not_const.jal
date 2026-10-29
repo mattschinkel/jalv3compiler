@@ -1,0 +1,8 @@
+-- negative: optional default must be a constant expression
+include 16f877
+pragma target clock 20_000_000
+var byte g = 5
+procedure p(optional byte in level default g) is
+end procedure
+forever loop
+end loop

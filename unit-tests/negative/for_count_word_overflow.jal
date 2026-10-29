@@ -1,0 +1,6 @@
+-- negative: for-loop count beyond a word counter (70000 > 65535)
+include 16f877
+pragma target clock 20_000_000
+var word k
+for 70000 using k loop
+end loop

@@ -1,0 +1,6 @@
+-- negative: more bit initializers than a CONST bit array's elements
+include 16f877
+pragma target clock 20_000_000
+const bit flags[2] = {true, false, true}
+forever loop
+end loop

@@ -1,0 +1,10 @@
+-- negative: array over the real RAM ceiling (16f18857, 4093 B free)
+include 16f18857
+pragma target clock 32_000_000
+var byte big[4094]
+var word i
+forever loop
+  for 4094 using i loop
+    big[i - 1] = byte(i)
+  end loop
+end loop

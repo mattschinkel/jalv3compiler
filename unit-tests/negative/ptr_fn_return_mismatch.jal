@@ -1,0 +1,10 @@
+-- negative: function-return-word pointer bound to function returning byte
+include 16f1825
+pragma target clock 20_000_000
+function get(byte in v) return byte is
+   return v
+end function
+var pointer fp as function(byte in) return word
+fp is get
+forever loop
+end loop

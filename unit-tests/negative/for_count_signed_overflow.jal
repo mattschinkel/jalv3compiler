@@ -1,0 +1,7 @@
+-- negative: for-loop count beyond a signed counter's range (130 > 127;
+-- the size-only check could not see signed ranges at all)
+include 16f877
+pragma target clock 20_000_000
+var sbyte k
+for 130 using k loop
+end loop

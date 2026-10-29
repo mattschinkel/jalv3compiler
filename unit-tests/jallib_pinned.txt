@@ -1,0 +1,7 @@
+# Pinned pristine jallib source for scripts/fetch_jallib.sh.
+# The fetched include/ tree flattens to third_party/jallib/lib and the
+# sample/ tree to third_party/jallib/samples (the -s library search is flat;
+# the upstream trees have no basename collisions).
+tag=Jallib_2.1.0
+url=https://github.com/jallib/jallib/archive/refs/tags/Jallib_2.1.0.tar.gz
+sha256=12e06ca95c10a5c60d6bf320f79315223f3291d6382273b298dc9beff825d22e

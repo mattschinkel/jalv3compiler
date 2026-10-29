@@ -1,0 +1,6 @@
+-- negative: dynamic string without _string_heap_size
+include 16f877
+pragma target clock 20_000_000
+var string s
+forever loop
+end loop

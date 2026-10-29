@@ -1,0 +1,12 @@
+-- negative: function-pointer call with too few arguments
+include 16f1825
+pragma target clock 20_000_000
+function add(byte in a, byte in b) return byte is
+   return a + b
+end function
+var pointer fp as function(byte in, byte in) return byte
+var byte r
+fp is add
+r = fp(1)
+forever loop
+end loop

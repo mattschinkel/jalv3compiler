@@ -1,0 +1,9 @@
+-- negative: subscript on a data pointer to a scalar
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var pointer p as var byte
+var byte x
+x = p[0]
+forever loop
+end loop

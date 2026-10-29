@@ -1,0 +1,12 @@
+-- negative: var declared inside a task body on a classic core
+-- (shared software frame area; fix_task_local_var_guard + lift)
+include 16f877
+pragma target clock 20_000_000
+pragma task 2
+task _tw() is
+   var byte local_counter = 0
+   _task_yield
+end task
+_task_start _tw()
+forever loop
+end loop

@@ -1,5 +1,5 @@
-JALv2 compiler fork ("jalv3compiler") — attribution notice
-=====================================================
+jalv3compiler ("JALv3") — attribution notice
+============================================
 
 The compiler sources in src/ are a fork of:
 
@@ -13,16 +13,22 @@ the original header block; files byte-identical to the jalv25r9 baseline
 are unmodified. The upstream repository publishes no LICENSE file; its
 files are redistributed here with their original notices intact.
 
-The JAL libraries under demo_lib/ originate from jallib 2.1
-(https://github.com/jallib/jallib, ZLIB license) and the upstream
-compiler distribution; authorship is stated in each file's own header.
-The same applies to the sample corpora under demo_sample/ and the
-libraries/samples created for the fork's own test and demo work. These
-files are not modified by this notice.
+The pre-built jalv2 compiler binaries under bin/old_versions/
+(jalv24q6 .. jalv25r9, all platforms) are redistributed from the jalv2
+releases of the same upstream project.
+
+The JAL libraries under demo_lib/ and the samples under demo_sample/
+originate from jallib 2.1 (https://github.com/jallib/jallib, ZLIB
+license) and the upstream compiler distribution; authorship is stated
+in each file's own header, and the same applies to libraries and
+samples created for the fork's own test and demo work. The pristine
+jallib corpus used by the unit gate is fetched, not vendored
+(unit-tests/fetch_jallib.sh, checksum-pinned).
 
 Fork extensions — the ESP32 (Xtensa LX6) and PIC32 (MIPS32) back ends,
 the dynamic string heap, pointers, native bit arrays, wide integers, the
-shared algorithm kernels, and related work — are
+shared algorithm kernels, the simulator suites (sims/) and the unit-test
+gate (unit-tests/) — are
 
     Copyright (c) 2026 Matthew Schinkel, all rights reserved.
 

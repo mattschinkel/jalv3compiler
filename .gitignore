@@ -14,3 +14,8 @@ __pycache__/
 demo_sample/old/
 demo_sample/backup/
 !sims/golden/*.hex
+/third_party/
+unit-tests/Output_*/
+unit-tests/Comparison/
+unit-tests/.unittests_shadow/
+unit-tests/reports/

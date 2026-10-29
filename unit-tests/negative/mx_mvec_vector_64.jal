@@ -1,0 +1,11 @@
+-- MX MVEC table has 64 entries: vector 64 must be rejected cleanly.
+include 32mx270f256b
+pragma target clock 40_000_000
+pragma target image pfm
+
+procedure isr64() is
+   pragma interrupt 64
+end procedure
+
+forever loop
+end loop

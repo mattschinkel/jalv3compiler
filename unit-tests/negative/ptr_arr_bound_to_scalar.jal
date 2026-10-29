@@ -1,0 +1,8 @@
+-- negative: pointer-to-array bound to a scalar byte target
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var pointer p as var byte[2]
+p is v
+forever loop
+end loop
