@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pf_cmd_h__
 #define pf_cmd_h__
@@ -18,6 +21,11 @@ void     pfile_cmd_branch_add(pfile_t *pf,
   cmd_branchtype_t type, cmd_branchcond_t cond, label_t dst,
   value_t var, value_t proc, value_t *proc_params);
 void   pfile_cmd_special_add(pfile_t *pf, cmd_type_t type, pfile_proc_t *proc);
+void   pfile_cmd_special_add_flags(pfile_t *pf, cmd_type_t type,
+    pfile_proc_t *proc, flag_t cmd_flags);
+void   pfile_cmd_bld_start(pfile_t *pf);
+void   pfile_cmd_bld_end(pfile_t *pf, cmd_t *head, cmd_t *tail);
+void   pfile_cmd_replace1_with_chain(pfile_t *pf, cmd_t oldc, cmd_t nh, cmd_t nt);
 void   pfile_cmd_usec_delay_add(pfile_t *pf, variable_const_t n);
 void   pfile_cmd_label_add(pfile_t *pf, label_t label);
 void   pfile_cmd_log_add(pfile_t *pf, pfile_log_t plog, size_t sz,

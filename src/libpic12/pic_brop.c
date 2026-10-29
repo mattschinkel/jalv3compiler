@@ -6,10 +6,14 @@
  **               2019-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <string.h>
 #include <assert.h>
 
+#include "../libutils/mem.h"
 #include "../libcore/pf_proc.h"
 #include "pic.h"
 #include "piccolst.h"
@@ -23,7 +27,426 @@ typedef struct pic_code_brop_data_ {
   pic_branchbits_t branchbits[PIC_CODE_GOP_DEPTH];
   unsigned         ix;
   unsigned         changed;
+  struct pic_brop_sums_ *sums;   /* callee PCLATH summaries (14-bit) */
 } pic_code_brop_data_t;
+
+/*
+ * Callee PCLATH summaries (classic 14-bit): the walk used to mark PCLATH
+ * INDETERMINATE after every CALL, so the forced branch-bit clears inserted
+ * before each call/goto of a multi-page program could never elide.  A call
+ * is transparent, though, when everything the callee can reach only leaves
+ * the page bits alone or drives them one way.  Summaries are computed per
+ * call-target label from the flat code list (bodies by CFG reachability,
+ * calls as edges) and joined to a fixpoint.
+ */
+typedef enum pic_brop_touch_ {
+  PIC_BROP_TOUCH_NONE,   /* bit is never touched */
+  PIC_BROP_TOUCH_CLR,    /* only cleared (or left alone) */
+  PIC_BROP_TOUCH_SET,    /* only set (or left alone) */
+  PIC_BROP_TOUCH_MIXED   /* anything else */
+} pic_brop_touch_t;
+
+typedef struct pic_brop_sum_ {
+  label_t          lbl;
+  pic_brop_touch_t dir3; /* direct (own body) contribution */
+  pic_brop_touch_t dir4;
+  pic_brop_touch_t t3;   /* after the call-graph fixpoint */
+  pic_brop_touch_t t4;
+} pic_brop_sum_t;
+
+typedef struct pic_brop_sums_ {
+  pic_brop_sum_t *sum;
+  size_t          ct;
+  size_t          alloc;
+  size_t         *edge_from;  /* callee edges as registry indices */
+  size_t         *edge_to;
+  size_t          edge_ct;
+  size_t          edge_alloc;
+  pic_code_t     *visited;    /* scratch visited set for one body walk */
+  size_t          visited_ct;
+  size_t          visited_alloc;
+} pic_brop_sums_t;
+
+static pic_brop_touch_t pic_brop_touch_join(pic_brop_touch_t a,
+    pic_brop_touch_t b)
+{
+  pic_brop_touch_t rc;
+
+  if (a == b) {
+    rc = a;
+  } else if (PIC_BROP_TOUCH_NONE == a) {
+    rc = b;
+  } else if (PIC_BROP_TOUCH_NONE == b) {
+    rc = a;
+  } else {
+    rc = PIC_BROP_TOUCH_MIXED;
+  }
+  return rc;
+}
+
+/* PCLATH state after a call whose summary is t, given state in on entry */
+static pic_bitstate_t pic_brop_call_exit(pic_brop_touch_t t,
+    pic_bitstate_t in)
+{
+  pic_bitstate_t rc;
+
+  switch (t) {
+    case PIC_BROP_TOUCH_NONE:
+      rc = in;
+      break;
+    case PIC_BROP_TOUCH_CLR:
+      rc = (PIC_BITSTATE_CLR == in)
+        ? PIC_BITSTATE_CLR : PIC_BITSTATE_INDETERMINATE;
+      break;
+    case PIC_BROP_TOUCH_SET:
+      rc = (PIC_BITSTATE_SET == in)
+        ? PIC_BITSTATE_SET : PIC_BITSTATE_INDETERMINATE;
+      break;
+    default:
+      rc = PIC_BITSTATE_INDETERMINATE;
+      break;
+  }
+  return rc;
+}
+
+static size_t pic_brop_sums_find(const pic_brop_sums_t *sums, label_t lbl)
+{
+  size_t ii;
+
+  for (ii = 0; ii < sums->ct; ii++) {
+    if (sums->sum[ii].lbl == lbl) {
+      return ii;
+    }
+  }
+  return (size_t) -1;
+}
+
+static boolean_t pic_brop_sums_add(pic_brop_sums_t *sums, label_t lbl)
+{
+  if ((size_t) -1 != pic_brop_sums_find(sums, lbl)) {
+    return BOOLEAN_FALSE;
+  }
+  if (sums->ct == sums->alloc) {
+    size_t          alloc;
+    pic_brop_sum_t *sum;
+
+    alloc = sums->alloc ? (2 * sums->alloc) : 16;
+    sum   = REALLOC(sums->sum, sizeof(*sum) * alloc);
+    if (!sum) {
+      return BOOLEAN_FALSE;
+    }
+    sums->sum   = sum;
+    sums->alloc = alloc;
+  }
+  sums->sum[sums->ct].lbl  = lbl;
+  sums->sum[sums->ct].dir3 = PIC_BROP_TOUCH_NONE;
+  sums->sum[sums->ct].dir4 = PIC_BROP_TOUCH_NONE;
+  sums->sum[sums->ct].t3   = PIC_BROP_TOUCH_NONE;
+  sums->sum[sums->ct].t4   = PIC_BROP_TOUCH_NONE;
+  sums->ct++;
+  return BOOLEAN_TRUE;
+}
+
+static void pic_brop_sums_edge_add(pic_brop_sums_t *sums, size_t from,
+    size_t to)
+{
+  if (sums->edge_ct == sums->edge_alloc) {
+    size_t  alloc;
+    size_t *edge;
+
+    alloc = sums->edge_alloc ? (2 * sums->edge_alloc) : 32;
+    edge  = REALLOC(sums->edge_from, sizeof(*edge) * alloc);
+    if (!edge) {
+      return;
+    }
+    sums->edge_from = edge;
+    edge = REALLOC(sums->edge_to, sizeof(*edge) * alloc);
+    if (!edge) {
+      return;
+    }
+    sums->edge_to   = edge;
+    sums->edge_alloc = alloc;
+  }
+  sums->edge_from[sums->edge_ct] = from;
+  sums->edge_to[sums->edge_ct]   = to;
+  sums->edge_ct++;
+}
+
+static boolean_t pic_brop_visited_test(const pic_brop_sums_t *sums,
+    pic_code_t code)
+{
+  size_t ii;
+
+  for (ii = 0; ii < sums->visited_ct; ii++) {
+    if (sums->visited[ii] == code) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static void pic_brop_visited_add(pic_brop_sums_t *sums, pic_code_t code)
+{
+  if (sums->visited_ct == sums->visited_alloc) {
+    size_t     alloc;
+    pic_code_t *visited;
+
+    alloc    = sums->visited_alloc ? (2 * sums->visited_alloc) : 256;
+    visited  = REALLOC(sums->visited, sizeof(*visited) * alloc);
+    if (!visited) {
+      return;
+    }
+    sums->visited       = visited;
+    sums->visited_alloc = alloc;
+  }
+  sums->visited[sums->visited_ct++] = code;
+}
+
+/* how this instruction alone touches the PCLATH page bits */
+static void pic_brop_code_touch(pfile_t *pf, pic_code_t code,
+    pic_brop_touch_t *t3, pic_brop_touch_t *t4)
+{
+  pic_opcode_t op;
+  unsigned     page_sz;
+  label_t      lbl;
+
+  *t3 = PIC_BROP_TOUCH_NONE;
+  *t4 = PIC_BROP_TOUCH_NONE;
+  if (pic_code_flag_test(code, PIC_CODE_FLAG_NO_OPTIMIZE)
+      || pic_code_is_suspend(pf, code)) {
+    *t3 = PIC_BROP_TOUCH_MIXED;
+    *t4 = PIC_BROP_TOUCH_MIXED;
+    return;
+  }
+  op      = pic_code_op_get(code);
+  page_sz = pic_target_page_size_get(pf);
+  switch (op) {
+    case PIC_OPCODE_BRANCHLO_SET:
+    case PIC_OPCODE_BRANCHLO_CLR:
+    case PIC_OPCODE_BRANCHLO_NOP:
+      /* the walk rewrites these to match the resolved target page, so
+       * classify by the target page rather than the SET/CLR spelling;
+       * elided (NOP) or materialized, the bit ends at the target page */
+      lbl = pic_code_brdst_get(code);
+      *t3 = (lbl && ((unsigned) label_pc_get(lbl) & page_sz))
+        ? PIC_BROP_TOUCH_SET : PIC_BROP_TOUCH_CLR;
+      break;
+    case PIC_OPCODE_BRANCHHI_SET:
+    case PIC_OPCODE_BRANCHHI_CLR:
+    case PIC_OPCODE_BRANCHHI_NOP:
+      lbl = pic_code_brdst_get(code);
+      *t4 = (lbl && ((unsigned) label_pc_get(lbl) & (2 * page_sz)))
+        ? PIC_BROP_TOUCH_SET : PIC_BROP_TOUCH_CLR;
+      break;
+    case PIC_OPCODE_MOVLP:
+    case PIC_OPCODE_MOVLP_NOP:
+      /* enhanced-midrange MOVLP writes all of PCLATH (defensive; the
+       * summaries are only used on classic 14-bit) */
+      *t3 = PIC_BROP_TOUCH_MIXED;
+      *t4 = PIC_BROP_TOUCH_MIXED;
+      break;
+    default:
+      if (pic_code_modifies_pclath(pf, code)) {
+        *t3 = PIC_BROP_TOUCH_MIXED;
+        *t4 = PIC_BROP_TOUCH_MIXED;
+      }
+      break;
+  }
+}
+
+/* walk the body of sums->sum[which]: join direct page-bit touches and
+ * record call edges.  Successor rules mirror pic_code_gop_analyze */
+static void pic_brop_body_walk(pfile_t *pf, pic_brop_sums_t *sums,
+    size_t which, pic_code_t code, boolean_t pv_cond)
+{
+  while (code) {
+    pic_opcode_t    op;
+    boolean_t       cond;
+    pic_brop_touch_t t3;
+    pic_brop_touch_t t4;
+
+    if (pic_brop_visited_test(sums, code)) {
+      return;
+    }
+    pic_brop_visited_add(sums, code);
+    pic_brop_code_touch(pf, code, &t3, &t4);
+    sums->sum[which].dir3 = pic_brop_touch_join(sums->sum[which].dir3, t3);
+    sums->sum[which].dir4 = pic_brop_touch_join(sums->sum[which].dir4, t4);
+
+    op   = pic_code_op_get(code);
+    cond = BOOLEAN_FALSE;
+    switch (op) {
+      case PIC_OPCODE_RETURN:
+      case PIC_OPCODE_RETFIE:
+      case PIC_OPCODE_RETLW:
+      case PIC_OPCODE_RESET:
+        if (!pv_cond) {
+          return; /* unconditional: this path is over */
+        }
+        break;
+      case PIC_OPCODE_GOTO:
+      case PIC_OPCODE_CALL:
+      case PIC_OPCODE_RCALL:
+      case PIC_OPCODE_BRA:
+      case PIC_OPCODE_BC:
+      case PIC_OPCODE_BN:
+      case PIC_OPCODE_BNC:
+      case PIC_OPCODE_BNN:
+      case PIC_OPCODE_BNOV:
+      case PIC_OPCODE_BNZ:
+      case PIC_OPCODE_BOV:
+      case PIC_OPCODE_BZ: {
+        pic_code_t tgt;
+
+        tgt = pic_code_label_find(pf, pic_code_brdst_get(code));
+        if (PIC_OPCODE_CALL == op) {
+          size_t to;
+
+          to = pic_brop_sums_find(sums, pic_code_brdst_get(code));
+          if ((size_t) -1 != to) {
+            pic_brop_sums_edge_add(sums, which, to);
+          } else {
+            /* unregistered target: unreachable from a direct call site;
+             * treat conservatively */
+            sums->sum[which].dir3 = PIC_BROP_TOUCH_MIXED;
+            sums->sum[which].dir4 = PIC_BROP_TOUCH_MIXED;
+          }
+        } else if (tgt && !pv_cond && !pic_code_is_suspend(pf, code)
+            && (PIC_OPCODE_GOTO == op)) {
+          code = tgt; /* unconditional GOTO: hop */
+          continue;
+        } else if (tgt) {
+          pic_brop_body_walk(pf, sums, which, tgt, BOOLEAN_FALSE);
+        }
+        break;
+      }
+      case PIC_OPCODE_INCFSZ:
+      case PIC_OPCODE_DECFSZ:
+      case PIC_OPCODE_BTFSC:
+      case PIC_OPCODE_BTFSS:
+        cond = BOOLEAN_TRUE;
+        break;
+      default:
+        break;
+    }
+    if (pic_code_modifies_pcl(pf, code)) {
+      return; /* computed jump: successor unknown */
+    }
+    pv_cond = cond;
+    code    = pic_code_next_get(code);
+  }
+}
+
+static void pic_brop_sums_compute(pfile_t *pf, pic_brop_sums_t *sums)
+{
+  pic_code_t code;
+  size_t     ii;
+
+  memset(sums, 0, sizeof(*sums));
+  /* registry: every direct call target label */
+  for (code = pic_code_list_head_get(pf); code;
+      code = pic_code_next_get(code)) {
+    label_t lbl;
+
+    if (PIC_OPCODE_CALL == pic_code_op_get(code)) {
+      lbl = pic_code_brdst_get(code);
+      if (lbl && pic_code_label_find(pf, lbl)) {
+        pic_brop_sums_add(sums, lbl);
+      }
+    }
+  }
+  /* bodies */
+  for (ii = 0; ii < sums->ct; ii++) {
+    pic_code_t entry;
+
+    entry = pic_code_label_find(pf, sums->sum[ii].lbl);
+    sums->visited_ct = 0;
+    if (entry) {
+      pic_brop_body_walk(pf, sums, ii, entry, BOOLEAN_FALSE);
+    } else {
+      sums->sum[ii].dir3 = PIC_BROP_TOUCH_MIXED;
+      sums->sum[ii].dir4 = PIC_BROP_TOUCH_MIXED;
+    }
+  }
+  /* call-graph fixpoint */
+  for (;;) {
+    pic_brop_touch_t *n3;
+    pic_brop_touch_t *n4;
+    boolean_t         changed;
+    size_t            jj;
+
+    n3 = MALLOC(sizeof(*n3) * (sums->ct ? sums->ct : 1));
+    n4 = MALLOC(sizeof(*n4) * (sums->ct ? sums->ct : 1));
+    if (!n3 || !n4) {
+      FREE(n3);
+      FREE(n4);
+      break;
+    }
+    for (ii = 0; ii < sums->ct; ii++) {
+      n3[ii] = sums->sum[ii].dir3;
+      n4[ii] = sums->sum[ii].dir4;
+    }
+    for (jj = 0; jj < sums->edge_ct; jj++) {
+      size_t from;
+      size_t to;
+
+      from = sums->edge_from[jj];
+      to   = sums->edge_to[jj];
+      n3[from] = pic_brop_touch_join(n3[from], sums->sum[to].t3);
+      n4[from] = pic_brop_touch_join(n4[from], sums->sum[to].t4);
+    }
+    changed = BOOLEAN_FALSE;
+    for (ii = 0; ii < sums->ct; ii++) {
+      if ((n3[ii] != sums->sum[ii].t3) || (n4[ii] != sums->sum[ii].t4)) {
+        changed = BOOLEAN_TRUE;
+      }
+      sums->sum[ii].t3 = n3[ii];
+      sums->sum[ii].t4 = n4[ii];
+    }
+    FREE(n3);
+    FREE(n4);
+    if (!changed) {
+      break;
+    }
+  }
+  FREE(sums->visited);
+  FREE(sums->edge_from);
+  FREE(sums->edge_to);
+  sums->visited       = 0;
+  sums->visited_alloc = 0;
+  sums->edge_from     = 0;
+  sums->edge_to       = 0;
+  sums->edge_alloc    = 0;
+  sums->edge_ct       = 0;
+}
+
+static void pic_brop_sums_free(pic_brop_sums_t *sums)
+{
+  if (sums) {
+    FREE(sums->sum);
+    FREE(sums->visited);
+    FREE(sums->edge_from);
+    FREE(sums->edge_to);
+    memset(sums, 0, sizeof(*sums));
+  }
+}
+
+/* Do not convert CALL+RETURN to GOTO for regression_checkpoint (see pic.c). */
+static boolean_t pic_brop_tail_call_forbidden(pic_code_t code)
+{
+  label_t     lbl;
+  const char *nm;
+
+  if (PIC_OPCODE_CALL != pic_code_op_get(code)) {
+    return BOOLEAN_FALSE;
+  }
+  lbl = pic_code_brdst_get(code);
+  if (!lbl) {
+    return BOOLEAN_FALSE;
+  }
+  nm = label_name_get(lbl);
+  return nm && strstr(nm, "regression_checkpoint");
+}
 
 /* note: this is very similar to databit optimization, but must
          be iterative because each time an operator is added or
@@ -217,6 +640,12 @@ static pic_code_gop_rc_t pic_code_brop_analyze(pfile_t *pf, pic_code_t code,
           default:
             break;
         }
+        if (pic_code_modifies_pclath(pf, code)) {
+          /* direct PCLATH write (lookup preamble, user code): the value
+           * is unknown to this walk */
+          bbits.pclath3 = PIC_BITSTATE_INDETERMINATE;
+          bbits.pclath4 = PIC_BITSTATE_INDETERMINATE;
+        }
         if (pic_flag_test(pf, PIC_FLAG_NO_PCLATH3)) {
           bbits.pclath3 = PIC_BITSTATE_CLR;
         }
@@ -229,13 +658,32 @@ static pic_code_gop_rc_t pic_code_brop_analyze(pfile_t *pf, pic_code_t code,
       break;
     case PIC_CODE_GOP_WHICH_POST:
       if (pic_code_is_suspend(pf, code)
-        || (PIC_OPCODE_CALL == pic_code_op_get(code))) {
-        bbits.pclath3 = (pic_flag_test(pf, PIC_FLAG_NO_PCLATH3))
-            ? PIC_BITSTATE_CLR
-            : PIC_BITSTATE_INDETERMINATE;
-        bbits.pclath4 = (pic_flag_test(pf, PIC_FLAG_NO_PCLATH4))
-            ? PIC_BITSTATE_CLR
-            : PIC_BITSTATE_INDETERMINATE;
+          || (PIC_OPCODE_CALL == pic_code_op_get(code))) {
+        if (pic_is_14bit(pf) && !pic_code_is_suspend(pf, code)
+            && data->sums) {
+          /* a call whose (transitive) body never writes the page bits
+           * one way or the other leaves them alone; see the summary
+           * machinery above */
+          size_t sum_ix;
+
+          sum_ix = pic_brop_sums_find(data->sums, pic_code_brdst_get(code));
+          if ((size_t) -1 != sum_ix) {
+            bbits.pclath3 = pic_brop_call_exit(data->sums->sum[sum_ix].t3,
+              bbits.pclath3);
+            bbits.pclath4 = pic_brop_call_exit(data->sums->sum[sum_ix].t4,
+              bbits.pclath4);
+          } else {
+            bbits.pclath3 = PIC_BITSTATE_INDETERMINATE;
+            bbits.pclath4 = PIC_BITSTATE_INDETERMINATE;
+          }
+        } else {
+          bbits.pclath3 = (pic_flag_test(pf, PIC_FLAG_NO_PCLATH3))
+              ? PIC_BITSTATE_CLR
+              : PIC_BITSTATE_INDETERMINATE;
+          bbits.pclath4 = (pic_flag_test(pf, PIC_FLAG_NO_PCLATH4))
+              ? PIC_BITSTATE_CLR
+              : PIC_BITSTATE_INDETERMINATE;
+        }
         pic_code_branchbits_set(code, &cbitstate);
       }
       break;
@@ -280,9 +728,40 @@ boolean_t pic_code_branchbits_post_analyze(pfile_t *pf)
   unsigned   ins_ct; /* instruction ct */
   unsigned   rem_ct;
   boolean_t  lbl_fix;
+  unsigned   lbl_ct;
+  unsigned   lbl_ix;
+  pic_pc_t  *lbl_page_was;
 
   lbl_fix = BOOLEAN_FALSE;
-  pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_CHECK);
+  pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
+
+  lbl_ct = 0;
+  for (code = pic_code_list_head_get(pf);
+       code;
+       code = pic_code_next_get(code)) {
+    if (pic_code_label_get(code)) {
+      lbl_ct++;
+    }
+  }
+  lbl_page_was = (pic_pc_t *) MALLOC(sizeof(*lbl_page_was) * (lbl_ct ? lbl_ct : 1));
+  if (!lbl_page_was) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "pic_code_branchbits_post_analyze: out of memory");
+    return BOOLEAN_FALSE;
+  }
+  lbl_ix = 0;
+  for (code = pic_code_list_head_get(pf);
+       code;
+       code = pic_code_next_get(code)) {
+    if (pic_code_label_get(code)) {
+      label_t lbl;
+
+      lbl = pic_code_label_get(code);
+      lbl_page_was[lbl_ix++] =
+          (pic_pc_t) ((unsigned) label_pc_get(lbl) & 0x1800U);
+    }
+  }
+
   for (ins_ct = 0, rem_ct = 0, code = pic_code_list_head_get(pf);
        code;
        ins_ct++) {
@@ -315,28 +794,34 @@ boolean_t pic_code_branchbits_post_analyze(pfile_t *pf)
           break;
       }
     }
-    if (rem_ct) {
-      /* adjust the PC */
-      pic_code_pc_set(code, (pic_pc_t) (pic_code_pc_get(code) - rem_ct));
-      if (pic_code_label_get(code)) {
-        pic_pc_t pc_old;
-        pic_pc_t pc_new;
-        label_t  lbl;
-
-        lbl = pic_code_label_get(code);
-        pc_old = (pic_pc_t) label_pc_get(lbl);
-        pc_new = (pic_pc_t) (pc_old - rem_ct);
-        label_pc_set(lbl, pic_code_pc_get(code));
-        if ((pc_old & 0x1800) != (pc_new & 0x1800)) {
-          pfile_log(pf, PFILE_LOG_DEBUG, 
-              "...%s moved from 0x%04lx to 0x%04lx (dist=%u) %p",
-              label_name_get(lbl), pc_old, pc_new, rem_ct, (void *) lbl);
-          lbl_fix = BOOLEAN_TRUE;
-        }
-      }
-    }
     code = next;
   }
+
+  pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
+
+  lbl_ix = 0;
+  for (code = pic_code_list_head_get(pf);
+       code;
+       code = pic_code_next_get(code)) {
+    if (pic_code_label_get(code)) {
+      label_t  lbl;
+      pic_pc_t newpg;
+
+      lbl = pic_code_label_get(code);
+      newpg = (pic_pc_t) ((unsigned) label_pc_get(lbl) & 0x1800U);
+      if (lbl_page_was[lbl_ix++] != newpg) {
+        pfile_log(pf, PFILE_LOG_DEBUG,
+            "...%s PCLATH page changed (was 0x%04x now 0x%04x) %p",
+            label_name_get(lbl),
+            (unsigned) lbl_page_was[lbl_ix - 1],
+            (unsigned) newpg,
+            (void *) lbl);
+        lbl_fix = BOOLEAN_TRUE;
+      }
+    }
+  }
+  FREE(lbl_page_was);
+
   pfile_log(pf, PFILE_LOG_DEBUG, "...removed %u of %u instructions", 
       rem_ct, ins_ct);
   pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_CHECK);
@@ -365,12 +850,29 @@ void pic_code_branchbits_optimize(pfile_t *pf)
 {
   unsigned             pass;
   pic_code_brop_data_t data;
+  pic_brop_sums_t      sums;
 
   pass = 0;
   pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
+  memset(&data, 0, sizeof(data));
+  memset(&sums, 0, sizeof(sums));
   do {
     data.changed = 0;
     pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_FIXING_CODE_BITS, ++pass);
+    if (pic_is_14bit(pf)) {
+      /* recompute each pass: label pages can move when code shrinks;
+       * 16F5xx-class device files declare no PCLATH (their paging is
+       * not PCLATH-based) -- stay on the old conservative behavior */
+      variable_t pclath;
+
+      pclath = pfile_variable_find(pf, PFILE_LOG_NONE, "_pclath", 0);
+      if (pclath) {
+        variable_release(pclath);
+        pic_brop_sums_free(&sums);
+        pic_brop_sums_compute(pf, &sums);
+        data.sums = &sums;
+      }
+    }
     pic_code_branchbits_pre_analyze(pf);
     pic_code_gop_optimize(pf, pic_code_brop_optimize,
       pic_code_brop_analyze, &data);
@@ -378,6 +880,7 @@ void pic_code_branchbits_optimize(pfile_t *pf)
       pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
     }
   } while (pic_code_branchbits_post_analyze(pf) || data.changed);
+  pic_brop_sums_free(&sums);
 }
 
 /*
@@ -611,9 +1114,11 @@ void pic_code_branch_optimize(pfile_t* pf)
 							code_tmp = pic_code_next_get(code_tmp);
 						}
 						if (PIC_OPCODE_RETURN == pic_code_op_get(code_tmp)) {
-							return_follows_call++;
-							pic_code_op_set(code, PIC_OPCODE_GOTO);
-							next = pic_code_next_get(code_tmp);
+							if (!pic_brop_tail_call_forbidden(code)) {
+								return_follows_call++;
+								pic_code_op_set(code, PIC_OPCODE_GOTO);
+								next = pic_code_next_get(code_tmp);
+							}
 						}
 					}
 				}

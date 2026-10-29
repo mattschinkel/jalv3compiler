@@ -6,6 +6,9 @@
  **           (c) 2024-2024, Rob Jansen
 ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef value_h__
 #define value_h__
@@ -23,6 +26,7 @@
                                           was an array */ 
 #define VALUE_FLAG_POINTER      0x0010U /* before dereferencing, this
                                           was a poitner */
+#define VALUE_FLAG_PTR_SLOT_RAW 0x0020U /* read pointer slot storage bytes */
 
 value_t   value_alloc(variable_t var);
 void      value_lock(value_t val);
@@ -34,6 +38,7 @@ refct_t  value_ref_ct_get(const value_t val);
 value_t  value_clone(value_t src);
 
 unsigned value_bit_offset_get(const value_t var);
+void     value_bit_offset_delta_set(value_t var, unsigned delta);
 
 /* test the variable definition flags */
 boolean_t     value_dflag_test(const value_t val, flag_t flags);
@@ -60,15 +65,13 @@ const char   *value_name_get(const value_t val);
 
 value_t       value_baseofs_get(const value_t val);
 void          value_baseofs_set(value_t val, value_t ofs);
+boolean_t     value_baseofs_depends(const value_t val, const value_t dep);
 
 variable_const_t value_const_get(const value_t val);
 void             value_const_set(value_t val, variable_const_t c);
 
-/*  RJ: This code was added to solve issue#36 but introduced another problem
-with printing strings from both const and var arrays so removed for now. */
-#if 0
-variable_const_t value_baseofs_const_get(const value_t val);
-#endif 
+boolean_t        value_baseofs_const_get(const value_t val,
+                    variable_const_t *dst);
 
 float            value_const_float_get(const value_t val);
 void             value_const_float_set(value_t val, float c);

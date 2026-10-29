@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <assert.h>
 #include "cmdd.h"
@@ -31,9 +34,12 @@ static void cmd_op_dump(cmd_t cmd, FILE *dst)
 
 static void cmd_op_free(cmd_t cmd)
 {
-  cmd_opdst_set(cmd, 0);
+  /* operands first: their cleanup reads the dst value's variable, so
+   * dst must still be alive; dst's own cleanup re-reads the operand
+   * fields, which are zeroed by then */
   cmd_opval1_set(cmd, 0);
   cmd_opval2_set(cmd, 0);
+  cmd_opdst_set(cmd, 0);
 }
 
 static cmd_t cmd_op_dup(const cmd_t cmd)
@@ -59,15 +65,40 @@ static void cmd_op_value_remap(cmd_t cmd, const value_map_t *map)
 
 static flag_t cmd_op_variable_accessed(const cmd_t cmd, variable_t var)
 {
-  flag_t flags;
+  flag_t   flags;
+  value_t  val;
+  unsigned depth;
 
   flags = CMD_VARIABLE_ACCESS_FLAG_NONE;
   if (var == value_variable_get(cmd_opdst_get(cmd))) {
     flags |= CMD_VARIABLE_ACCESS_FLAG_WRITTEN;
   }
+  /* a subscripted operand or destination is addressed through its
+   * baseofs chain at run time: every variable in that chain is read */
+  for (val = value_baseofs_get(cmd_opdst_get(cmd)), depth = 0;
+      val && (depth < 4);
+      val = value_baseofs_get(val), depth++) {
+    if (var == value_variable_get(val)) {
+      flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
+    }
+  }
   if ((var == value_variable_get(cmd_opval1_get(cmd)))
     || (var == value_variable_get(cmd_opval2_get(cmd)))) {
     flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
+  }
+  for (val = value_baseofs_get(cmd_opval1_get(cmd)), depth = 0;
+      val && (depth < 4);
+      val = value_baseofs_get(val), depth++) {
+    if (var == value_variable_get(val)) {
+      flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
+    }
+  }
+  for (val = value_baseofs_get(cmd_opval2_get(cmd)), depth = 0;
+      val && (depth < 4);
+      val = value_baseofs_get(val), depth++) {
+    if (var == value_variable_get(val)) {
+      flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
+    }
   }
   return flags;
 }
@@ -81,7 +112,10 @@ static flag_t cmd_op_value_accessed(const cmd_t cmd, value_t val)
     flags |= CMD_VARIABLE_ACCESS_FLAG_WRITTEN;
   }
   if ((val == cmd_opval1_get(cmd))
-    || (val == cmd_opval2_get(cmd))) {
+    || (val == cmd_opval2_get(cmd))
+    || value_baseofs_depends(cmd_opdst_get(cmd), val)
+    || value_baseofs_depends(cmd_opval1_get(cmd), val)
+    || value_baseofs_depends(cmd_opval2_get(cmd), val)) {
     flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
   }
   return flags;
@@ -89,8 +123,26 @@ static flag_t cmd_op_value_accessed(const cmd_t cmd, value_t val)
 
 static void cmd_op_assign_used_set(cmd_t cmd)
 {
+  value_t  val;
+  unsigned depth;
+
   cmd_gen_add(cmd, value_variable_get(cmd_opval1_get(cmd)));
   cmd_gen_add(cmd, value_variable_get(cmd_opval2_get(cmd)));
+  for (val = value_baseofs_get(cmd_opdst_get(cmd)), depth = 0;
+      val && (depth < 4);
+      val = value_baseofs_get(val), depth++) {
+    cmd_gen_add(cmd, value_variable_get(val));
+  }
+  for (val = value_baseofs_get(cmd_opval1_get(cmd)), depth = 0;
+      val && (depth < 4);
+      val = value_baseofs_get(val), depth++) {
+    cmd_gen_add(cmd, value_variable_get(val));
+  }
+  for (val = value_baseofs_get(cmd_opval2_get(cmd)), depth = 0;
+      val && (depth < 4);
+      val = value_baseofs_get(val), depth++) {
+    cmd_gen_add(cmd, value_variable_get(val));
+  }
   cmd_kill_add(cmd, value_variable_get(cmd_opdst_get(cmd)));
 }
 
@@ -216,16 +268,27 @@ void cmd_opval1_set(cmd_t cmd, value_t val1)
         proc = value_proc_get(val1);
         if (proc) {
           pfile_proc_flag_set(proc, PFILE_PROC_FLAG_INDIRECT);
+          label_usage_bump(pfile_proc_label_get(proc), CTR_BUMP_INCR);
         }
 
         value_lock(val1);
         value_use_ct_bump(val1, CTR_BUMP_INCR);
       }
       if (ptr->u.op.val1) {
-        value_use_ct_bump(ptr->u.op.val1, CTR_BUMP_DECR);
-        value_release(ptr->u.op.val1);
+        value_t old_val1 = ptr->u.op.val1;
+        pfile_proc_t *proc;
+
+        proc = value_proc_get(old_val1);
+        if (proc) {
+          label_usage_bump(pfile_proc_label_get(proc), CTR_BUMP_DECR);
+        }
+        /* bookkeeping first: the release may free the value element
+         * (and drop its variable lock), so fetch the variables and
+         * update use lists BEFORE releasing */
         variable_uses_remove(value_variable_get(ptr->u.op.dst),
-          value_variable_get(ptr->u.op.val1));
+          value_variable_get(old_val1));
+        value_use_ct_bump(old_val1, CTR_BUMP_DECR);
+        value_release(old_val1);
       }
       ptr->u.op.val1 = val1;
       variable_uses_add(value_variable_get(ptr->u.op.dst),
@@ -256,10 +319,12 @@ void cmd_opval2_set(cmd_t cmd, value_t val2)
         value_use_ct_bump(val2, CTR_BUMP_INCR);
       }
       if (ptr->u.op.val2) {
-        value_use_ct_bump(ptr->u.op.val2, CTR_BUMP_DECR);
-        value_release(ptr->u.op.val2);
+        value_t old_val2 = ptr->u.op.val2;
+
         variable_uses_remove(value_variable_get(ptr->u.op.dst),
-          value_variable_get(ptr->u.op.val2));
+          value_variable_get(old_val2));
+        value_use_ct_bump(old_val2, CTR_BUMP_DECR);
+        value_release(old_val2);
       }
       ptr->u.op.val2 = val2;
       variable_uses_add(value_variable_get(ptr->u.op.dst),
@@ -345,6 +410,7 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
 
 {
   result_t   rc;
+  boolean_t  isflt;
 
   rc   = RESULT_OK;
   if (CMD_TYPE_OPERATOR == cmd_type_get(cmd)) {
@@ -356,6 +422,11 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
     op   = cmd_optype_get(cmd);
     val1 = cmd_opval1_get(cmd);
     val2 = cmd_opval2_get(cmd);
+
+    /* IEEE-754: identities with 0 are value-changing for float
+     * operands (inf*0, inf-inf, 0/0 -> NaN; -0 + +0 -> +0), so the
+     * reductions below must only run for integer operands */
+    isflt = value_is_float(val1) || value_is_float(val2);
 
     rsz = (value_sz_get(val1) < value_sz_get(val2))
       ? value_sz_get(val2)
@@ -395,10 +466,11 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
       case OPERATOR_CAST:
       case OPERATOR_DOT:
       case OPERATOR_SUBSCRIPT:
+      case OPERATOR_POINTER_ASSIGN:
       case OPERATOR_CT:
         break;
       case OPERATOR_ADD:
-        if (value_const_cmp(val2, 0)) {
+        if (!isflt && value_const_cmp(val2, 0)) {
           /* x + 0 --> x */
           val2 = VALUE_NONE;
           op   = OPERATOR_ASSIGN;
@@ -406,7 +478,7 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
         break;
       case OPERATOR_SUB:
         if (value_const_cmp(val2, 0)) {
-          /* x - 0 --> x */
+          /* x - 0 --> x (exact for every float, incl. -0) */
           val2 = VALUE_NONE;
           op   = OPERATOR_ASSIGN;
         } else if (value_const_cmp(val1, 0)) {
@@ -414,14 +486,14 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
           val1 = val2;
           val2 = VALUE_NONE;
           op   = OPERATOR_NEG;
-        } else if (value_is_same(val1, val2)) {
+        } else if (!isflt && value_is_same(val1, val2)) {
           op   = OPERATOR_ASSIGN;
           val1 = value_zero;
           val2 = VALUE_NONE;
         }
         break;
       case OPERATOR_MUL:
-        if (value_const_cmp(val2, 0)) {
+        if (!isflt && value_const_cmp(val2, 0)) {
           /* x * 0 --> 0 */
           val1 = value_zero;
           val2 = VALUE_NONE;
@@ -443,7 +515,7 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
           /* x / 1 --> x */
           val2 = VALUE_NONE;
           op   = OPERATOR_ASSIGN;
-        } else if (value_const_cmp(val1, 0)) {
+        } else if (!isflt && value_const_cmp(val1, 0)) {
           /* 0 / x --> 0 */
           val1 = value_zero;
           val2 = VALUE_NONE;
@@ -480,8 +552,9 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
       case OPERATOR_EQ:
       case OPERATOR_NE:
         if (value_is_const(val2)) {
-           if (0 == value_const_get(val2)) {
-            /* x == 0, or x != 0 */
+           if (!isflt && 0 == value_const_get(val2)) {
+            /* x == 0, or x != 0 (integer truthiness; a float 0.0
+             * must take the real IEEE compare, incl. -0 and NaN) */
             val2 = VALUE_NONE;
             op = (OPERATOR_EQ == op)
               ? OPERATOR_NOTL

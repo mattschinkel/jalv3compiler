@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pfile_h__
 #define pfile_h__
@@ -83,6 +86,13 @@
 #define PFILE_FLAG_DEBUG_EMULATOR      0x04000000UL
 /* turn off dead-code removal */
 #define PFILE_FLAG_DEBUG_DEADCODE      0x08000000UL
+/* Fine-grained debug channels (jal -debug=… / -debug kw); not in asm flag dump */
+#define PFILE_DBGSUB_NONE              0x00000000UL
+#define PFILE_DBGSUB_STACK             0x00000001UL
+/* stderr lines from pic_variable_alloc_fixup (large / high-bank placements) */
+#define PFILE_DBGSUB_VALLOC            0x00000002UL
+/* pic_code_value_operand_for_pcode: dump value when file base still unknown */
+#define PFILE_DBGSUB_UNKBASE           0x00000004UL
 /* for 18 series, start code at 0x800, isr at 0x808 */
 #define PFILE_FLAG_BOOT_LOADER18       0x10000000UL
 /* optimize commands for speed (default = size) */
@@ -153,6 +163,14 @@ FILE *pfile_hex_file_set(pfile_t *pf, FILE *f_hex);
 void  pfile_loader_offset_set(pfile_t *pf, ulong offset);
 ulong pfile_loader_offset_get(pfile_t *pf);
 
+void  pfile_code_location_set(pfile_t *pf, ulong addr);
+ulong pfile_code_location_get(pfile_t *pf);
+
+/* `pragma data` extents (all targets; libpic32 uses the top as RAM end). */
+void  pfile_data_range_add(pfile_t *pf, ulong lo, ulong hi);
+ulong pfile_data_low_get(const pfile_t *pf);
+ulong pfile_data_high_get(const pfile_t *pf);
+
 void pfile_task_ct_set(pfile_t *pf, unsigned task_ct);
 
 int pfile_ch_get(pfile_t *pf);
@@ -182,6 +200,16 @@ variable_def_t pfile_variable_def_find(pfile_t *pf, pfile_log_t plog,
 struct pfile_block_;
 variable_t pfile_variable_find(pfile_t *pf, pfile_log_t plog,
   const char *name, struct pfile_block_ **blk);
+/* `p is <var>`: the target's address escapes -- count it as assigned so
+ * the const-fold (pfile_block_variable_fixup) keeps it in RAM and stores
+ * through the pointer are not refused as lookup-table writes
+ * (pfile_lookup_mark_val). Declared-const targets are skipped (ROM
+ * pointer semantics). See pfile.c for the full chain. */
+void pfile_pointer_bind_target_note(variable_t var);
+/* libpic12 `pic.c`: lowest packed _bitbucket bit reserved on classic PIC12/14
+ * (see `pfile_proc_variable_fixup`). PIC18 / PIC14E return 0. */
+unsigned pfile_bitbucket_packed_lo_reserve_get(pfile_t *pf);
+
 void pfile_variable_fixup(pfile_t *pf, flag_t flags);
 void pfile_variable_dump(pfile_t *pf);
 void pfile_write_hex(pfile_t *pf, ulong pc, unsigned char data);
@@ -191,6 +219,14 @@ label_t pfile_label_alloc(pfile_t *pf, const char *name);
 label_t pfile_label_find(pfile_t *pf, pfile_log_t plog, const char *name);
 void pfile_label_dump(pfile_t *pf);
 void pfile_label_fixup(pfile_t *pf);
+/* used pointer slot must be bound (`is`, `=`, …); see pfile_cmd_dump + jal_main */
+void pfile_pointer_slot_bind_check(pfile_t *pf);
+
+/* Dynamic string handle registry: built after p-code analysis, consumed by PIC
+ * asm to emit v__string_handle_count / v__string_reg_n equates. */
+void pfile_dynstr_reg_build(pfile_t *pf);
+size_t pfile_dynstr_reg_ct_get(const pfile_t *pf);
+variable_t pfile_dynstr_reg_get(const pfile_t *pf, size_t i);
 
 /* misc bits */
 label_t pfile_lblptr_get(pfile_t *pf);
@@ -206,6 +242,7 @@ void     pfile_user_entry_set(pfile_t *pf, label_t lbl);
 label_t  pfile_user_entry_get(pfile_t *pf);
 void     pfile_isr_entry_set(pfile_t *pf, label_t lbl);
 label_t  pfile_isr_entry_get(pfile_t *pf);
+boolean_t pfile_isr_entry_active(const pfile_t *pf);
 
 label_t  pfile_isr_preamble_entry_get(pfile_t *pf);
 
@@ -220,8 +257,32 @@ boolean_t pfile_flag_test(const pfile_t *pf, flag_t flag);
 void      pfile_flag_set(pfile_t *pf, flag_t flag);
 void      pfile_flag_clr(pfile_t *pf, flag_t flag);
 flag_t    pfile_flag_get_all(const pfile_t *pf);
+
+/* Suppress the always-TRUE/FALSE relation diagnostics while compiler-
+ * generated expansions build relations (the fold itself still happens;
+ * user-source relations keep warning). Holds nest. */
+void      pfile_relation_warning_hold(pfile_t *pf);
+void      pfile_relation_warning_release(pfile_t *pf);
+
+void      pfile_parse_lvalue_ctx_push(pfile_t *pf);
+void      pfile_parse_lvalue_ctx_pop(pfile_t *pf);
+boolean_t pfile_parse_lvalue_ctx(const pfile_t *pf);
+void      pfile_parse_count_operand_push(pfile_t *pf);
+void      pfile_parse_count_operand_pop(pfile_t *pf);
+boolean_t pfile_parse_count_operand(const pfile_t *pf);
+void      pfile_parse_call_data_ptr_arg_push(pfile_t *pf);
+void      pfile_parse_call_data_ptr_arg_pop(pfile_t *pf);
+boolean_t pfile_parse_call_data_ptr_arg(const pfile_t *pf);
+/* runtime-conditioned / loop-body parse depth (include guard; jal_ctrl.c) */
+void      pfile_runtime_block_push(pfile_t *pf);
+void      pfile_runtime_block_pop(pfile_t *pf);
+boolean_t pfile_runtime_block_test(const pfile_t *pf);
 /* flags = (flags & mask) | set */
 void      pfile_flag_change(pfile_t *pf, flag_t mask, flag_t set);
+
+void      pfile_debug_sub_set(pfile_t *pf, flag_t sub);
+flag_t    pfile_debug_sub_get(const pfile_t *pf);
+boolean_t pfile_debug_sub_test(const pfile_t *pf, flag_t bit);
 
 pfile_source_t       *pfile_source_get(const pfile_t *pf);
 void                  pfile_source_restore(pfile_t *pf, pfile_source_t *src);
@@ -235,7 +296,10 @@ result_t pfile_proc_enter(pfile_t *pf, const char *tag);
 /* leave an existing procedure */
 result_t pfile_proc_leave(pfile_t *pf);
 
+#define PFILE_BLOCK_FLAG_NONE       ((flag_t) 0)
+#define PFILE_BLOCK_FLAG_INLINE_DUP ((flag_t) 1) /* pfile_cmd_block_dup: see pfile_temp_fixup */
 result_t pfile_block_enter(pfile_t *pf);
+result_t pfile_block_enter_flags(pfile_t *pf, flag_t flags);
 result_t pfile_block_leave(pfile_t *pf);
 
 pfile_proc_t *pfile_proc_find(pfile_t *pf, pfile_log_t plog, const char *tag);
@@ -246,6 +310,12 @@ pfile_proc_t *pfile_proc_root_get(const pfile_t *pf);
 
 const char *pfile_include_path_get(pfile_t *pf);
 result_t    pfile_include_path_set(pfile_t *pf, const char *inc_path);
+
+/* PIC32 hex address form: 0/default = physical (direct ipecmd
+ * programming), 1 = KSEG virtual (QEMU loader form).  mips_hex_addr
+ * maps a laid-out address per the current form (see mips_hex.c). */
+void          pfile_mips_sim_hex_set(pfile_t *pf, unsigned on);
+unsigned long mips_hex_addr(const pfile_t *pf, unsigned long addr);
 
 void       *pfile_vector_arg_get(const pfile_t *pf);
 void        pfile_vector_arg_set(pfile_t *pf, void *arg);
@@ -272,11 +342,18 @@ void pfile_stats_get(pfile_t *pf, pfile_stats_t *stats);
 typedef unsigned long pfile_token_ct_t;
 pfile_token_ct_t pfile_token_ct_get(pfile_t *pf);
 
+/* dynamic string: deferred `string_heap_compact` (NOP in cmd list, expanded in dump) */
+void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result);
+void pfile_str_heap_defer_free(pfile_t *pf);
+
 void pfile_cmd_cursor_set(pfile_t *pf, cmd_t cmd);
 
 label_t pfile_label_temp_head_get(pfile_t *pf);
 
 unsigned pfile_task_ct_get(pfile_t *pf);
+unsigned pfile_task_slot_ct_get(pfile_t *pf);
+/* flat 32-bit storage size of a def (shared ESP32/PIC32 sizing policy) */
+variable_sz_t pfile_flat_def_storage_sz(pfile_t *pf, variable_def_t def);
 
 COD_directory_t *pfile_COD_dir_get(pfile_t *pf);
 

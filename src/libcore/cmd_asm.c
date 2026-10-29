@@ -5,8 +5,12 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
 #include "../libutils/mem.h"
 #include "../libpic12/pic_inst.h"
@@ -80,12 +84,25 @@ static void cmd_asm_free(cmd_t cmd)
 
 static cmd_t cmd_asm_dup(const cmd_t cmd)
 {
+  size_t    dsz;
+  uchar    *src;
+  uchar    *copy;
+
+  dsz  = cmd_asm_data_sz_get(cmd);
+  src  = cmd_asm_data_get(cmd);
+  copy = 0;
+  if (dsz && src) {
+    copy = MALLOC(dsz);
+    if (copy) {
+      memcpy(copy, src, dsz);
+    }
+  }
   return cmd_asm_alloc(cmd_asm_op_get(cmd), cmd_asm_val_get(cmd),
     cmd_asm_valofs_get(cmd),
     cmd_asm_opdst_get(cmd), cmd_asm_n_get(cmd), cmd_asm_lbl_get(cmd),
     cmd_asm_flag_get_all(cmd),
-    cmd_asm_data_sz_get(cmd),
-    cmd_asm_data_get(cmd));
+    copy ? dsz : 0,
+    copy);
 }
 
 static void cmd_asm_label_remap(cmd_t cmd, const label_map_t *map)

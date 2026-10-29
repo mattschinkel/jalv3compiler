@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef jal_vdef_h__
 #define jal_vdef_h__
@@ -13,7 +16,8 @@
 #include "../libcore/pfile.h"
 
 void jal_parse_var_common(pfile_t *pf, const pfile_pos_t *start,
-  variable_t *dst, flag_t flags);
+  variable_t *dst, flag_t flags, boolean_t formal_name_optional,
+  unsigned *formal_anon_idx);
 void jal_parse_var(pfile_t *pf, const pfile_pos_t *start);
 void jal_parse_const(pfile_t *pf, const pfile_pos_t *start);
 variable_def_t jal_vdef_get(pfile_t *pf, flag_t flags);
@@ -47,8 +51,21 @@ typedef enum {
   JAL_VAL_TYPE_CT
 } jal_val_type_t;
 
+const char *jal_value_type_to_name(char *dst, size_t dst_sz,
+    const char *name, jal_val_type_t type);
+const char *jal_value_type_to_quote_name(char *dst, const char *name, 
+    jal_val_type_t type);
+
 boolean_t jal_value_find(pfile_t *pf, const char *name,
     value_t val[JAL_VAL_TYPE_CT]);
+/* same registry lookup, but independent of the current tokenizer token:
+ * for callers holding an explicit saved name (pointer pseudo links) */
+boolean_t jal_value_find_by_name(pfile_t *pf, const char *name,
+    value_t val[JAL_VAL_TYPE_CT]);
+/* a pointer variable's link resolved to an INDEXED pseudo's GET
+ * (pseudo array); VALUE_NONE when the link is plain or scalar */
+value_t    jal_pointer_link_indexed_get_get(pfile_t *pf, variable_t var);
+boolean_t  jal_pointer_var_is_pseudo_linked(pfile_t *pf, variable_t var);
 void      jal_value_release(value_t val[JAL_VAL_TYPE_CT]);
 
 boolean_t jal_identifier_is_reserved(pfile_t *pf);

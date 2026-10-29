@@ -6,6 +6,9 @@
  **               2020-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef variable_h__
 #define variable_h__
@@ -35,6 +38,7 @@
  */
 typedef struct variable_ *variable_t;
 typedef struct varlist_  varlist_t;
+typedef struct value_    *value_t;
 
 struct varlist_ {
   variable_t head;
@@ -42,11 +46,14 @@ struct varlist_ {
   size_t     ct;
 };
 
-/* RJ: We can keep unsigned short since data space is not 64k. 
-   If needed it could be changed to unsigned. */
-typedef unsigned short variable_base_t; 
+/* PIC data-file offsets fit in 16 bits; PIC32 `at` SFRs are 32-bit
+ * KSEG virtual addresses, so the type is unsigned (see the original
+ * note that this can widen when needed). */
+typedef unsigned variable_base_t; 
 
-typedef unsigned long  variable_const_t;
+__extension__ typedef unsigned __int128 variable_const_t;
+
+#define VARIABLE_CONST_BIT_CT 128U
 
 #define VARIABLE_BASE_UNKNOWN ((variable_base_t) -1)
 
@@ -86,6 +93,8 @@ typedef unsigned long  variable_const_t;
  * bit. If set, the array can gracefully degrade to its first member
  * when needed */
 #define VARIABLE_DEF_FLAG_STRING   0x0100U
+/* dynamic string handle backed by the compiler-managed string heap */
+#define VARIABLE_DEF_FLAG_STRING_DYNAMIC 0x0200U
  
 #define VARIABLE_FLAG_NONE         0x0000U
 #define VARIABLE_FLAG_AUTO         0x0001U
@@ -127,6 +136,12 @@ typedef unsigned long  variable_const_t;
 /* this variable is available in all banks; rp1:rp0/BSR will be ignord */
 #define VARIABLE_FLAG_SHARED     0x1000U
 
+/* this variable is the storage host of at least one overlay (some other
+ * variable's master). const promotion must not fold such a variable:
+ * writes through the overlay reference the overlay's variable, so the
+ * single-constant-assign scan would not see them */
+#define VARIABLE_FLAG_OVERLAY_HOST 0x2000U
+
 #define VARIABLE_FLAG_PTR_MASK \
   (VARIABLE_FLAG_PTR_PTR       \
    | VARIABLE_FLAG_PTR_LOOKUP  \
@@ -138,6 +153,7 @@ typedef boolean_t (*varfind_cb_t)(void *arg, const variable_t var,
 
 void variable_list_init(varlist_t *lst);
 void variable_list_append(varlist_t *lst, variable_t var);
+void variable_list_remove(varlist_t *lst, variable_t victim);
 variable_t variable_list_find(varlist_t *lst, varfind_cb_t fn, void *arg,
     const void *data);
 void variable_list_reset(varlist_t *lst);
@@ -173,6 +189,21 @@ variable_const_t variable_const_get(const variable_t var,
     variable_def_t vdef, size_t ofs);
 void             variable_const_set(variable_t var, variable_def_t vdef,
     size_t ofs, variable_const_t n);
+
+variable_const_t variable_const_mask_get(unsigned bits);
+variable_const_t variable_const_normalize(variable_const_t n,
+    variable_def_t def);
+variable_const_t variable_const_sign_extend(variable_const_t n,
+    unsigned bits);
+boolean_t        variable_const_sign_bit_test(variable_const_t n,
+    unsigned bits);
+int              variable_const_cmp(variable_const_t left,
+    variable_const_t right, unsigned bits, boolean_t is_signed);
+boolean_t        variable_const_is_negative(variable_const_t n,
+    unsigned bits);
+unsigned char    variable_const_byte_get(variable_const_t n, unsigned ofs);
+void             variable_const_str_get(variable_const_t n,
+    boolean_t is_signed, char *buf, size_t buf_sz);
 
 float            variable_const_float_get(const variable_t var, size_t ofs);
 void             variable_const_float_set(const variable_t var, size_t ofs,
@@ -214,11 +245,50 @@ unsigned variable_bit_offset_get(const variable_t var);
 
 variable_t variable_master_get(const variable_t var);
 void       variable_master_set(variable_t var, variable_t master);
+void       variable_origin_set(variable_t var, const void *origin);
+const void *variable_origin_get(const variable_t var);
+
+/* RHS identifier of last `p is <id>` (strdup'd); used so rvalue `p` can call
+ * `<id>`'get when LVALUE parsing cleared GET for the `is` RHS. */
+const char *variable_pointer_rvalue_link_name_get(const variable_t ptr_var);
+void variable_pointer_rvalue_link_name_set(variable_t ptr_var,
+    const char *link_name);
+value_t variable_pointer_whereis_target_get(const variable_t ptr_var);
+void variable_pointer_whereis_target_set(variable_t ptr_var, value_t target);
+void      variable_pointer_bound_ct_bump(const variable_t var);
+boolean_t variable_pointer_bound_p(const variable_t var);
+void      variable_pointer_slot_use_note(const variable_t var,
+    variable_const_t slot_ofs);
+size_t    variable_pointer_slot_use_ct_get(const variable_t var);
+variable_const_t variable_pointer_slot_use_get(const variable_t var,
+    size_t index);
+void      variable_pointer_slot_rt_bind_ct_bump(const variable_t var);
+ctr_t     variable_pointer_slot_rt_bind_ct_get(const variable_t var);
+void      variable_pointer_slot_link_name_set(const variable_t var,
+    variable_const_t slot_ofs, const char *link_name);
+const char *variable_pointer_slot_link_name_get(const variable_t var,
+    variable_const_t slot_ofs);
+boolean_t variable_pointer_slot_links_any(const variable_t var);
+variable_t variable_pointer_slot_kind_var_get(const variable_t var);
+void variable_pointer_slot_kind_var_set(const variable_t var,
+    variable_t helper);
+variable_t variable_pointer_slot_getcall_var_get(const variable_t var);
+void variable_pointer_slot_getcall_var_set(const variable_t var,
+    variable_t helper);
+variable_t variable_pointer_slot_putcall_var_get(const variable_t var);
+void variable_pointer_slot_putcall_var_set(const variable_t var,
+    variable_t helper);
+variable_t variable_pointer_slot_puts_var_get(const variable_t var);
+void variable_pointer_slot_puts_var_set(const variable_t var,
+    variable_t helper);
+value_t variable_pointer_whereis_slot_target_get(const variable_t ptr_var,
+    variable_const_t slot_ofs);
+void variable_pointer_whereis_slot_target_set(variable_t ptr_var,
+    variable_const_t slot_ofs, value_t target);
 
 pfile_proc_t *variable_proc_get(const variable_t var);
 void          variable_proc_set(variable_t var, pfile_proc_t *proc);
 
-typedef struct value_ *value_t;
 value_t       variable_value_get(const variable_t var);
 void          variable_value_set(variable_t var, value_t val);
 
@@ -227,6 +297,7 @@ void          variable_label_set(variable_t var, label_t lbl);
 
 boolean_t     variable_is_volatile(const variable_t var);
 boolean_t     variable_is_const(const variable_t var);
+boolean_t     variable_is_pure_const(const variable_t var);
 boolean_t     variable_is_pseudo_const(const variable_t var);
 boolean_t     variable_is_auto(const variable_t var);
 boolean_t     variable_is_array(const variable_t var);

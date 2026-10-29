@@ -821,7 +821,10 @@ void jal_parse_asm(pfile_t *pf, const pfile_pos_t *statement_start)
             }
           }
         }
-        if (PIC_OPTYPE_F_D == asm_cmds[ii].type) {
+        /* ii can be COUNT here: a bare `BANK n` statement parses without
+         * error and leaves no command -- only the bank-flag marker below
+         * must run (bounds-guarded read, cf. the special lookup above) */
+        if ((ii < COUNT(asm_cmds)) && (PIC_OPTYPE_F_D == asm_cmds[ii].type)) {
           opdst = value_const_get(n) ? PIC_OPDST_F : PIC_OPDST_W;
           value_release(n);
           n = VALUE_NONE;

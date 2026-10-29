@@ -5,6 +5,9 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pfblock_h__
 #define pfblock_h__
@@ -39,6 +42,10 @@ result_t pfile_block_variable_add(pfile_block_t *blk,
     variable_t var);
 variable_t     pfile_block_variable_find(pfile_block_t *block,
     const char *name);
+variable_t     pfile_block_variable_find_shallow(pfile_block_t *block,
+    const char *name);
+void           pfile_block_variable_remove(pfile_block_t *block,
+    variable_t victim);
 variable_t     pfile_block_variable_get_first(pfile_block_t *block);
 
 result_t pfile_block_label_alloc(pfile_block_t *blk, tag_t tag, 

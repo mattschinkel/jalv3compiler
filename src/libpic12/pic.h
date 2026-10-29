@@ -6,6 +6,9 @@
  **               2020-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef _pic_h__
 #define _pic_h__
@@ -28,7 +31,9 @@ typedef enum {
   PIC_TARGET_CPU_14BIT,
   PIC_TARGET_CPU_16BIT,
   PIC_TARGET_CPU_SX_12,
-  PIC_TARGET_CPU_14HBIT
+  PIC_TARGET_CPU_14HBIT,
+  PIC_TARGET_CPU_MIPS32,  /* PIC32 (MIPS32) -- routed to src/libpic32/ */
+  PIC_TARGET_CPU_ESP32   /* ESP32 (Xtensa LX6) -- routed to src/libesp32/ */
 } pic_target_cpu_t;
 
 /* The compiler needs to handle some PICs that use a different
@@ -41,10 +46,10 @@ typedef enum {
 typedef enum {
     PIC_TARGET_INSTR_SET_NONE = 0,
     PIC_TARGET_INSTR_SET_P16F1_V1,     /* 1 Used by compiler. */
-    PIC_TARGET_INSTR_SET_PIC18F_V6     /* 2 Used by compiler. */
-/*    PIC_TARGET_INSTR_SET_PIC12C5XX,     3 Not used yet. */
+    PIC_TARGET_INSTR_SET_PIC18F_V6,    /* 2 Used by compiler. */
+    PIC_TARGET_INSTR_SET_MIPS32R2 = 3  /* PIC32 (MIPS32r2/r5 integer ISA). */
 /*    PIC_TARGET_INSTR_SET_PIC16F77,      4 Not used yet. */
-/*    PIC_TARGET_INSTR_SET_CPU_MID_V10,   5 Not used yet. */ 
+/*    PIC_TARGET_INSTR_SET_CPU_MID_V10,   5 Not used yet. */
 /*    PIC_TARGET_INSTR_SET_PIC18,         6 Not used yet. */
 /*    PIC_TARGET_INSTR_SET_EGG            7 Not used yet. */
 } pic_target_instr_set_t;
@@ -143,11 +148,35 @@ extern pic_mem_size_t pic_mem_size_loader;
 
 void pic_init(pfile_t *pf);
 void pic_data_bank_list_add(pfile_t *pf, size_t lo, size_t hi);
+void pic_data_bank_list_remove_range(pfile_t *pf, size_t lo, size_t hi);
 void pic_shared_bank_list_add(pfile_t *pf, size_t lo, size_t hi);
+boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr);
+/* PIC18 MOVLB-churn metadata + layout trials (see pic_var.c) */
+void pic_var_banked_access_reset(void);
+void pic_var_banked_access_bump(variable_t var);
+void pic_var_trials_free(void);
+boolean_t pic_var_trials_available(pfile_t *pf);
+void pic_var_trial_install(pfile_t *pf, int window);
+/* placement-refusal state (trial-safe; see pic_var.c) */
+boolean_t pic_var_refusal_get(variable_t *var, variable_sz_t *sz,
+    variable_sz_t *best);
+void pic_var_refusal_report(pfile_t *pf);
+variable_ct_t pic_variable_chunk_ct_get(variable_t var);
+variable_base_t pic_variable_chunk_base_get(variable_t var, variable_ct_t ix);
+variable_sz_t pic_variable_chunk_sz_get(variable_t var, variable_ct_t ix);
+/* Layer 2 chunk-walking linear arrays: compile-time const-offset
+ * resolution through the chunk map, and the pointer-target registry
+ * (linear pointer arithmetic cannot walk -- holed placement refused) */
+variable_base_t pic_var_chunk_addr_resolve(variable_t var,
+    variable_base_t linear);
+void pic_var_pointer_target_reset(void);
+void pic_var_pointer_target_bump(variable_t var);
+boolean_t pic_var_pointer_target_test(variable_t var);
 
 label_t pic_label_find(pfile_t *pf, const char *tag, boolean_t alloc);
 
 boolean_t pic_code_modifies_pcl(pfile_t *pf, pic_code_t code);
+boolean_t pic_code_modifies_pclath(pfile_t *pf, pic_code_t code);
 /*
  * there are two labels for each lookup table:
  *   _lookup_* : the code pre-amble (12 & 14 bit only)
@@ -178,10 +207,18 @@ boolean_t        pic_is_12bit(pfile_t *pf);
 boolean_t        pic_is_14bit(pfile_t *pf);
 boolean_t        pic_is_14bit_hybrid(pfile_t *pf);
 boolean_t        pic_is_16bit(pfile_t *pf);
+/* pic_is_mips32 / pic_is_esp32: file-local predicates in pic.c
+ * (only pic_backend_get uses them; pic_is_16bit stays public). */
 boolean_t        instruction_set_is_p16f1_v1(pfile_t* pf);
 boolean_t        instruction_set_is_pic18f_v6(pfile_t* pf);
 
 value_t pic_fsr_get(pfile_t *pf);
+
+/* task scheduler variables (pic.c; lazily created via the task_alg
+ * kernel -- pic_opfn.c's yield helper needs them) */
+value_t pic_task_list_val(pfile_t *pf);
+value_t pic_task_paused_val(pfile_t *pf);
+value_t pic_task_active_val(pfile_t *pf);
 void    pic_fsr_setup(pfile_t *pf, value_t val);
 
 char *pic_chip_name_get(pfile_t *pf);
@@ -189,7 +226,30 @@ char *pic_chip_name_get(pfile_t *pf);
 boolean_t        pic_in_isr(pfile_t *pf); /* TRUE when generating ISR code */
 value_t          pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which);
 variable_sz_t    pic_pointer_size_get(pfile_t *pf);
+
+/* back-end descriptor: the per-target delegation seam. A NULL
+ * descriptor selects the classic PIC12/14/14H/18/SX implementation in
+ * this library (libpic12); PIC32 (libpic32) and ESP32 (libesp32) map to
+ * their descriptors via pic_backend_get (see pic.c) -- the single place
+ * that knows which library serves a core. pic_cmd_optimize is IR-level
+ * and shared by every target, so it is not part of the descriptor. */
+typedef struct pic_backend_s {
+  void          (*cmd_generate)(pfile_t *pf, const cmd_t cmd);
+  void          (*cmd_dump)(pfile_t *pf, const cmd_t cmd, boolean_t first);
+  void          (*code_cleanup)(pfile_t *pf);
+  void          (*code_emu)(pfile_t *pf);
+  variable_sz_t (*pointer_size_get)(pfile_t *pf);
+} pic_backend_t;
+
+const pic_backend_t *pic_backend_get(pfile_t *pf);
+/* TRUE on back ends whose locals have unique static addresses (the
+ * 32-bit linear allocators) -- task bodies may declare variables;
+ * classic cores keep the var-in-task error */
+boolean_t        pic_task_locals_allowed(pfile_t *pf);
 unsigned         pic_code_gen_pass_get(pfile_t *pf);
+/* PIC32 clock-tree solve hook (pragma target OSC/clock); no-op on every
+ * non-MIPS32 target -- docs/investigations/pic32_clock_select_plan.md */
+void             pic32_clock_solve_maybe(pfile_t *pf);
 /* the _reentrant block is a temporary holding area for re-entrant functions */
 
 #define PIC_FLAG_NONE       0x0000

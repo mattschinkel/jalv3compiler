@@ -6,15 +6,167 @@
  **               2018-2018, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ***********************************************************/
 #include <assert.h>
+#if defined(__linux__)
+#include <execinfo.h>
+#endif
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "../libutils/mem.h"
 /*#include "../libutils/array.h"*/
 #include "pf_proc.h"
+#include "value.h"
 #include "vararray.h"
 #include "variable.h"
+
+variable_const_t variable_const_mask_get(unsigned bits)
+{
+  if (!bits) {
+    return 0;
+  }
+  if (bits >= VARIABLE_CONST_BIT_CT) {
+    return (variable_const_t) -1;
+  }
+  return (((variable_const_t) 1) << bits) - 1;
+}
+
+boolean_t variable_const_sign_bit_test(variable_const_t n, unsigned bits)
+{
+  if (!bits) {
+    return BOOLEAN_FALSE;
+  }
+  if (bits > VARIABLE_CONST_BIT_CT) {
+    bits = VARIABLE_CONST_BIT_CT;
+  }
+  return (n & ((variable_const_t) 1 << (bits - 1))) ? BOOLEAN_TRUE
+    : BOOLEAN_FALSE;
+}
+
+variable_const_t variable_const_sign_extend(variable_const_t n, unsigned bits)
+{
+  variable_const_t mask;
+
+  if (!bits || (bits >= VARIABLE_CONST_BIT_CT)) {
+    return n;
+  }
+  mask = variable_const_mask_get(bits);
+  n &= mask;
+  if (variable_const_sign_bit_test(n, bits)) {
+    n |= ~mask;
+  }
+  return n;
+}
+
+variable_const_t variable_const_normalize(variable_const_t n,
+    variable_def_t def)
+{
+  variable_sz_t bits;
+
+  if (!def) {
+    return n;
+  }
+  bits = variable_def_sz_get(def);
+  if (!variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT)) {
+    bits *= 8;
+  }
+  if (VARIABLE_DEF_TYPE_BOOLEAN == variable_def_type_get(def)) {
+    n = !!n;
+  } else if ((VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(def))
+      || (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def))) {
+    /* These constants carry addresses or aggregate data. */
+  } else if (bits < VARIABLE_CONST_BIT_CT) {
+    n &= variable_const_mask_get(bits);
+    if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
+      n = variable_const_sign_extend(n, bits);
+    }
+  }
+  if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT)
+    && (1 == bits) 
+    && variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
+    n = -n;
+  }
+  return n;
+}
+
+boolean_t variable_const_is_negative(variable_const_t n, unsigned bits)
+{
+  return variable_const_sign_bit_test(n, bits);
+}
+
+int variable_const_cmp(variable_const_t left, variable_const_t right,
+    unsigned bits, boolean_t is_signed)
+{
+  if (!bits || (bits > VARIABLE_CONST_BIT_CT)) {
+    bits = VARIABLE_CONST_BIT_CT;
+  }
+  left &= variable_const_mask_get(bits);
+  right &= variable_const_mask_get(bits);
+  if (is_signed) {
+    boolean_t left_neg;
+    boolean_t right_neg;
+
+    left_neg = variable_const_is_negative(left, bits);
+    right_neg = variable_const_is_negative(right, bits);
+    if (left_neg != right_neg) {
+      return left_neg ? -1 : 1;
+    }
+  }
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+}
+
+unsigned char variable_const_byte_get(variable_const_t n, unsigned ofs)
+{
+  if (ofs >= sizeof(n)) {
+    return 0;
+  }
+  return (unsigned char) ((n >> (8 * ofs)) & 0xff);
+}
+
+void variable_const_str_get(variable_const_t n, boolean_t is_signed,
+    char *buf, size_t buf_sz)
+{
+  char tmp[50];
+  size_t pos;
+  boolean_t neg;
+
+  if (!buf_sz) {
+    return;
+  }
+  neg = BOOLEAN_FALSE;
+  if (is_signed && variable_const_is_negative(n, VARIABLE_CONST_BIT_CT)) {
+    neg = BOOLEAN_TRUE;
+    n = ~n + 1;
+  }
+  pos = 0;
+  do {
+    tmp[pos++] = (char) ('0' + (unsigned) (n % 10));
+    n /= 10;
+  } while (n && (pos < sizeof(tmp)));
+  if (neg && (pos < sizeof(tmp))) {
+    tmp[pos++] = '-';
+  }
+  {
+    size_t out;
+
+    out = 0;
+    while (pos && (out + 1 < buf_sz)) {
+      buf[out++] = tmp[--pos];
+    }
+    buf[out] = 0;
+  }
+}
 
 static unsigned variable_id;
 
@@ -23,6 +175,11 @@ typedef struct variable_ref_ {
   refct_t    ref_ct;
 } variable_ref_t;
 #define VARIABLE_REF_NONE ((variable_ref_t *) 0)
+
+typedef struct variable_pointer_whereis_slot_ {
+  variable_const_t slot_ofs;
+  value_t          target;
+} variable_pointer_whereis_slot_t;
 
 struct variable_ {
   variable_t         link;
@@ -39,6 +196,8 @@ struct variable_ {
                                 /* base position, or offset from
                                    master's base position     */
   unsigned short     bit_offset;/* bit #                      */
+  const void        *origin;    /* declaring source file (JAL `var`),
+                                   used for explicit-pin conflict checks */
   ctr_t              ctr_assign;/* # of times assigned        */
   ctr_t              ctr_use;   /* # of times used            */
   unsigned char     *data;      /* misc. data; size = ct * sz */
@@ -49,6 +208,28 @@ struct variable_ {
 
   /* if this is an alias, master points to the controlling variable */
   variable_t         master;
+  /* strdup'd first token of `p is <id>` for pseudo-'get rvalue resolution */
+  char              *ptr_rvalue_link_name;
+  /* cloned target lvalue from the last scalar `p is ...`; used by WHEREIS(p) */
+  value_t            ptr_whereis_target;
+  /* cloned target lvalues for indexed pointer slots; keyed by byte offset */
+  array_t           *ptr_whereis_slots;
+  /* must-bind tracking: real slot writes (binds/copies) count, and
+   * through-accesses on pointer-slot arrays (const element offsets
+   * used + runtime-indexed bind count for the element check) */
+  ctr_t              ctr_ptr_bound;
+  ctr_t              ctr_ptr_slot_rt_bind;
+  array_t           *ptr_slot_uses;
+  /* per-element pseudo links for pointer-slot arrays: the bound pseudo
+   * NAME keyed by byte offset (static const-index dispatch) */
+  array_t           *ptr_slot_links;
+  /* stage-2 runtime dispatch helpers per marked pointer-slot array:
+   * a byte kind[] mirror (1 = pseudo element) and a fn-ptr array of
+   * the elements' 'put accessors (the slot itself stores 'get) */
+  variable_t         ptr_slot_kind_var;
+  variable_t         ptr_slot_puts_var;
+  variable_t         ptr_slot_getcall_var;
+  variable_t         ptr_slot_putcall_var;
   /* for functions this is the destination */
   pfile_proc_t      *proc;
   label_t            lbl;
@@ -127,6 +308,7 @@ variable_t variable_alloc(tag_t tag, variable_def_t def)
     ptr->data        = 0;
     ptr->cflt.single = 0.0;
     ptr->cflt.array  = 0;
+    ptr->link        = 0;  /* Initialize link to NULL */
     data_sz = (variable_def_flag_test(def, VARIABLE_DEF_FLAG_CONST))
       ? variable_def_sz_get(def) : 0;
     if (data_sz && var) {
@@ -163,9 +345,22 @@ variable_t variable_alloc(tag_t tag, variable_def_t def)
         ptr->base[ii] = VARIABLE_BASE_UNKNOWN;
       }
       ptr->bit_offset = 0;
+      ptr->origin    = 0;
       ptr->ctr_assign = 0;
       ptr->ctr_use    = 0;
       ptr->master     = VARIABLE_NONE;
+      ptr->ptr_rvalue_link_name = 0;
+      ptr->ctr_ptr_bound        = 0;
+      ptr->ctr_ptr_slot_rt_bind = 0;
+      ptr->ptr_slot_uses        = 0;
+      ptr->ptr_slot_links       = 0;
+      ptr->ptr_slot_kind_var    = VARIABLE_NONE;
+      ptr->ptr_slot_puts_var    = VARIABLE_NONE;
+      ptr->ptr_slot_getcall_var = VARIABLE_NONE;
+      ptr->ptr_slot_putcall_var = VARIABLE_NONE;
+      ptr->ptr_whereis_target = VALUE_NONE;
+      ptr->ptr_whereis_slots = array_alloc(0,
+          sizeof(variable_pointer_whereis_slot_t));
 	  ptr->val        = VALUE_NONE; 
       ptr->proc       = PFILE_PROC_NONE;
       ptr->lbl        = LABEL_NONE;
@@ -185,16 +380,61 @@ void variable_release(variable_t var)
 
   ptr = variable_element_seek(var, BOOLEAN_TRUE);
   if (ptr && !--ptr->ref_ct) { 
+    if (ptr->ptr_rvalue_link_name) {
+      FREE(ptr->ptr_rvalue_link_name);
+      ptr->ptr_rvalue_link_name = 0;
+    }
+    value_release(ptr->ptr_whereis_target);
+    ptr->ptr_whereis_target = VALUE_NONE;
+    if (ptr->ptr_slot_uses) {
+      array_free(ptr->ptr_slot_uses);
+      ptr->ptr_slot_uses = 0;
+    }
+    if (ptr->ptr_slot_links) {
+      size_t li;
+
+      for (li = 0; li < array_ct(ptr->ptr_slot_links); li++) {
+        struct slot_link_rel {
+          variable_const_t ofs;
+          char            *name;
+        };
+        struct slot_link_rel *ent;
+
+        ent = array_get(ptr->ptr_slot_links, li);
+        if (ent && ent->name) {
+          FREE(ent->name);
+          ent->name = 0;
+        }
+      }
+      array_free(ptr->ptr_slot_links);
+      ptr->ptr_slot_links = 0;
+    }
+    if (ptr->ptr_whereis_slots) {
+      size_t ii;
+
+      for (ii = 0; ii < array_ct(ptr->ptr_whereis_slots); ii++) {
+        variable_pointer_whereis_slot_t *slot;
+
+        slot = array_get(ptr->ptr_whereis_slots, ii);
+        if (slot) {
+          value_release(slot->target);
+          slot->target = VALUE_NONE;
+        }
+      }
+      array_free(ptr->ptr_whereis_slots);
+      ptr->ptr_whereis_slots = 0;
+    }
     variable_master_set(var, VARIABLE_NONE);
     ptr = variable_element_seek(var, BOOLEAN_TRUE);
     array_free(ptr->used_by);
     array_free(ptr->uses);
     variable_array_free(ptr->interference);
+    FREE(ptr->cflt.array);
+    ptr->cflt.array = 0;
     variable_data_set(var, 0);
     variable_label_set(var, LABEL_NONE);
     tag_release(ptr->tag);
     cache_element_free(&variable_cache, var);
-    FREE(ptr->cflt.array);
   }
 }
 
@@ -336,6 +576,17 @@ void variable_base_set(variable_t var, variable_base_t base, size_t which)
 {
   struct variable_ *ptr;
 
+  if (getenv("JALV2_DBG_VBS") && variable_name_get(var)
+      && 0 == strcmp(variable_name_get(var), "_pic_isr_w")) {
+#if defined(__linux__)
+    void *bt[8];
+    int  n = backtrace(bt, 8);
+    fprintf(stderr, "VBS _pic_isr_w -> 0x%04X\n", (unsigned) base);
+    backtrace_symbols_fd(bt, n, 2);
+#else
+    fprintf(stderr, "VBS _pic_isr_w -> 0x%04X\n", (unsigned) base);
+#endif
+  }
   ptr = variable_element_seek(var, BOOLEAN_TRUE);
   if (ptr) {
     if (which < VARIABLE_MIRROR_CT) {
@@ -351,7 +602,27 @@ variable_const_t variable_const_get(const variable_t var,
   variable_const_t  n;
 
   ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  if (ptr && ptr->data) {
+  if (ptr && (ptr->lbl || ptr->val)) {
+    if (ptr->lbl) {
+      n = label_pc_get(ptr->lbl);
+    } else {
+      variable_base_t base;
+      value_t         baseofs;
+
+      base = value_base_get(ptr->val);
+      n = (VARIABLE_BASE_UNKNOWN == base) ? 0 : base;
+      baseofs = value_baseofs_get(ptr->val);
+      if (baseofs && value_is_const(baseofs)) {
+        n += value_const_get(baseofs);
+      }
+    }
+    if (ofs < sizeof(n)) {
+      n >>= 8 * ofs;
+    } else if (ofs) {
+      n = 0;
+    }
+    n = variable_const_normalize(n, def);
+  } else if (ptr && ptr->data) {
     size_t           ii;
     size_t           pos_mx;
 
@@ -361,20 +632,21 @@ variable_const_t variable_const_get(const variable_t var,
       pos_mx = variable_sz_get(var);
     }
 
-    for (ii = 0, n = 0; (ii < variable_def_sz_get(def)); ii++) {
+    for (ii = 0, n = 0; (ii < variable_def_sz_get(def))
+        && (ii < sizeof(n)); ii++) {
       /*n <<= 8UL;*/
       if (ofs + ii < pos_mx) {
-        n |= ptr->data[ofs + ii] << (8 * ii);
+        n |= ((variable_const_t) ptr->data[ofs + ii]) << (8 * ii);
       }
     }
     if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
-      if ((ii < sizeof(n)) && (n & (1UL << ((8 * ii) - 1)))) {
-        /* we need to extend the signed bit here! */
-        while (ii < sizeof(n)) {
-          n |= 255UL << (8 * ii);
-          ii++;
-        }
+      unsigned bits;
+
+      bits = 8 * variable_def_sz_get(def);
+      if (bits > VARIABLE_CONST_BIT_CT) {
+        bits = VARIABLE_CONST_BIT_CT;
       }
+      n = variable_const_sign_extend(n, bits);
     }
   } else {
     n = 0;
@@ -397,10 +669,10 @@ void variable_const_set(variable_t var, variable_def_t vdef,
       if (VARIABLE_DEF_TYPE_BOOLEAN == variable_type_get(var)) {
         n = !!n;
       } else {
-        n &= (1 << variable_sz_get(var)) - 1;
+        n &= variable_const_mask_get(variable_sz_get(var));
       }
       if (variable_is_signed(var)
-        && (n & (1 << (variable_sz_get(var) - 1)))) {
+        && variable_const_sign_bit_test(n, variable_sz_get(var))) {
         /* high bit is set, so negate n */
         n = -n;
       }
@@ -409,7 +681,7 @@ void variable_const_set(variable_t var, variable_def_t vdef,
     }
     for (ii = 0; ii < variable_def_sz_get(vdef); ii++) {
       if (ofs + ii < ofs_mx) {
-        ptr->data[ofs + ii] = (uchar) (n & 0xff);
+        ptr->data[ofs + ii] = variable_const_byte_get(n, 0);
       }
       n >>= 8;
     }
@@ -460,7 +732,15 @@ void variable_const_float_set(variable_t var, size_t ofs, float n)
       ptr->cflt.single = n;
     }
     if (n == 0) {
-      mantissa = 0;
+      /* -0.0 == +0.0 numerically; keep the sign of a negative zero
+       * (1/-0.0 is -inf, 1/+0.0 is +inf) */
+      mantissa = (1.0f / n < 0.0f) ? 0x80000000UL : 0;
+    } else if (n != n) {
+      /* NaN: frexp(NaN) is undefined; store the quiet-NaN pattern */
+      mantissa = 0x7FC00000UL;
+    } else if ((n > 3.402823466e+38f) || (n < -3.402823466e+38f)) {
+      /* infinity: same -- store the IEEE inf pattern with the sign */
+      mantissa = (n < 0.0f) ? 0xFF800000UL : 0x7F800000UL;
     } else {
       mantissa = ((unsigned long) (0x01000000UL * frexp(fabs(n), &e))) 
         & 0x007fffffUL;
@@ -509,9 +789,12 @@ void variable_dump(const variable_t var, FILE *out)
     variable_dflag_test(var, VARIABLE_DEF_FLAG_BIT) ? ":" : "",
     variable_sz_get(var));
   if (variable_is_const(var)) {
-    fmt = (variable_dflag_test(var, VARIABLE_DEF_FLAG_SIGNED))
-      ? "%ld" : "%lu";
-    fprintf(out, fmt, variable_const_get(var, variable_def_get(var), 0));
+    char cbuf[50];
+
+    variable_const_str_get(variable_const_get(var, variable_def_get(var), 0),
+        variable_dflag_test(var, VARIABLE_DEF_FLAG_SIGNED), cbuf,
+        sizeof(cbuf));
+    fputs(cbuf, out);
   }
   fputc('}', out);
 }
@@ -538,6 +821,31 @@ void variable_link_set(variable_t var, variable_t link)
 
   ptr = variable_element_seek(var, BOOLEAN_TRUE);
   if (ptr) {
+    /* Comprehensive circular reference prevention */
+    if (var == link) {
+      /* Direct self-reference - definitely circular */
+      return;
+    }
+    
+    /* Check for circular chains by following links */
+    {
+      variable_t current = link;
+      int depth = 0;
+      while (current && current != VARIABLE_NONE && depth < 10) {
+        if (current == var) {
+          /* Circular reference detected - don't create the link */
+          return;
+        }
+        current = variable_link_get(current);
+        depth++;
+      }
+      
+      /* If chain is too long, assume it might be circular */
+      if (depth >= 10) {
+        return;
+      }
+    }
+    
     ptr->link = link;
   }
 }
@@ -655,6 +963,36 @@ void variable_list_append(varlist_t *lst, variable_t var)
   lst->ct++;
 }
 
+void variable_list_remove(varlist_t *lst, variable_t victim)
+{
+  variable_t cur;
+  variable_t prev;
+
+  if (!lst || !victim) {
+    return;
+  }
+  prev = 0;
+  for (cur = lst->head; cur; cur = variable_link_get(cur)) {
+    if (cur == victim) {
+      if (prev) {
+        variable_link_set(prev, variable_link_get(cur));
+      } else {
+        lst->head = variable_link_get(cur);
+      }
+      if (lst->tail == victim) {
+        lst->tail = prev;
+      }
+      if (lst->ct) {
+        lst->ct--;
+      }
+      variable_link_set(victim, 0);
+      variable_release(victim);
+      return;
+    }
+    prev = cur;
+  }
+}
+
 variable_t variable_list_find(varlist_t *lst, varfind_cb_t cb, void *cb_arg,
     const void *data)
 {
@@ -743,37 +1081,26 @@ void variable_calc_sz_min(variable_const_t n,
   variable_sz_t *psz, variable_def_type_t *ptype,
   flag_t *pflags)
 {
-  unsigned char       n0, n1, n2, n3;
+  unsigned char       bytes[sizeof(variable_const_t)];
+  size_t              ix;
   variable_sz_t       sz;
   variable_def_type_t type;
   flag_t              flags;
 
-
-  n0 = (uchar) ((n      ) & 0xff);
-  n1 = (uchar) ((n >>  8) & 0xff);
-  n2 = (uchar) ((n >> 16) & 0xff);
-  n3 = (uchar) ((n >> 24) & 0xff);
-  sz = 4;
+  for (ix = 0; ix < sizeof(bytes); ix++) {
+    bytes[ix] = variable_const_byte_get(n, (unsigned) ix);
+  }
+  sz = (variable_sz_t) sizeof(bytes);
   type  = VARIABLE_DEF_TYPE_INTEGER;
   flags = VARIABLE_DEF_FLAG_NONE;
-  if (0 == n3) {
+  while ((sz > 1) && (0 == bytes[sz - 1])) {
     sz--;
-    if (0 == n2) {
-      sz--;
-      if (0 == n1) {
-        sz--;
-      }
-    }
-  } else if ((0xff == n3) && (n2 & 0x80)) {
-    /* the code generator will sign extend as necessary, so we'll
-       pretend that this value is signed */
+  }
+  if ((sizeof(bytes) == sz) && (bytes[sz - 1] & 0x80)) {
     flags |= VARIABLE_DEF_FLAG_SIGNED;
-    sz--;
-    if ((0xff == n2) && (n1 & 0x80)) {
+    while ((sz > 1) && (0xff == bytes[sz - 1])
+        && (bytes[sz - 2] & 0x80)) {
       sz--;
-      if ((0xff == n1) && (n0 & 0x80)) {
-        sz--;
-      }
     }
   }
   if (psz) {
@@ -785,6 +1112,26 @@ void variable_calc_sz_min(variable_const_t n,
   if (pflags) {
     *pflags = flags;
   }
+}
+
+void variable_origin_set(variable_t var, const void *origin)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->origin = origin;
+  }
+}
+
+const void *variable_origin_get(const variable_t var)
+{
+  struct variable_ *ptr;
+  const void      *origin;
+
+  ptr    = variable_element_seek(var, BOOLEAN_TRUE);
+  origin = (ptr) ? ptr->origin : 0;
+  return origin;
 }
 
 void variable_bit_offset_set(variable_t var, ushort bit)
@@ -811,6 +1158,365 @@ variable_t variable_master_get(const variable_t var)
 
   ptr = variable_element_seek(var, BOOLEAN_FALSE);
   return (ptr) ? ptr->master : 0;
+}
+
+const char *variable_pointer_rvalue_link_name_get(const variable_t ptr_var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(ptr_var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ptr_rvalue_link_name : 0;
+}
+
+void variable_pointer_rvalue_link_name_set(variable_t ptr_var,
+    const char *link_name)
+{
+  struct variable_ *ptr;
+  char              *copy;
+
+  ptr = variable_element_seek(ptr_var, BOOLEAN_TRUE);
+  if (!ptr) {
+    return;
+  }
+  if (ptr->ptr_rvalue_link_name) {
+    FREE(ptr->ptr_rvalue_link_name);
+    ptr->ptr_rvalue_link_name = 0;
+  }
+  if (link_name && *link_name) {
+    copy = STRDUP(link_name);
+    if (copy) {
+      ptr->ptr_rvalue_link_name = copy;
+    }
+  }
+}
+
+value_t variable_pointer_whereis_target_get(const variable_t ptr_var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(ptr_var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ptr_whereis_target : VALUE_NONE;
+}
+
+void variable_pointer_whereis_target_set(variable_t ptr_var, value_t target)
+{
+  struct variable_ *ptr;
+  value_t           copy;
+
+  copy = VALUE_NONE;
+  if (target) {
+    copy = value_clone(target);
+  }
+  ptr = variable_element_seek(ptr_var, BOOLEAN_TRUE);
+  if (ptr) {
+    value_release(ptr->ptr_whereis_target);
+    ptr->ptr_whereis_target = copy;
+  } else {
+    value_release(copy);
+  }
+}
+
+static variable_pointer_whereis_slot_t *variable_pointer_whereis_slot_find(
+    array_t *slots, variable_const_t slot_ofs)
+{
+  size_t ii;
+
+  if (!slots) {
+    return 0;
+  }
+  for (ii = 0; ii < array_ct(slots); ii++) {
+    variable_pointer_whereis_slot_t *slot;
+
+    slot = array_get(slots, ii);
+    if (slot && slot->slot_ofs == slot_ofs) {
+      return slot;
+    }
+  }
+  return 0;
+}
+
+value_t variable_pointer_whereis_slot_target_get(const variable_t ptr_var,
+    variable_const_t slot_ofs)
+{
+  struct variable_                 *ptr;
+  variable_pointer_whereis_slot_t  *slot;
+
+  ptr = variable_element_seek(ptr_var, BOOLEAN_FALSE);
+  if (!ptr) {
+    return VALUE_NONE;
+  }
+  slot = variable_pointer_whereis_slot_find(ptr->ptr_whereis_slots, slot_ofs);
+  return slot ? slot->target : VALUE_NONE;
+}
+
+void variable_pointer_whereis_slot_target_set(variable_t ptr_var,
+    variable_const_t slot_ofs, value_t target)
+{
+  struct variable_                *ptr;
+  variable_pointer_whereis_slot_t *slot;
+  value_t                          copy;
+
+  copy = VALUE_NONE;
+  if (target) {
+    copy = value_clone(target);
+  }
+  ptr = variable_element_seek(ptr_var, BOOLEAN_TRUE);
+  if (!ptr) {
+    value_release(copy);
+    return;
+  }
+  if (!ptr->ptr_whereis_slots) {
+    ptr->ptr_whereis_slots = array_alloc(0,
+        sizeof(variable_pointer_whereis_slot_t));
+  }
+  slot = variable_pointer_whereis_slot_find(ptr->ptr_whereis_slots, slot_ofs);
+  if (!slot) {
+    variable_pointer_whereis_slot_t new_slot;
+
+    new_slot.slot_ofs = slot_ofs;
+    new_slot.target = VALUE_NONE;
+    slot = array_append(ptr->ptr_whereis_slots, &new_slot);
+  }
+  if (slot) {
+    value_release(slot->target);
+    slot->target = copy;
+  } else {
+    value_release(copy);
+  }
+}
+
+/* must-bind tracking: a pointer counts as BOUND only when its slot was
+ * genuinely written -- `p is x` binds, slot copies (`q = p`, `p = arr`)
+ * -- never by store-through accesses (`p = 42` bumps ctr_assign via
+ * cmd_opdst_set and must not silence the check) */
+void variable_pointer_bound_ct_bump(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ctr_ptr_bound++;
+  }
+}
+
+boolean_t variable_pointer_bound_p(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr && ptr->ctr_ptr_bound) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+void variable_pointer_slot_use_note(const variable_t var,
+    variable_const_t slot_ofs)
+{
+  struct variable_ *ptr;
+  size_t            ii;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (!ptr) {
+    return;
+  }
+  if (!ptr->ptr_slot_uses) {
+    ptr->ptr_slot_uses = array_alloc(0, sizeof(variable_const_t));
+  }
+  if (ptr->ptr_slot_uses) {
+    for (ii = 0; ii < array_ct(ptr->ptr_slot_uses); ii++) {
+      variable_const_t *used;
+
+      used = array_get(ptr->ptr_slot_uses, ii);
+      if (used && (*used == slot_ofs)) {
+        return;
+      }
+    }
+    array_append(ptr->ptr_slot_uses, &slot_ofs);
+  }
+}
+
+size_t variable_pointer_slot_use_ct_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr && ptr->ptr_slot_uses) ? array_ct(ptr->ptr_slot_uses) : 0;
+}
+
+variable_const_t variable_pointer_slot_use_get(const variable_t var,
+    size_t index)
+{
+  struct variable_   *ptr;
+  variable_const_t   *ofs;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  ofs = (ptr && ptr->ptr_slot_uses && (index < array_ct(ptr->ptr_slot_uses)))
+      ? array_get(ptr->ptr_slot_uses, index) : 0;
+  return (ofs) ? *ofs : 0;
+}
+
+void variable_pointer_slot_rt_bind_ct_bump(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ctr_ptr_slot_rt_bind++;
+  }
+}
+
+void variable_pointer_slot_link_name_set(const variable_t var,
+    variable_const_t slot_ofs, const char *link_name)
+{
+  struct slot_link_entry {
+    variable_const_t ofs;
+    char            *name;
+  };
+  struct variable_    *ptr;
+  struct slot_link_entry *ent;
+  size_t               ii;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (!ptr || !link_name) {
+    return;
+  }
+  if (!ptr->ptr_slot_links) {
+    ptr->ptr_slot_links = array_alloc(0, sizeof(struct slot_link_entry));
+  }
+  if (ptr->ptr_slot_links) {
+    for (ii = 0; ii < array_ct(ptr->ptr_slot_links); ii++) {
+      ent = array_get(ptr->ptr_slot_links, ii);
+      if (ent && (ent->ofs == slot_ofs)) {
+        if (ent->name) {
+          FREE(ent->name);
+        }
+        ent->name = STRDUP(link_name);
+        return;
+      }
+    }
+    {
+      struct slot_link_entry neu;
+
+      neu.ofs  = slot_ofs;
+      neu.name = STRDUP(link_name);
+      array_append(ptr->ptr_slot_links, &neu);
+    }
+  }
+}
+
+const char *variable_pointer_slot_link_name_get(const variable_t var,
+    variable_const_t slot_ofs)
+{
+  struct slot_link_entry {
+    variable_const_t ofs;
+    char            *name;
+  };
+  struct variable_    *ptr;
+  struct slot_link_entry *ent;
+  size_t               ii;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  if (!ptr || !ptr->ptr_slot_links) {
+    return 0;
+  }
+  for (ii = 0; ii < array_ct(ptr->ptr_slot_links); ii++) {
+    ent = array_get(ptr->ptr_slot_links, ii);
+    if (ent && (ent->ofs == slot_ofs)) {
+      return ent->name;
+    }
+  }
+  return 0;
+}
+
+variable_t variable_pointer_slot_kind_var_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ptr_slot_kind_var : VARIABLE_NONE;
+}
+
+void variable_pointer_slot_kind_var_set(const variable_t var,
+    variable_t helper)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ptr_slot_kind_var = helper;
+  }
+}
+
+variable_t variable_pointer_slot_getcall_var_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ptr_slot_getcall_var : VARIABLE_NONE;
+}
+
+void variable_pointer_slot_getcall_var_set(const variable_t var,
+    variable_t helper)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ptr_slot_getcall_var = helper;
+  }
+}
+
+variable_t variable_pointer_slot_putcall_var_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ptr_slot_putcall_var : VARIABLE_NONE;
+}
+
+void variable_pointer_slot_putcall_var_set(const variable_t var,
+    variable_t helper)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ptr_slot_putcall_var = helper;
+  }
+}
+
+variable_t variable_pointer_slot_puts_var_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ptr_slot_puts_var : VARIABLE_NONE;
+}
+
+void variable_pointer_slot_puts_var_set(const variable_t var,
+    variable_t helper)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ptr_slot_puts_var = helper;
+  }
+}
+
+boolean_t variable_pointer_slot_links_any(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr && ptr->ptr_slot_links
+      && array_ct(ptr->ptr_slot_links)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+ctr_t variable_pointer_slot_rt_bind_ct_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return (ptr) ? ptr->ctr_ptr_slot_rt_bind : 0;
 }
 
 static void variable_master_counters_adjust(variable_t var,
@@ -850,6 +1556,9 @@ void variable_master_set(variable_t var, variable_t master)
       ptr->base[0] = 0;
     }
     variable_master_counters_adjust(master, ctr_assign, ctr_use);
+    if (master) {
+      variable_flag_set(master, VARIABLE_FLAG_OVERLAY_HOST);
+    }
   }
 }
 
@@ -976,10 +1685,23 @@ boolean_t variable_is_const(const variable_t var)
   return variable_dflag_test(var, VARIABLE_DEF_FLAG_CONST);
 }
 
+/* declared CONST and never assigned.  Const-folding
+ * (pfile_block_variable_fixup) marks assigned-but-never-read variables
+ * CONST, so the flag alone does not prove the cmd stream is free of
+ * write references -- back ends may only pool/fold a const when the
+ * assignment count is still zero. */
+boolean_t variable_is_pure_const(const variable_t var)
+{
+  return variable_is_const(var) && (0 == variable_assign_ct_get(var));
+}
+
 boolean_t variable_is_pseudo_const(const variable_t var)
 {
   boolean_t rc;
 
+  if (!var) {
+    return BOOLEAN_FALSE;
+  }
   rc = variable_is_const(var);
   if (!rc) {
     if (variable_master_get(var)) {

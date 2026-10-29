@@ -6,6 +6,9 @@
  **               2018-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <string.h>
 #include <errno.h>
@@ -19,26 +22,13 @@
 #include "jal_tokn.h"
 #include "jal_vdef.h"
 #include "jal_incl.h"
+#include "../libcore/pfiled.h"
+#include "../libcore/label.h"
 #include "../libpic12/pic.c"
-
-typedef struct jal_pragma_fuses_entry_
-{
-  struct jal_pragma_fuses_entry_ *link;
-  const char                     *name;
-  unsigned                        bits;
-} jal_pragma_fuses_entry_t;
-
-typedef struct jal_pragma_fuses_ {
-  struct jal_pragma_fuses_ *link;
-  const char               *name;
-  unsigned                  mask;
-  unsigned                  config_word; /* which config word */
-  jal_pragma_fuses_entry_t *entry;
-} jal_pragma_fuses_t;
 
 /* list of known jal fuses */
 
-static jal_pragma_fuses_t *jal_fuses;
+jal_pragma_fuses_t *jal_fuses;
 
 
 void jal_parse_include(pfile_t *pf, const pfile_pos_t *statement_start)
@@ -49,6 +39,18 @@ void jal_parse_include(pfile_t *pf, const pfile_pos_t *statement_start)
   size_t      jj;
 
   UNUSED(statement_start);
+  /* includes are COMPILE-TIME: inside a runtime-conditioned block (or a
+   * loop body -- always block-scoped) the old behavior silently included
+   * unconditionally with the declarations trapped block-local.  Clean
+   * error instead (const conditions and defined() folds are fine -- they
+   * never reach this depth).  The include is still processed after the
+   * error so parsing recovers in one message. */
+  if (pfile_runtime_block_test(pf)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "include inside a runtime conditional or loop is not supported"
+        " -- include runs at compile time; use a constant condition or"
+        " defined()");
+  }
   ptr = jal_token_parse_raw(pf);
   /* remove any prepended spaces */
   for (ii = 0;
@@ -170,14 +172,18 @@ static void jal_parse_pragma_target_chip(pfile_t *pf)
         inf.vdef = vdef;
         
         name = MALLOC(sizeof(*name) * inf.ct);
-        for (ii = 0; ii < inf.ct; ii++) {
-          name[ii] = pfile_constant_get(pf, ptr[ii], VARIABLE_DEF_NONE);
-        }
-        variable_release(
-            jal_variable_alloc(pf, &inf, BOOLEAN_FALSE, inf.ct,
-              name, PFILE_VARIABLE_ALLOC_GLOBAL));
-        for (ii = 0; ii < inf.ct; ii++) {
-          value_release(name[ii]);
+        if (!name) {
+          pfile_log_syserr(pf, ENOMEM);
+        } else {
+          for (ii = 0; ii < inf.ct; ii++) {
+            name[ii] = pfile_constant_get(pf, ptr[ii], VARIABLE_DEF_NONE);
+          }
+          variable_release(
+              jal_variable_alloc(pf, &inf, BOOLEAN_FALSE, inf.ct,
+                name, PFILE_VARIABLE_ALLOC_GLOBAL));
+          for (ii = 0; ii < inf.ct; ii++) {
+            value_release(name[ii]);
+          }
         }
         FREE(name);
       }
@@ -193,6 +199,28 @@ static void jal_pragma_variable_assign(pfile_t *pf, char *vname)
   value_t cexpr;
 
   cexpr = jal_parse_expr(pf);
+  if (!cexpr) {
+    /* Check if this is a fuse constant */
+    const char *token_name = pf_token_ptr_get(pf);
+    const jal_pragma_fuses_t *fuses;
+    const jal_pragma_fuses_entry_t *entry;
+    boolean_t found = BOOLEAN_FALSE;
+    
+    for (fuses = jal_fuses; fuses && !found; fuses = fuses->link) {
+      for (entry = fuses->entry; entry && !found; entry = entry->link) {
+        if (strcmp(entry->name, token_name) == 0) {
+          /* Found a pragma constant - create a constant value */
+          cexpr = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_INTEGER, 1);
+          if (cexpr) {
+            value_const_set(cexpr, entry->bits);
+            found = BOOLEAN_TRUE;
+            pf_token_get(pf, PF_TOKEN_NEXT); /* consume the token */
+          }
+        }
+      }
+    }
+  }
+  
   if (cexpr) {
     if (!value_is_const(cexpr)) {
       pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_CONSTANT_EXPECTED);
@@ -212,6 +240,54 @@ static void jal_pragma_variable_assign(pfile_t *pf, char *vname)
   }
 }
 
+static void jal_pragma_const_assign(pfile_t *pf, char *vname,
+    variable_const_t n)
+{
+  value_t cexpr;
+
+  cexpr = pfile_constant_get(pf, n, VARIABLE_DEF_NONE);
+  if (cexpr) {
+    jal_variable_info_t inf;
+
+    jal_variable_info_init(&inf);
+    inf.name      = vname;
+    inf.ct        = 0;
+    inf.def_flags = VARIABLE_DEF_FLAG_CONST;
+    variable_release(
+        jal_variable_alloc(pf, &inf, BOOLEAN_FALSE, 1, &cexpr,
+          PFILE_VARIABLE_ALLOC_GLOBAL));
+    value_release(cexpr);
+  }
+}
+
+
+/* Record which fuse fields the user has set, for the 32-bit back ends:
+ * `pragma target <fuse_def entry> <value>` applies its bits to _FUSES
+ * AND ORs its field mask into _FUSES_EDIT[word]; the hex writer merges
+ * exactly the marked fields into the solved DEVCFG words (the solved
+ * words would otherwise overwrite the user's bits, and diffing _FUSES
+ * against defaults cannot reconstruct the touched fields).  Classic
+ * device files declare no _FUSES_EDIT, so this is a no-op there. */
+static void jal_fuse_edit_mark(pfile_t *pf, variable_ct_t word,
+  unsigned mask)
+{
+  value_t edits;
+
+  edits = pfile_value_find(pf, PFILE_LOG_NONE, "_fuses_edit");
+  if (edits) {
+    if (value_is_array(edits) && (word < value_ct_get(edits))) {
+      value_t e;
+
+      e = value_subscript_set(edits, word);
+      if (e) {
+        value_const_set(e, value_const_get(e) | (variable_const_t) mask);
+        value_release(e);
+      }
+    }
+    value_release(edits);
+  }
+}
+
 
 /* this is analogous to:
    const target_clock = cexpr */
@@ -219,10 +295,23 @@ static void jal_parse_pragma_target_cpu(pfile_t *pf)
 {
   jal_pragma_variable_assign(pf, "target_cpu");
 }
+static void jal_parse_pragma_target_flash_mode(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "_flash_mode");
+}
+static void jal_parse_pragma_target_flash_size(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "_flash_size");
+}
+static void jal_parse_pragma_target_flash_freq(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "_flash_freq");
+}
 
 static void jal_parse_pragma_target_clock(pfile_t *pf)
 {
   jal_pragma_variable_assign(pf, "target_clock");
+  pic32_clock_solve_maybe(pf);   /* OSC-then-clock order re-solves */
 }
 
 static void jal_parse_pragma_target_bank(pfile_t *pf)
@@ -240,6 +329,73 @@ static void jal_parse_pragma_target_instruction_set(pfile_t* pf)
 static void jal_parse_pragma_target_page(pfile_t *pf)
 {
   jal_pragma_variable_assign(pf, "target_page_size");
+}
+
+/* Legacy `pragma string heap <expr>` — ignored (no diagnostic). Heap arena size
+ * is only `const word _string_heap_size = <bytes>` in user source. */
+static void jal_parse_pragma_string_heap(pfile_t *pf)
+{
+  value_t cexpr;
+
+  cexpr = jal_parse_expr(pf);
+  value_release(cexpr);
+}
+
+static void jal_parse_pragma_string_index(pfile_t *pf)
+{
+  static const struct {
+    const char       *name;
+    variable_const_t  size;
+  } map[] = {
+    {"auto",  0},
+    {"byte",  1},
+    {"word",  2}
+  };
+  size_t ii;
+
+  for (ii = 0; (ii < COUNT(map))
+      && !pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, map[ii].name);
+      ii++)
+    ;
+  if (ii == COUNT(map)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "expected auto, byte, or word");
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else {
+    jal_pragma_const_assign(pf, "_string_index_size", map[ii].size);
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+}
+
+/* pragma string alloc first_fit | best_fit */
+static void jal_parse_pragma_string_alloc(pfile_t *pf)
+{
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "first_fit")) {
+    pf->jal_str_heap_alloc_policy = 0U;
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "best_fit")) {
+    pf->jal_str_heap_alloc_policy = 1U;
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "expected first_fit or best_fit (pragma string alloc)");
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+}
+
+/* pragma string retry on | off — after failed alloc, one string_heap_compact + retry */
+static void jal_parse_pragma_string_retry(pfile_t *pf)
+{
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "on")) {
+    pf->jal_str_heap_alloc_retry = 1U;
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "off")) {
+    pf->jal_str_heap_alloc_retry = 0U;
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR, "expected on or off (pragma string retry)");
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
 }
 
 static void jal_parse_pragma_target_fuses(pfile_t *pf)
@@ -264,6 +420,9 @@ static void jal_parse_pragma_target_fuses(pfile_t *pf)
 
           tmp = value_subscript_set(n,
               (variable_ct_t) value_const_get(cexpr));
+          /* whole-word user edit: mark every bit for the 32-bit merge */
+          jal_fuse_edit_mark(pf,
+              (variable_ct_t) value_const_get(cexpr), ~0U);
           value_release(cexpr);
           value_release(n);
           n = tmp;
@@ -282,6 +441,188 @@ static void jal_parse_pragma_target_fuses(pfile_t *pf)
   value_release(cexpr);
 }
 
+
+static void jal_parse_pragma_target_plldiv(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_plldiv");
+}
+
+static void jal_parse_pragma_target_cpudiv(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_cpudiv");
+}
+
+static void jal_parse_pragma_target_wdt(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_wdt");
+}
+
+static void jal_parse_pragma_target_xinst(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_xinst");
+}
+
+static void jal_parse_pragma_target_debug(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_debug");
+}
+
+static void jal_parse_pragma_target_fcmem(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_fcmem");
+}
+
+static void jal_parse_pragma_target_ieso(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_ieso");
+}
+
+/* PIC32 clock selection (docs/investigations/pic32_clock_select_plan.md):
+ * `pragma target OSC <mode>` stores the numeric mode in target_osc.
+ * The mode names are parser keywords (classic fuse-entry style), NOT
+ * device-file consts -- consts in the device file cost RAM/zero-init
+ * code on every image (probed 2026-10-07), keywords are free. */
+static void jal_parse_pragma_target_osc(pfile_t *pf)
+{
+  typedef struct pragma_osc_mode_ {
+    const char *name;
+    unsigned long mode;
+  } pragma_osc_mode_t;
+  static const pragma_osc_mode_t mips_modes[] = {
+    {"frc", 1}, {"frcdiv", 2}, {"frc_spll", 3}, {"posc", 4},
+    {"posc_spll", 5}, {"ec", 6}, {"ec_spll", 7}
+  };
+  static const pragma_osc_mode_t esp32_modes[] = {
+    {"crystal", 2}, {"pll", 3}
+  };
+  const pragma_osc_mode_t *modes;
+  size_t mode_ct;
+  const char *vocab;
+  const char *tok = pf_token_ptr_get(pf);
+  value_t cpu;
+  size_t i;
+
+  cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+  if (cpu && (PIC_TARGET_CPU_ESP32 == (pic_target_cpu_t) value_const_get(cpu))) {
+    modes = esp32_modes;
+    mode_ct = COUNT(esp32_modes);
+    vocab = "CRYSTAL, PLL";
+  } else {
+    modes = mips_modes;
+    mode_ct = COUNT(mips_modes);
+    vocab = "FRC, FRCDIV, FRC_SPLL, POSC, POSC_SPLL, EC, EC_SPLL";
+  }
+  if (cpu) {
+    value_release(cpu);
+  }
+  for (i = 0; i < mode_ct; i++) {
+    if (!strcmp(modes[i].name, tok)) {
+      break;
+    }
+  }
+  if (i < mode_ct) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_pragma_const_assign(pf, "target_osc", modes[i].mode);
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "unknown oscillator mode: %s (%s)", tok, vocab);
+  }
+}
+
+/* PIC32 config pragmas (fix_pic32_clock_select.md addendum 3): classic
+ * sample vocabulary (WDT CONTROL/DISABLED, DEBUG DISABLED, MCLR
+ * EXTERNAL...) stored as 0/1 consts the clock solver masks into the
+ * solved DEVCFG words. Absent pragma = the proven default bits, so
+ * images without these pragmas stay byte-identical. Values are parser
+ * keywords, keeping the device file symbol-only (probed: device-file
+ * consts cost RAM/zero-init on every image). */
+static void jal_parse_pragma_flag(pfile_t *pf, char *name,
+  const char *vname, unsigned long on_val, unsigned long off_val)
+{
+  const char *tok = pf_token_ptr_get(pf);
+
+  if (!strcmp("disabled", tok) || !strcmp("internal", tok)) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_pragma_const_assign(pf, name, off_val);
+  } else if (!strcmp("enabled", tok) || !strcmp("control", tok)
+    || !strcmp("external", tok)) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_pragma_const_assign(pf, name, on_val);
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR, "unknown %s setting: %s", vname, tok);
+  }
+}
+
+static void jal_parse_pragma_pic32_wdt(pfile_t *pf)
+{
+  jal_parse_pragma_flag(pf, "target_wdt", "WDT", 1, 0);
+}
+
+static void jal_parse_pragma_pic32_dmt(pfile_t *pf)
+{
+  jal_parse_pragma_flag(pf, "target_dmt", "DMT", 1, 0);
+}
+
+static void jal_parse_pragma_pic32_debug(pfile_t *pf)
+{
+  jal_parse_pragma_flag(pf, "target_debug", "DEBUG", 1, 0);
+}
+
+static void jal_parse_pragma_pic32_ieso(pfile_t *pf)
+{
+  jal_parse_pragma_flag(pf, "target_ieso", "IESO", 1, 0);
+}
+
+static void jal_parse_pragma_pic32_sosc(pfile_t *pf)
+{
+  jal_parse_pragma_flag(pf, "target_sosc", "SOSC", 1, 0);
+}
+
+static void jal_parse_pragma_pic32_mclr(pfile_t *pf)
+{
+  jal_parse_pragma_flag(pf, "target_mclr", "MCLR", 1, 0);
+}
+
+/* `pragma target oscillator <hz>` -- the external source frequency
+ * (crystal or clock module); jallib readability: full words, no
+ * datasheet abbreviations in sample files. */
+static void jal_parse_pragma_target_oscillator(pfile_t *pf)
+{
+  jal_pragma_variable_assign(pf, "target_oscillator");
+}
+
+/* `pragma target image pfm` -- honest-name form of the image shape the
+ * 32mz sample kit uses: app in program flash (PFM) at 0x9D000000 plus
+ * the compiler-emitted boot block. No bootloader is involved; the
+ * legacy `pragma bootloader pic32` predates the own-boot flow and
+ * remains fully supported. PIC32-only (the flag/offset semantics are
+ * meaningless on classic cores). */
+static void jal_parse_pragma_target_image(pfile_t *pf);
+static void jal_parse_pragma_loader32(pfile_t *pf);
+
+static void jal_parse_pragma_target_image(pfile_t *pf)
+{
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "pfm")) {
+    value_t cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+    boolean_t mips = cpu
+      && (PIC_TARGET_CPU_MIPS32 == (pic_target_cpu_t) value_const_get(cpu));
+
+    if (cpu) {
+      value_release(cpu);
+    }
+    if (!mips) {
+      pfile_log(pf, PFILE_LOG_ERR,
+        "pragma target image pfm requires the PIC32 back end");
+    } else {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+      jal_parse_pragma_loader32(pf);
+    }
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR, "unknown image form: %s (pfm)",
+      pf_token_ptr_get(pf));
+  }
+}
+
 static void jal_parse_pragma_target(pfile_t *pf)
 {
   static const struct {
@@ -292,9 +633,20 @@ static void jal_parse_pragma_target(pfile_t *pf)
     {"clock", jal_parse_pragma_target_clock},
     {"fuses", jal_parse_pragma_target_fuses},
     {"cpu",   jal_parse_pragma_target_cpu},
+    {"flash_mode", jal_parse_pragma_target_flash_mode},
+    {"flash_size", jal_parse_pragma_target_flash_size},
+    {"flash_freq", jal_parse_pragma_target_flash_freq},
     {"bank",  jal_parse_pragma_target_bank},
     {"inst",  jal_parse_pragma_target_instruction_set},
-    {"page",  jal_parse_pragma_target_page}
+    {"page",  jal_parse_pragma_target_page},
+    {"PLLDIV", jal_parse_pragma_target_plldiv},
+    {"CPUDIV", jal_parse_pragma_target_cpudiv},
+    {"WDT",   jal_parse_pragma_target_wdt},
+    {"XINST", jal_parse_pragma_target_xinst},
+    {"DEBUG", jal_parse_pragma_target_debug},
+    {"FCMEM", jal_parse_pragma_target_fcmem},
+    {"IESO",  jal_parse_pragma_target_ieso},
+    {"image", jal_parse_pragma_target_image}
   };
   size_t cmd;
 
@@ -316,8 +668,39 @@ static void jal_parse_pragma_target(pfile_t *pf)
          fuses = fuses->link)
       ;
     if (!fuses) {
-      pfile_log(pf, PFILE_LOG_ERR, "unknown pragma target: %s",
-        pf_token_ptr_get(pf));
+      /* No fuse group with this name: the PIC32 clock/config keyword
+       * pragmas take over (classic cores always declare fuse groups
+       * for osc/wdt/debug/ieso/mclr, so they never reach this branch;
+       * identifiers arrive lowercased from the tokenizer). */
+      static const struct {
+        const char *tag;
+        void      (*action)(pfile_t *);
+      } pic32_pragmas[] = {
+        {"osc",        jal_parse_pragma_target_osc},
+        {"oscillator", jal_parse_pragma_target_oscillator},
+        {"wdt",   jal_parse_pragma_pic32_wdt},
+        {"dmt",   jal_parse_pragma_pic32_dmt},
+        {"debug", jal_parse_pragma_pic32_debug},
+        {"ieso",  jal_parse_pragma_pic32_ieso},
+        {"sosc",  jal_parse_pragma_pic32_sosc},
+        {"mclr",  jal_parse_pragma_pic32_mclr}
+      };
+      size_t pic32_i;
+
+      for (pic32_i = 0;
+           (pic32_i < COUNT(pic32_pragmas))
+           && !pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE,
+             pic32_pragmas[pic32_i].tag);
+           pic32_i++)
+        ;
+      if (pic32_i < COUNT(pic32_pragmas)) {
+        pf_token_get(pf, PF_TOKEN_NEXT);
+        pic32_pragmas[pic32_i].action(pf);
+        pic32_clock_solve_maybe(pf);
+      } else {
+        pfile_log(pf, PFILE_LOG_ERR, "unknown pragma target: %s",
+          pf_token_ptr_get(pf));
+      }
     } else {
       /* figure out which one it is */
       const jal_pragma_fuses_entry_t *entry;
@@ -342,6 +725,8 @@ static void jal_parse_pragma_target(pfile_t *pf)
           if (value_is_array(n)) {
             value_t m;
 
+            jal_fuse_edit_mark(pf,
+                (variable_ct_t) fuses->config_word, fuses->mask);
             m = value_subscript_set(n, fuses->config_word);
             value_release(n);
             n = m;
@@ -359,6 +744,7 @@ static void jal_parse_pragma_target(pfile_t *pf)
 static void jal_parse_pragma_interrupt(pfile_t *pf)
 {
   pfile_proc_t *proc;
+  value_t       irqval;
 
   proc = pfile_proc_active_get(pf);
 
@@ -375,7 +761,39 @@ static void jal_parse_pragma_interrupt(pfile_t *pf)
   } else {
     pfile_proc_flag_set(proc, PFILE_PROC_FLAG_INTERRUPT);
     label_usage_bump(pfile_proc_label_get(proc), CTR_BUMP_INCR);
+    irqval = jal_token_to_constant(pf, PFILE_LOG_NONE);
+    if (irqval) {
+      variable_const_t n;
+
+      n = value_const_get(irqval);
+      value_release(irqval);
+      pf_token_get(pf, PF_TOKEN_NEXT);
+      if (n > 255) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "pragma interrupt vector must be 0..255");
+      } else {
+        pfile_proc_irq_set(proc, (int) n);
+      }
+    }
   }
+}
+
+static void jal_marker_label(pfile_t *pf, const char *name)
+{
+  label_t lbl;
+
+  lbl = pfile_label_find(pf, PFILE_LOG_NONE, name);
+  if (!lbl) {
+    lbl = pfile_label_alloc(pf, name);
+  }
+  if (lbl) {
+    label_release(lbl);
+  }
+}
+
+static void jal_parse_pragma_interrupt_mvec(pfile_t *pf)
+{
+  jal_marker_label(pf, "_mips_mvec");
 }
 
 static void jal_parse_pragma_interrupt_normal(pfile_t *pf)
@@ -403,6 +821,21 @@ static void jal_parse_pragma_interrupt_fast(pfile_t *pf)
    nb : i'll likely ignore this and instead look for 
         ``addwf pcl,f; keeping everthing from there to the end
         of either the procedure or block in one bank */
+/* Opt-in PIC32 COP1 (MZ EF). Default remains IEEE soft-float so QEMU
+ * EC (no FPU) stays correct. Marker label is looked up in libpic32. */
+static void jal_parse_pragma_fpu_hardware(pfile_t *pf)
+{
+  label_t lbl;
+
+  lbl = pfile_label_find(pf, PFILE_LOG_NONE, "_mips_fpu_hardware");
+  if (!lbl) {
+    lbl = pfile_label_alloc(pf, "_mips_fpu_hardware");
+  }
+  if (lbl) {
+    label_release(lbl);
+  }
+}
+
 static void jal_parse_pragma_jump_table(pfile_t *pf)
 {
   pfile_proc_t *proc;
@@ -529,7 +962,8 @@ static void jal_parse_pragma_id(pfile_t *pf)
 
 typedef enum {
   JAL_PARSE_PRAGMA_DATA_COMMON_DATA,
-  JAL_PARSE_PRAGMA_DATA_COMMON_SHARED
+  JAL_PARSE_PRAGMA_DATA_COMMON_SHARED,
+  JAL_PARSE_PRAGMA_DATA_COMMON_DATA_REMOVE
 } jal_parse_pragma_data_common_t;
 
 static void jal_parse_pragma_data_common(pfile_t *pf,
@@ -570,9 +1004,13 @@ static void jal_parse_pragma_data_common(pfile_t *pf,
         switch (which) {
           case JAL_PARSE_PRAGMA_DATA_COMMON_DATA:
             pic_data_bank_list_add(pf, lo, hi);
+            pfile_data_range_add(pf, (ulong) lo, (ulong) hi);
             break;
           case JAL_PARSE_PRAGMA_DATA_COMMON_SHARED:
             pic_shared_bank_list_add(pf, lo, hi);
+            break;
+          case JAL_PARSE_PRAGMA_DATA_COMMON_DATA_REMOVE:
+            pic_data_bank_list_remove_range(pf, lo, hi);
             break;
         }
       }
@@ -584,6 +1022,11 @@ static void jal_parse_pragma_data_common(pfile_t *pf,
 static void jal_parse_pragma_data(pfile_t *pf)
 {
   jal_parse_pragma_data_common(pf, JAL_PARSE_PRAGMA_DATA_COMMON_DATA);
+}
+
+static void jal_parse_pragma_data_remove(pfile_t *pf)
+{
+  jal_parse_pragma_data_common(pf, JAL_PARSE_PRAGMA_DATA_COMMON_DATA_REMOVE);
 }
 
 static void jal_parse_pragma_shared(pfile_t *pf)
@@ -620,6 +1063,29 @@ static void jal_parse_pragma_code_or_stack(pfile_t *pf, char *name)
 static void jal_parse_pragma_code(pfile_t *pf)
 {
   jal_parse_pragma_code_or_stack(pf, "_code_size");
+}
+
+/* pragma code_location <const-expr>
+ * Where code lands when the program has no `pragma bootloader` (the
+ * bootloader pragma always wins when present).  The default lives in
+ * the device file -- for generated PIC32 files it is computed from the
+ * .PIC boot sector (reset-vector flash mapped through kseg1).  A
+ * program-side pragma overrides the device default (last one wins). */
+static void jal_parse_pragma_code_location(pfile_t *pf)
+{
+  value_t addr;
+
+  addr = jal_parse_expr(pf);
+  if (addr) {
+    if (!value_is_const(addr)) {
+      pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_CONSTANT_EXPECTED);
+    } else if (!value_const_get(addr)) {
+      pfile_log(pf, PFILE_LOG_ERR, "code location must be > 0");
+    } else {
+      pfile_code_location_set(pf, value_const_get(addr));
+    }
+    value_release(addr);
+  }
 }
 
 static void jal_parse_pragma_stack(pfile_t *pf)
@@ -715,12 +1181,14 @@ static void jal_parse_pragma_iddata(pfile_t *pf)
  *   ...
  * '}'
  */ 
+
 static void jal_parse_pragma_fuse_def(pfile_t *pf)
 {
   jal_pragma_fuses_t *fuse;
   const char         *ptr;
   size_t              sz;
   value_t             val;
+  
 
   ptr = pf_token_get(pf, PF_TOKEN_CURRENT);
   sz  = 1 + strlen(ptr);
@@ -798,6 +1266,7 @@ static void jal_parse_pragma_fuse_def(pfile_t *pf)
   }
   pf_token_get(pf, PF_TOKEN_NEXT);
 }
+
 
 static void jal_parse_pragma_inline(pfile_t *pf)
 {
@@ -944,6 +1413,22 @@ static void jal_parse_pragma_loader18(pfile_t *pf)
 }
 
 
+static void jal_parse_pragma_loader32(pfile_t *pf)
+{
+  value_t val;
+
+  jal_marker_label(pf, "_mips_loader_pfm");
+  pfile_flag_clr(pf, PFILE_FLAG_BOOT_FUSES);
+  val = jal_token_to_constant(pf, PFILE_LOG_NONE);
+  if (val) {
+    pfile_loader_offset_set(pf, value_const_get(val));
+    value_release(val);
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else {
+    pfile_loader_offset_set(pf, 0x9D000000UL);
+  }
+}
+
 static const pragma_word_t pragma_bootloader[] = {
   DEFINE_FLAG("rickpic", 
     ~BOOTLOADER_FLAGS,
@@ -955,6 +1440,7 @@ static const pragma_word_t pragma_bootloader[] = {
     ~BOOTLOADER_FLAGS,
     PFILE_FLAG_BOOT_BLOADER),
   DEFINE_FN("loader18", jal_parse_pragma_loader18, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN("pic32", jal_parse_pragma_loader32, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FLAG(0,
     ~BOOTLOADER_FLAGS,
     0),
@@ -1226,7 +1712,34 @@ static const pragma_word_t pragma_interrupt[] = {
   DEFINE_FN("raw",    jal_parse_pragma_interrupt_raw, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN("fast",   jal_parse_pragma_interrupt_fast, 
     PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN("mvec",   jal_parse_pragma_interrupt_mvec,
+    PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(0, jal_parse_pragma_interrupt, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_END_OF_LIST
+};
+
+static void jal_parse_pragma_isa_micromips(pfile_t *pf)
+{
+  jal_marker_label(pf, "_mips_micromips");
+}
+
+static const pragma_word_t pragma_isa[] = {
+  DEFINE_FN("micromips", jal_parse_pragma_isa_micromips,
+    PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_END_OF_LIST
+};
+
+static const pragma_word_t pragma_fpu[] = {
+  DEFINE_FN("hardware", jal_parse_pragma_fpu_hardware,
+    PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_END_OF_LIST
+};
+
+static const pragma_word_t pragma_string[] = {
+  DEFINE_FN("heap", jal_parse_pragma_string_heap, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN("index", jal_parse_pragma_string_index, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN("alloc", jal_parse_pragma_string_alloc, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN("retry", jal_parse_pragma_string_retry, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_END_OF_LIST
 };
 
@@ -1242,9 +1755,13 @@ static const pragma_word_t base[] = {
   DEFINE_FN(    "eeprom",     jal_parse_pragma_eeprom, 
     PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "data",       jal_parse_pragma_data, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN(    "data_remove", jal_parse_pragma_data_remove,
+    PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "shared",     jal_parse_pragma_shared,
     PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "code",       jal_parse_pragma_code, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN(    "code_location", jal_parse_pragma_code_location,
+    PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "stack",      jal_parse_pragma_stack, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "eedata",     jal_parse_pragma_eedata, 
     PRAGMA_WORD_FLAG_ABSORB),
@@ -1255,6 +1772,9 @@ static const pragma_word_t base[] = {
   DEFINE_FN(    "nostack",    jal_parse_pragma_nostack, 
     PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "task",       jal_parse_pragma_task, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FOLLOW("fpu",        pragma_fpu),
+  DEFINE_FOLLOW("isa",        pragma_isa),
+  DEFINE_FOLLOW("string",     pragma_string),
   DEFINE_FOLLOW("bootloader", pragma_bootloader),
   DEFINE_FOLLOW("clear",      pragma_clear),
   DEFINE_FOLLOW("opt",        pragma_opt),
@@ -1306,6 +1826,8 @@ void jal_parse_pragma(pfile_t *pf, const pfile_pos_t *statement_start)
             pf_token_get(pf, PF_TOKEN_CURRENT));
         break;
     }
+    /* Don't advance tokens after pragma processing - let the main parser handle it */
+  } else {
   }
 }
 

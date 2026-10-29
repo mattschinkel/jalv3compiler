@@ -7,6 +7,9 @@
  **
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include <string.h>
 #include "pic_inst.h"
@@ -725,152 +728,6 @@ static void pic_indirect_create(pfile_t *pf)
   pic_var_pointer_release(pf, lsb);
 }
 
-/*
- * NAME
- *   pic_task_start_create
- *
- * DESCRIPTION
- *   create the task start procedure
- *
- * PARAMETERS
- *   task_ptr[0]      holds base
- *   task_ptr[1] or W holds HIGH
- *   task_ptr[2] or W holds UPPER
- *
- * RETURN
- *   none
- *
- * NOTES
- *   basically:
- *   LOOP task_ct USING task_idx LOOP
- *     IF 0 == task_list[task_idx] THEN
- *       task_list[task_idx] = entry
- *       RETURN
- *     END IF
- *   END_LOOP
- */
-static void pic_task_start_create(pfile_t *pf)
-{
-  value_t       idx;
-  value_t       task_list;
-  value_t       task_ptr;
-  label_t       lbl_top;
-  label_t       lbl_found;
-  variable_ct_t task_ct;
-  value_t       fsr;
-  value_t       ind;
-  variable_sz_t ii;
-
-  fsr       = pic_fsr_get(pf);
-  task_ct   = pfile_task_ct_get(pf);
-  if (task_ct < 2) {
-    pfile_log(pf, PFILE_LOG_ERR, "task count must be >= 2!");
-    task_ct = 2;
-  }
-
-  task_list = pfile_value_find(pf, PFILE_LOG_NONE, "_task_list");
-  if (VALUE_NONE == task_list) {
-    variable_def_t def;
-    variable_def_t vdef;
-    value_t        task_active;
-
-    vdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
-        VARIABLE_DEF_FLAG_NONE, pic_pointer_size_get(pf));
-    def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
-        VARIABLE_DEF_FLAG_NONE, 0);
-    variable_def_member_add(def, 0, vdef, task_ct);
-
-    task_list = VALUE_NONE;
-    pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL, "_task_list", 
-        def, &task_list);
-    variable_flag_set(value_variable_get(task_list), VARIABLE_FLAG_AUTO);
-    /* also, allocate _task_active */
-    def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
-        VARIABLE_DEF_FLAG_NONE, 1);
-    task_active = VALUE_NONE;
-    pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL, "_task_active",
-        def, &task_active);
-    variable_flag_set(value_variable_get(task_active), VARIABLE_FLAG_AUTO);
-    value_release(task_active);
-  }
-
-  idx      = pic_var_loop_get(pf);
-  task_ptr = pic_var_task_ptr_get(pf);
-  ind      = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
-
-  /* store W as it will be destroyed */
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, task_ptr, 
-    value_sz_get(task_ptr) - 1);
-  /* find an empty slot */
-  pic_indirect_setup(pf, task_list, pic_pointer_size_get(pf) * task_ct - 1);
-  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, task_ct);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, idx, 0);
-  lbl_top = pfile_label_alloc(pf, 0);
-  lbl_found = pfile_label_alloc(pf, 0);
-  pic_instr_append_label(pf, lbl_top);
-  for (ii = 0; ii < pic_pointer_size_get(pf); ii++) {
-    if (ii) {
-      pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
-      pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, ind, 0, PIC_OPDST_W);
-    } else {
-      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
-    }
-  }
-  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
-  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_found);
-  pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
-  pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, idx, 0, PIC_OPDST_F);
-  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_top);
-  pic_instr_append(pf, PIC_OPCODE_RETURN); /* nothing empty, ignore */
-  pic_instr_append_label(pf, lbl_found);
-  for (ii = 0; ii < pic_pointer_size_get(pf); ii++) {
-    if (ii) {
-      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsr, 0, PIC_OPDST_F);
-    }
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, task_ptr, ii, PIC_OPDST_W);
-    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ind, 0);
-  }
-  pic_instr_append(pf, PIC_OPCODE_RETURN);
-
-  label_release(lbl_found);
-  label_release(lbl_top);
-
-  value_release(ind);
-  pic_var_task_ptr_release(pf, task_ptr);
-  pic_var_loop_release(pf, idx);
-  value_release(task_list);
-  value_release(fsr);
-}
-
-/*
- * NAME
- *   pic_task_kill_create
- *
- * DESCRIPTION
- *   create the pic_task_kill function
- *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
- *
- * NOTES
- *   on entry, W holds the task ID. 
- *   basically:
- *     _task_active = W
- *     _task_list[_task_active] = 0
- *     suspend
- */
-static void pic_task_kill_create(pfile_t *pf)
-{
-  value_t task_active;
-
-  task_active = pfile_value_find(pf, PFILE_LOG_ERR, "_task_active");
-  pic_op(pf, OPERATOR_ASSIGN, task_active, VALUE_NONE, VALUE_NONE);
-  value_release(task_active);
-  label_release(pic_label_find(pf, PIC_LABEL_TASK_SUICIDE, BOOLEAN_TRUE));
-}
 
 static void pic_task_suicide_create(pfile_t *pf)
 {
@@ -884,12 +741,12 @@ static void pic_task_suicide_create(pfile_t *pf)
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
   /* fall through to suspend! */
   pic_var_task_ptr_release(pf, task_ptr);
-  label_release(pic_label_find(pf, PIC_LABEL_TASK_SUSPEND, BOOLEAN_TRUE));
+  label_release(pic_label_find(pf, PIC_LABEL_TASK_YIELD, BOOLEAN_TRUE));
 }
 
 /*
  * NAME
- *   pic_task_suspend_create
+ *   pic_task_yield_create
  *
  * DESCRIPTION
  *   suspend the current task
@@ -924,7 +781,7 @@ static void pic_task_suicide_create(pfile_t *pf)
  *
  * Note2: to kill a task, suspend with the lsb/msb of 0
  */
-static void pic_task_suspend_create(pfile_t *pf)
+static void pic_task_yield_create(pfile_t *pf)
 {
   value_t       idx;
   value_t       task_list;
@@ -936,11 +793,13 @@ static void pic_task_suspend_create(pfile_t *pf)
   value_t       fsr;
   value_t       ind;
   variable_sz_t ii;
+  label_t       lbl_preskip_emit = LABEL_NONE;
+  value_t       paused_val       = VALUE_NONE;
 
   fsr       = pic_fsr_get(pf);
-  task_ct   = pfile_task_ct_get(pf);
-  task_list = pfile_value_find(pf, PFILE_LOG_ERR, "_task_list");
-  task_idx  = pfile_value_find(pf, PFILE_LOG_ERR, "_task_active");
+  task_ct   = pfile_task_slot_ct_get(pf);
+  task_list = pic_task_list_val(pf);
+  task_idx  = pic_task_active_val(pf);
   idx       = pic_var_loop_get(pf);
   task_ptr  = pic_var_task_ptr_get(pf);
   ind       = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
@@ -985,6 +844,28 @@ static void pic_task_suspend_create(pfile_t *pf)
   }
   pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
   pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_top);
+  /* suspended slots keep their resume PC but are skipped: check
+   * _task_paused[_task_active] through the FSR (save/restore the list
+   * pointer in task_ptr -- it is free scratch after the resume store) */
+  {
+    value_t paused;
+    label_t lbl_preskip;
+
+    paused     = pic_task_paused_val(pf);
+    lbl_preskip = pfile_label_alloc(pf, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, fsr, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, task_ptr, 0);
+    pic_indirect_setup(pf, paused, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, task_idx, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, fsr, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_preskip);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, task_ptr, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsr, 0);
+    lbl_preskip_emit = lbl_preskip;
+    paused_val = paused;
+  }
   /* jump to the active task */
   if (pic_is_16bit(pf)) {
     pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsr, 0, PIC_OPDST_F);
@@ -1004,6 +885,16 @@ static void pic_task_suspend_create(pfile_t *pf)
     pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
     pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pcl");
+  }
+  /* paused != 0 path: restore the list pointer and rescan (placed after
+   * the computed jump, which never falls through) */
+  if (lbl_preskip_emit) {
+    pic_instr_append_label(pf, lbl_preskip_emit);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, task_ptr, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsr, 0);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_top);
+    label_release(lbl_preskip_emit);
+    value_release(paused_val);
   }
 
   label_release(lbl_skip);
@@ -1047,6 +938,12 @@ static void pic_pointer_read_create(pfile_t *pf)
   /* jalv25r9: We will used bit 7 instead of bit 6 which solves issue#30. */
   pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, ptr, msb, 7);
   pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_lookup);
+  /* PIC18: older const-array pointer binding used the byte-1 marker. Accept
+   * that legacy encoding as well as the canonical MSB marker. */
+  if (pic_is_16bit(pf) && msb >= 2) {
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, ptr, 1, 7);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_lookup);
+  }
   /* _pic_pointer points to data */
   pic_fsr_setup(pf, ptr);
   pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
@@ -1064,8 +961,8 @@ static void pic_pointer_read_create(pfile_t *pf)
     for (ii = 0; ii < 3; ii++) {
       pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptr, ii, PIC_OPDST_W);
 
-      if (2 == ii) {
-          /* mask off the high bit */
+      /* Strip flash/lookup flags from address bytes (legacy flag in byte 1 or 2). */
+      if (1 == ii || 2 == ii) {
           /* jalv25r9: Mask off only bit 7, not bit 6 (issue#30). */
           pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (~0x80) & 0xff);
       }
@@ -1638,8 +1535,18 @@ static void pic_float_divide_create(pfile_t *pf)
     label_t         lbl;
     label_t         lbl_done;
     label_t         lbl_loop_top;
+    label_t         lbl_not_eq;
+    label_t         lbl_round_up;
+    label_t         lbl_no_round;
+    label_t         lbl_shift2;
+    label_t         lbl_cmp;
     value_t         dval1;
     value_t         dval2;
+    value_t         rtemp;
+    value_t         tdiv;
+    value_t         rsign;
+    value_t         c_1;
+    value_t         c_2;
     variable_def_t  def;
 
     pic_var_float_get(pf, &flt);
@@ -1650,6 +1557,12 @@ static void pic_float_divide_create(pfile_t *pf)
     value_def_set(dval1, def);
     value_def_set(dval2, def);
     pic_var_div_get(pf, 6, &divs);
+    /* rounding scratches: 4-byte scaled remainder + zero-padded divisor */
+    rtemp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 4);
+    tdiv  = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 4);
+    rsign = pic_var_sign_get(pf);
+    c_1 = pfile_constant_get(pf, 1, VARIABLE_DEF_NONE);
+    c_2 = pfile_constant_get(pf, 2, VARIABLE_DEF_NONE);
 
     /* exp1 = exp1 + 127 - exp2 */
 
@@ -1701,6 +1614,15 @@ static void pic_float_divide_create(pfile_t *pf)
     pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
     label_release(lbl);
 
+    /* RNE happens AFTER normalization (rounding before the normalize
+     * shift rounds at the wrong bit position when the quotient ratio is
+     * < 1 and costs 2 ulp after the shift).  Track whether the loop
+     * below will shift (quotient bit 23 clear = ratio < 1): the scaled
+     * remainder threshold is rem<<2 for the shifted case, rem<<1 else. */
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, rsign, 0);
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSS, divs.quotient, 2, 7);
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BSF, rsign, 0, 0);
+
     lbl_done = pfile_label_alloc(pf, 0);
     lbl_loop_top = pfile_label_alloc(pf, 0);
     pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, divs.quotient, 2, 7);
@@ -1716,6 +1638,80 @@ static void pic_float_divide_create(pfile_t *pf)
     pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSS, divs.quotient, 2, 7);
     pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_loop_top);
     pic_instr_append_label(pf, lbl_done);
+
+    /* round-to-nearest-even on the normalized 24-bit mantissa using the
+     * divider's remainder: round up iff (rem<<k) > divisor, or equal and
+     * the mantissa is odd (tie to even).  k = 2 when the quotient was
+     * normalized by a left shift (its LSB is the shifted-in 0, so a tie
+     * correctly stays); k = 1 otherwise. */
+    lbl_not_eq   = pfile_label_alloc(pf, 0);
+    lbl_round_up = pfile_label_alloc(pf, 0);
+    lbl_no_round = pfile_label_alloc(pf, 0);
+    lbl_shift2   = pfile_label_alloc(pf, 0);
+    lbl_cmp      = pfile_label_alloc(pf, 0);
+    /* rtemp = remainder (zero-extended to 4 bytes) */
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, rtemp, 3);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.remainder, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, rtemp, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.remainder, 1, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, rtemp, 1);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.remainder, 2, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, rtemp, 2);
+    /* tdiv = divisor (zero-extended to 4 bytes) */
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, tdiv, 3);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.divisor, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tdiv, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.divisor, 1, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tdiv, 1);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.divisor, 2, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tdiv, 2);
+    /* scale the remainder by k */
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, rsign, 0, 0);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_shift2);
+    pic_op(pf, OPERATOR_SHIFT_LEFT, rtemp, c_1, 0);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_cmp);
+    pic_instr_append_label(pf, lbl_shift2);
+    pic_op(pf, OPERATOR_SHIFT_LEFT, rtemp, c_2, 0);
+    pic_instr_append_label(pf, lbl_cmp);
+    /* round up iff rtemp > tdiv, or equal with an odd mantissa */
+    pic_op(pf, OPERATOR_LE, 0, tdiv, rtemp);
+    /* LE idiom (as in the divider): Z set = equal, C clear = less */
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_not_eq);
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, divs.quotient, 0, 0);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_round_up);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_no_round);
+    pic_instr_append_label(pf, lbl_not_eq);
+    /* empirically pinned against the 4-byte LE emit (the divider's own
+     * idiom runs on 6-byte compares): C SET = val2 >= val1 = round up */
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_round_up);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_no_round);
+    pic_instr_append_label(pf, lbl_round_up);
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, divs.quotient, 0,
+      PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, divs.quotient, 1,
+      PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, divs.quotient, 2,
+      PIC_OPDST_F);
+    /* carry-out of the 24-bit mantissa: RNE produced exactly 2^24 (the
+     * next binade).  The wrap left the quotient at 0 -- renormalize to
+     * the implicit 1 and bump the exponent. */
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_no_round);
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, divs.quotient, 0);
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, divs.quotient, 1);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0x80);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, divs.quotient, 2);
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, flt.exp1, 0, PIC_OPDST_F);
+    pic_instr_append_label(pf, lbl_no_round);
+    label_release(lbl_not_eq);
+    label_release(lbl_round_up);
+    label_release(lbl_no_round);
+    label_release(lbl_shift2);
+    label_release(lbl_cmp);
 
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, divs.quotient, 0, PIC_OPDST_W);
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, flt.fval1, 0);
@@ -1737,6 +1733,11 @@ static void pic_float_divide_create(pfile_t *pf)
     pic_instr_append(pf, PIC_OPCODE_RETURN);
 
     pic_var_div_release(pf, &divs);
+    value_release(c_2);
+    value_release(c_1);
+    pic_var_sign_release(pf, rsign);
+    pic_var_temp_release(pf, tdiv);
+    pic_var_temp_release(pf, rtemp);
     value_release(dval2);
     value_release(dval1);
     pic_var_float_release(pf, &flt);
@@ -1778,11 +1779,8 @@ static const struct {
   /* {PIC_LABEL_PTR_WRITE,    pic_pointer_write_create}, */
   {PIC_LABEL_PTR_READ,       pic_pointer_read_create},
   {PIC_LABEL_INDIRECT,       pic_indirect_create},
-  {PIC_LABEL_TASK_START,     pic_task_start_create},
-  /* KILL/SUICIDE/SUSPEND must come in this order! */
-  {PIC_LABEL_TASK_KILL,      pic_task_kill_create},
   {PIC_LABEL_TASK_SUICIDE,   pic_task_suicide_create},
-  {PIC_LABEL_TASK_SUSPEND,   pic_task_suspend_create},
+  {PIC_LABEL_TASK_YIELD,   pic_task_yield_create},
   /* floating point functions */
   /* SUB + ADD must go in this order */
   {PIC_LABEL_FLOAT_SUB,      pic_float_sub_create},
@@ -1818,6 +1816,7 @@ boolean_t pic_intrinsics_exist(pfile_t *pf)
   label_t lbl;
   size_t  ii;
   const pfile_multiply_width_table_entry_t *mw;
+
 
   for (ii = 0, lbl = LABEL_NONE; !lbl && (ii < COUNT(intrinsics)); ii++) {
     lbl = pfile_label_find(pf, PFILE_LOG_NONE, intrinsics[ii].tag);

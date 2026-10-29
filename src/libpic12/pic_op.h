@@ -19,6 +19,10 @@
 void pic_op(pfile_t *pf, operator_t op, value_t dst, value_t val1,
     value_t val2);
 void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset);
+/* FSR = array/variable base + runtime byte index (classic cores) */
+void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
+    variable_t var, variable_base_t base, value_t idx,
+    variable_sz_t idx_range);
 
 void pic_last_values_reset(void);
 

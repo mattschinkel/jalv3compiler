@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include "operator.h"
 
@@ -51,6 +54,7 @@ boolean_t operator_is_unary(operator_t op)
     case OPERATOR_SHIFT_RIGHT:
     case OPERATOR_SHIFT_RIGHT_ARITHMETIC:
     case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN:
     case OPERATOR_CT:
       break;
     case OPERATOR_LOGICAL:
@@ -108,6 +112,7 @@ boolean_t operator_is_assign(operator_t op)
     case OPERATOR_CT:
       break;
     case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN:
       rc = BOOLEAN_TRUE;
       break;
   }
@@ -148,6 +153,7 @@ boolean_t operator_is_logical(operator_t op)
     case OPERATOR_INCR:
     case OPERATOR_DECR:
     case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN:
     case OPERATOR_REFERENCE:
     case OPERATOR_DOT:
     case OPERATOR_CAST:
@@ -191,6 +197,7 @@ boolean_t operator_is_relation(operator_t op)
     case OPERATOR_INCR:
     case OPERATOR_DECR:
     case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN:
     case OPERATOR_REFERENCE:
     case OPERATOR_DOT:
     case OPERATOR_CAST:
@@ -229,6 +236,7 @@ boolean_t operator_is_commutative(operator_t op)
     case OPERATOR_INCR:
     case OPERATOR_DECR:
     case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN:
     case OPERATOR_LT:
     case OPERATOR_LE:
     case OPERATOR_GE:
@@ -280,6 +288,7 @@ const char *operator_to_str(operator_t op)
     case OPERATOR_XORB:         ostr = "^"; break;
     case OPERATOR_CMPB:         ostr = "~"; break;
     case OPERATOR_ASSIGN:       ostr = "="; break;
+    case OPERATOR_POINTER_ASSIGN: ostr = "is"; break;
     case OPERATOR_NEG:          ostr = "neg"; break;
     case OPERATOR_SHIFT_LEFT:   ostr = "<<"; break;
     case OPERATOR_SHIFT_RIGHT:  ostr = ">>"; break;

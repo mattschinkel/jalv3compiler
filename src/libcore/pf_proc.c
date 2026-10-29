@@ -6,6 +6,9 @@
  **               2020-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <string.h>
 #include <errno.h>
@@ -15,6 +18,7 @@
 #include "pf_proc.h"
 #include "pf_procd.h"
 #include "cmdarray.h"
+#include "vardef.h"
 
 pfile_proc_t  *pfile_proc_alloc(pfile_proc_t *parent, label_t entry_label,
   label_t skip_lbl, label_t exit_lbl, variable_def_t def)
@@ -65,6 +69,7 @@ pfile_proc_t  *pfile_proc_alloc(pfile_proc_t *parent, label_t entry_label,
 
     proc->name       = label_name_get(entry_label);
     proc->successors = CMD_ARRAY_NONE;
+    proc->irq        = -1;
   }
   return proc;
 }
@@ -84,7 +89,7 @@ void pfile_proc_free(pfile_proc_t *proc, pfile_t *pf)
   label_release(proc->label);
   label_release(proc->exit_label);
   label_release(proc->skip_label);
-  FREE(proc->calls);
+  pfile_proc_array_free(proc->calls);
   variable_release(proc->temp);
   variable_release(proc->btemp);
   variable_release(proc->ret_ptr);
@@ -188,7 +193,11 @@ variable_def_t pfile_proc_variable_def_find(pfile_proc_t *proc,
   pfile_block_t *blk;
   variable_def_t def;
 
-  for (def = 0, blk = proc->block_active;
+  /* Match pfile_proc_variable_find: if block_active is NULL (e.g. after
+   * pfile_block_leave unwound past block_root), still search from block_root
+   * so basetypes on the root block (byte, dword, …) resolve for casts. */
+  for (def = 0,
+       blk = proc->block_active ? proc->block_active : proc->block_root;
        blk && !def;
        blk = pfile_block_parent_get(blk)) {
     def = pfile_block_variable_def_find(blk, tag); 
@@ -282,7 +291,7 @@ static value_t pfile_proc_value_temp_boolean_get(pfile_proc_t *proc,
   if (proc->btemp) {
     variable_t     tmp;
     variable_def_t mdef;
-    char           name[16];
+    char           name[32];
     static unsigned dummy;
 
     /*sprintf(name, "%s%u", PFILE_BTMP_VARNAME, variable_sz_get(proc->btemp));*/
@@ -290,14 +299,20 @@ static value_t pfile_proc_value_temp_boolean_get(pfile_proc_t *proc,
 
     mdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
         VARIABLE_DEF_FLAG_BIT, 1);
-    (void) pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_LOCAL,
-        name, mdef, proc->btemp, &tmp);
-    variable_bit_offset_set(tmp, variable_sz_get(proc->btemp));
-    variable_def_set(proc->btemp,
-        variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
-          VARIABLE_DEF_FLAG_BIT, 1 + variable_sz_get(proc->btemp)));
-    val = value_alloc(tmp);
-    variable_release(tmp);
+    if (RESULT_OK != pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_LOCAL,
+        name, mdef, proc->btemp, &tmp)) {
+      pfile_log_syserr(pf, ENOMEM);
+    } else {
+      variable_bit_offset_set(tmp, variable_sz_get(proc->btemp));
+      variable_def_set(proc->btemp,
+          variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+            VARIABLE_DEF_FLAG_BIT, 1 + variable_sz_get(proc->btemp)));
+      val = value_alloc(tmp);
+      if (!val) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+      variable_release(tmp);
+    }
   }
   return val;
 }
@@ -314,9 +329,20 @@ value_t  pfile_proc_value_temp_get_from_def(pfile_proc_t *proc,
 
     val = VALUE_NONE;
     is_bit = variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT);
-    /* only inherit the signed flag */
-    def = variable_def_flags_change(def, 
-      variable_def_flags_get_all(def) & VARIABLE_DEF_FLAG_SIGNED);
+    /* only inherit the signed flag; dup first — variable_def_flags_change
+     * detaches members from its input (would hollow shared defs, e.g. record
+     * return types reused from procedure signatures). */
+    {
+      variable_def_t dupd;
+
+      dupd = variable_def_dup(def);
+      if (!dupd) {
+        pfile_log_syserr(pf, ENOMEM);
+        return VALUE_NONE;
+      }
+      def = variable_def_flags_change(dupd,
+        variable_def_flags_get_all(dupd) & VARIABLE_DEF_FLAG_SIGNED);
+    }
     /* we *do* want temporary booleans, we *don't* want temporary generic
      * bits, otherwise JAL won't work correctly */
     if (is_bit) {
@@ -359,14 +385,24 @@ value_t  pfile_proc_value_temp_get_from_def(pfile_proc_t *proc,
         value_def_set(val, def);
         def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, 
             VARIABLE_DEF_FLAG_CONST, 2);
-
-        ovar = variable_alloc(0, def);
-        variable_const_set(ovar, variable_def_get(ovar), 0, 0);
-        oval = value_alloc(ovar);
-
-        value_baseofs_set(val, oval);
-        value_release(oval);
-        variable_release(ovar);
+        if (!def) {
+          pfile_log_syserr(pf, ENOMEM);
+        } else {
+          ovar = variable_alloc(0, def);
+          if (!ovar) {
+            pfile_log_syserr(pf, ENOMEM);
+          } else {
+            variable_const_set(ovar, variable_def_get(ovar), 0, 0);
+            oval = value_alloc(ovar);
+            if (!oval) {
+              pfile_log_syserr(pf, ENOMEM);
+            } else {
+              value_baseofs_set(val, oval);
+              value_release(oval);
+            }
+            variable_release(ovar);
+          }
+        }
       }
     }
     assert(!value_dflag_test(val, VARIABLE_DEF_FLAG_BIT));
@@ -409,6 +445,7 @@ void pfile_proc_variable_fixup(pfile_proc_t *proc, pfile_t *pf, flag_t flags)
 {
   variable_t     bitbucket;
   variable_def_t def;
+  unsigned       inuse0;
 
   def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
     VARIABLE_DEF_FLAG_NONE, 0);
@@ -417,8 +454,30 @@ void pfile_proc_variable_fixup(pfile_proc_t *proc, pfile_t *pf, flag_t flags)
   (void) pfile_block_variable_alloc(proc->block_root,
     pfile_tag_alloc(pf, PFILE_BITBUCKET_VARNAME), def, 
     VARIABLE_NONE, pf, &bitbucket);
+  inuse0 = pfile_bitbucket_packed_lo_reserve_get(pf);
   pfile_block_variable_fixup(pfile_proc_block_root_get(proc), 
-    bitbucket, 0, flags);
+    bitbucket, inuse0, flags);
+  /*
+   * Packed procedure bits use _bitbucket; if a program has none, the bucket
+   * stays size 0, is not AUTO, and is skipped by variable allocation. Later,
+   * pic_variable_counters_clear zeros assign/use before asm, so an empty
+   * bucket is also omitted from -asm EQU output. tests (expect
+   * bit_clear v__bitbucket 0) and check-asm-symbols need the symbol: grow to
+   * one byte and mark AUTO so it gets a base. pic_variable_counters_set bumps
+   * assign when pcode never references the bucket so pic_variable_alloc_fixup
+   * does not reclaim its GPR. Classic PIC12/14: pfile_bitbucket_packed_lo_reserve_get
+   * leaves pool bit 0 unused so that EQU byte's file bit 0 stays clear for gpsim.
+   */
+  if (0 == variable_sz_get(bitbucket)) {
+    variable_def_t d1;
+
+    d1 = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, 1);
+    variable_def_set(bitbucket, d1);
+    /* AUTO so pic_variable_alloc_block assigns a base; assign/use here are
+     * cleared later by pic_variable_counters_clear and are not used for -asm. */
+    variable_flag_set(bitbucket, VARIABLE_FLAG_AUTO);
+  }
   variable_release(bitbucket);
 }
 
@@ -843,6 +902,18 @@ void          pfile_proc_flag_clr(pfile_proc_t *proc, flag_t flag)
   }
 }
 
+int pfile_proc_irq_get(const pfile_proc_t *proc)
+{
+  return proc ? proc->irq : -1;
+}
+
+void pfile_proc_irq_set(pfile_proc_t *proc, int irq)
+{
+  if (proc) {
+    proc->irq = irq;
+  }
+}
+
 pfile_block_t *pfile_proc_block_root_get(const pfile_proc_t *proc)
 {
   return proc->block_root;
@@ -933,6 +1004,11 @@ size_t pfile_proc_frame_sz_get(const pfile_proc_t *proc)
 variable_t pfile_proc_frame_get(const pfile_proc_t *proc)
 {
   return proc->frame;
+}
+
+variable_t pfile_proc_temp_get(const pfile_proc_t *proc)
+{
+  return proc->temp;
 }
 
 void pfile_proc_frame_set(pfile_proc_t *proc, variable_base_t base, 

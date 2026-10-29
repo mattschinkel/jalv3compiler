@@ -229,6 +229,7 @@
     <ClCompile Include="vararray.c" />
     <ClCompile Include="vardef.c" />
     <ClCompile Include="variable.c" />
+    <ClCompile Include="wide_alg.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

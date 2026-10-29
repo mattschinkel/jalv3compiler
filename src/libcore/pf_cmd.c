@@ -6,8 +6,12 @@
  **               2018-2018, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 
 #include "../libutils/mem.h"
@@ -35,6 +39,10 @@
 void pfile_cmd_add(pfile_t *pf, cmd_t cmd)
 {
   /*cmd_dump(cmd, stdout);*/
+  if (!cmd) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
 #if 1
   if (pfile_codegen_disable_get(pf)) {
     cmd_free(cmd);
@@ -42,6 +50,15 @@ void pfile_cmd_add(pfile_t *pf, cmd_t cmd)
 #else
     {
 #endif
+    if (pf->cmd_bld) {
+      if (pf->cmd_bld_tail) {
+        cmd_link_set(pf->cmd_bld_tail, cmd);
+        pf->cmd_bld_tail = cmd;
+      } else {
+        pf->cmd_bld_head = cmd;
+        pf->cmd_bld_tail = cmd;
+      }
+    } else {
     pfile_block_t *blk;
     if (!cmd_source_get(cmd)) {
       pfile_pos_t    pos;
@@ -77,10 +94,12 @@ void pfile_cmd_add(pfile_t *pf, cmd_t cmd)
     if (pfile_flag_test(pf, PFILE_FLAG_CMD_SPEED)) {
       cmd_flag_set(cmd, CMD_FLAG_SPEED);
     }
+    }
   }
 }
 
-void pfile_cmd_special_add(pfile_t *pf, cmd_type_t type, pfile_proc_t *proc)
+void pfile_cmd_special_add_flags(pfile_t *pf, cmd_type_t type,
+    pfile_proc_t *proc, flag_t cmd_flags)
 {
   cmd_t cmd;
 
@@ -89,8 +108,78 @@ void pfile_cmd_special_add(pfile_t *pf, cmd_type_t type, pfile_proc_t *proc)
     if (proc) {
       cmd_proc_set(cmd, proc);
     }
+    if (cmd_flags) {
+      cmd_flag_set_all(cmd, cmd_flags);
+    }
     pfile_cmd_add(pf, cmd);
   }
+}
+
+void pfile_cmd_special_add(pfile_t *pf, cmd_type_t type, pfile_proc_t *proc)
+{
+  pfile_cmd_special_add_flags(pf, type, proc, 0);
+}
+
+void pfile_cmd_bld_start(pfile_t *pf)
+{
+  pf->cmd_bld   = 1U;
+  pf->cmd_bld_head = CMD_NONE;
+  pf->cmd_bld_tail = CMD_NONE;
+}
+
+void pfile_cmd_bld_end(pfile_t *pf, cmd_t *head, cmd_t *tail)
+{
+  if (head) {
+    *head = pf->cmd_bld_head;
+  }
+  if (tail) {
+    *tail = pf->cmd_bld_tail;
+  }
+  pf->cmd_bld      = 0U;
+  pf->cmd_bld_head = CMD_NONE;
+  pf->cmd_bld_tail = CMD_NONE;
+}
+
+void pfile_cmd_replace1_with_chain(pfile_t *pf, cmd_t oldc, cmd_t nh, cmd_t nt)
+{
+  cmd_t p, c, nxt;
+
+  if (CMD_NONE == oldc) {
+    return;
+  }
+  nxt = cmd_link_get(oldc);
+  p   = 0U;
+  c   = pf->cmd_head;
+  while (c && c != oldc) {
+    p = c;
+    c = cmd_link_get(c);
+  }
+  if (c != oldc) {
+    return;
+  }
+  if (CMD_NONE == nt) {
+    nt = nh;
+  }
+  if (p) {
+    cmd_link_set(p, nh);
+  } else {
+    pf->cmd_head = nh;
+  }
+  cmd_link_set(nt, nxt);
+  if (oldc == pf->cmd_tail) {
+    if (nxt) {
+      for (c = nxt; cmd_link_get(c); c = cmd_link_get(c)) {
+        ;
+      }
+      pf->cmd_tail = c;
+    } else {
+      pf->cmd_tail = nt;
+    }
+  }
+  if (oldc == pf->cmd_cursor) {
+    pf->cmd_cursor = nt;
+  }
+  cmd_free(oldc);
 }
 
 void pfile_cmd_usec_delay_add(pfile_t *pf, variable_const_t n)
@@ -130,15 +219,17 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
 {
   pfile_block_t *child;
   variable_t     var;
+  boolean_t      failed;
 
   child = PFILE_BLOCK_NONE;
+  failed = BOOLEAN_FALSE;
   cmd = cmd_link_get(cmd);
-  (void) pfile_block_enter(pf);
+  (void) pfile_block_enter_flags(pf, PFILE_BLOCK_FLAG_INLINE_DUP);
   /* add all variables defined in blk to the active block;
    * also add them to the associated maps
    */
   for (var = pfile_block_variable_list_head(blk);
-       var;
+       var && !failed;
        var = variable_link_get(var)) {
     if (!variable_is_const(var)
       && (VARIABLE_NONE == variable_map_search(replacement_var_map, var))) {
@@ -166,21 +257,31 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
           master = tvar;
         }
       }
-      (void) pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_LOCAL,
+      if (RESULT_OK != pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_LOCAL,
           variable_name_get(var), variable_def_get(var),
-          master, &new);
-      map->var_map.map[map->var_map.used].new = new;
-      variable_flags_set_all(new, variable_flags_get_all(var));
-      variable_bit_offset_set(new, variable_bit_offset_get(var));
-      for (ii = 0; ii < VARIABLE_MIRROR_CT; ii++) {
-        variable_base_set(new, variable_base_real_get(var, ii), ii);
-      }
+          master, &new)) {
+        failed = BOOLEAN_TRUE;
+      } else {
+        map->var_map.map[map->var_map.used].new = new;
+        variable_flags_set_all(new, variable_flags_get_all(var));
+        variable_bit_offset_set(new, variable_bit_offset_get(var));
+        for (ii = 0; ii < VARIABLE_MIRROR_CT; ii++) {
+          variable_base_set(new, variable_base_real_get(var, ii), ii);
+        }
 
-      map->var_map.used++;
+        map->var_map.used++;
+        if (getenv("JALV2_DBG_DUP")
+            && variable_name_get(new)
+            && 0 == strcmp(variable_name_get(new), "_pic_isr_w")) {
+          fprintf(stderr, "DUPSET _pic_isr_w old=%s oldbase=0x%04X\n",
+                  variable_name_get(var) ? variable_name_get(var) : "?",
+                  (unsigned) variable_base_get(var, 0));
+        }
+      }
     }
   }
 
-  if (proc_params) {
+  if (!failed && proc_params) {
     /* this is the entry into the procedure. go ahead & make the
      * necessary assignments */
     size_t ii;
@@ -203,12 +304,15 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
     }
   }
 
-  while (CMD_TYPE_BLOCK_END != cmd_type_get(cmd)) {
+  while (!failed && cmd && (CMD_TYPE_BLOCK_END != cmd_type_get(cmd))) {
     if (CMD_TYPE_BLOCK_START == cmd_type_get(cmd)) {
       child = (child) ? pfile_block_sibbling_get(child)
         : pfile_block_child_get(blk);
       cmd = pfile_cmd_block_dup(pf, PFILE_PROC_NONE, 0, child, map, cmd,
         replacement_var_map);
+      if (!cmd) {
+        failed = BOOLEAN_TRUE;
+      }
     } else {
       cmd_t dup;
 
@@ -228,15 +332,24 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
           if (tmp) {
             map->lbl_map.map = tmp;
             map->lbl_map.alloc = n;
+          } else {
+            pfile_log_syserr(pf, ENOMEM);
+            failed = BOOLEAN_TRUE;
           }
         }
-        if (map->lbl_map.used < map->lbl_map.alloc) {
+        if (!failed && (map->lbl_map.used < map->lbl_map.alloc)) {
           map->lbl_map.map[map->lbl_map.used].old = cmd_label_get(cmd);
           map->lbl_map.map[map->lbl_map.used].new = pfile_label_alloc(pf, 0);
-          map->lbl_map.used++;
+          if (!map->lbl_map.map[map->lbl_map.used].new) {
+            failed = BOOLEAN_TRUE;
+          } else {
+            map->lbl_map.used++;
+          }
         }
-        /* remap the label straight away */
-        cmd_label_set(dup, map->lbl_map.map[map->lbl_map.used - 1].new);
+        if (!failed) {
+          /* remap the label straight away */
+          cmd_label_set(dup, map->lbl_map.map[map->lbl_map.used - 1].new);
+        }
       }
 
 #if 0
@@ -245,7 +358,9 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
       cmd_dump(dup, stdout);
       printf("\n");
 #endif
-      if (dup) {
+      if (failed) {
+        cmd_free(dup);
+      } else if (dup) {
         pfile_cmd_add(pf, dup);
         /*cmd_dump(dup, stdout);*/
         if (value_proc_get(cmd_brproc_get(dup))) {
@@ -256,7 +371,7 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
       cmd = cmd_link_get(cmd);
     }
   }
-  if (proc_params) {
+  if (!failed && proc_params) {
     /* this is the exit from the procedure, so make the necessary
      * assignments */
     size_t ii;
@@ -276,7 +391,7 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
     }
   }
   (void) pfile_block_leave(pf);
-  return cmd_link_get(cmd);
+  return (failed || !cmd) ? CMD_NONE : cmd_link_get(cmd);
 }
 
 /*
@@ -339,7 +454,7 @@ static void pfile_cmd_proc_inline_param_replacements_get(
          * easy way to do this, so I'll simply set the element to a
          * new variable, and use that
          */
-        char            pbuf[16];
+        char            pbuf[32];
         static unsigned pn;
         value_t         tmp;
         cmd_t           cmd;
@@ -443,8 +558,12 @@ static void pfile_cmd_proc_inline_param_replacements_get(
           pfile_log(pf, PFILE_LOG_DEBUG, "%s is replaceable (with %s)!",
             value_name_get(pval), value_name_get(rparam));
         } else if (pval) {
-          pfile_log(pf, PFILE_LOG_DEBUG, "%s is replaceable (with %lu)!",
-            value_name_get(pval), value_const_get(rparam));
+          char cbuf[50];
+
+          variable_const_str_get(value_const_get(rparam),
+            value_is_signed(rparam), cbuf, sizeof(cbuf));
+          pfile_log(pf, PFILE_LOG_DEBUG, "%s is replaceable (with %s)!",
+            value_name_get(pval), cbuf);
         }
         params[ii] = VALUE_NONE;
       }
@@ -469,8 +588,23 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
   variable_map_t replacement_var_map;
   value_t       *dup_proc_params;
   size_t         param_ct;
+  boolean_t      failed;
 
   param_ct = pfile_proc_param_ct_get(proc);
+  dup_proc_params = 0;
+  replacement_val_map.alloc = 0;
+  replacement_val_map.used  = 0;
+  replacement_val_map.map   = 0;
+  replacement_var_map.alloc = 0;
+  replacement_var_map.used  = 0;
+  replacement_var_map.map   = 0;
+  map.lbl_map.alloc = 0;
+  map.lbl_map.used  = 0;
+  map.lbl_map.map   = 0;
+  map.var_map.alloc = 0;
+  map.var_map.used  = 0;
+  map.var_map.map   = 0;
+  failed = BOOLEAN_FALSE;
 #if 0
   printf("parameter count: %u\n", param_ct);
 #endif
@@ -479,24 +613,32 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
    * param replacements function zeros out the original
    * params array when replacement occurs
    */
-  dup_proc_params = MALLOC(sizeof(*dup_proc_params) * param_ct);
-  if (!dup_proc_params) {
-    pfile_log(pf, PFILE_LOG_ERR, "out of memory");
+  dup_proc_params = param_ct
+    ? MALLOC(sizeof(*dup_proc_params) * param_ct)
+    : 0;
+  if (param_ct && !dup_proc_params) {
+    pfile_log_syserr(pf, ENOMEM);
+    failed = BOOLEAN_TRUE;
   } else {
     for (ii = 0; ii < param_ct; ii++) {
       dup_proc_params[ii] = proc_params[ii];
     }
   }
 
-  replacement_val_map.alloc = pfile_proc_param_ct_get(proc);
-  replacement_val_map.used  = 0;
-  replacement_val_map.map   = MALLOC(sizeof(*replacement_val_map.map) 
-      * replacement_val_map.alloc);
-
-  replacement_var_map.alloc = pfile_proc_param_ct_get(proc);
-  replacement_var_map.used  = 0;
-  replacement_var_map.map   = MALLOC(sizeof(*replacement_var_map.map) 
-      * replacement_var_map.alloc);
+  if (!failed) {
+    replacement_val_map.alloc = param_ct;
+    replacement_val_map.map   = param_ct
+      ? MALLOC(sizeof(*replacement_val_map.map) * replacement_val_map.alloc)
+      : 0;
+    replacement_var_map.alloc = param_ct;
+    replacement_var_map.map   = param_ct
+      ? MALLOC(sizeof(*replacement_var_map.map) * replacement_var_map.alloc)
+      : 0;
+    if (param_ct && (!replacement_val_map.map || !replacement_var_map.map)) {
+      pfile_log_syserr(pf, ENOMEM);
+      failed = BOOLEAN_TRUE;
+    }
+  }
 
   for (blk = pfile_proc_block_root_get(proc),
          var_ct = 0;
@@ -513,15 +655,20 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
     }
   }
 
-  map.lbl_map.alloc = 0;
-  map.lbl_map.used  = 0;
-  map.lbl_map.map   = 0;
+  if (!failed) {
+    map.var_map.alloc = var_ct;
+    map.var_map.map   = (var_ct)
+      ? CALLOC(var_ct, sizeof(*map.var_map.map))
+      : 0;
+    if (var_ct && !map.var_map.map) {
+      pfile_log_syserr(pf, ENOMEM);
+      failed = BOOLEAN_TRUE;
+    }
+  }
 
-  map.var_map.alloc = var_ct;
-  map.var_map.used  = 0;
-  map.var_map.map   = (var_ct)
-    ? CALLOC(sizeof(*map.var_map.map), var_ct)
-    : 0;
+  if (failed) {
+    goto cleanup;
+  }
 
   cmd = label_cmd_get(pfile_proc_label_get(proc));
   assert(CMD_TYPE_PROC_ENTER == cmd_type_get(cmd));
@@ -536,6 +683,10 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
   cmd = pfile_cmd_block_dup(pf, proc, proc_params,
       pfile_proc_block_root_get(proc), &map, cmd,
       &replacement_var_map);
+  if (!cmd) {
+    failed = BOOLEAN_TRUE;
+    goto cleanup;
+  }
   /* printf("-----------------\n"); */
   assert(CMD_TYPE_PROC_LEAVE == cmd_type_get(cmd));
   cmd_start = cmd_link_get(cmd_start);
@@ -612,6 +763,7 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
     cmd_start = cmd_link_get(cmd_start);
   }
   /*printf("====================\n");*/
+cleanup:
   for (ii = 0; ii < map.var_map.used; ii++) {
     variable_release(map.var_map.map[ii].new);
   }
@@ -622,9 +774,19 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
   FREE(map.lbl_map.map);
   FREE(replacement_val_map.map);
   FREE(replacement_var_map.map);
-  for (ii = 0; ii < param_ct; ii++) {
-    if (!proc_params[ii]) {
-      value_release(dup_proc_params[ii]);
+  if (failed) {
+    for (ii = 0; ii < param_ct; ii++) {
+      if (proc_params[ii]) {
+        value_release(proc_params[ii]);
+      } else if (dup_proc_params) {
+        value_release(dup_proc_params[ii]);
+      }
+    }
+  } else {
+    for (ii = 0; ii < param_ct; ii++) {
+      if (!proc_params[ii]) {
+        value_release(dup_proc_params[ii]);
+      }
     }
   }
   FREE(dup_proc_params);
@@ -770,23 +932,28 @@ boolean_t pfile_cmd_remove_unreachable(pfile_t *pf)
   ct = 0;
   while (cmd) {
     label_t lbl;
+    cmd_t   next;
 
     lbl = cmd_label_get(cmd);
     if (!cmd_is_reachable(cmd)
       || (lbl && !label_usage_get(lbl))
       || (was_last_eos && (CMD_TYPE_STATEMENT_END == cmd_type_get(cmd)))) {
+      /* Save successor before free. If we removed the list head, cmd_pv is NULL;
+       * the old code set cmd = cmd_pv and dropped the rest of the list. */
+      next = cmd_link_get(cmd);
       if (cmd_pv) {
-        cmd_link_set(cmd_pv, cmd_link_get(cmd));
+        cmd_link_set(cmd_pv, next);
       } else {
-        pf->cmd_head = cmd_link_get(cmd);
+        pf->cmd_head = next;
         if (!pf->cmd_head) {
           pf->cmd_tail = 0;
         }
       }
       cmd_free(cmd);
-      cmd = cmd_pv;
+      cmd = next;
       ct++;
       was_last_eos = BOOLEAN_TRUE;
+      continue;
     } else if (CMD_TYPE_LABEL != cmd_type_get(cmd)) {
       was_last_eos = (CMD_TYPE_STATEMENT_END == cmd_type_get(cmd));
     }

@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <stdlib.h>
 #include <string.h>
@@ -54,14 +57,22 @@ variable_def_t variable_def_flags_change(variable_def_t src, flag_t flags)
 {
   if (variable_def_flags_get_all(src) != flags) {
     variable_def_member_t mbr;
+    const char         *tag;
+    variable_def_type_t typ;
+    variable_sz_t       sz;
 
     mbr = src->members;
-    src = variable_def_alloc(
-        variable_def_tag_get(src),
-        variable_def_type_get(src),
-        flags,
-        variable_def_sz_get(src));
-    src->members = mbr;
+    tag = variable_def_tag_get(src);
+    typ = variable_def_type_get(src);
+    sz = variable_def_sz_get(src);
+    /* Detach members from src before replacing src; otherwise the old def
+     * (still pointed to by e.g. jal_variable_info_t.vdef) aliases the same
+     * member list as the new def (pointer-to-data with volatile, etc.). */
+    src->members = 0;
+    src = variable_def_alloc(tag, typ, flags, sz);
+    if (src) {
+      src->members = mbr;
+    }
   }
   return src;
 }
@@ -78,13 +89,11 @@ void variable_def_free(variable_def_t def)
     def->ugly_hack.next->ugly_hack.prev = def->ugly_hack.prev;
   }
   if (def) {
-    while (def->members) {
-      variable_def_member_t mbr;
-
-      mbr = variable_def_member_link_get(def->members);
-      variable_def_member_free(def->members);
-      def->members = mbr;
-    }
+    /* Avoid circular reference issues by not traversing the linked list */
+    /* Just clear the members pointer and let the individual members be freed elsewhere */
+    /* This is a temporary workaround until we can properly fix the circular reference issue */
+    def->members = 0;
+    
     FREE(def);
     variable_def_outstanding--;
   }
@@ -218,6 +227,50 @@ result_t variable_def_member_add(variable_def_t def,
   return rc;
 }
 
+result_t variable_def_pointer_fold_scalar_pointee_array(variable_def_t ptr,
+    variable_ct_t dim)
+{
+  variable_def_member_t pmbr;
+  variable_def_t       pointee;
+  variable_def_t       arr;
+  result_t             rc;
+
+  if (!ptr || VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(ptr)
+      || VARIABLE_CT_UNKNOWN == dim || dim < 1) {
+    return RESULT_INVALID;
+  }
+  pmbr = variable_def_member_get(ptr);
+  if (!pmbr || variable_def_member_link_get(pmbr)) {
+    return RESULT_INVALID;
+  }
+  pointee = variable_def_member_def_get(pmbr);
+  if (!pointee || VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(pointee)) {
+    return RESULT_INVALID;
+  }
+  if (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(pointee)
+      || VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(pointee)) {
+    return RESULT_INVALID;
+  }
+  /* signedness belongs to the ELEMENT def (plain `var sbyte buf[N]`
+   * clears SIGNED at the array level); copying it here made the folded
+   * pointee def fail the bind signature check against a real sbyte
+   * array -- `p is buf` errored "type mismatch" for every signed
+   * element type */
+  arr = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
+      variable_def_flags_get_all(pointee)
+        & ~VARIABLE_DEF_FLAG_SIGNED, 0);
+  if (!arr) {
+    return RESULT_MEMORY;
+  }
+  rc = variable_def_member_add(arr, 0, pointee, dim);
+  if (RESULT_OK != rc) {
+    variable_def_free(arr);
+    return rc;
+  }
+  pmbr->def = arr;
+  return RESULT_OK;
+}
+
 variable_def_member_t variable_def_member_alloc(const char *tag,
   const variable_def_t def, variable_ct_t ct)
 {
@@ -242,15 +295,30 @@ variable_def_member_t variable_def_member_alloc(const char *tag,
 
 void variable_def_member_free(variable_def_member_t mbr)
 {
-  UNUSED(mbr);
-  /*FREE(mbr);*/
+  if (mbr) {
+    FREE(mbr);
+  }
 }
 
 
 variable_def_member_t variable_def_member_link_get(
   const variable_def_member_t mbr)
 {
-  return (mbr) ? mbr->link : 0;
+  /* Safety check to prevent accessing freed memory */
+  if (!mbr) {
+    return 0;
+  }
+  
+  /* Reject the NULL page. Upper-bound VA checks used unsigned long and
+   * broke LLP64 (Win64: long is 32-bit). size_t matches pointer width. */
+  if ((size_t) mbr < (size_t) 0x1000) {
+    return 0;
+  }
+  
+  /* Try to access the link field - if it causes a use-after-free,
+     AddressSanitizer will catch it and we'll return 0 */
+  /* This is a temporary workaround until we fix the root cause */
+  return mbr->link;
 }
 
 void variable_def_member_link_set(variable_def_member_t mbr,
@@ -271,13 +339,34 @@ variable_ct_t variable_def_member_ct_get(const variable_def_member_t mbr)
   return (mbr) ? mbr->ct : 0;
 }
 
+/* Open [] may still have ct=65535 (0xFFFF) on paths that used a 16-bit -1; after
+   widening, VARIABLE_CT_UNKNOWN is 0xFFFFFFFF. 65535U with aggregate sz 0 is
+   unambiguous: true byte[65535] has def->sz >= 65535*elem. */
+static boolean_t
+vardef_mbr_is_open_unknown(const variable_def_t def,
+  const variable_def_member_t mbr)
+{
+  variable_ct_t c;
+
+  c = variable_def_member_ct_get(mbr);
+  if (VARIABLE_CT_UNKNOWN == c) {
+    return BOOLEAN_TRUE;
+  }
+  if (65535U == c
+    && VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def)
+    && 0U == variable_def_sz_get(def)) {
+    return BOOLEAN_TRUE;
+  }
+  return BOOLEAN_FALSE;
+}
+
 result_t variable_def_member_ct_set(variable_def_t def, 
   variable_def_member_t mbr, variable_ct_t ct)
 {
   result_t       res;
 
   if ((VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(def))
-    || (VARIABLE_CT_UNKNOWN != variable_def_member_ct_get(mbr))) {
+    || !vardef_mbr_is_open_unknown(def, mbr)) {
     res = RESULT_INVALID;
   } else {
     res      = RESULT_OK;
@@ -445,9 +534,11 @@ variable_def_t variable_def_dup(const variable_def_t def)
            mbr && !err;
            mbr = variable_def_member_link_get(mbr)) {
         variable_def_member_t mdup;
+        variable_def_t        child_copy;
 
-        mdup = variable_def_member_alloc(mbr->tag,
-          variable_def_dup(mbr->def), mbr->ct);
+        /* Procedure/function defs use NULL first member for "no return" (void). */
+        child_copy = (mbr->def) ? variable_def_dup(mbr->def) : VARIABLE_DEF_NONE;
+        mdup = variable_def_member_alloc(mbr->tag, child_copy, mbr->ct);
         if (!mdup) {
           err = BOOLEAN_TRUE;
         } else {

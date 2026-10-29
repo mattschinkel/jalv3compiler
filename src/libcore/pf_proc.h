@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pf_proc_h__
 #define pf_proc_h__
@@ -97,9 +100,15 @@ void          pfile_proc_dump(pfile_proc_t *root, pfile_t *pf, int depth);
 
 pfile_proc_t *pfile_proc_next(const pfile_proc_t *proc);
 
+/* the procedure's shared `_temp` variable (VARIABLE_NONE until the first
+ * non-boolean temp is allocated) */
+variable_t    pfile_proc_temp_get(const pfile_proc_t *proc);
+
 boolean_t     pfile_proc_flag_test(const pfile_proc_t *proc, flag_t flag);
 void          pfile_proc_flag_set(pfile_proc_t *proc, flag_t flag);
 void          pfile_proc_flag_clr(pfile_proc_t *proc, flag_t flag);
+int           pfile_proc_irq_get(const pfile_proc_t *proc);
+void          pfile_proc_irq_set(pfile_proc_t *proc, int irq);
 
 pfile_block_t *pfile_proc_block_root_get(const pfile_proc_t *proc);
 pfile_block_t *pfile_proc_block_active_get(const pfile_proc_t *proc);

@@ -6,6 +6,9 @@
  **               2020-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <string.h>
 #include <math.h>
@@ -418,8 +421,11 @@ value_t jal_token_to_constant(pfile_t *pf, pfile_log_t plog)
       val    = VALUE_NONE;
     } else {
       static const char *digits = "0123456789abcdef";
-      unsigned long n;
-      float         nf;
+      variable_const_t n;
+      /* the literal is accumulated in double and rounded to float32
+       * ONCE at the end: the old float32 accumulation rounded at every
+       * digit, leaving some decimals (e.g. 9.999999) one ulp off */
+      double        nf;
       const char   *digptr;
       boolean_t     suppress;
       boolean_t     is_float;
@@ -430,7 +436,11 @@ value_t jal_token_to_constant(pfile_t *pf, pfile_log_t plog)
       suppress = BOOLEAN_FALSE;
       while (('_' == *ptr) || (0 != (digptr = memchr(digits, *ptr, base)))) {
         if ('_' != *ptr) {
-          if (!suppress && ((n * base)/base != n)) {
+          unsigned digit;
+
+          digit = (unsigned) (digptr - digits);
+          if (!suppress
+              && (n > (((variable_const_t) -1) - digit) / base)) {
             /*
              * only issue this warning once/constant
              */
@@ -438,14 +448,14 @@ value_t jal_token_to_constant(pfile_t *pf, pfile_log_t plog)
               "constant does not fit in UNIVERSAL");
             suppress = BOOLEAN_TRUE;
           }
-          n = n * base + (digptr - digits);
-          nf = nf * base + (digptr - digits);
+          n = n * base + digit;
+          nf = nf * base + digit;
         }
         ptr++;
       }
       if (('.' == *ptr) || ('e' == *ptr)) {
         /* this is a floating point constant */
-        float nfrac;
+        double nfrac;
 
         is_float = BOOLEAN_TRUE;
         nfrac    = 10.0;
@@ -458,7 +468,7 @@ value_t jal_token_to_constant(pfile_t *pf, pfile_log_t plog)
           }
         }
         if ('e' == *ptr) {
-          float     nexp;
+          double    nexp;
           boolean_t neg_exp;
 
           nexp    = 0.0;
@@ -488,7 +498,7 @@ value_t jal_token_to_constant(pfile_t *pf, pfile_log_t plog)
         variable_def_t def;
         def = VARIABLE_DEF_NONE;
         val = (is_float)
-          ? pfile_constant_float_get(pf, nf, def)
+          ? pfile_constant_float_get(pf, (float) nf, def)
           : pfile_constant_get(pf, n, def);
       }
     }
@@ -563,8 +573,13 @@ boolean_t jal_token_is_keyword(pfile_t *pf)
     "task",
     "include",
     "pragma",
-    "start",
+    "_task_start",
+    "_task_yield",
     "suspend",
+    "_task_suspend",
+    "_task_resume",
+    "_task_kill",
+    "_task_restart",
     "block",
     "case",
     "end",

@@ -143,8 +143,9 @@ boolean_t pic16_code_to_pcode(pfile_t *pf, pic_code_t code,
         value_t  bval;
 
         bval = pic_code_value_get(code);
-        base = value_base_get(bval)
-              + value_const_get(value_baseofs_get(bval))
+        base = pic_var_chunk_addr_resolve(value_variable_get(bval),
+            value_base_get(bval)
+              + value_const_get(value_baseofs_get(bval)))
               + pic_code_ofs_get(code);
         /* Some PICs use another instruction for LFSR. */
         if (instruction_set_is_pic18f_v6(pf)) {

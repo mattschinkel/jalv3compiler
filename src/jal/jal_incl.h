@@ -5,11 +5,32 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef jal_incl_h__
 #define jal_incl_h__
 
 #include "../libcore/pfile.h"
+
+/* Forward declarations for pragma fuse structures */
+typedef struct jal_pragma_fuses_entry_ {
+  struct jal_pragma_fuses_entry_ *link;
+  const char                     *name;
+  unsigned                        bits;
+} jal_pragma_fuses_entry_t;
+
+typedef struct jal_pragma_fuses_ {
+  struct jal_pragma_fuses_ *link;
+  const char               *name;
+  unsigned                  mask;
+  unsigned                  config_word; /* which config word */
+  jal_pragma_fuses_entry_t *entry;
+} jal_pragma_fuses_t;
+
+/* External reference to the global fuses list */
+extern jal_pragma_fuses_t *jal_fuses;
 
 /*
  * these are defined both here and in libpic12.

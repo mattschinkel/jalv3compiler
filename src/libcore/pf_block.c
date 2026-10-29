@@ -5,9 +5,13 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <string.h>
 #include "../libutils/mem.h"
+#include "../libutils/hash.h"
 #include "pfile.h"
 #include "pf_proc.h"
 #include "pf_blckd.h"
@@ -23,6 +27,69 @@
  * only the ones from the newest block will be kept.
  */
 static ulong block_ct;
+
+static boolean_t varname_cb(void *arg, const variable_t var, const void *data)
+{
+  const char *name;
+
+  UNUSED(arg);
+
+  name = variable_name_get(var);
+  return name && !strcmp(name, data);
+}
+
+static unsigned long blk_varname_hash(const void *key)
+{
+  const char     *name;
+  unsigned long   hash;
+
+  hash = 5381;
+  for (name = key; *name; name++) {
+    hash = ((hash << 5) + hash) + (unsigned char) *name;
+  }
+  return hash;
+}
+
+static boolean_t blk_varname_eq(const void *key, void *value)
+{
+  const char *name;
+
+  name = variable_name_get(value);
+  return name && !strcmp(name, key);
+}
+
+/* register a var_active member in the name index; an index failure
+ * permanently disables the index (finds fall back to the linear scan) */
+static void blk_var_idx_add(pfile_block_t *blk, variable_t var)
+{
+  const char *name;
+
+  if (blk->var_idx) {
+    name = variable_name_get(var);
+    if (name) {
+      if (!hash_add(blk->var_idx, name, var)) {
+        hash_free(blk->var_idx);
+        blk->var_idx = 0;
+      }
+    }
+  }
+}
+
+static variable_t blk_var_idx_find(pfile_block_t *blk, const char *name)
+{
+  variable_t var;
+
+  var = 0;
+  if (blk->var_idx) {
+    var = hash_find(blk->var_idx, name);
+    if (var) {
+      variable_lock(var);
+    }
+  } else {
+    var = variable_list_find(&blk->var_active, varname_cb, 0, name);
+  }
+  return var;
+}
 
 pfile_block_t *pfile_block_alloc(pfile_block_t *parent, 
     pfile_proc_t *owner, cmd_t cmd)
@@ -49,6 +116,7 @@ pfile_block_t *pfile_block_alloc(pfile_block_t *parent,
     }
     blk->var_defs = 0;
     variable_list_init(&blk->var_active);
+    blk->var_idx = hash_alloc(blk_varname_hash, blk_varname_eq, 0);
     label_list_init(&blk->label_user);
 
     blk->bit_bucket = VARIABLE_NONE;
@@ -70,6 +138,7 @@ void pfile_block_free(pfile_block_t *blk, pfile_t *pf)
   }
   label_list_reset(&blk->label_user);
   variable_release(blk->bit_bucket);
+  hash_free(blk->var_idx);
   variable_list_reset(&blk->var_active);
   while (blk->var_defs) {
     variable_def_t def;
@@ -125,6 +194,7 @@ result_t pfile_block_variable_add(pfile_block_t *blk,
     variable_t var)
 {
   variable_list_append(&blk->var_active, var);
+  blk_var_idx_add(blk, var);
   return RESULT_OK;
 
 }
@@ -152,6 +222,7 @@ result_t pfile_block_variable_alloc(pfile_block_t *blk, tag_t tag,
       variable_user_data_set(var, blk);
       if (tag) {
         variable_list_append(&blk->var_active, var);
+        blk_var_idx_add(blk, var);
       }
       if (master) {
         variable_master_set(var, master);
@@ -166,14 +237,28 @@ result_t pfile_block_variable_alloc(pfile_block_t *blk, tag_t tag,
   return rc;
 }
 
-static boolean_t varname_cb(void *arg, const variable_t var, const void *data)
+variable_t pfile_block_variable_find_shallow(pfile_block_t *blk,
+  const char *name)
 {
-  const char *name;
+  if (!name) {
+    return VARIABLE_NONE;
+  }
+  return blk_var_idx_find(blk, name);
+}
 
-  UNUSED(arg);
+void pfile_block_variable_remove(pfile_block_t *blk, variable_t victim)
+{
+  if (blk && victim) {
+    const char *name;
 
-  name = variable_name_get(var);
-  return name && !strcmp(name, data);
+    if (blk->var_idx) {
+      name = variable_name_get(victim);
+      if (name) {
+        hash_remove(blk->var_idx, name, victim);
+      }
+    }
+    variable_list_remove(&blk->var_active, victim);
+  }
 }
 
 variable_t pfile_block_variable_find(pfile_block_t *blk, const char *name)
@@ -183,7 +268,7 @@ variable_t pfile_block_variable_find(pfile_block_t *blk, const char *name)
   if (!name) {
     var = VARIABLE_NONE;
   } else {
-    var = variable_list_find(&blk->var_active, varname_cb, 0, name);
+    var = blk_var_idx_find(blk, name);
     while (var && variable_is_alias(var)) {
       variable_t master;
 
@@ -310,9 +395,11 @@ void pfile_block_variable_fixup(pfile_block_t *blk,
       if (((flags & PFILE_FLAG_OPT_VARIABLE_REDUCE)
           && ((variable_is_volatile(vptr)
           && (variable_is_assigned(vptr) || variable_is_used(vptr)))
+          || (variable_is_assigned(vptr) && variable_is_used(vptr))
           || (variable_is_assigned(vptr) && variable_is_used(vptr))))
           || (!(flags & PFILE_FLAG_OPT_VARIABLE_REDUCE) 
             && variable_sz_get(vptr))) {
+        /* variable is allocated */
         /* if it's volatile *or* both assigned & used then it's auto */
         if (variable_dflag_test(vptr, VARIABLE_DEF_FLAG_BIT)) {
           /* bits go into the great bit bucket! */
@@ -337,7 +424,9 @@ void pfile_block_variable_fixup(pfile_block_t *blk,
           variable_flag_set(vptr, VARIABLE_FLAG_AUTO);
         } 
       } else {
+        /* variable not allocated */
         /* it's neither volatile or assigned & used */
+        {
         variable_def_t def;
 
         def = variable_def_get(vptr);
@@ -350,6 +439,7 @@ void pfile_block_variable_fixup(pfile_block_t *blk,
           variable_def_flags_get_all(def) | VARIABLE_DEF_FLAG_CONST,
           variable_def_sz_get(def));
         variable_def_set(vptr, def);
+        }
       }
     }
   }

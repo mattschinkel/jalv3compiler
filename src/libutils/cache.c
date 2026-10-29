@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include <assert.h>
 #include <string.h>
@@ -174,8 +177,10 @@ static cache_element_header_t *cache_element_seek_internal(
   if (el && (el < cache->next)) {
     if (!cache->buf) {
       cache->buf = MALLOC(CACHE_SWAP_BLOCK_SIZE + 2);
-      cache->buf[CACHE_SWAP_BLOCK_SIZE] = (unsigned char) 0xa5;
-      cache->buf[CACHE_SWAP_BLOCK_SIZE+1] = 0x5a;
+      if (cache->buf) {
+        cache->buf[CACHE_SWAP_BLOCK_SIZE] = (unsigned char) 0xa5;
+        cache->buf[CACHE_SWAP_BLOCK_SIZE+1] = 0x5a;
+      }
     }
     if (cache->buf) {
       assert((char) 0xa5 == cache->buf[CACHE_SWAP_BLOCK_SIZE]);
@@ -257,6 +262,9 @@ cache_element_t cache_element_alloc(cache_t *cache)
   cache->stats.allocs++;
   if (!hdr) {
     hdr = cache_element_seek_internal(cache, el, BOOLEAN_TRUE);
+    if (!hdr) {
+      return 0;
+    }
     hdr->owner = cache;
   }
   hdr->inuse = BOOLEAN_TRUE;
@@ -325,6 +333,9 @@ cache_element_t cache_element_alloc(cache_t *cache)
     cache->stats.reused++;
   } else {
     hdr = MALLOC(sizeof(*hdr) + cache->el_sz);
+    if (!hdr) {
+      return 0;
+    }
     hdr->owner  = cache;
   }
   cache->stats.allocs++;

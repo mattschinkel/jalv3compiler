@@ -26,3 +26,10 @@ void jal_block_start_show(pfile_t *pf, const char *tag,
 
 
 
+
+/* canonical pointer-to-function(byte in) return byte def (stage-2
+ * runtime dispatch for pseudo-marked pointer arrays) */
+variable_def_t jal_pointer_fnptr_def_get(pfile_t *pf);
+/* stage-2 runtime dispatch master switch (FALSE until the slot-value
+ * indirect-call emission is wired through the fps[i](x) machinery) */
+boolean_t jal_pointer_slot_rt_enabled(void);

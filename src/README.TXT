@@ -1,3 +1,8 @@
+Co-author note: locally adapted for the jalv3compiler fork (2026) by
+Matthew Schinkel -- build instructions updated for Linux x86_64
+and the ESP32/PIC32 back ends. Original text (jalv25r9, Kyle A.
+York / jallib) follows.
+
 Remarks for building the JALV2 compilers
 ========================================
 
@@ -41,8 +46,7 @@ Building the JALV2 compiler for Linux
 For this the available cc compiler in Linux Mint was used. Linux Mint 64-bit was running from a Virtual Box.
 The compiler can also be created using other Linux OS-es like Ubuntu. 
 
-Standard you can make the project with 'make project jal'. This will make the native
-version of the JAL compiler (jalv2-native), depending on your OS.
+Standard you can make the project with 'make project' in **src/**. On **Linux x86_64**, **`Makefile.inc`** defaults **`ARCH=x86-64`**, so **`bin/jalv2-x86-64`** is built from this tree; use **`make ARCH=native project`** for **`bin/jalv2-original`** (**`-march=native`**). On other hosts the default remains **native** → **jalv2-original**.
 
 There are two Linux scripts used for making the two version of the JAL Linux compiler:
 1) 'bash make_32' or './make_32' in the src directory will create the 32-bit version of the 
@@ -56,10 +60,7 @@ Building the JALV2 compiler for MacOS
 =====================================
 For this the available cc compiler in XCode was used. MacOS Big Sur 64-bit was running from a Virtual Box.
 
-Standard you can make the project with 'make project jal'. This will make the native
-version of the JAL compiler (jalv2-native), depending on your OS.
-
-There is a Linux script used for making the JAL MacOS compiler:
+Standard you can make the project with 'make project' in **src/**. On **macOS**, the default **`ARCH`** is **native** (see **`Makefile.inc`**), producing **`bin/jalv2-original`** unless you set **`ARCH=osx`** or use **`./make_osx`** for **`bin/jalv2-osx`**.
 -) 'bash make_osx' or ./make_osx' in the src directory will create the 64-bit version of the 
     MacOS Linux compiler called jalv2-osx
 

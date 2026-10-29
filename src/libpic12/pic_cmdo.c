@@ -5,6 +5,9 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include "../libcore/value.h"
 #include "../libcore/cmd_op.h"
@@ -23,6 +26,25 @@
  *   branch condition tmp --> x
  * and removes tmp from (tmp = relational)
  */ 
+/* The test/branch strip in pic_cmd_optimize relies on the stripped
+ * op's STATUS FLAGS surviving to the branch.  A CMD_TYPE_LABEL between
+ * the two (e.g. the mismatch/done join of jal_string's relation loop,
+ * where `result = 0' sits on ONE incoming path only) means control can
+ * reach the branch without executing the op -- the branch would test
+ * stale flags (observed: `t == "lit"' inverted on classic cores). */
+static boolean_t pic_cmd_label_between(cmd_t from, cmd_t to)
+{
+  cmd_t it;
+
+  for (it = cmd_link_get(from); it && (it != to);
+      it = cmd_link_get(it)) {
+    if (CMD_TYPE_LABEL == cmd_type_get(it)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 void pic_cmd_optimize(pfile_t *pf, cmd_t *cmd_head)
 {
   cmd_t         cmd;
@@ -42,7 +64,8 @@ void pic_cmd_optimize(pfile_t *pf, cmd_t *cmd_head)
           || (OPERATOR_CMPB == cmd_optype_get(cmd)))
         && value_is_temp(cmd_opdst_get(cmd))
         && value_is_same(cmd_opdst_get(cmd), cmd_brval_get(cmd_next))
-        && (CMD_BRANCHCOND_NONE != cmd_brcond_get(cmd_next))) {
+        && (CMD_BRANCHCOND_NONE != cmd_brcond_get(cmd_next))
+        && !pic_cmd_label_between(cmd, cmd_next)) {
       cmd_opdst_set(cmd, VALUE_NONE);
       cmd_brval_set(cmd_next, VALUE_NONE);
     }

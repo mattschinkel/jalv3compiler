@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include <assert.h>
 
@@ -46,7 +49,7 @@ typedef struct pic_code_daop_data_ {
  *     when I've the chance. The main problem I've run into is how to
  *     detect loops.
  */
-static pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
+pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
   pic_code_t code, pic_code_gop_which_t which, void *odata) 
 {
   pic_code_daop_data_t *data;
@@ -61,6 +64,11 @@ static pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
   } else {
     dbits.rp0 = PIC_BITSTATE_UNKNOWN;
     dbits.rp1 = PIC_BITSTATE_UNKNOWN;
+    /* Initialize cbits to avoid uninitialized variable warning */
+    cbits.before.rp0 = PIC_BITSTATE_UNKNOWN;
+    cbits.before.rp1 = PIC_BITSTATE_UNKNOWN;
+    cbits.action.rp0 = PIC_BITSTATE_UNKNOWN;
+    cbits.action.rp1 = PIC_BITSTATE_UNKNOWN;
   }
   rc = PIC_CODE_GOP_RC_CONTINUE;
   
@@ -196,11 +204,32 @@ static void pic_code_daop_optimize(pfile_t *pf,
 
 }
 
+/* Reset every instruction's databits annotation before a full GOP walk.
+ * pic_code_daop_analyze returns PIC_CODE_GOP_RC_STOP when stored `before`
+ * already matches the walker's dbits; pic_code_gop_analyze then sets
+ * next = PIC_CODE_NONE and truncates the rest of the list. A later
+ * pic_code_databits_optimize pass (e.g. after list edits) must not treat
+ * those stale `before` fields as stable — otherwise verify sees bogus RP
+ * state on downstream file ops. */
+static void pic_code_databits_reset_all_unknown(pfile_t *pf)
+{
+  pic_code_t code;
+  static const pic_databits_state_t z = {
+    {PIC_BITSTATE_UNKNOWN, PIC_BITSTATE_UNKNOWN},
+    {PIC_BITSTATE_UNKNOWN, PIC_BITSTATE_UNKNOWN}};
+
+  UNUSED(pf);
+  for (code = pic_code_list_head_get(pf); code; code = pic_code_next_get(code)) {
+    pic_code_databits_set(code, &z);
+  }
+}
+
 void pic_code_databits_optimize(pfile_t *pf)
 {
   pic_code_daop_data_t data;
 
   pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_FIXING_DATA_BITS);
+  pic_code_databits_reset_all_unknown(pf);
   pic_code_gop_optimize(pf, pic_code_daop_optimize,
     pic_code_daop_analyze, &data);
   /* once the analysis is done, we need to run through & make

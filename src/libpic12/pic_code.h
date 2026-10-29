@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pic_code_h__
 #define pic_code_h__
@@ -83,6 +86,14 @@ typedef struct {
 /* use UPPER lbl */
 #define PIC_CODE_FLAG_LABEL_UPPER   0x0080
 
+/*
+ * pic_stk.c walk bookkeeping: the node is on the CURRENT DFS path of the
+ * hardware-stack depth walk (set on entry, cleared on backtrack). Used to cut
+ * call-graph cycles by node identity so the longest-acyclic-path search
+ * terminates without the depth cap having to mask static cycles.
+ */
+#define PIC_CODE_FLAG_STK_PATH      0x0100
+
 typedef struct pic_code_ *pic_code_t;
 #define PIC_CODE_NONE ((pic_code_t) 0)
 
@@ -115,9 +126,19 @@ pic_opcode_t pic_code_op_get(pic_code_t code);
 
 void       pic_code_value_set(pic_code_t code, value_t val);
 value_t    pic_code_value_get(pic_code_t code);
+/* Logical data location when value is _ind/_ind0 (indirect file access). */
+void       pic_code_memval_set(pic_code_t code, value_t val);
+value_t    pic_code_memval_get(pic_code_t code);
 
 void       pic_code_ofs_set(pic_code_t code, size_t ofs);
 size_t     pic_code_ofs_get(pic_code_t code);
+
+/* Linear data file byte address for pic_opt_verify_skip (PIC18 / hybrid);
+ * recorded at emit time via pic_code_bsr_verify_data_addr resolution. */
+void       pic_code_bank_op_linear_set(pic_code_t code, unsigned long addr,
+              boolean_t valid);
+boolean_t  pic_code_bank_op_linear_fetch(const pic_code_t code,
+              unsigned long *addr);
 
 void pic_code_fsr_n_set(pic_code_t code, unsigned fsr_n);
 unsigned pic_code_fsr_n_get(pic_code_t code);

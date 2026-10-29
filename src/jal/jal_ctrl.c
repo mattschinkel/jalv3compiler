@@ -5,11 +5,16 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <errno.h>
+#include <string.h>
 #include "../libutils/mem.h"
 #include "../libcore/pf_cmd.h"
 #include "../libcore/pf_expr.h"
+#include "../libcore/pf_msg.h"
 #include "../libcore/pf_proc.h"
 #include "jal_expr.h"
 #include "jal_blck.h"
@@ -82,10 +87,38 @@ void jal_parse_for(pfile_t *pf, const pfile_pos_t *statement_start)
                 "BIT values shouldn't be used in loops");
           }
         }
-      } else {
-        if (!value_is_universal(expr) 
-            && (value_sz_get(expr) > value_sz_get(val))) {
-          pfile_log(pf, PFILE_LOG_ERR, "expr doesn't fit into variable");
+      } else if (!value_is_const(val)) {
+        /* the loop can only terminate when the counter can reach the
+         * count: either the count fits the counter's value range, or
+         * it is exactly the counter's storage wrap (the power-of-two
+         * count the special loop form runs on natural wraparound).
+         * A size-only comparison missed universal literals (300 into
+         * a byte counter) and signed counters (130 into an sbyte);
+         * the loop-exit relation then const-folded to always FALSE
+         * and the dead-code pass silently dropped everything after
+         * the never-exiting loop */
+        variable_sz_t    bits;
+        variable_const_t cn;
+        variable_const_t max;
+
+        bits = (variable_sz_t) (8UL * value_sz_get(val));
+        cn   = value_const_get(expr);
+        max  = value_is_signed(val)
+          ? variable_const_mask_get((unsigned) bits - 1)
+          : variable_const_mask_get((unsigned) bits);
+        if ((bits)
+          && (bits < VARIABLE_CONST_BIT_CT)
+          && (cn > max)
+          && (cn != (((variable_const_t) 1) << bits))) {
+          char cn_buf[50];
+          char hi_buf[50];
+
+          variable_const_str_get(cn, BOOLEAN_FALSE, cn_buf, sizeof(cn_buf));
+          variable_const_str_get(max, value_is_signed(val), hi_buf,
+            sizeof(hi_buf));
+          pfile_log(pf, PFILE_LOG_ERR,
+            "loop count %s doesn't fit the loop variable (max %s)",
+            cn_buf, hi_buf);
         }
       }
     }
@@ -131,7 +164,9 @@ void jal_parse_for(pfile_t *pf, const pfile_pos_t *statement_start)
   pfile_cmd_label_add(pf, lbl_top);
   cmd_start = pfile_cmdlist_tail_get(pf);
   lbl_exit_prev = pfile_exit_label_set(pf, lbl_exit);
+  pfile_runtime_block_push(pf); /* loop body: includes error */
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
+  pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
   /* make sure the control variable isn't modified in the block! */
   is_modified = BOOLEAN_FALSE;
@@ -218,7 +253,9 @@ void jal_parse_forever(pfile_t *pf, const pfile_pos_t *statement_start)
 
   pfile_cmd_label_add(pf, lbl_top);
   lbl_exit_prev = pfile_exit_label_set(pf, lbl_exit);
+  pfile_runtime_block_push(pf); /* loop body: includes error */
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
+  pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
     && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
@@ -291,7 +328,9 @@ void jal_parse_while(pfile_t *pf, const pfile_pos_t *statement_start)
     pf_token_get(pf, PF_TOKEN_NEXT);
   }
   lbl_exit_prev = pfile_exit_label_set(pf, lbl_exit);
+  pfile_runtime_block_push(pf); /* loop body: includes error */
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
+  pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
     && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
@@ -325,7 +364,9 @@ void jal_parse_repeat(pfile_t *pf, const pfile_pos_t *statement_start)
   pfile_cmd_label_add(pf, lbl_top);
 
   lbl_exit_prev = pfile_exit_label_set(pf, lbl_exit);
+  pfile_runtime_block_push(pf); /* loop body: includes error */
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
+  pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "until")) {
     pf_token_get(pf, PF_TOKEN_NEXT);
@@ -424,6 +465,8 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
   boolean_t   else_skip;
   boolean_t   is_first;
   boolean_t   is_end;
+  boolean_t   clause_const;
+  boolean_t   chain_runtime;
   flag_t      block_process_flag;
 
   lbl_end = pfile_label_alloc(pf, 0);
@@ -432,9 +475,11 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
   /* else_skip is set to TRUE if any of the preceding IF clauses
      has evaluated to a constant TRUE which means the ELSE can
      never be hit */
-  else_skip = BOOLEAN_FALSE;
-  is_first  = BOOLEAN_TRUE;
-  is_end    = BOOLEAN_FALSE;
+  else_skip    = BOOLEAN_FALSE;
+  is_first     = BOOLEAN_TRUE;
+  is_end       = BOOLEAN_FALSE;
+  clause_const = BOOLEAN_FALSE;
+  chain_runtime = BOOLEAN_FALSE;
   do {
     value_t   expr;
     boolean_t skip_clause;
@@ -455,7 +500,9 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
      * all other clauses need to be skipped
      */
     skip_clause = else_skip;
-    if (value_is_const(expr)) {
+    clause_const = value_is_const(expr);
+    chain_runtime = chain_runtime || !clause_const;
+    if (clause_const) {
       if (pfile_flag_test(pf, PFILE_FLAG_WARN_DIRECTIVES)) {
         pfile_log(pf, PFILE_LOG_WARN, "compiler directive");
       }
@@ -481,7 +528,15 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
     if (skip_clause) {
       is_end = jal_skip_if(pf, BOOLEAN_FALSE);
     } else {
+      /* a RUNTIME clause body: includes inside are a clean error (a
+       * const clause processes with NO_BLOCK above and needs no guard) */
+      if (!clause_const) {
+        pfile_runtime_block_push(pf);
+      }
       jal_block_process(pf, block_process_flag);
+      if (!clause_const) {
+        pfile_runtime_block_pop(pf);
+      }
     }
     if (lbl_end) {
       pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
@@ -500,16 +555,39 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
     if (else_skip) {
       is_end = jal_skip_if(pf, BOOLEAN_TRUE);
     } else {
+      /* else of a chain with any runtime clause is runtime-guarded; an
+       * all-const chain's else is compile-time (NO_BLOCK path above) */
+      if (chain_runtime) {
+        pfile_runtime_block_push(pf);
+      }
       jal_block_process(pf, block_process_flag);
+      if (chain_runtime) {
+        pfile_runtime_block_pop(pf);
+      }
     }
   }
   if (!is_end) {
-    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+    /* pfile_log() prefixes with pf->statement_start; nested statements
+     * overwrite the global, so errors at "missing end if" pointed at the
+     * wrong line (GitHub jalv2compiler #22). Use this IF's opening position. */
+    pfile_pos_t save_stmt;
+
+    pfile_statement_start_get(pf, &save_stmt);
+    pfile_statement_start_set(pf, statement_start);
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "end")
       && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "if")) {
       pf_token_get(pf, PF_TOKEN_NEXT);
     } else {
+      const char *cur;
+
+      cur = pf_token_get(pf, PF_TOKEN_CURRENT);
+      if (0 != strcmp(cur, "end")) {
+        pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_EXPECTED, "end",
+          (cur && *cur) ? cur : "EOF");
+      }
       jal_block_start_show(pf, "IF", statement_start);
     }
+    pfile_statement_start_set(pf, &save_stmt);
   }
   pfile_cmd_label_add(pf, lbl_end);
   label_release(lbl_end);
@@ -681,8 +759,11 @@ void jal_parse_case(pfile_t *pf, const pfile_pos_t *statement_start)
              ii++)
           ; /* empty body */
         if (ii < consts_used.used) {
-          pfile_log(pf, PFILE_LOG_ERR, "CASE expression already used: %lu",
-            n);
+          char cbuf[50];
+
+          variable_const_str_get(n, BOOLEAN_FALSE, cbuf, sizeof(cbuf));
+          pfile_log(pf, PFILE_LOG_ERR, "CASE expression already used: %s",
+            cbuf);
         }
         cexpr_ct++;
         if (consts_used.used == consts_used.alloc) {

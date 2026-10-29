@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <stdlib.h>
 #include <stdio.h>
@@ -52,6 +55,7 @@ struct pic_code_ {
   value_t                literal; /* bit or literal */
   /* pic_instr_append_n        */
   label_t                brdst;
+  value_t                memval; /* indirect: logical dst/src for use/assign */
 
   unsigned               fsr_n; /* which FSR */
   unsigned               depth;
@@ -60,6 +64,9 @@ struct pic_code_ {
 
   size_t                 data_sz; /* data size for PIC_OPCODE_DB */
   void                  *data;    /* the actual data             */
+
+  unsigned long          bank_op_linear;
+  unsigned char          bank_op_linear_valid;
 };
 
 static cache_t   pic_code_cache;
@@ -117,6 +124,7 @@ pic_code_t pic_code_alloc(label_t lbl, pic_opcode_t op, flag_t flags)
       ptr->dst        = PIC_OPDST_NONE;
       ptr->literal    = VALUE_NONE;
       ptr->brdst      = LABEL_NONE;
+      ptr->memval     = VALUE_NONE;
       ptr->depth      = -1;
       pic_code_label_set(code, lbl);
       pic_code_op_set(code, op);
@@ -127,6 +135,8 @@ pic_code_t pic_code_alloc(label_t lbl, pic_opcode_t op, flag_t flags)
       ptr->pclath.action = PIC_PCLATH_UNKNOWN;
       ptr->data_sz    = 0;
       ptr->data       = 0;
+      ptr->bank_op_linear = 0;
+      ptr->bank_op_linear_valid = 0;
     }
   }
   return code;
@@ -141,6 +151,7 @@ void pic_code_free(pic_code_t code)
     pic_code_label_set(code, LABEL_NONE);
     value_release(ptr->value);
     value_release(ptr->literal);
+    value_release(ptr->memval);
     label_release(ptr->brdst);
     value_release(ptr->w_value);
     FREE(ptr->data);
@@ -280,6 +291,26 @@ value_t pic_code_value_get(pic_code_t code)
   return (ptr) ? ptr->value : 0;
 }
 
+void pic_code_memval_set(pic_code_t code, value_t val)
+{
+  struct pic_code_ *ptr;
+
+  ptr = pic_code_element_seek(code, BOOLEAN_TRUE);
+  if (ptr) {
+    value_lock(val);
+    value_release(ptr->memval);
+    ptr->memval = val;
+  }
+}
+
+value_t pic_code_memval_get(pic_code_t code)
+{
+  struct pic_code_ *ptr;
+
+  ptr = pic_code_element_seek(code, BOOLEAN_FALSE);
+  return (ptr) ? ptr->memval : VALUE_NONE;
+}
+
 void pic_code_ofs_set(pic_code_t code, size_t ofs)
 {
   struct pic_code_ *ptr;
@@ -296,6 +327,35 @@ size_t pic_code_ofs_get(pic_code_t code)
 
   ptr = pic_code_element_seek(code, BOOLEAN_FALSE);
   return (ptr) ? ptr->ofs : 0;
+}
+
+void pic_code_bank_op_linear_set(pic_code_t code, unsigned long addr,
+    boolean_t valid)
+{
+  struct pic_code_ *ptr;
+
+  ptr = pic_code_element_seek(code, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->bank_op_linear = addr;
+    ptr->bank_op_linear_valid = (unsigned char) (valid ? 1 : 0);
+  }
+}
+
+boolean_t pic_code_bank_op_linear_fetch(const pic_code_t code,
+    unsigned long *addr)
+{
+  struct pic_code_ *ptr;
+
+  if (!addr) {
+    return BOOLEAN_FALSE;
+  }
+  *addr = 0;
+  ptr = pic_code_element_seek((pic_code_t) code, BOOLEAN_FALSE);
+  if (!ptr || !ptr->bank_op_linear_valid) {
+    return BOOLEAN_FALSE;
+  }
+  *addr = ptr->bank_op_linear;
+  return BOOLEAN_TRUE;
 }
 
 void pic_code_fsr_n_set(pic_code_t code, unsigned fsr_n)

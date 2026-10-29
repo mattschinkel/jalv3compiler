@@ -21,7 +21,7 @@
 #define PIC_LABEL_STKPOP         "_pic_stkpop"
 #define PIC_LABEL_INDIRECT       "_pic_indirect" /* for indirect calls */
 #define PIC_LABEL_TASK_START     "_pic_task_start"
-#define PIC_LABEL_TASK_SUSPEND   "_pic_task_suspend"
+#define PIC_LABEL_TASK_YIELD   "_pic_task_yield"
 #define PIC_LABEL_TASK_KILL      "_pic_task_kill"
 #define PIC_LABEL_TASK_SUICIDE   "_pic_task_suicide"
 #define PIC_LABEL_PTR_WRITE      "_pic_pointer_write"

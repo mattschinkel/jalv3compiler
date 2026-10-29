@@ -5,6 +5,9 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include "../libcore/operator.h"
 
@@ -45,7 +48,8 @@ operator_priority_t operator_priority_get(operator_t op)
     case OPERATOR_XORB:        pr = 10; break;
     case OPERATOR_INCR:
     case OPERATOR_DECR:
-    case OPERATOR_ASSIGN:      pr = 0; break;
+    case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN: pr = 0; break;
   }
   return pr;
 }

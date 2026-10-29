@@ -7,6 +7,9 @@
  **
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 
 /*
@@ -40,6 +43,7 @@
  *  _pic_isr_w      -- must be shared or allocated in all banks
  *  _pic_isr_status -- must be allocated in the first bank
  *  _pic_isr_pclath -- must be allocated in the first bank
+ *  _pic_isr_prod   -- PIC18: shadow for PRODL/PRODH when ISR uses MUL
  */
 #include <stddef.h>
 #include <assert.h>
@@ -64,6 +68,7 @@
 #define PIC_STVAR_FLAG_FSR      0x0400
 #define PIC_STVAR_FLAG_TBLPTR   0x0800
 #define PIC_STVAR_FLAG_FLOAT    0x1000
+#define PIC_STVAR_FLAG_PROD     0x2000 /* PIC18: ISR uses MUL; save PRODL/H on entry */
 
 static unsigned stvar_flags; /* make sure two routines don't both
                                 grab the same variable! */
@@ -310,6 +315,12 @@ value_t pic_var_temp_get(pfile_t *pf, flag_t flags, variable_sz_t sz)
     val = pfile_value_find(pf, PFILE_LOG_NONE, "_pic_temp");
     if (!val) {
       val = pic_var_value_get(pf, "_pic_temp", VARIABLE_DEF_TYPE_INTEGER, sz);
+      if (val && pic_var_placement_done_get()) {
+        /* created after placement ran (chunk-walk scratch is only
+         * requested once chunk maps exist -- pass 2+): allocate it NOW
+         * or it can never get an address */
+        pic_variable_late_alloc(pf, value_variable_get(val));
+      }
     }
     if (pic_temp_sz_in_use) {
       value_t tmp;
@@ -327,6 +338,12 @@ value_t pic_var_temp_get(pfile_t *pf, flag_t flags, variable_sz_t sz)
       def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, 
           VARIABLE_DEF_FLAG_NONE, pic_temp_sz_in_use);
       variable_def_set(var, def);
+      if (pic_var_placement_done_get()
+          && (VARIABLE_BASE_UNKNOWN != variable_base_get(var, 0))) {
+        /* grew beyond its placed size after placement: re-allocate at
+         * the larger size (the old extent goes back to the free list) */
+        pic_variable_late_alloc(pf, var);
+      }
     }
     def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, 
         flags & VARIABLE_DEF_FLAG_SIGNED, sz);
@@ -388,6 +405,11 @@ boolean_t pic_var_mul_get(pfile_t *pf, variable_sz_t sz1, variable_sz_t sz2,
 {
   if (pic_in_isr(pf)) {
     isr_info.var_flags |= PIC_STVAR_FLAG_MULTIPLY;
+    if (pic_is_16bit(pf)) {
+      isr_info.var_flags |= PIC_STVAR_FLAG_PROD;
+      value_release(pic_var_value_get(pf, "_pic_isr_prod",
+        VARIABLE_DEF_TYPE_INTEGER, 2));
+    }
   }
   if (sz1 > sz2) {
     SWAP(variable_sz_t, sz1, sz2);
@@ -589,6 +611,7 @@ void pic_stvar_fixup(pfile_t* pf)
         "_pic_isr_pointer",
         "_pic_isr_fsr",
         "_pic_isr_tblptr",
+        "_pic_isr_prod",
         "_pic_fval1",
         "_pic_fexp1",
         "_pic_fval2",
@@ -707,6 +730,8 @@ static const struct {
   const char *isr_name;
   unsigned    flag;
 } pic_isr_var_map[] = {
+  /* PROD must be first: saved on ISR entry before other work; restored last on exit */
+  { 0,              "_pic_isr_prod",    PIC_STVAR_FLAG_PROD   },
   { "_pic_accum",   "_pic_isr_accum",   PIC_STVAR_FLAG_ACCUM   },
   { "_pic_loop",    "_pic_isr_loop",    PIC_STVAR_FLAG_LOOP    },
   { "_pic_sign",    "_pic_isr_sign",    PIC_STVAR_FLAG_SIGN    },
@@ -720,6 +745,8 @@ static const char *pic14_reg_fsr[] = { "_fsr" };
 static const char *pic16_reg_fsr[] = { "_fsr0l", "_fsr0h" };
 static const char *pic16_reg_tblptr[] = { "tblptrl", "tblptrh", "tblptru",
   "_tablat"};
+/* Lowercase: JAL normalizes identifiers; pfile_variable_find is case-sensitive. */
+static const char *pic16_reg_prod[] = { "prodl", "prodh" };
 
 typedef struct pic_isr_reg_get_ {
   const char **reg;
@@ -747,6 +774,14 @@ static void pic_isr_reg_get(pfile_t *pf, unsigned flag, pic_isr_reg_get_t *dst)
     } else if (flag & PIC_STVAR_FLAG_TBLPTR) {
       dst->reg = pic16_reg_tblptr;
       dst->ct  = COUNT(pic16_reg_tblptr);
+    } else if (flag & PIC_STVAR_FLAG_PROD) {
+      if (pic_is_16bit(pf)) {
+        dst->reg = pic16_reg_prod;
+        dst->ct  = COUNT(pic16_reg_prod);
+      } else {
+        dst->reg = 0;
+        dst->ct  = 0;
+      }
     } else {
       assert(0);
     }

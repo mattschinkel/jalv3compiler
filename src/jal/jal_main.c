@@ -5,8 +5,12 @@
  ** Copyright (c) 2005-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
@@ -16,16 +20,22 @@
 #include "../libcore/pf_cmd.h"
 #include "../libpic12/pic_cmdo.h"
 #include "../libpic12/pic.h"
+#include "../libcore/pfile.h"
 #include "jal_blck.h"
 #include "jal_file.h"
 #include "jal_tokn.h"
 #include "jal_build.h"
 
+
 #if defined (MSDOS) && !defined (__WATCOMC__)
 extern unsigned _stklen = 16384;
 #endif
 
-#define JAL_VERSION            2004   /* major * 1000 + minor */
+/* major * 1000 + minor.  Upstream tracked 2002/2003/2004 (2.2/2.3/
+ * 2.4, 2007) then froze at 2004 through the whole 2.5 series.  This
+ * fork bumps to 3.0 with its first release (jalv3 3.0a1): new 32-bit
+ * targets + language surface (tasks, text casts, & chains). */
+#define JAL_VERSION            3000
 #define JAL_MSG_COMPDATE       "jal "JAL_VERSION_STR" (compiled %s)"
 #define JAL_VERSION_CONST_NAME "jal_version"
 #define JAL_BUILD_CONST_NAME   "jal_build"
@@ -34,6 +44,8 @@ extern unsigned _stklen = 16384;
 /* format: 
  *   picjal file 
  *     -hex name : set the name of the hex  file, default is file.hex
+ *     -qemu-hex : PIC32: emit KSEG virtual hex addresses (QEMU form;
+ *                  default is physical for direct ipecmd programming)
  *     -asm name : set the name of the assembly file, default is file.asm
  */     
 
@@ -56,7 +68,9 @@ typedef enum {
   opt_boot_loader18,
   /* --- misc. options --- */
   opt_misc_clear_bss,
+  opt_misc_dev_options,
   opt_misc_quiet,
+  opt_misc_sim_hex,
   opt_misc_task,
   opt_misc_fastmath,
   /* --- warnings --- */
@@ -143,9 +157,16 @@ static const opt_def_t opt_defs[] = {
   {opt_misc_clear_bss, "clear", 
       "clear data area on program entry",
       OPT_FLAG_NO_PREFIX | OPT_FLAG_PFLAG, PFILE_FLAG_MISC_CLEAR_BSS},
+  {opt_misc_dev_options, "dev_options",
+      "developer sub-commands (= or next argv): syntax = parse+pcode, pointer bind check, no dump/codegen",
+      OPT_FLAG_PARAM, PFILE_FLAG_NONE},
   {opt_misc_quiet, "quiet",
-      "disable/enable compile status updates", 
+      "disable/enable compile status updates",
       OPT_FLAG_NO_PREFIX | OPT_FLAG_PFLAG, PFILE_FLAG_MISC_QUIET},
+  {opt_misc_sim_hex, "qemu-hex",
+      "PIC32: emit KSEG virtual addresses in the hex file (QEMU loader "
+      "form; default is physical for direct ipecmd programming)",
+      OPT_FLAG_NO_PREFIX, PFILE_FLAG_NONE},
   {opt_misc_task, "task",
       "set the maximum # of concurrent tasks", 
       OPT_FLAG_PARAM, PFILE_FLAG_NONE},
@@ -221,8 +242,9 @@ static const opt_def_t opt_defs[] = {
       "do not generate any assembly code", 
       OPT_FLAG_NO_PREFIX | OPT_FLAG_PFLAG, PFILE_FLAG_DEBUG_CODEGEN},
   {opt_debug_debug, "debug",
-      "show debug information", 
-      OPT_FLAG_NO_PREFIX | OPT_FLAG_PFLAG, PFILE_FLAG_DEBUG_COMPILER},
+      "debug: -debug (general) | -debug=a,b | -debug a [b…] "
+      "(stack|varalloc|unkbase|compiler|pcode|codegen|emu|deadcode|all); see --help",
+      OPT_FLAG_NO_PREFIX, PFILE_FLAG_NONE},
   {opt_debug_pcode, "pcode",
       "show pcode in the asm file",
       OPT_FLAG_NO_PREFIX | OPT_FLAG_PFLAG, PFILE_FLAG_DEBUG_PCODE},
@@ -233,6 +255,200 @@ static const opt_def_t opt_defs[] = {
       "enable dead code elimination",
       OPT_FLAG_NO_PREFIX | OPT_FLAG_PFLAG, PFILE_FLAG_DEBUG_DEADCODE}
 };
+
+/* Main pfile flags toggled by -debug=all / -no-debug=all (not codegen) */
+#define JAL_DBG_OPT_ALL_FLAGS                                          \
+  (PFILE_FLAG_DEBUG_COMPILER | PFILE_FLAG_DEBUG_PCODE                    \
+    | PFILE_FLAG_DEBUG_EMULATOR | PFILE_FLAG_DEBUG_DEADCODE)
+#define JAL_DBG_PSUB_CLEAR \
+  (PFILE_DBGSUB_STACK | PFILE_DBGSUB_VALLOC | PFILE_DBGSUB_UNKBASE)
+
+static boolean_t jal_debug_keyword_is(const char *s)
+{
+  return (0 == strcmp(s, "stack"))
+      || (0 == strcmp(s, "varalloc"))
+      || (0 == strcmp(s, "unkbase"))
+      || (0 == strcmp(s, "compiler"))
+      || (0 == strcmp(s, "pcode"))
+      || (0 == strcmp(s, "codegen"))
+      || (0 == strcmp(s, "emu"))
+      || (0 == strcmp(s, "deadcode"))
+      || (0 == strcmp(s, "all"));
+}
+
+static boolean_t jal_debug_apply_keyword(const char *kw, boolean_t is_no,
+    flag_t *pflags, flag_t *psub)
+{
+  if (0 == strcmp(kw, "stack")) {
+    if (is_no) {
+      *psub &= ~PFILE_DBGSUB_STACK;
+    } else {
+      *psub |= PFILE_DBGSUB_STACK;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "varalloc")) {
+    if (is_no) {
+      *psub &= ~PFILE_DBGSUB_VALLOC;
+    } else {
+      *psub |= PFILE_DBGSUB_VALLOC;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "unkbase")) {
+    if (is_no) {
+      *psub &= ~PFILE_DBGSUB_UNKBASE;
+    } else {
+      *psub |= PFILE_DBGSUB_UNKBASE;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "compiler")) {
+    if (is_no) {
+      *pflags &= ~PFILE_FLAG_DEBUG_COMPILER;
+    } else {
+      *pflags |= PFILE_FLAG_DEBUG_COMPILER;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "pcode")) {
+    if (is_no) {
+      *pflags &= ~PFILE_FLAG_DEBUG_PCODE;
+    } else {
+      *pflags |= PFILE_FLAG_DEBUG_PCODE;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "codegen")) {
+    if (is_no) {
+      *pflags &= ~PFILE_FLAG_DEBUG_CODEGEN;
+    } else {
+      *pflags |= PFILE_FLAG_DEBUG_CODEGEN;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "emu")) {
+    if (is_no) {
+      *pflags &= ~PFILE_FLAG_DEBUG_EMULATOR;
+    } else {
+      *pflags |= PFILE_FLAG_DEBUG_EMULATOR;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "deadcode")) {
+    if (is_no) {
+      *pflags &= ~PFILE_FLAG_DEBUG_DEADCODE;
+    } else {
+      *pflags |= PFILE_FLAG_DEBUG_DEADCODE;
+    }
+    return BOOLEAN_TRUE;
+  } else if (0 == strcmp(kw, "all")) {
+    if (is_no) {
+      *pflags &= ~JAL_DBG_OPT_ALL_FLAGS;
+      *psub &= ~JAL_DBG_PSUB_CLEAR;
+    } else {
+      *pflags |= JAL_DBG_OPT_ALL_FLAGS;
+      *psub |= PFILE_DBGSUB_STACK;
+    }
+    return BOOLEAN_TRUE;
+  }
+  fprintf(stderr, "jal: unknown -debug keyword \"%s\"\n", kw);
+  return BOOLEAN_FALSE;
+}
+
+static boolean_t jal_debug_parse_list(const char *list, boolean_t is_no,
+    flag_t *pflags, flag_t *psub)
+{
+  const char *p;
+
+  p = list;
+  while (*p) {
+    char   buf[48];
+    size_t n;
+
+    while (*p == ' ' || *p == '\t' || *p == ',') {
+      p++;
+    }
+    if (!*p) {
+      break;
+    }
+    n = 0;
+    while (*p && *p != ',' && *p != ' ' && *p != '\t' && n < sizeof(buf) - 1) {
+      buf[n++] = *p++;
+    }
+    buf[n] = 0;
+    if (n) {
+      if (!jal_debug_apply_keyword(buf, is_no, pflags, psub)) {
+        return BOOLEAN_FALSE;
+      }
+    }
+  }
+  return BOOLEAN_TRUE;
+}
+
+/*
+ * opt_token_raw is argv[] for this option, e.g. "-debug=stack" or "-no-debug".
+ * *arg_io is the index of the next argv element (already past this option).
+ */
+static void jal_debug_process_option(const char *opt_token_raw,
+    boolean_t is_no, int *arg_io, char **argv, int argc,
+    flag_t *pflags, flag_t *psub, boolean_t *perr)
+{
+  const char *t;
+  int         consumed_kw;
+
+  t = opt_token_raw;
+  if (t && (t[0] == '-')) {
+    t++;
+  }
+  if (!t) {
+    return;
+  }
+  if (0 == strncmp(t, "no-", 3)) {
+    t += 3;
+  }
+  if (0 != memcmp(t, "debug", 5)) {
+    return;
+  }
+  t += 5;
+  if (is_no) {
+    if ('=' == *t) {
+      if (!jal_debug_parse_list(t + 1, BOOLEAN_TRUE, pflags, psub)) {
+        *perr = BOOLEAN_TRUE;
+      }
+    } else {
+      *pflags &= ~JAL_DBG_OPT_ALL_FLAGS;
+      *psub &= ~JAL_DBG_PSUB_CLEAR;
+    }
+    return;
+  }
+  if ('=' == *t) {
+    t++;
+    if (!*t) {
+      fprintf(stderr, "jal: empty -debug= list\n");
+      *perr = BOOLEAN_TRUE;
+      return;
+    }
+    if (!jal_debug_parse_list(t, BOOLEAN_FALSE, pflags, psub)) {
+      *perr = BOOLEAN_TRUE;
+    }
+    return;
+  }
+  if (*t) {
+    return;
+  }
+  consumed_kw = 0;
+  while ((*arg_io < argc) && argv[*arg_io] && (argv[*arg_io][0] != '-')) {
+    if (!jal_debug_keyword_is(argv[*arg_io])) {
+      break;
+    }
+    if (!jal_debug_apply_keyword(argv[*arg_io], BOOLEAN_FALSE, pflags, psub)) {
+      *perr = BOOLEAN_TRUE;
+      return;
+    }
+    (*arg_io)++;
+    consumed_kw++;
+    if (0 == strcmp(argv[*arg_io - 1], "all")) {
+      break;
+    }
+  }
+  if (0 == consumed_kw) {
+    *pflags |= PFILE_FLAG_DEBUG_COMPILER;
+  }
+}
 
 static int file_open(FILE **dst, const char *name, const char *mode,
     const char *ext, size_t base_sz, char *namebuf)
@@ -250,6 +466,7 @@ static int file_open(FILE **dst, const char *name, const char *mode,
   } else {
     f = fopen(name, mode);
     if (0 == f) {
+      *dst = 0;
       fprintf(stderr, "Cannot open: %s (%s)\n", name, strerror(errno));
       rc = 1;
     } else {
@@ -268,6 +485,37 @@ static void file_remove(const char *name, const char *ext,
     name = namebuf;
   }
   remove(name);
+}
+
+/* Intel HEX is written to temp_out first, then renamed to final_out on success. */
+static int hex_atomic_paths_build(
+    char *final_out, size_t final_sz,
+    char *temp_out, size_t temp_sz,
+    const char *hex_name, size_t base_sz, const char *namebuf)
+{
+  if (hex_name) {
+    size_t nlen;
+
+    nlen = strlen(hex_name);
+    if (nlen + 6 >= final_sz || nlen + 6 >= temp_sz) {
+      return -1;
+    }
+    memcpy(final_out, hex_name, nlen + 1);
+    memcpy(temp_out, hex_name, nlen);
+    memcpy(temp_out + nlen, ".part", (size_t) 6);
+    return 0;
+  }
+  if (!namebuf) {
+    return -1;
+  }
+  if (base_sz + 10U >= final_sz || base_sz + 15U >= temp_sz) {
+    return -1;
+  }
+  memcpy(final_out, namebuf, base_sz);
+  memcpy(final_out + base_sz, ".hex", (size_t) 5);
+  memcpy(temp_out, namebuf, base_sz);
+  memcpy(temp_out + base_sz, ".hex.part", (size_t) 10);
+  return 0;
 }
 
 static void jal_include_process(pfile_t *pf)
@@ -343,6 +591,9 @@ static variable_def_t jal_expr_result_def_get(pfile_t *pf, operator_t op,
 }
 
 
+/* -dev_options syntax: after jal_file_process, pfile_pointer_slot_bind_check; no label_fixup/cmd_dump */
+static boolean_t jal_dev_syntax_only = BOOLEAN_FALSE;
+
 static pfile_vectors_t vectors = {
   /* front-end vectors */
   jal_file_open,
@@ -397,14 +648,22 @@ static void jal_show_format(const char *prog, flag_t def)
     }
     printf("    %s\n\n", opt_defs[ii].descr);
   }
+  printf(
+      "-debug fine control (keywords may follow -debug or use -debug=a,b):\n"
+      "    stack varalloc unkbase compiler pcode codegen emu deadcode all\n"
+      "    Example: -debug=stack   or   -debug stack   (stack trace only)\n"
+      "    -debug with no keywords enables general compiler debug (unchanged).\n"
+      "    -no-debug clears debug flags except -codegen (codegen stays as set).\n\n");
+  printf(
+      "-dev_options developer modes (subcommand after '=' or as next argument):\n"
+      "    syntax — jal_file_process (parse + initial p-code), then pointer slot bind\n"
+      "             check; no label fixup, p-code dump pass, PIC codegen, or asm/hex.\n"
+      "    Example: -dev_options=syntax   or   -dev_options syntax\n\n");
 }
 
 static boolean_t opt_def_key_comp(const char *arg,
     boolean_t is_no, boolean_t is_warn, const opt_def_t *def)
 {
-  size_t arg_len;
-
-  arg_len = strlen(arg);
   /* nb: the 2nd line below is a bit obtuse, here's the explanation:
    *     !!(def->opt_flags & OPT_FLAG_WARN)
    *       results in 1 if OPT_FLAG_WARN is set, 0 if not
@@ -419,7 +678,7 @@ static boolean_t opt_def_key_comp(const char *arg,
   return (def->key
     && (!(!!is_warn ^ !!(def->opt_flags & OPT_FLAG_WARN)))
     && (!is_no || def->opt_flags & OPT_FLAG_NO_PREFIX)
-    && (0 == memcmp(arg, def->key, arg_len)));
+    && (0 == memcmp(arg, def->key, strlen(def->key))));
 }
 
 typedef struct cli_expanded_ {
@@ -443,6 +702,8 @@ int main(int argc, char **argv)
   const char *prog_name;
   flag_t      pfile_flags;
   flag_t      pfile_flags_def;
+  unsigned    sim_hex = 0;
+  flag_t      debug_sub;
   char       *namebuf; /* for creating default names */
   pfile_t    *pf;
   boolean_t   err;
@@ -452,6 +713,11 @@ int main(int argc, char **argv)
   int         arg_no;
   ulong       loader_offset;
   ulong       files_disabled;
+  char        hexb_final[2048];
+  char        hexb_temp[2048];
+  boolean_t   hex_atomic_pending;
+  boolean_t   hex_atomic_output;
+  boolean_t   cli_info_only;
 
   err            = BOOLEAN_FALSE;
   inc_path       = 0;
@@ -460,6 +726,9 @@ int main(int argc, char **argv)
   arg_no         = 0;
   loader_offset  = 0;
   files_disabled = 0;
+  hex_atomic_pending = BOOLEAN_FALSE;
+  hex_atomic_output = BOOLEAN_FALSE;
+  cli_info_only = BOOLEAN_FALSE;
 
 #ifdef MSDOS
   cos(1.0); /* silly, but it links in the math bits */
@@ -486,20 +755,27 @@ int main(int argc, char **argv)
     PFILE_FLAG_WARN_ALL
     | PFILE_FLAG_OPT_EXPR_REDUCTION
     | PFILE_FLAG_OPT_CEXPR_REDUCTION
-    | PFILE_FLAG_OPT_VARIABLE_REDUCE
+    | PFILE_FLAG_OPT_VARIABLE_REDUCE  /* RE-ENABLED: Test optimized memory usage */
     | PFILE_FLAG_OPT_VARIABLE_REUSE
     | PFILE_FLAG_BOOT_FUSES
-    | PFILE_FLAG_DEBUG_CODEGEN
+    | PFILE_FLAG_DEBUG_CODEGEN  /* ENABLED: Generate actual PIC machine code by default */
+    /* ENABLED: aggressive DCE (dead stores to never-read variables,
+     * unreachable code, empty blocks).  Upstream left it opt-in, but
+     * the jalv25r9 reference compiler ships it ON -- written-never-read
+     * storage vars (e.g. sd_card.jal's sd_sector_select) must be
+     * eliminated or the fat32 sample grows by ~186 B. */
     | PFILE_FLAG_DEBUG_DEADCODE;
   pfile_flags_def &= ~PFILE_FLAG_WARN_DIRECTIVES;
   pfile_flags = pfile_flags_def;
+  debug_sub     = 0;
 
   printf(JAL_MSG_COMPDATE"\n", __DATE__);
 
   if (arg_no == argc) {
     err = BOOLEAN_TRUE;
   } else {
-    while (!err && (arg_no < argc)) {
+    /* Do not stop on err: a bad -debug= token must not skip the .jal path. */
+    while (arg_no < argc) {
       size_t           ii;
       const opt_def_t *def;
       const char      *arg;
@@ -519,9 +795,11 @@ int main(int argc, char **argv)
           || (0 == strcmp(arg, "/h"))
           || (0 == strcmp(arg, "/?"))) {
         jal_show_format(argv[0], pfile_flags_def);
-        err = BOOLEAN_TRUE;
+        cli_info_only = BOOLEAN_TRUE;
+        arg_no = argc;
       } else if (0 == strcmp(arg, "--version")) {
-        err = BOOLEAN_TRUE;
+        cli_info_only = BOOLEAN_TRUE;
+        arg_no = argc;
       } else if (arg[0] == '-') {
         /* this is an option */
         arg++;
@@ -535,7 +813,11 @@ int main(int argc, char **argv)
           is_no = BOOLEAN_TRUE;
           arg += 3;
         }
-        for (ii = 0; !err && (ii < COUNT(opt_defs)); ii++) {
+        /* Allow GNU-style long options: --opt -> -opt was stripped once above */
+        while (arg[0] == '-') {
+          arg++;
+        }
+        for (ii = 0; ii < COUNT(opt_defs); ii++) {
           if (opt_def_key_comp(arg, is_no, is_warn, opt_defs + ii)) {
             if (!def) {
               def = opt_defs + ii;
@@ -583,6 +865,9 @@ int main(int argc, char **argv)
                pfile_flags &= ~PFILE_FLAG_BOOT_FUSES;
              }
              break;
+          case opt_misc_sim_hex:
+            sim_hex = is_no ? 0u : 1u;
+            break;
           case opt_boot_bloader:
           case opt_boot_fuse:
           case opt_boot_long_start:
@@ -606,6 +891,9 @@ int main(int argc, char **argv)
           case opt_opt_variable_reuse:
           case opt_opt_load_reduce:
           case opt_debug_debug:
+            jal_debug_process_option(argv[arg_no - 1], is_no, &arg_no, argv,
+                argc, &pfile_flags, &debug_sub, &err);
+            break;
           case opt_debug_pcode:
           case opt_debug_codegen: 
           case opt_debug_emu:
@@ -626,6 +914,46 @@ int main(int argc, char **argv)
                 fprintf(stderr, "task count must be > 0\n");
                 err = BOOLEAN_TRUE;
               } 
+            }
+            break;
+          case opt_misc_dev_options:
+            {
+              const char *full;
+              const char *param;
+              const char *eq;
+
+              full = argv[arg_no - 1];
+              if (full[0] == '-') {
+                full++;
+              }
+              if (full[0] == '-') {
+                full++;
+              }
+              eq = strchr(full, '=');
+              if (eq) {
+                param = eq + 1;
+              } else if (arg_no < argc) {
+                param = argv[arg_no];
+                arg_no++;
+              } else {
+                fprintf(stderr,
+                    "Required parameter to dev_options is missing "
+                    "(try -dev_options=syntax or -dev_options syntax)\n");
+                err = BOOLEAN_TRUE;
+                break;
+              }
+              if (!param || !*param) {
+                fprintf(stderr, "dev_options: empty subcommand\n");
+                err = BOOLEAN_TRUE;
+              } else if (0 == strcmp(param, "syntax")) {
+                jal_dev_syntax_only = BOOLEAN_TRUE;
+              } else {
+                fprintf(stderr,
+                    "unknown dev_options subcommand \"%s\" "
+                    "(supported: syntax)\n",
+                    param);
+                err = BOOLEAN_TRUE;
+              }
             }
             break;
           case opt_boot_loader18:
@@ -698,7 +1026,8 @@ int main(int argc, char **argv)
           }
           arg_no++;
         }
-        if (def && (def->opt_flags & OPT_FLAG_PFLAG)) {
+        if (def && (def->opt_flags & OPT_FLAG_PFLAG)
+            && (opt != opt_debug_debug)) {
           if (is_no) {
             pfile_flags &= ~def->pfile_flag;
           } else {
@@ -707,6 +1036,11 @@ int main(int argc, char **argv)
         }
       }
     }
+  }
+  if (cli_info_only) {
+    FREE(inc_path);
+    FREE(pre_include);
+    return EXIT_SUCCESS;
   }
   if (!jal_name) {
     fprintf(stderr, "no source file, use %s --help for help\n",
@@ -728,18 +1062,28 @@ int main(int argc, char **argv)
       sz--;
       if (!inc_path) {
         inc_path = MALLOC(sz + 1);
-        memcpy(inc_path, jal_name, sz);
-        inc_path[sz] = 0;
+        if (!inc_path) {
+          fprintf(stderr, "out of memory\n");
+          err = 1;
+        } else {
+          memcpy(inc_path, jal_name, sz);
+          inc_path[sz] = 0;
+        }
       } else {
         size_t inc_sz;
         char  *tmp;
 
         inc_sz = 1 + strlen(inc_path);
         tmp = REALLOC(inc_path, inc_sz + sz + 1);
-        memmove(tmp + sz + 1, tmp, inc_sz);
-        memcpy(tmp, jal_name, sz);
-        tmp[sz] = ';';
-        inc_path = tmp;
+        if (!tmp) {
+          fprintf(stderr, "out of memory\n");
+          err = 1;
+        } else {
+          memmove(tmp + sz + 1, tmp, inc_sz);
+          memcpy(tmp, jal_name, sz);
+          tmp[sz] = ';';
+          inc_path = tmp;
+        }
       }
     }
     sz = 0;
@@ -765,11 +1109,27 @@ int main(int argc, char **argv)
         memcpy(namebuf, jal_name, sz);
       }
     }
+    if (!err && !(files_disabled & (1 << opt_file_hex))) {
+      if (0 != hex_atomic_paths_build(hexb_final, sizeof hexb_final,
+            hexb_temp, sizeof hexb_temp, hex_name, sz,
+            namebuf)) {
+        fprintf(stderr, "jal: hex output path too long\n");
+        err = BOOLEAN_TRUE;
+      } else {
+        hex_atomic_pending = BOOLEAN_TRUE;
+        hex_atomic_output = BOOLEAN_TRUE;
+      }
+    }
     if (!err
         && (0 == file_open(&f_asm, asm_name, "wt", 
           (files_disabled & (1 << opt_file_asm)) ? 0 : ".asm", sz, namebuf))
-        && (0 == file_open(&f_hex, hex_name, "wt", 
-          (files_disabled & (1 << opt_file_hex)) ? 0 : ".hex", sz, namebuf))
+        && (0 == file_open(&f_hex,
+          hex_atomic_pending ? hexb_temp : hex_name,
+          "wt",
+          hex_atomic_pending
+            ? 0
+            : ((files_disabled & (1 << opt_file_hex)) ? 0 : ".hex"),
+          sz, namebuf))
         && (0 == file_open(&f_lst, lst_name, "wt", 0,      sz, namebuf))
         && (0 == file_open(&f_log, log_name, "wt", 0,      sz, namebuf))) {
       result_t rc;
@@ -785,6 +1145,8 @@ int main(int argc, char **argv)
       rc = pfile_open(&pf, f_asm, f_asm, f_hex, f_log,
         cod_name, pfile_flags, &vectors, 0, task_ct, "JAL "JAL_VERSION_STR);
       if (RESULT_OK == rc) {
+        pfile_mips_sim_hex_set(pf, sim_hex);
+        pfile_debug_sub_set(pf, debug_sub);
         if (log_name) {
           pfile_log(pf, PFILE_LOG_INFO, JAL_MSG_COMPDATE, __DATE__);
         }
@@ -818,14 +1180,37 @@ int main(int argc, char **argv)
             pfile_log(pf, PFILE_LOG_INFO, 
               "%lu tokens, %lu chars; %lu lines; %lu files",
               pfile_token_ct_get(pf), stats.chars, stats.lines, stats.files);
-            pfile_label_fixup(pf);
-            name_buf = MALLOC(sizeof(JAL_MSG_COMPDATE) + 1 + sizeof(__DATE__));
-            if (name_buf) {
-              sprintf(name_buf, JAL_MSG_COMPDATE"\n", __DATE__);
-            }
-            pfile_cmd_dump(pf, (name_buf) ? name_buf : prog_name, argc, argv);
-            if (name_buf) {
-              FREE(name_buf);
+            if (jal_dev_syntax_only) {
+              pfile_pointer_slot_bind_check(pf);
+              if (pfile_errct_get(pf)) {
+                fprintf(stderr,
+                    "jal: -dev_options syntax — parse finished with errors "
+                    "(%lu tokens, %lu lines, %lu files); "
+                    "pointer slot bind check reported problems; "
+                    "skipped label fixup, p-code dump opts, and codegen\n",
+                    (unsigned long) pfile_token_ct_get(pf),
+                    (unsigned long) stats.lines,
+                    (unsigned long) stats.files);
+              } else {
+                fprintf(stderr,
+                    "jal: -dev_options syntax — parse finished OK "
+                    "(%lu tokens, %lu lines, %lu files); "
+                    "pointer slot bind check passed; "
+                    "skipped label fixup, p-code dump opts, and codegen\n",
+                    (unsigned long) pfile_token_ct_get(pf),
+                    (unsigned long) stats.lines,
+                    (unsigned long) stats.files);
+              }
+            } else {
+              pfile_label_fixup(pf);
+              name_buf = MALLOC(sizeof(JAL_MSG_COMPDATE) + 1 + sizeof(__DATE__));
+              if (name_buf) {
+                sprintf(name_buf, JAL_MSG_COMPDATE"\n", __DATE__);
+              }
+              pfile_cmd_dump(pf, (name_buf) ? name_buf : prog_name, argc, argv);
+              if (name_buf) {
+                FREE(name_buf);
+              }
             }
           }
         } else {
@@ -840,14 +1225,32 @@ int main(int argc, char **argv)
     if (f_hex) {
       fclose(f_hex);
     }
+    if (hex_atomic_pending) {
+      if (!err) {
+#if defined(_WIN32)
+        remove(hexb_final);
+#endif
+        if (0 != rename(hexb_temp, hexb_final)) {
+          fprintf(stderr, "jal: could not install hex output %s: %s\n",
+              hexb_final, strerror(errno));
+          err = BOOLEAN_TRUE;
+          remove(hexb_temp);
+        }
+      } else {
+        remove(hexb_temp);
+      }
+      hex_atomic_pending = BOOLEAN_FALSE;
+    }
     if (f_asm) {
       fclose(f_asm);
     }
     if (err) {
-      if (!(pfile_flags & PFILE_FLAG_DEBUG_COMPILER)) {
+      if (!(pfile_flags & PFILE_FLAG_DEBUG_COMPILER) && !debug_sub) {
         file_remove(asm_name, ".asm", sz, namebuf);
       }
-      file_remove(hex_name, ".hex", sz, namebuf);
+      if (!hex_atomic_output) {
+        file_remove(hex_name, ".hex", sz, namebuf);
+      }
       file_remove(cod_name, ".cod", sz, namebuf);
       file_remove(cod_name, ".lst", sz, namebuf);
       file_remove(cod_name, ".log", sz, namebuf);

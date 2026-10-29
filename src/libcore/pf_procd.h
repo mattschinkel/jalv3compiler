@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pf_procd_h__
 #define pf_procd_h__
@@ -52,6 +55,7 @@ struct pfile_proc_ {
   variable_t          ret_ptr;  /* for no stack, this holds a pointer
                                    to the return label */
   const char         *name;
+  int                 irq; /* PIC32 OFFx vector; -1 = unnumbered */
 };
 
 

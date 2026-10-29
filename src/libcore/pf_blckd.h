@@ -5,6 +5,9 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pf_blckd_h__
 #define pf_blckd_h__
@@ -22,6 +25,7 @@ struct pfile_block_ {
 
   variable_def_t var_defs;
   varlist_t      var_active;
+  struct hash_  *var_idx;   /* name -> var_active member (linear fallback) */
   lbllist_t      label_user;
 
   variable_t     bit_bucket;

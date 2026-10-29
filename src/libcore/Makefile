@@ -3,6 +3,6 @@
 # Copyright (c) 2008, Kyle A. York
 # All rights reserved
 #
-LIBRARY=libcore-$(ARCH).a
+LIBRARY=libcore-$(LIBTAG).a
 include ../Makefile.inc
 

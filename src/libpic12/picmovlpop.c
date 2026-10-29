@@ -6,9 +6,13 @@
  **               2020-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include <assert.h>
 #include <string.h>
+#include "../libutils/mem.h"
 #include "../libcore/pf_proc.h"
 #include "pic_msg.h"
 #include "pic_inst.h"
@@ -160,9 +164,39 @@ boolean_t pic_code_pclath_post_analyze(pfile_t *pf)
   unsigned   ins_ct; /* instruction ct */
   unsigned   rem_ct;
   boolean_t  lbl_fix;
+  unsigned   lbl_ct;
+  unsigned   lbl_ix;
+  pic_pc_t  *lbl_hi_was;
 
   lbl_fix = BOOLEAN_FALSE;
-  pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_CHECK);
+  pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
+
+  lbl_ct = 0;
+  for (code = pic_code_list_head_get(pf);
+       code;
+       code = pic_code_next_get(code)) {
+    if (pic_code_label_get(code)) {
+      lbl_ct++;
+    }
+  }
+  lbl_hi_was = (pic_pc_t *) MALLOC(sizeof(*lbl_hi_was) * (lbl_ct ? lbl_ct : 1));
+  if (!lbl_hi_was) {
+    pfile_log(pf, PFILE_LOG_ERR, "pic_code_pclath_post_analyze: out of memory");
+    return BOOLEAN_FALSE;
+  }
+  lbl_ix = 0;
+  for (code = pic_code_list_head_get(pf);
+       code;
+       code = pic_code_next_get(code)) {
+    if (pic_code_label_get(code)) {
+      label_t lbl;
+
+      lbl = pic_code_label_get(code);
+      lbl_hi_was[lbl_ix++] =
+          (pic_pc_t) ((unsigned) label_pc_get(lbl) & ~0xffU);
+    }
+  }
+
   for (ins_ct = 0, rem_ct = 0, code = pic_code_list_head_get(pf);
        code;
        ins_ct++) {
@@ -181,28 +215,34 @@ boolean_t pic_code_pclath_post_analyze(pfile_t *pf)
         rem_ct++;
       }
     }
-    if (rem_ct) {
-      /* adjust the PC */
-      pic_code_pc_set(code, (pic_pc_t) (pic_code_pc_get(code) - rem_ct));
-      if (pic_code_label_get(code)) {
-        pic_pc_t pc_old;
-        pic_pc_t pc_new;
-        label_t  lbl;
-
-        lbl = pic_code_label_get(code);
-        pc_old = (pic_pc_t) label_pc_get(lbl);
-        pc_new = (pic_pc_t) (pc_old - rem_ct);
-        label_pc_set(lbl, pic_code_pc_get(code));
-        if ((pc_old & ~0xff) != (pc_new & ~0xff)) {
-          pfile_log(pf, PFILE_LOG_DEBUG, 
-              "...%s moved from 0x%04lx to 0x%04lx (dist=%u) %p",
-              label_name_get(lbl), pc_old, pc_new, rem_ct, (void *) lbl);
-          lbl_fix = BOOLEAN_TRUE;
-        }
-      }
-    }
     code = next;
   }
+
+  pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
+
+  lbl_ix = 0;
+  for (code = pic_code_list_head_get(pf);
+       code;
+       code = pic_code_next_get(code)) {
+    if (pic_code_label_get(code)) {
+      label_t  lbl;
+      pic_pc_t newhi;
+
+      lbl = pic_code_label_get(code);
+      newhi = (pic_pc_t) ((unsigned) label_pc_get(lbl) & ~0xffU);
+      if (lbl_hi_was[lbl_ix++] != newhi) {
+        pfile_log(pf, PFILE_LOG_DEBUG,
+            "...%s MOVLP page changed (was 0x%04x now 0x%04x) %p",
+            label_name_get(lbl),
+            (unsigned) lbl_hi_was[lbl_ix - 1],
+            (unsigned) newhi,
+            (void *) lbl);
+        lbl_fix = BOOLEAN_TRUE;
+      }
+    }
+  }
+  FREE(lbl_hi_was);
+
   pfile_log(pf, PFILE_LOG_DEBUG, "...removed %u of %u instructions", 
       rem_ct, ins_ct);
   pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_CHECK);

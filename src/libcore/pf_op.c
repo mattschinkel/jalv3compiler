@@ -5,33 +5,55 @@
  ** Copyright (c) 2007, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <assert.h>
 #include "pf_expr.h"
 #include "pf_op.h"
 
 /* return n sign extended as necessary */
-static variable_const_t pfile_op_val_sign_extend(
-    variable_const_t     n,
+static unsigned pfile_op_def_bit_ct_get(
     const variable_def_t def)
 {
-  variable_sz_t sz; /* *bit* size */
-
-  assert((VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(def))
-      || (VARIABLE_DEF_TYPE_BOOLEAN == variable_def_type_get(def)));
+  variable_sz_t sz;
 
   sz = variable_def_sz_get(def);
   if (!variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT)) {
     sz *= 8;
   }
+  if (sz > VARIABLE_CONST_BIT_CT) {
+    sz = VARIABLE_CONST_BIT_CT;
+  }
+  return sz;
+}
+
+static variable_const_t pfile_op_val_sign_extend(
+    variable_const_t     n,
+    const variable_def_t def)
+{
+  unsigned sz; /* *bit* size */
+
+  assert((VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(def))
+      || (VARIABLE_DEF_TYPE_BOOLEAN == variable_def_type_get(def))
+      || (VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(def))
+      || (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      || (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def)));
+
+  sz = pfile_op_def_bit_ct_get(def);
   if (VARIABLE_DEF_TYPE_BOOLEAN == variable_def_type_get(def)) {
     n = !!n;
-  } else if (sz < 32) {
-    if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED) 
-        && (n & (1UL << (sz - 1)))) {
-      n |= ~((1UL << sz) - 1);
-    } else {
-      n &= (1UL << sz) - 1;
+  } else if (VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(def)) {
+    /* Function types don't need sign extension */
+    /* They will be handled by the calling code */
+  } else if (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def)) {
+    /* Array types don't need sign extension */
+    /* They will be handled by the calling code */
+  } else {
+    n &= variable_const_mask_get(sz);
+    if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
+      n = variable_const_sign_extend(n, sz);
     }
   }
   return n;
@@ -42,28 +64,16 @@ static variable_const_t pfile_op_val_get(
     variable_const_t     n,
     const variable_def_t def)
 {
-  variable_sz_t sz;
+  /* Debug: check what type we're getting */
+  variable_def_type_t def_type = variable_def_type_get(def);
+  /* Support for extended types in pointer operations */
+  assert((VARIABLE_DEF_TYPE_INTEGER == def_type)
+      || (VARIABLE_DEF_TYPE_BOOLEAN == def_type)
+      || (VARIABLE_DEF_TYPE_POINTER == def_type)
+      || (VARIABLE_DEF_TYPE_FUNCTION == def_type)
+      || (VARIABLE_DEF_TYPE_ARRAY == def_type));
 
-  assert((VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(def))
-      || (VARIABLE_DEF_TYPE_BOOLEAN == variable_def_type_get(def)));
-
-  sz = variable_def_sz_get(def);
-  if (!variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT)) {
-    sz *= 8;
-  }
-  if (VARIABLE_DEF_TYPE_BOOLEAN == variable_def_type_get(def)) {
-    n = !!n;
-  } else {
-    if (sz < 32) {
-      n &= ((1 << sz) - 1);
-    }
-    if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT)
-      && (1 == sz) 
-      && variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
-      n = -n;
-    }
-  }
-  return pfile_op_val_sign_extend(n, def);
+  return pfile_op_val_sign_extend(variable_const_normalize(n, def), def);
 }
 
 pf_const_t pfile_op_const_exec(pfile_t *pf,
@@ -77,9 +87,8 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
   pf_const_t       n;
   pf_const_t       n1;
   pf_const_t       n2;
-  variable_sz_t    sz;
+  unsigned         sz;
   variable_const_t mask;
-  variable_const_t sign_bit;
   boolean_t        result_is_signed;
   boolean_t        is_float;
 
@@ -130,9 +139,8 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
       }
     }
   }
-  sz               = 8 * variable_def_sz_get(rdef);
-  mask             = (sz < 32) ? (1UL << sz) - 1 : -1UL;
-  sign_bit         = 1UL << 31;
+  sz               = pfile_op_def_bit_ct_get(rdef);
+  mask             = variable_const_mask_get(sz);
   result_is_signed = variable_def_flag_test(
                         pfile_variable_def_promotion_get(pf, OPERATOR_NULL,
                         val1, val2), VARIABLE_DEF_FLAG_SIGNED);
@@ -148,6 +156,11 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
     case OPERATOR_CT:
       assert(0);
       break;
+    case OPERATOR_POINTER_ASSIGN:
+      /* Pointer assignments are not constant expressions */
+      n.type = PF_CONST_TYPE_NONE;
+      n.u.n = 0;
+      return n;
     case OPERATOR_ADD:
       if (is_float) {
         n.type = PF_CONST_TYPE_FLOAT;
@@ -192,22 +205,35 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
           pfile_log(pf, PFILE_LOG_ERR, "divide by zero");
         } else {
           boolean_t sign;
+          boolean_t sign1;
 
-          sign = BOOLEAN_FALSE;
-          if (result_is_signed) {
-            if (value_is_signed(val1) && (n1.u.n & sign_bit)) {
-              sign   = BOOLEAN_TRUE;
-              n1.u.n = -n1.u.n;
-            }
-            if (value_is_signed(val2) && (n2.u.n & sign_bit)) {
-              sign  ^= BOOLEAN_TRUE;
-              n2.u.n = -n2.u.n;
-            }
+          /* Sign fix-up is driven by the constants themselves: a folded
+           * negative constant (e.g. -7, or 10 / -2) may carry an unsigned
+           * literal def, so value_is_signed()/result_is_signed() under-
+           * report and the divide ran unsigned over the full constant.
+           * A positive literal never has the const sign bit set, so this
+           * cannot misfire on genuinely unsigned operands.
+           * Quotient sign = dividend XOR divisor; remainder sign follows
+           * the dividend alone (C truncation semantics). */
+          sign  = BOOLEAN_FALSE;
+          sign1 = BOOLEAN_FALSE;
+          if (variable_const_is_negative(n1.u.n, VARIABLE_CONST_BIT_CT)) {
+            sign   = BOOLEAN_TRUE;
+            sign1  = BOOLEAN_TRUE;
+            n1.u.n = -n1.u.n;
+          }
+          if (variable_const_is_negative(n2.u.n, VARIABLE_CONST_BIT_CT)) {
+            sign  ^= BOOLEAN_TRUE;
+            n2.u.n = -n2.u.n;
           }
           n1.u.n = n1.u.n & mask;
           n2.u.n = n2.u.n & mask;
           n.u.n = (OPERATOR_DIV == op) ? n1.u.n / n2.u.n : n1.u.n % n2.u.n;
-          if (sign) {
+          if (OPERATOR_DIV == op) {
+            if (sign) {
+              n.u.n = -n.u.n;
+            }
+          } else if (sign1) {
             n.u.n = -n.u.n;
           }
         }
@@ -234,8 +260,8 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
       } else {
         n.type = PF_CONST_TYPE_INTEGER;
         if (BOOLEAN_FALSE == result_is_signed) {
-          variable_sz_t sz1;
-          variable_sz_t sz2;
+          unsigned sz1;
+          unsigned sz2;
 
           sz1 = value_sz_get(val1);
           if (!value_is_bit(val1)) {
@@ -249,20 +275,18 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
           if (sz < 8) {
             sz = 8;
           }
-          mask = (sz < 32) ? (1UL << sz) - 1 : -1UL;
+          mask = variable_const_mask_get(sz);
           n1.u.n &= mask;
           n2.u.n &= mask;
         }
         switch (op) {
           case OPERATOR_LT:
-            n.u.n = (result_is_signed)
-                  ? ((long) n1.u.n < (long) n2.u.n)
-                  : (n1.u.n < n2.u.n);
+            n.u.n = variable_const_cmp(n1.u.n, n2.u.n, sz,
+                result_is_signed) < 0;
             break;
           case OPERATOR_LE:
-            n.u.n = (result_is_signed)
-                  ? ((long) n1.u.n <= (long) n2.u.n)
-                  : (n1.u.n <= n2.u.n);
+            n.u.n = variable_const_cmp(n1.u.n, n2.u.n, sz,
+                result_is_signed) <= 0;
             break;
           case OPERATOR_EQ:
             n.u.n = (n1.u.n == n2.u.n);
@@ -271,14 +295,12 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
             n.u.n = (n1.u.n != n2.u.n);
             break;
           case OPERATOR_GE:
-            n.u.n = (result_is_signed)
-                  ? ((long) n1.u.n >= (long) n2.u.n)
-                  : (n1.u.n >= n2.u.n);
+            n.u.n = variable_const_cmp(n1.u.n, n2.u.n, sz,
+                result_is_signed) >= 0;
             break;
           case OPERATOR_GT:
-            n.u.n = (result_is_signed)
-                  ? ((long) n1.u.n > (long) n2.u.n)
-                  : (n1.u.n > n2.u.n);
+            n.u.n = variable_const_cmp(n1.u.n, n2.u.n, sz,
+                result_is_signed) > 0;
             break;
           default:
             break; /* cannot get here */
@@ -344,7 +366,7 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
     case OPERATOR_NEG:
       if (is_float) {
         n.type = PF_CONST_TYPE_FLOAT;
-        n.u.f = -n.u.f;
+        n.u.f = -n1.u.f;
       } else {
         n.type = PF_CONST_TYPE_INTEGER;
         n.u.n = -n1.u.n;
@@ -371,37 +393,36 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
     case OPERATOR_SHIFT_LEFT:
       if (!is_float) {
         n.type = PF_CONST_TYPE_INTEGER;
-        n.u.n = n1.u.n << n2.u.n;
+        n.u.n = (n2.u.n >= VARIABLE_CONST_BIT_CT)
+          ? 0
+          : (n1.u.n << (unsigned) n2.u.n);
       }
       break;
     case OPERATOR_SHIFT_RIGHT:
     case OPERATOR_SHIFT_RIGHT_ARITHMETIC:
       if (!is_float) {
         n.type = PF_CONST_TYPE_INTEGER;
-        if (value_is_signed(val1)
+        {
+          unsigned sign_bit;
+
+          if (value_is_signed(val1)
             && (value_byte_sz_get(val1) < variable_def_sz_get(rdef))) {
-          sign_bit = variable_def_sz_get(def1);
-          if (!variable_def_flag_test(def1, VARIABLE_DEF_FLAG_BIT)) {
-            sign_bit *= 8;
+            sign_bit = pfile_op_def_bit_ct_get(def1);
+          } else {
+            sign_bit = pfile_op_def_bit_ct_get(rdef);
           }
-        } else {
-          sign_bit = variable_def_sz_get(rdef);
-          if (!variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_BIT)) {
-            sign_bit *= 8;
-          }
-        }
-        sign_bit = 1UL << (sign_bit - 1);
-        if (n2.u.n >= sz) {
-          n.u.n = (variable_const_t) (((OPERATOR_SHIFT_RIGHT_ARITHMETIC == op)
-              && (n1.u.n & sign_bit))
+          if (n2.u.n >= sz) {
+            n.u.n = (variable_const_t) (((OPERATOR_SHIFT_RIGHT_ARITHMETIC == op)
+              && variable_const_is_negative(n1.u.n, sign_bit))
             ? -1
             : 0);
-        } else {
-          n.u.n = (n1.u.n & mask) >> n2.u.n;
-          if ((OPERATOR_SHIFT_RIGHT_ARITHMETIC == op)
-              && (sz - n2.u.n < 32)
-              && (n1.u.n & sign_bit)) {
-            n.u.n |= ~((1UL << (sz - n2.u.n)) - 1);
+          } else {
+            n.u.n = (n1.u.n & mask) >> (unsigned) n2.u.n;
+            if ((OPERATOR_SHIFT_RIGHT_ARITHMETIC == op)
+                && variable_const_is_negative(n1.u.n, sign_bit)) {
+              n.u.n = variable_const_sign_extend(n.u.n,
+                  (unsigned) (sz - n2.u.n));
+            }
           }
         }
         n.u.n &= mask;

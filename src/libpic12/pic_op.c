@@ -6,6 +6,9 @@
  **           (c) 2020-2025, Rob Jansen
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <assert.h>
 #include <errno.h>
@@ -21,11 +24,6 @@
 #include "piccolst.h"
 #include "pic_inst.h"
 #include "pic_op.h"
- /* RJ: This code was added to solve issue#36 but introduced another problem
-     with printing strings from both const and var arrays so removed for now. */
-#if 0
-#include "../libcore/value.h"
-#endif
 
 /*
  * general note:
@@ -53,6 +51,18 @@ static void pic_shift_right(pfile_t *pf, operator_t op, value_t dst,
   value_t val1, value_t val2, unsigned flags);
 static void pic_shift_left(pfile_t *pf, operator_t op, value_t dst,
   value_t val1, value_t val2, unsigned flags);
+static boolean_t pic_variable_is_array_table(variable_t sv);
+static boolean_t pic_variable_is_rom_int_const_table(variable_t sv);
+static boolean_t pic_dst_backs_pointer_storage(value_t dst);
+
+typedef struct pic_dynamic_bit_ref_ {
+  value_t byte;
+  value_t mask;
+  value_t byte_index;
+  value_t bit_index;
+} pic_dynamic_bit_ref_t;
+static boolean_t pic_value_is_dynamic_bit_array_element(value_t val);
+static boolean_t pic_dynamic_bit_load_to_w(pfile_t *pf, value_t src);
 
 /*
  * these are used to prevent duplicate calls to _multiply or _divide
@@ -176,14 +186,19 @@ static value_t pic_var_temp_get_assign(pfile_t *pf, value_t val, value_t val2,
 static uchar pic_value_const_byte_get(const value_t val, unsigned ofs)
 {
   variable_const_t cn;
+  unsigned         bits;
 
   cn = value_const_get(val);
+  bits = value_sz_get(val);
+  if (!value_is_bit(val)) {
+    bits *= 8;
+  }
   if (ofs >= value_sz_get(val)) {
-    cn = (value_is_signed(val) && (cn >= 0x8000000))
+    cn = (value_is_signed(val) && variable_const_is_negative(cn, bits))
       ? 0xff
       : 0x00;
   } else {
-    cn >>= (8 * ofs);
+    cn = variable_const_byte_get(cn, ofs);
   }
   return (uchar) cn;
 }
@@ -212,6 +227,19 @@ void pic_fsr_setup(pfile_t *pf, value_t val)
 {
   pic_stvar_fsr_mark(pf);
   if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+    /* Check if this is a function parameter that should use direct addressing */
+    variable_t var = value_variable_get(val);
+    if (var) {
+      const char *name = variable_name_get(var);
+      /* Skip FSR0 for function parameters, preserve for actual pointer operations */
+      if (name && (strstr(name, "_device_put") ||
+                   strstr(name, "_str_") ||
+                   strstr(name, "___str"))) {
+        /* Skip FSR0 for specific string-parameter hacks; do not use strstr(..., "str")
+         * — it matches identifiers like string1/string2 and breaks FSR0 for indexing. */
+        return;
+      }
+    }
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 1, PIC_OPDST_W);
     pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 0, PIC_OPDST_W);
@@ -223,6 +251,350 @@ void pic_fsr_setup(pfile_t *pf, value_t val)
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 1, PIC_OPDST_F);
     pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
     pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+  }
+}
+
+static variable_sz_t pic_dynamic_index_byte_sz_get(value_t idx)
+{
+  variable_sz_t idx_sz;
+
+  idx_sz = value_byte_sz_get(idx);
+  return (idx_sz < 1) ? 1 : idx_sz;
+}
+
+static boolean_t pic_variable_chunks_holed(variable_t var);
+static void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
+    value_t idx, size_t offset, boolean_t hybrid);
+static void pic_fsr_chunk_walk_emit(pfile_t *pf, variable_t var,
+    value_t idx, boolean_t hybrid);
+
+static void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
+    value_t array_val)
+{
+  variable_sz_t idx_sz;
+  variable_t    walk_var;
+
+  walk_var = value_variable_get(array_val);
+  if (!pic_variable_chunks_holed(walk_var)) {
+    /* unescaped pointer bind: walk the TARGET's chunks */
+    walk_var = pic_var_pointer_bind_walk_target(walk_var);
+  }
+  if (pic_variable_chunks_holed(walk_var)) {
+    pic_fsr_chunk_walk_emit(pf, walk_var, idx, BOOLEAN_TRUE);
+    return;
+  }
+  idx_sz = pic_dynamic_index_byte_sz_get(idx);
+  /* the subscript byte offset cannot exceed the array's span, so an
+   * array of at most 256 bytes has a single-byte index however wide
+   * the index expression's type is (e.g. word `address / 2` into a
+   * byte[256] sector buffer). Narrowing drops the high-byte
+   * addwfc/addwf fsr0h pair per access site; the carry fixup below
+   * keeps an unaligned base correct. */
+  {
+    variable_t array_var;
+
+    array_var = value_variable_get(array_val);
+    if (array_var) {
+      variable_sz_t span;
+
+      /* the SPAN must come from the array variable's def, not the
+       * subscripted value's def: `arr[i]` carries the ELEMENT view
+       * (storage need 1), which made this guard see span==1 for every
+       * array and take the carry-free fast path whenever the BASE fit
+       * a 256 window -- base+index then wrapped into low RAM (the
+       * PIC18 FSR-carry defect, docs/investigations/
+       * pic18_runtime_index_fsr_carry_20261005.md) */
+      span = pic_variable_def_storage_need_get(pf,
+          variable_def_get(array_var), 0);
+      if (span && (span <= 256)) {
+        idx_sz = 1;
+        /* when the allocated base is known and the whole array fits
+         * below the next 256 boundary, base_lo + idx cannot carry
+         * into FSR0H and the fixup is dead (checked at emission:
+         * bases are known from generate pass 2 on) */
+        {
+          variable_base_t base;
+
+          base = value_base_get(array_val);
+          if ((VARIABLE_BASE_UNKNOWN != base)
+              && (((base & 0xFFU) + span) <= 256U)) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
+            pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0l",
+                PIC_OPDST_F);
+            return;
+          }
+        }
+      }
+    }
+  }
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
+  pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0l", PIC_OPDST_F);
+  if (idx_sz > 1) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWFc, idx, 1, PIC_OPDST_W);
+    pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0h", PIC_OPDST_F);
+  } else {
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  }
+}
+
+static void pic_classic_irp_set_from_w(pfile_t *pf)
+{
+  value_t hi;
+
+  hi = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  if (!hi) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, hi, 0);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+  pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, hi, 0, 0);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+  pic_var_temp_release(pf, hi);
+}
+
+/* Layer 2: a variable placed across bank holes (non-adjacent chunks).
+ * Contiguous multi-node runs (PIC18 bank splits) are still linear. */
+static boolean_t pic_variable_chunks_holed(variable_t var)
+{
+  variable_ct_t ct;
+  variable_ct_t ii;
+
+  ct = var ? pic_variable_chunk_ct_get(var) : 0;
+  if (ct <= 1) {
+    return BOOLEAN_FALSE;
+  }
+  for (ii = 1; ii < ct; ii++) {
+    if (pic_variable_chunk_base_get(var, ii)
+        != (variable_base_t) (pic_variable_chunk_base_get(var, ii - 1)
+          + pic_variable_chunk_sz_get(var, ii - 1))) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* Layer 2: holed linear arrays -- walk the chunk map at run time. The
+ * byte offset is copied to a scratch (the walk consumes it: compare,
+ * then subtract the chunk size), and each chunk branch computes the
+ * element address completely before jumping to done. Chunk sizes are
+ * bank-node bounded (< 256), so a byte compare with a high-byte
+ * zero-test decides membership; the subtract rides the generic
+ * OPERATOR_SUB emitter (carry-correct for wide offsets). Modeled on
+ * the dynamic-bit chunk walk (pic_dynamic_bit_ref_addr_setup). */
+static void pic_fsr_chunk_walk_emit(pfile_t *pf, variable_t var,
+    value_t idx, boolean_t hybrid)
+{
+  pic_fsr_chunk_walk_emit_ofs(pf, var, idx, 0, hybrid);
+}
+
+/* offset-aware walk: the scratch t is initialized to idx + offset (the
+ * const part folded out of a pointer-view subscript, e.g. p[256 + i]).
+ * W-staged values around the caller are NOT touched -- the offset add
+ * rides the walk's own scratch (found the hard way: emitting pic_op
+ * arithmetic mid-addressing destroyed the staged RHS of the store). */
+static void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
+    value_t idx, size_t offset, boolean_t hybrid)
+{
+  variable_ct_t  ct;
+  variable_ct_t  ii;
+  variable_sz_t  idx_sz;
+  unsigned       t_wide;
+  value_t        t;
+  label_t        done;
+
+  ct = pic_variable_chunk_ct_get(var);
+  idx_sz = pic_dynamic_index_byte_sz_get(idx);
+  t_wide = ((idx_sz > 1) || (offset > 0xFFU)) ? 1 : 0;
+  t = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE,
+      t_wide ? 2 : 1);
+  if (!t) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
+  if (idx_sz > 1) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+  } else if (offset > 0xFFU) {
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, t, 1);
+  }
+  if (offset) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+        (unsigned) (offset & 0xFFU));
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
+    if ((idx_sz > 1) || (offset > 0xFFU)) {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
+      if (offset > 0xFFU) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+            (unsigned) ((offset >> 8) & 0xFFU));
+        pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
+      }
+    }
+  }
+
+  done = pfile_label_alloc(pf, 0);
+  for (ii = 0; ii < ct; ii++) {
+    variable_sz_t    sz;
+    variable_base_t  cb;
+    label_t          next;
+    value_t          cval;
+
+    sz = pic_variable_chunk_sz_get(var, ii);
+    cb = pic_variable_chunk_base_get(var, ii);
+    next = LABEL_NONE;
+    if (ii + 1 < ct) {
+      next = pfile_label_alloc(pf, 0);
+      if (idx_sz > 1) {
+        /* offset >= 256 cannot be in this (< 256 byte) chunk */
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+        pic_instr_append_n(pf, PIC_OPCODE_GOTO, next);
+      }
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, sz);
+      pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_W);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_n(pf, PIC_OPCODE_GOTO, next);
+    }
+    if (hybrid) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, cb & 0xff);
+      pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (cb >> 8) & 0xff);
+      pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 0, PIC_OPDST_W);
+      pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0l", PIC_OPDST_F);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+      if (t_wide) {
+        /* a single-chunk map never runs the subtract ladder, so t can
+         * still hold the FULL (>= 256) linear index -- its high byte
+         * belongs in fsr0h (ladder-reduced chunks carry t+1 == 0 and
+         * the add is a no-op) */
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
+        pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0h",
+            PIC_OPDST_F);
+      }
+    } else {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, cb & 0xff);
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_W);
+      pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+      /* IRP = (chunk base >= 0x100) OR carry of the low-byte add: a
+       * chunk in banks 2/3 needs IRP set even when the low-byte sum
+       * does not carry (base 0x110 + offset 0x19 computed 0x23 with
+       * IRP left clear and landed in bank 0 -- found by the 16f877
+       * >256-byte runtime witness, 2026-10-26) */
+      if (cb & 0x100) {
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+      } else {
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+      }
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+      if (t_wide) {
+        /* full linear index still in t (single-chunk map): IRP takes
+         * t's high byte too */
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+      }
+    }
+    if (LABEL_NONE != next) {
+      pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+      pic_instr_append_label(pf, next);
+      cval = pfile_constant_get(pf, sz, VARIABLE_DEF_NONE);
+      if (cval) {
+        pic_op(pf, OPERATOR_SUB, t, t, cval);
+        value_release(cval);
+      } else {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+      label_release(next);
+    }
+  }
+  pic_instr_append_label(pf, done);
+  label_release(done);
+  pic_var_temp_release(pf, t);
+}
+
+/* idx_range: statically-known byte span the index may legally cover
+ * (array byte size minus element offset); 0 = unknown. var: the array
+ * variable (VARIABLE_NONE for pointer-slot storage that has no chunk
+ * map of its own). */
+void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
+    variable_t var, variable_base_t base, value_t idx,
+    variable_sz_t idx_range)
+{
+  variable_sz_t idx_sz;
+  boolean_t     wide16;
+
+  if (!pic_variable_chunks_holed(var)) {
+    var = pic_var_pointer_bind_walk_target(var);
+  }
+  if (pic_variable_chunks_holed(var)) {
+    pic_fsr_chunk_walk_emit(pf, var, idx, BOOLEAN_FALSE);
+    return;
+  }
+  idx_sz = pic_dynamic_index_byte_sz_get(idx);
+  wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+  /* const index: fold into the base and use a literal high half (ADDWF
+   * with a const value would read the const's value as a REGISTER
+   * address -- offset 2 reads PCL) */
+  if (value_is_const(idx)) {
+    variable_base_t abs_addr;
+
+    abs_addr = base + (variable_base_t) value_const_get(idx);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+        (unsigned) (abs_addr & 0xff));
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF,
+        wide16 ? "_fsr0l" : "_fsr");
+    if (wide16) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (unsigned) ((abs_addr >> 8) & 0xff));
+      pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+    } else {
+      pic_instr_append(pf, (abs_addr >= 256)
+          ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
+    }
+    return;
+  }
+  /* Static-window fast path: a byte-sized index whose legal range keeps
+   * base+index inside the first 256-byte FSR window needs no 16-bit
+   * carry chain and a statically clear IRP.  Out-of-range subscripts
+   * are undefined (no bounds checking), so the range precondition is
+   * the language contract; jalv25r9 emitted this exact shape. */
+  if ((1 == idx_sz) && (idx_range > 0)
+      && ((unsigned long) base + (unsigned long) idx_range) <= 0x100UL) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, idx, 0, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF,
+        wide16 ? "_fsr0l" : "_fsr");
+    if (wide16) {
+      pic_instr_append_reg(pf, PIC_OPCODE_CLRF, "_fsr0h");
+    } else {
+      pic_instr_append(pf, PIC_OPCODE_IRP_CLR);
+    }
+    return;
+  }
+  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+  pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, idx, 0, PIC_OPDST_W);
+  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF,
+      wide16 ? "_fsr0l" : "_fsr");
+  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+  pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+  if (idx_sz > 1) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, idx, 1, PIC_OPDST_W);
+  }
+  if (wide16) {
+    /* W holds the computed high byte; the 16-bit FSR needs it stored,
+     * not an IRP latch (there is none on these cores) */
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  } else {
+    pic_classic_irp_set_from_w(pf);
   }
 }
 
@@ -246,6 +618,162 @@ void pic_fsr_setup(pfile_t *pf, value_t val)
  */
 static void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
     value_t src, value_t val2);
+
+/* PIC14 lookup CALL needs the table index in W. pic_instr_append_f_d(MOVF)
+ * is only correct for a plain file register; indexed RAM (INDF / v__ind)
+ * needs FSR setup from pic_op_assign (nested index into var array as lookup
+ * subscript — GitHub jalv2compiler #40). */
+static boolean_t pic_lookup_index_ok_for_movf(value_t baseofs)
+{
+  variable_t v;
+
+  if (!baseofs) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_is_bit(baseofs) || value_is_indirect(baseofs)) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_flag_test(baseofs, VALUE_FLAG_POINTER)) {
+    return BOOLEAN_FALSE;
+  }
+  v = value_variable_get(baseofs);
+  if (!v || VARIABLE_NONE == v) {
+    return BOOLEAN_FALSE;
+  }
+  if (VALUE_NONE != value_baseofs_get(baseofs)) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
+static void pic_lookup_index_load_w(pfile_t *pf, value_t baseofs)
+{
+  if (value_is_bit(baseofs)) {
+    pic_op_assign(pf, OPERATOR_ASSIGN, VALUE_NONE, baseofs, VALUE_NONE);
+  } else if (pic_lookup_index_ok_for_movf(baseofs)) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 0, PIC_OPDST_W);
+  } else {
+    pic_op_assign(pf, OPERATOR_ASSIGN, VALUE_NONE, baseofs, VALUE_NONE);
+  }
+}
+
+/* True array-of-pointers (e.g. **`var pointer var pointer var byte x[N]`**):
+ * outer def is ARRAY of POINTER; FSR must load from the pointer *slot* words,
+ * not linear *slot+i pointee math (MOVLW-on-indirect **`v__ind`** bug on PIC14).
+ * Folded **`var pointer var byte p[N]`** is POINTER→ARRAY (one pointer slot). */
+static boolean_t pic_value_variable_is_array_of_pointers(const value_t val)
+{
+  variable_t              v;
+  variable_def_t        vd;
+  variable_def_member_t   mbr;
+  variable_def_t        em;
+
+  v = value_variable_get(val);
+  if (!v || VARIABLE_NONE == v) {
+    return BOOLEAN_FALSE;
+  }
+  vd = variable_def_get(v);
+  if (!vd || VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(vd)) {
+    return BOOLEAN_FALSE;
+  }
+  mbr = variable_def_member_get(vd);
+  em  = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  return (em && VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(em));
+}
+
+static boolean_t pic_value_is_array_pointer_slot_storage(const value_t val)
+{
+  return value_flag_test(val, VALUE_FLAG_PTR_SLOT_RAW);
+}
+
+/* True if we should emit a runtime "all slot bytes zero" check before loading
+ * FSR from a pointer variable. Skips legacy string / device_put paths that
+ * are not normal `var pointer` GPR slots. */
+static boolean_t pic_pointer_runtime_null_guard_eligible(variable_t v)
+{
+  const char *nm;
+
+  if (!v || VARIABLE_NONE == v || !variable_is_pointer(v)) {
+    return BOOLEAN_FALSE;
+  }
+  nm = variable_name_get(v);
+  if (nm && (strstr(nm, "_device_put")
+      || strstr(nm, "_str_")
+      || strstr(nm, "___str"))) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
+/*
+ * If every byte of the pointer slot at base[slot_offs..] is zero, jump to a
+ * local infinite loop (never uses a bogus FSR). Z=1 after IOR means all bytes
+ * read as 0 (typical cleared BSS / never bound). BTFSS STATUS,Z skips the
+ * `goto lbl_ok` when Z=1 (all slot bytes zero) so execution falls into hang.
+ */
+static void pic_pointer_slot_emit_null_guard(pfile_t *pf, value_t base,
+    variable_sz_t slot_offs)
+{
+  label_t       lbl_hang;
+  label_t       lbl_ok;
+  variable_sz_t psz;
+  variable_sz_t jj;
+  variable_t    v;
+
+  v = value_variable_get(base);
+  if (!pic_pointer_runtime_null_guard_eligible(v)) {
+    return;
+  }
+  lbl_hang = pfile_label_alloc(pf, 0);
+  lbl_ok   = pfile_label_alloc(pf, 0);
+  psz = pic_pointer_size_get(pf);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, slot_offs + 0, PIC_OPDST_W);
+  for (jj = 1; jj < psz; jj++) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, base, slot_offs + jj,
+        PIC_OPDST_W);
+  }
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_ok);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_hang);
+  pic_instr_append_label(pf, lbl_hang);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_hang);
+  pic_instr_append_label(pf, lbl_ok);
+  label_release(lbl_hang);
+  label_release(lbl_ok);
+}
+
+/* Dereferenced `var pointer … as var string`: pointee is STRING_DYNAMIC.
+ * Indexing the handle must load FSR from the pointer slot (`*p`+field), not
+ * LFSR to the slot's file address (`p`+field). */
+static boolean_t pic_value_indirect_heap_string_through_pointer(const value_t val)
+{
+  variable_t            v;
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        pt;
+
+  if (!value_is_indirect(val) || !value_flag_test(val, VALUE_FLAG_POINTER)) {
+    return BOOLEAN_FALSE;
+  }
+  v = value_variable_get(val);
+  if (!v || !variable_is_pointer(v)) {
+    return BOOLEAN_FALSE;
+  }
+  def = variable_def_get(v);
+  if (!def) {
+    return BOOLEAN_FALSE;
+  }
+  mbr = variable_def_member_get(def);
+  if (!mbr) {
+    return BOOLEAN_FALSE;
+  }
+  pt = variable_def_member_def_get(mbr);
+  return (pt && variable_def_flag_test(pt,
+      VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC))
+      ? BOOLEAN_TRUE
+      : BOOLEAN_FALSE;
+}
+
 void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
 {
   value_t baseofs;
@@ -256,26 +784,164 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
     offset += (value_bit_offset_get(val) + 7) / 8;
   }
 
-  if (value_is_indirect(val)) {
-    /* STATUS<IRP>:FSR = *value */
+  if (value_flag_test(val, VALUE_FLAG_PTR_SLOT_RAW)) {
+    variable_base_t base;
+    value_t         fsr;
+
+    fsr = pic_fsr_get(pf);
+    base = value_base_get(val) + offset;
+    if (value_is_const(baseofs)) {
+      base += (variable_base_t) value_const_get(baseofs);
+      base = pic_var_chunk_addr_resolve(value_variable_get(val), base);
+      if (pic_is_16bit(pf)) {
+        pic_instr_append_lfsr(pf, 0, val, value_const_get(baseofs));
+      } else if (pic_is_14bit_hybrid(pf)) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+      } else {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsr, 0);
+        pic_instr_append(pf, (base >= 256)
+           ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
+      }
+    } else {
+      if (pic_is_16bit(pf)) {
+        pic_instr_append_lfsr(pf, 0, val, 0);
+        if (VALUE_NONE != baseofs) {
+          pic_fsr0_add_dynamic_index(pf, baseofs, val);
+        }
+      } else if (pic_is_14bit_hybrid(pf)) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+        if (VALUE_NONE != baseofs) {
+          pic_fsr0_add_dynamic_index(pf, baseofs, val);
+        }
+      } else if (VALUE_NONE != baseofs) {
+        pic_classic_fsr_load_base_dynamic_index(pf,
+            value_variable_get(val), base, baseofs, 0);
+      } else {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsr, 0);
+        pic_instr_append(pf, (base >= 256)
+           ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
+      }
+    }
+    value_release(fsr);
+    return;
+  }
+
+  if (value_is_indirect(val) || value_flag_test(val, VALUE_FLAG_POINTER)) {
+    /* STATUS<IRP>:FSR = *value. Const-pointee indexed reads can retain POINTER
+     * while INDIRECT is clear (baseofs is const 0), so value_is_indirect alone
+     * would skip this block and emit movf INDF before FSR is loaded. */
     value_t tmp;
 
     tmp = value_clone(val);
     value_baseofs_set(tmp, VALUE_NONE);
-    if (value_flag_test(val, VALUE_FLAG_ARRAY)) {
+    {
+      /* chunk-walked addressing: an open-array formal carrying a
+       * propagated chunk map (a direct call specialized to a chunked
+       * actual), or an UNESCAPED pointer bind whose target is chunked
+       * (the pointer is only ever dereferenced, so every access can
+       * walk the target's chunks) -- the flat home base / linear
+       * base+index cannot address across the holes */
+      variable_t walk_var;
+      boolean_t  formal_map;
+
+      formal_map = pic_variable_chunks_holed(value_variable_get(val));
+      if (!formal_map
+          && (VALUE_NONE != baseofs) && value_is_const(baseofs)
+          && (pic_var_pointer_bind_walk_target(
+                value_variable_get(val)) != VARIABLE_NONE)) {
+        /* const subscript through an unescaped walked bind: resolve
+         * the linear offset through the TARGET's chunk map and load
+         * the absolute address (the home-slot base path below would
+         * address linearly across the holes) */
+        variable_t wt;
+        variable_base_t linear;
+        variable_base_t phys;
+
+        wt = pic_var_pointer_bind_walk_target(value_variable_get(val));
+        linear = variable_base_get(wt, 0)
+          + (variable_base_t) value_const_get(baseofs)
+          + (variable_base_t) offset;
+        phys = pic_var_chunk_addr_resolve(wt, linear);
+        if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+              (unsigned) (phys & 0xff));
+          pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+              (unsigned) ((phys >> 8) & 0xff));
+          pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+        } else {
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+              (unsigned) (phys & 0xff));
+          pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+          pic_instr_append(pf, (phys >= 256)
+              ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
+        }
+        value_release(tmp);
+        return;
+      }
+      if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
+          && (formal_map
+            || (pic_var_pointer_bind_walk_target(
+                  value_variable_get(val)) != VARIABLE_NONE))) {
+        /* const baseofs on a map-carrying formal falls through to the
+         * const path below, which resolves through the chunk map */
+        walk_var = formal_map
+          ? value_variable_get(val)
+          : pic_var_pointer_bind_walk_target(value_variable_get(val));
+        pic_fsr_chunk_walk_emit_ofs(pf, walk_var, baseofs, offset,
+            pic_is_16bit(pf) || pic_is_14bit_hybrid(pf));
+        value_release(tmp);
+        return;
+      }
+    }
+
+    /* `var pointer … p` then `p[i]` (pointee is array): linear *p+index.
+     * True **`ARRAY` of `POINTER`** (nested data pointer): each element is a
+     * pointer slot; use the same path as a plain subscripted pointer.
+     * Heap `var string` through `var pointer … as var string`: see
+     * `pic_value_indirect_heap_string_through_pointer`. */
+    if (value_flag_test(val, VALUE_FLAG_ARRAY)
+        && !pic_value_indirect_heap_string_through_pointer(val)
+        && (!pic_value_variable_is_array_of_pointers(val)
+          || pic_value_is_array_pointer_slot_storage(val))) {
       pic_opcode_t op;
 
-      offset += value_const_get(baseofs);
+      if (value_is_const(baseofs)) {
+        offset += value_const_get(baseofs);
+      }
       value_baseofs_set(tmp, VALUE_NONE);
+      {
+        value_t gtmp;
+
+        gtmp = value_clone(tmp);
+        value_baseofs_set(gtmp, VALUE_NONE);
+        value_flag_clr(gtmp, VALUE_FLAG_POINTER);
+        value_flag_clr(gtmp, VALUE_FLAG_INDIRECT);
+        if (!pic_value_is_array_pointer_slot_storage(val)) {
+          pic_pointer_slot_emit_null_guard(pf, gtmp, 0);
+        }
+        value_release(gtmp);
+      }
       if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
         if (pic_is_16bit(pf)) {
           pic_instr_append_lfsr(pf, 0, tmp, offset);
         } else {
           unsigned char lsb;
           unsigned char msb;
+          variable_base_t base;
 
-          lsb = (uchar) (value_base_get(tmp) & 0xff);
-          msb = (uchar) (value_base_get(tmp) >> 8);
+          base = pic_var_chunk_addr_resolve(value_variable_get(tmp),
+              value_base_get(tmp) + offset);
+          lsb = (uchar) (base & 0xff);
+          msb = (uchar) (base >> 8);
 
           if (!lsb) {
             pic_instr_append_reg(pf, PIC_OPCODE_CLRF, "_fsr0l");
@@ -290,16 +956,8 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
             pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
           }
         }
-        if (!value_is_const(baseofs) || offset) {
-          if (value_is_const(baseofs)) {
-            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, offset);
-          } else {
-            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 0, PIC_OPDST_W);
-            if (offset) {
-              pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, offset);
-            }
-          }
-          pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0l", PIC_OPDST_F);
+        if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)) {
+          pic_fsr0_add_dynamic_index(pf, baseofs, val);
         }
       } else {
         if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)) {
@@ -307,44 +965,216 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
             pic_op_assign(pf, OPERATOR_ASSIGN, VALUE_NONE, baseofs, 
                 VALUE_NONE);
             pic_instr_append_f(pf, PIC_OPCODE_ADDLW, tmp, offset);
+            pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
+            pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+            pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+            pic_classic_irp_set_from_w(pf);
           } else {
-            pic_instr_append_f(pf, PIC_OPCODE_MOVLW, tmp, offset);
-            pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 0, 
-                PIC_OPDST_W);
+            variable_sz_t range;
+
+            range = (variable_sz_t) (value_byte_sz_get(tmp) - offset);
+            pic_classic_fsr_load_base_dynamic_index(pf,
+                value_variable_get(tmp),
+                value_base_get(tmp) + offset, baseofs, range);
           }
         } else {
             pic_instr_append_f(pf, PIC_OPCODE_MOVLW, tmp, offset);
+            pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+            op = (value_base_get(tmp) >= 256)
+              ? PIC_OPCODE_IRP_SET
+              : PIC_OPCODE_IRP_CLR;
+            pic_instr_append(pf, op);
         }
-        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
-        op = (value_base_get(tmp) >= 256)
-          ? PIC_OPCODE_IRP_SET
-          : PIC_OPCODE_IRP_CLR;
-        pic_instr_append(pf, op);
       }
     } else {
       /* assert(value_is_pointer(val)); */
       value_flag_clr(tmp, VALUE_FLAG_INDIRECT);
+      /* Element is typed as the pointee; POINTER stays set and makes
+       * value_is_indirect() true (baseofs is often const 0). pic_instr_append_f_d
+       * would then treat tmp as an INDF read (movf 0,w) before FSR is loaded.
+       * Clear POINTER so MOV reads the pointer slot (see const-pointee loads). */
+      value_flag_clr(tmp, VALUE_FLAG_POINTER);
 
-      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 0, PIC_OPDST_W);
-      if (baseofs) {
-        if (value_is_const(baseofs)) {
-          if (value_const_get(baseofs)) {
-            pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 
-                value_const_get(baseofs));
+      {
+        variable_sz_t loff;
+        boolean_t     slot_array;
+
+        /* `p[i]` / `p`+offset: const baseofs is an index into the *pointee*
+         * (MOVF p,0 then ADDLW). `slot[i]` on `var pointer … slot[N]`: const
+         * baseofs is a byte offset within the pointer *aggregate* (MOVF slot+2). */
+        slot_array = pic_value_variable_is_array_of_pointers(val);
+        loff = 0;
+        if (slot_array && VALUE_NONE != baseofs && value_is_const(baseofs)) {
+          loff = (variable_sz_t) value_const_get(baseofs);
+        }
+        pic_pointer_slot_emit_null_guard(pf, tmp, loff);
+        if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)) {
+          if (slot_array) {
+            /* ARRAY-of-pointers element at a runtime index: DOUBLE
+             * indirection -- FSR = &slot[k], load the slot's pointer
+             * bytes, then re-stage FSR (and IRP) from the loaded
+             * pointer so the caller's INDF access hits the element's
+             * real target. The previous `*slot0 + index` staging used
+             * slot 0's VALUE (a bound code address) as the data base
+             * (the classic runtime-index read+write defect + the
+             * stage-2 call blocker, 2026-10-28). 16-bit core + hybrid
+             * variant added 2026-10-28: those cores previously never
+             * compiled here (the staging emitted 14-bit _fsr/_irp
+             * names) and the generic FSR0 tail re-staged from the
+             * ARRAY's own storage -- silently wrong element targets. */
+            value_t indv;
+            value_t fsrv;
+            value_t ptmp;
+            boolean_t wide16;
+
+            wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+            indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+            fsrv = pic_fsr_get(pf);
+            ptmp = pic_var_pointer_get(pf);
+            pic_classic_fsr_load_base_dynamic_index(pf,
+                value_variable_get(tmp), value_base_get(tmp),
+                baseofs, (variable_sz_t) value_byte_sz_get(tmp));
+            /* load the slot's own pointer into the SCRATCH (not tmp --
+             * tmp maps to the array's own storage and would clobber
+             * slot 0) */
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
+                PIC_OPDST_W);
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, 0);
+            pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+                PIC_OPDST_F);
+            if (wide16) {
+                /* INCF _fsr0l alone cannot cross a 256-byte boundary */
+                pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
+                    "_status", "_z");
+                pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+            }
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
+                PIC_OPDST_W);
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, 1);
+            /* FSR = the loaded pointer: fsr0l/fsr0h on wide cores,
+             * fsr + IRP-latch from bit 8 on the 14-bit core */
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 0,
+                PIC_OPDST_W);
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsrv, 0);
+            if (wide16) {
+                pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 1, 0);
+                pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+            } else {
+                pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status",
+                    "_irp");
+                pic_instr_append_f_d(pf, PIC_OPCODE_BTFSC, ptmp, 1, 0);
+                pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status",
+                    "_irp");
+            }
+            pic_var_pointer_release(pf, ptmp);
+            value_release(fsrv);
+            value_release(indv);
+            /* the caller's INDF access now hits the element's real
+             * target; the common FSR/IRP tail below would re-stage
+             * from the value's own storage and clobber it */
+            value_release(tmp);
+            return;
+          } else if (variable_is_array(value_variable_get(tmp))) {
+            /* plain ARRAY element at a runtime index: the base is the
+             * array's own address (MOVLW), not its first element's
+             * value (MOVF would read arr[0] as the base) */
+            pic_classic_fsr_load_base_dynamic_index(pf,
+                value_variable_get(tmp), value_base_get(tmp),
+                baseofs, (variable_sz_t) value_byte_sz_get(tmp));
+          } else {
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 0,
+                PIC_OPDST_W);
+            pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 0,
+                PIC_OPDST_W);
           }
+        } else if (slot_array) {
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, loff, PIC_OPDST_W);
         } else {
-          pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 0, PIC_OPDST_W);
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 0, PIC_OPDST_W);
+          if (baseofs) {
+            if (value_is_const(baseofs)) {
+              if (value_const_get(baseofs)) {
+                pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW,
+                    value_const_get(baseofs));
+              }
+            } else {
+              pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 0,
+                  PIC_OPDST_W);
+            }
+          }
         }
       }
       if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+        /* Check if this is a function parameter that should use direct addressing */
+        variable_t var = value_variable_get(val);
+        if (var) {
+          const char *name = variable_name_get(var);
+          /* Skip FSR0 for function parameters, preserve for actual pointer operations */
+          if (name && (strstr(name, "_device_put") ||
+                       strstr(name, "_str_") ||
+                       strstr(name, "___str"))) {
+            return;
+          }
+        }
         pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
-        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
+        if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
+            && !pic_value_variable_is_array_of_pointers(val)) {
+          variable_sz_t idx_sz;
+
+          idx_sz = pic_dynamic_index_byte_sz_get(baseofs);
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
+          pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+          pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+          if (idx_sz > 1) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 1,
+                PIC_OPDST_W);
+          }
+        } else if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)) {
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
+        } else if (pic_value_variable_is_array_of_pointers(val)) {
+          variable_sz_t loff;
+
+          loff = 0;
+          if (VALUE_NONE != baseofs && value_is_const(baseofs)) {
+            loff = (variable_sz_t) value_const_get(baseofs);
+          }
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, loff + 1, PIC_OPDST_W);
+        } else {
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
+        }
         pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
       } else {
+        variable_sz_t loff;
+        variable_sz_t irp_byte;
+
         pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
-        pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
-        pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, tmp, 1, 0);
-        pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+        loff = 0;
+        if (pic_value_variable_is_array_of_pointers(val)
+            && VALUE_NONE != baseofs && value_is_const(baseofs)) {
+          loff = (variable_sz_t) value_const_get(baseofs);
+        }
+        if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
+            && !pic_value_variable_is_array_of_pointers(val)) {
+          variable_sz_t idx_sz;
+
+          idx_sz = pic_dynamic_index_byte_sz_get(baseofs);
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
+          pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+          pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+          if (idx_sz > 1) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 1,
+                PIC_OPDST_W);
+          }
+          pic_classic_irp_set_from_w(pf);
+        } else {
+          pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+          irp_byte = pic_value_variable_is_array_of_pointers(val)
+              ? (variable_sz_t) (loff + pic_pointer_size_get(pf) - 1)
+              : (variable_sz_t) (pic_pointer_size_get(pf) - 1);
+          pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, tmp, irp_byte, 0);
+          pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+        }
       }
     }
     value_release(tmp);
@@ -353,34 +1183,47 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
     value_t         fsr;
 
     fsr = pic_fsr_get(pf);
-    if (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)) {
-      pic_instr_append(pf, 
-         (variable_base_get(value_variable_get(val), 0) >= 256) 
-         ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
-    }
     base = value_base_get(val) + offset;
     if (value_is_const(baseofs)) {
       /* fsr = value_base_get(value) + value_const_get(baseofs) + sz */
       base += (variable_base_t) value_const_get(baseofs);
+      base = pic_var_chunk_addr_resolve(value_variable_get(val), base);
       if (pic_is_16bit(pf)) {
         pic_instr_append_lfsr(pf, 0, val, value_const_get(baseofs));
+      } else if (pic_is_14bit_hybrid(pf)) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
       } else {
         pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
         pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsr, 0);
+        pic_instr_append(pf, (base >= 256)
+           ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
       }
     } else {
       /* fsr = base (+ sz - 1) */
       if (pic_is_16bit(pf)) {
         pic_instr_append_lfsr(pf, 0, val, 0);
+      } else if (pic_is_14bit_hybrid(pf)) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
       } else {
         pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
         pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsr, 0);
+        pic_instr_append(pf, (base >= 256)
+           ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
       }
       if (VALUE_NONE != baseofs) {
-        /* w = baseofs */
-        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 0, PIC_OPDST_W);
-        /* _fsr += w */
-        pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, fsr, 0, PIC_OPDST_F);
+        if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+          pic_fsr0_add_dynamic_index(pf, baseofs, val);
+        } else {
+          pic_classic_fsr_load_base_dynamic_index(pf,
+              value_variable_get(val), base, baseofs,
+              (variable_sz_t) (value_byte_sz_get(val) - offset));
+        }
       }
     }
     value_release(fsr);
@@ -395,7 +1238,8 @@ static value_t pic_indirect_value_get(value_t val1, value_t val2, value_t val3)
 {
   value_t val;
 
-  if (value_is_indirect(val1)) {
+  if (value_is_indirect(val1)
+      || (val1 && value_flag_test(val1, VALUE_FLAG_POINTER))) {
     assert((value_is_same(val1, val2) || !value_is_indirect(val2))
            && (value_is_same(val1, val3) || !value_is_indirect(val3)));
     val = val1;
@@ -517,9 +1361,35 @@ static boolean_t pic_val_bank_same(pfile_t *pf, value_t val1, value_t val2)
     var2 = value_variable_get(val2);
 
     if (pic_is_16bit(pf)) {
-      rc = (value_base_get(val1) / 256) == (value_base_get(val2) / 256);
+      unsigned long addr1;
+      unsigned long addr2;
+
+      addr1 = (unsigned long) value_base_get(val1);
+      if (VARIABLE_BASE_UNKNOWN != value_base_get(val1)) {
+        addr1 += (unsigned long) value_const_get(value_baseofs_get(val1));
+        addr1 += (unsigned long) (value_bit_offset_get(val1) / 8);
+      }
+      addr2 = (unsigned long) value_base_get(val2);
+      if (VARIABLE_BASE_UNKNOWN != value_base_get(val2)) {
+        addr2 += (unsigned long) value_const_get(value_baseofs_get(val2));
+        addr2 += (unsigned long) (value_bit_offset_get(val2) / 8);
+      }
+      rc = ((addr1 / 256UL) == (addr2 / 256UL));
     } else if (pic_is_14bit_hybrid(pf)) {
-      rc = (value_base_get(val1) / 128) == (value_base_get(val2) / 128);
+      unsigned long addr1;
+      unsigned long addr2;
+
+      addr1 = (unsigned long) value_base_get(val1);
+      if (VARIABLE_BASE_UNKNOWN != value_base_get(val1)) {
+        addr1 += (unsigned long) value_const_get(value_baseofs_get(val1));
+        addr1 += (unsigned long) (value_bit_offset_get(val1) / 8);
+      }
+      addr2 = (unsigned long) value_base_get(val2);
+      if (VARIABLE_BASE_UNKNOWN != value_base_get(val2)) {
+        addr2 += (unsigned long) value_const_get(value_baseofs_get(val2));
+        addr2 += (unsigned long) (value_bit_offset_get(val2) / 8);
+      }
+      rc = ((addr1 / 128UL) == (addr2 / 128UL));
     } else {
       size_t ii;
 
@@ -552,6 +1422,47 @@ static boolean_t pic_val_bank_same(pfile_t *pf, value_t val1, value_t val2)
     }
   }
   return rc;
+}
+
+/*
+ * PIC18 / PIC18-hybrid: true when the MOVLB bank for data byte v1+ofs1
+ * equals that for v2+ofs2 (same full-file-address /256 or /128 as
+ * pic_instr_append_daop). Otherwise false (including classic 14-bit).
+ */
+static boolean_t pic_val_movl_bank_equal(pfile_t *pf,
+    value_t v1, size_t ofs1, value_t v2, size_t ofs2)
+{
+  variable_base_t b1;
+  variable_base_t b2;
+  unsigned long   addr1;
+  unsigned long   addr2;
+
+  if (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_is_indirect(v1) || value_is_indirect(v2)
+      || pic_value_is_w(v1) || pic_value_is_w(v2)
+      || value_is_const(v1) || value_is_const(v2)
+      || value_is_shared(v1) || value_is_shared(v2)) {
+    return BOOLEAN_FALSE;
+  }
+  b1 = value_base_get(v1);
+  b2 = value_base_get(v2);
+  if (VARIABLE_BASE_UNKNOWN == b1 || VARIABLE_BASE_UNKNOWN == b2) {
+    return BOOLEAN_FALSE;
+  }
+  addr1 = (unsigned long) b1
+      + (unsigned long) value_const_get(value_baseofs_get(v1))
+      + (unsigned long) (value_bit_offset_get(v1) / 8)
+      + (unsigned long) ofs1;
+  addr2 = (unsigned long) b2
+      + (unsigned long) value_const_get(value_baseofs_get(v2))
+      + (unsigned long) (value_bit_offset_get(v2) / 8)
+      + (unsigned long) ofs2;
+  if (pic_is_16bit(pf)) {
+    return (boolean_t) ((addr1 / 256UL) == (addr2 / 256UL));
+  }
+  return (boolean_t) ((addr1 / 128UL) == (addr2 / 128UL));
 }
 
 /*
@@ -706,11 +1617,14 @@ static void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src);
 static void pic_value_is_zero(pfile_t *pf, value_t src)
 {
   assert(!value_is_const(src));
-  if (value_is_const(src)) {
+  if (value_is_const(src)
+      && pic_variable_is_rom_int_const_table(value_variable_get(src))) {
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, value_const_get(src) ? 1 : 0);
   } else if (pic_value_is_w(src)) {
     pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, 0xff);
-  } else if (value_is_single_bit(src)) {
+  } else if (pic_value_is_dynamic_bit_array_element(src)) {
+    (void) pic_dynamic_bit_load_to_w(pf, src);
+  } else if (value_is_single_bit(src) && !value_is_indirect(src)) {
     pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_z");
     pic_instr_append_f(pf, PIC_OPCODE_BTFSS, src, 0);
     pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_z");
@@ -804,11 +1718,626 @@ static value_t pic_bit_overlay_create(value_t val)
   return dst;
 }
 
+static boolean_t pic_value_is_dynamic_bit_array_element(value_t val)
+{
+  value_t baseofs;
+  variable_t var;
+
+  baseofs = value_baseofs_get(val);
+  var = value_variable_get(val);
+  return value_is_bit(val)
+    && value_flag_test(val, VALUE_FLAG_ARRAY)
+    && ((baseofs && !value_is_const(baseofs))
+      || (var && (pic_variable_chunk_ct_get(var) > 1)));
+}
+
+static void pic_dynamic_bit_ref_release(pfile_t *pf,
+    pic_dynamic_bit_ref_t *ref)
+{
+  value_release(ref->byte);
+  if (ref->mask) {
+    pic_var_temp_release(pf, ref->mask);
+  }
+  if (ref->bit_index) {
+    pic_var_temp_release(pf, ref->bit_index);
+  }
+  if (ref->byte_index) {
+    pic_var_temp_release(pf, ref->byte_index);
+  }
+  ref->byte       = VALUE_NONE;
+  ref->mask       = VALUE_NONE;
+  ref->byte_index = VALUE_NONE;
+  ref->bit_index  = VALUE_NONE;
+}
+
+static boolean_t pic_dynamic_bit_ref_prepare(pfile_t *pf, value_t val,
+    pic_dynamic_bit_ref_t *ref)
+{
+  value_t       baseofs;
+  value_t       cval;
+  boolean_t     baseofs_release;
+  variable_t    var;
+  variable_t    master;
+  variable_def_t def;
+  variable_sz_t idx_sz;
+  unsigned      bit_base;
+
+  ref->byte       = VALUE_NONE;
+  ref->mask       = VALUE_NONE;
+  ref->byte_index = VALUE_NONE;
+  ref->bit_index  = VALUE_NONE;
+
+  baseofs_release = BOOLEAN_FALSE;
+  baseofs = value_baseofs_get(val);
+  var     = value_variable_get(val);
+  if (!var) {
+    return BOOLEAN_FALSE;
+  }
+  if (!baseofs) {
+    baseofs = pfile_constant_get(pf, 0, VARIABLE_DEF_NONE);
+    baseofs_release = BOOLEAN_TRUE;
+  }
+  if (!baseofs) {
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  bit_base = value_bit_offset_get(val);
+  /*
+   * Open `bit in bits[]` formals read buffer-relative bits: the normalize
+   * buffer re-bases the packed actual at bit 0, but the formal binding
+   * leaks the actual's intra-byte offset (classic reserved bitbucket bit 0)
+   * onto the value — drop it so bits[i] resolves at buffer bit i on every
+   * core (same contract as the static-offset arm in pic_assign_from_bit).
+   * fix_pic18_open_bit_formal_indirect.md
+   */
+  if (bit_base && var && variable_is_pointer(var)
+      && value_is_indirect(val) && baseofs
+      && !value_is_const(baseofs)) {
+    bit_base = 0;
+  }
+  idx_sz = value_byte_sz_get(baseofs);
+  if (idx_sz < 1) {
+    idx_sz = 1;
+  }
+  if ((idx_sz < 2) && (bit_base + variable_sz_get(var) > 255)) {
+    idx_sz = 2;
+  }
+
+  ref->byte_index = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, idx_sz);
+  ref->bit_index  = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  ref->mask       = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  if (!ref->byte_index || !ref->bit_index || !ref->mask) {
+    if (baseofs_release) {
+      value_release(baseofs);
+    }
+    pic_dynamic_bit_ref_release(pf, ref);
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+
+  pic_op(pf, OPERATOR_ASSIGN, ref->byte_index, baseofs, VALUE_NONE);
+  if (baseofs_release) {
+    value_release(baseofs);
+  }
+  if (bit_base) {
+    cval = pfile_constant_get(pf, bit_base, VARIABLE_DEF_NONE);
+    pic_op(pf, OPERATOR_ADD, ref->byte_index, ref->byte_index, cval);
+    value_release(cval);
+  }
+
+  cval = pfile_constant_get(pf, 7, VARIABLE_DEF_NONE);
+  pic_op(pf, OPERATOR_ANDB, ref->bit_index, ref->byte_index, cval);
+  value_release(cval);
+
+  cval = pfile_constant_get(pf, 3, VARIABLE_DEF_NONE);
+  pic_op(pf, OPERATOR_SHIFT_RIGHT, ref->byte_index, ref->byte_index, cval);
+  value_release(cval);
+
+  cval = pfile_constant_get(pf, 1, VARIABLE_DEF_NONE);
+  pic_op(pf, OPERATOR_SHIFT_LEFT, ref->mask, cval, ref->bit_index);
+  value_release(cval);
+
+  def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, 1);
+  if (!def) {
+    pic_dynamic_bit_ref_release(pf, ref);
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  master = variable_master_get(var);
+  if (!master) {
+    master = var;
+  }
+  var = variable_alloc(TAG_NONE, def);
+  if (!var) {
+    pic_dynamic_bit_ref_release(pf, ref);
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  variable_master_set(var, master);
+  ref->byte = value_alloc(var);
+  variable_release(var);
+  if (!ref->byte) {
+    pic_dynamic_bit_ref_release(pf, ref);
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  value_flag_set(ref->byte, VALUE_FLAG_ARRAY);
+  value_baseofs_set(ref->byte, ref->byte_index);
+  return BOOLEAN_TRUE;
+}
+
+static void pic_dynamic_bit_ref_linear_addr_setup(pfile_t *pf,
+    pic_dynamic_bit_ref_t *ref, variable_base_t base)
+{
+  variable_sz_t   idx_sz;
+
+  idx_sz = value_byte_sz_get(ref->byte_index);
+  if (idx_sz < 1) {
+    idx_sz = 1;
+  }
+  pic_stvar_fsr_mark(pf);
+  if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, ref->byte_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+    if (idx_sz > 1) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWFc, ref->byte_index, 1,
+          PIC_OPDST_W);
+    } else {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+    }
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  } else {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base & 0xff);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, ref->byte_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (base >> 8) & 0xff);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+    if (idx_sz > 1) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, ref->byte_index, 1,
+          PIC_OPDST_W);
+    }
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ref->bit_index, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, ref->bit_index, 0, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+  }
+}
+
+static void pic_dynamic_bit_ref_index_ge_chunk(pfile_t *pf,
+    pic_dynamic_bit_ref_t *ref, variable_sz_t chunk_sz, label_t lbl_ge)
+{
+  variable_sz_t idx_sz;
+
+  idx_sz = value_byte_sz_get(ref->byte_index);
+  if (idx_sz < 1) {
+    idx_sz = 1;
+  }
+  if (chunk_sz >= 256) {
+    if (idx_sz > 1) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref->byte_index, 1,
+          PIC_OPDST_W);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+      pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_ge);
+    }
+  } else {
+    if (idx_sz > 1) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref->byte_index, 1,
+          PIC_OPDST_W);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+      pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_ge);
+    }
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, chunk_sz);
+    pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, ref->byte_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_ge);
+  }
+}
+
+static void pic_dynamic_bit_ref_addr_setup(pfile_t *pf,
+    pic_dynamic_bit_ref_t *ref)
+{
+  variable_t      var;
+  variable_ct_t  chunk_ct;
+
+  var = value_variable_get(ref->byte);
+  chunk_ct = var ? pic_variable_chunk_ct_get(var) : 0;
+  if (chunk_ct > 1) {
+    label_t done;
+    variable_ct_t ii;
+
+    done = pfile_label_alloc(pf, 0);
+    for (ii = 0; ii < chunk_ct; ii++) {
+      label_t         next;
+      variable_base_t chunk_base;
+      variable_sz_t   chunk_sz;
+
+      chunk_base = pic_variable_chunk_base_get(var, ii);
+      chunk_sz   = pic_variable_chunk_sz_get(var, ii);
+      next = LABEL_NONE;
+      if (ii + 1 < chunk_ct) {
+        next = pfile_label_alloc(pf, 0);
+        pic_dynamic_bit_ref_index_ge_chunk(pf, ref, chunk_sz, next);
+      }
+      pic_dynamic_bit_ref_linear_addr_setup(pf, ref, chunk_base);
+      pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+      if (next) {
+        value_t cval;
+
+        pic_instr_append_label(pf, next);
+        cval = pfile_constant_get(pf, chunk_sz, VARIABLE_DEF_NONE);
+        if (cval) {
+          pic_op(pf, OPERATOR_SUB, ref->byte_index, ref->byte_index, cval);
+          value_release(cval);
+        } else {
+          pfile_log_syserr(pf, ENOMEM);
+        }
+        label_release(next);
+      }
+    }
+    pic_instr_append_label(pf, done);
+    label_release(done);
+  } else {
+    pic_dynamic_bit_ref_linear_addr_setup(pf, ref, value_base_get(ref->byte));
+  }
+}
+
+static void pic_dynamic_bit_ref_emit_set(pfile_t *pf,
+    pic_dynamic_bit_ref_t *ref)
+{
+  pic_dynamic_bit_ref_addr_setup(pf, ref);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref->byte, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, ref->mask, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ref->byte, 0);
+}
+
+static void pic_dynamic_bit_ref_emit_clear(pfile_t *pf,
+    pic_dynamic_bit_ref_t *ref)
+{
+  pic_dynamic_bit_ref_addr_setup(pf, ref);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref->mask, 0, PIC_OPDST_W);
+  pic_instr_append_w_kn(pf, PIC_OPCODE_XORLW, 0xff);
+  pic_instr_append_f_d(pf, PIC_OPCODE_ANDWF, ref->byte, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ref->byte, 0);
+}
+
+/* Width-aware load/store for runtime-indexed `bit*N` elements (N in
+ * 2..8). The 1-bit dynamic machinery above handles `var bit` arrays;
+ * until 2026-10-27 multi-bit fields also routed there and every access
+ * collapsed to a single set/clear of bit (idx & 7) of byte idx/8 with
+ * the index UNSCALED -- a[k] wrote one bit at the wrong position and
+ * reads returned 0/1 (the bit*N runtime defect). These emitters treat
+ * the element as an N-bit field at runtime (byte, bit): 16-bit
+ * rotate-loop shifts build the positioned mask/value pair, a runtime
+ * straddle test (bit_index + N > 8) covers the second byte, and the
+ * second address is a re-run of the address setup after a carry-aware
+ * increment of the byte-index temp. */
+static boolean_t pic_dynamic_field_width_get(value_t val,
+    variable_sz_t *width)
+{
+  variable_sz_t w;
+
+  w = value_sz_get(val);
+  if ((w > 1) && (w <= 8)) {
+    if (width) {
+      *width = w;
+    }
+    return BOOLEAN_TRUE;
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* leaves the N-bit field value in W; Z reflects it (callers of the
+ * 1-bit loader contract) */
+static boolean_t pic_dynamic_field_load_to_w(pfile_t *pf, value_t src)
+{
+  pic_dynamic_bit_ref_t ref;
+  variable_sz_t        w;
+  value_t              t0;
+  value_t              t1;
+  value_t              cnt;
+  label_t              lbl_nohi;
+  label_t              lbl_loop;
+  label_t              lbl_done;
+
+  if (!pic_dynamic_field_width_get(src, &w)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!pic_dynamic_bit_ref_prepare(pf, src, &ref)) {
+    return BOOLEAN_FALSE;
+  }
+  t0 = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  t1 = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  cnt = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  if (!t0 || !t1 || !cnt) {
+    pfile_log_syserr(pf, ENOMEM);
+  } else {
+    lbl_nohi = pfile_label_alloc(pf, 0);
+    lbl_loop = pfile_label_alloc(pf, 0);
+    lbl_done = pfile_label_alloc(pf, 0);
+
+    /* t0 = *byte; t1 = straddle ? *(byte+1) : 0 */
+    pic_dynamic_bit_ref_addr_setup(pf, &ref);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.byte, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t0, 0);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t1, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.bit_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_SUBLW, 8 - w);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_nohi);
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, ref.byte_index, 0,
+        PIC_OPDST_F);
+    if (value_byte_sz_get(ref.byte_index) > 1) {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, ref.byte_index, 1,
+          PIC_OPDST_F);
+    }
+    pic_dynamic_bit_ref_addr_setup(pf, &ref);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.byte, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t1, 0);
+    pic_instr_append_label(pf, lbl_nohi);
+
+    /* (t1:t0) >>= bit_index, then W = t0 & ((1<<N)-1). The rrf pair
+     * order shifts t1's LSB into t0's MSB; bits discarded from t0 can
+     * never re-enter t0's low N bits within 7 shifts, so no carry
+     * hygiene is needed between iterations. */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.bit_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cnt, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_c");
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_done);
+    pic_instr_append_label(pf, lbl_loop);
+    pic_instr_append_f_d(pf, PIC_OPCODE_RRF, t1, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_RRF, t0, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cnt, 0, PIC_OPDST_F);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_loop);
+    pic_instr_append_label(pf, lbl_done);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t0, 0, PIC_OPDST_W);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (1 << w) - 1);
+
+    label_release(lbl_done);
+    label_release(lbl_loop);
+    label_release(lbl_nohi);
+  }
+  if (cnt) {
+    pic_var_temp_release(pf, cnt);
+  }
+  if (t1) {
+    pic_var_temp_release(pf, t1);
+  }
+  if (t0) {
+    pic_var_temp_release(pf, t0);
+  }
+  pic_dynamic_bit_ref_release(pf, &ref);
+  return (t0 && t1 && cnt) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* N-bit field store at a runtime (byte, bit) */
+static boolean_t pic_assign_to_dynamic_field(pfile_t *pf, value_t dst,
+    value_t src)
+{
+  pic_dynamic_bit_ref_t ref;
+  variable_sz_t        w;
+  value_t              sval;
+  value_t              m0;
+  value_t              m1;
+  value_t              v0;
+  value_t              v1;
+  value_t              cnt;
+  label_t              lbl_nohi;
+  label_t              lbl_loop;
+  label_t              lbl_done;
+  boolean_t            ok;
+
+  if (!pic_dynamic_field_width_get(dst, &w)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!pic_dynamic_bit_ref_prepare(pf, dst, &ref)) {
+    return BOOLEAN_FALSE;
+  }
+  sval = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  m0 = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  m1 = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  v0 = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  v1 = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  cnt = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  ok = (sval && m0 && m1 && v0 && v1 && cnt) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  if (!ok) {
+    pfile_log_syserr(pf, ENOMEM);
+  } else {
+    lbl_nohi = pfile_label_alloc(pf, 0);
+    lbl_loop = pfile_label_alloc(pf, 0);
+    lbl_done = pfile_label_alloc(pf, 0);
+
+    /* sval = src & ((1<<N)-1) */
+    if (value_is_const(src)) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (unsigned) (value_const_get(src) & ((1 << w) - 1)));
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, sval, 0);
+    } else {
+      value_t maskv;
+
+      pic_op(pf, OPERATOR_ASSIGN, sval, src, VALUE_NONE);
+      maskv = pfile_constant_get(pf, (1 << w) - 1, VARIABLE_DEF_NONE);
+      if (maskv) {
+        pic_op(pf, OPERATOR_ANDB, sval, sval, maskv);
+        value_release(maskv);
+      }
+    }
+
+    /* (m1:m0) = ((1<<N)-1) << bit_index ; (v1:v0) = sval << bit_index.
+     * The interleaved rlf chain is carry-safe: both high bytes stay
+     * below bit 7 for N <= 8 and bit_index < 8, so C is 0 between the
+     * pairs and each pair zero-fills. */
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (1 << w) - 1);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, m0, 0);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, m1, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, sval, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, v0, 0);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, v1, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.bit_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cnt, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_c");
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_done);
+    pic_instr_append_label(pf, lbl_loop);
+    pic_instr_append_f_d(pf, PIC_OPCODE_RLF, m0, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_RLF, m1, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_RLF, v0, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_RLF, v1, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cnt, 0, PIC_OPDST_F);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_loop);
+    pic_instr_append_label(pf, lbl_done);
+
+    /* low byte: *byte = (*byte & ~m0) | v0 */
+    pic_dynamic_bit_ref_addr_setup(pf, &ref);
+    pic_instr_append_f_d(pf, PIC_OPCODE_COMF, m0, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.byte, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ANDWF, m0, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, v0, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ref.byte, 0);
+
+    /* high byte only when the field straddles (bit_index + N > 8):
+     * SUBLW (8-N) leaves C=1 when bit_index <= 8-N (no straddle) */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.bit_index, 0,
+        PIC_OPDST_W);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_SUBLW, 8 - w);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_nohi);
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, ref.byte_index, 0,
+        PIC_OPDST_F);
+    if (value_byte_sz_get(ref.byte_index) > 1) {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, ref.byte_index, 1,
+          PIC_OPDST_F);
+    }
+    pic_dynamic_bit_ref_addr_setup(pf, &ref);
+    pic_instr_append_f_d(pf, PIC_OPCODE_COMF, m1, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.byte, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ANDWF, m1, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, v1, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ref.byte, 0);
+    pic_instr_append_label(pf, lbl_nohi);
+
+    label_release(lbl_nohi);
+    label_release(lbl_loop);
+    label_release(lbl_done);
+  }
+  if (cnt) {
+    pic_var_temp_release(pf, cnt);
+  }
+  if (v1) {
+    pic_var_temp_release(pf, v1);
+  }
+  if (v0) {
+    pic_var_temp_release(pf, v0);
+  }
+  if (m1) {
+    pic_var_temp_release(pf, m1);
+  }
+  if (m0) {
+    pic_var_temp_release(pf, m0);
+  }
+  if (sval) {
+    pic_var_temp_release(pf, sval);
+  }
+  pic_dynamic_bit_ref_release(pf, &ref);
+  return ok;
+}
+
+static boolean_t pic_dynamic_bit_load_to_w(pfile_t *pf, value_t src)
+{
+  pic_dynamic_bit_ref_t ref;
+
+  if ((value_sz_get(src) > 1)) {
+    return pic_dynamic_field_load_to_w(pf, src);
+  }
+  if (!pic_dynamic_bit_ref_prepare(pf, src, &ref)) {
+    return BOOLEAN_FALSE;
+  }
+  pic_dynamic_bit_ref_addr_setup(pf, &ref);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ref.byte, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_ANDWF, ref.mask, 0, PIC_OPDST_W);
+  pic_dynamic_bit_ref_release(pf, &ref);
+  return BOOLEAN_TRUE;
+}
+
+static boolean_t pic_assign_to_dynamic_bit(pfile_t *pf, value_t dst,
+    value_t src)
+{
+  pic_dynamic_bit_ref_t ref;
+  boolean_t             rc;
+
+  if (value_sz_get(dst) > 8) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "runtime-indexed bit*%u array elements are not supported yet "
+        "(width above 8 bits); use a constant subscript or a byte-array "
+        "representation", (unsigned) value_sz_get(dst));
+    return BOOLEAN_TRUE;
+  }
+  if (value_sz_get(dst) > 1) {
+    return pic_assign_to_dynamic_field(pf, dst, src);
+  }
+  rc = pic_dynamic_bit_ref_prepare(pf, dst, &ref);
+  if (rc) {
+    if (value_is_const(src)) {
+      if (value_const_get(src)) {
+        pic_dynamic_bit_ref_emit_set(pf, &ref);
+      } else {
+        pic_dynamic_bit_ref_emit_clear(pf, &ref);
+      }
+    } else {
+      value_t src_tmp;
+      label_t lbl_clear;
+      label_t lbl_done;
+
+      src_tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+      if (!src_tmp) {
+        pfile_log_syserr(pf, ENOMEM);
+      } else {
+        pic_op(pf, OPERATOR_ASSIGN, src_tmp, src, VALUE_NONE);
+        lbl_clear = pfile_label_alloc(pf, 0);
+        lbl_done  = pfile_label_alloc(pf, 0);
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, src_tmp, 0, PIC_OPDST_F);
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+        pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_clear);
+        pic_dynamic_bit_ref_emit_set(pf, &ref);
+        pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_done);
+        pic_instr_append_label(pf, lbl_clear);
+        pic_dynamic_bit_ref_emit_clear(pf, &ref);
+        pic_instr_append_label(pf, lbl_done);
+        label_release(lbl_done);
+        label_release(lbl_clear);
+        pic_var_temp_release(pf, src_tmp);
+      }
+    }
+    pic_dynamic_bit_ref_release(pf, &ref);
+  }
+  return rc;
+}
+
 /* dst is a bit, src is not lookup */
 static void pic_assign_to_bit(pfile_t *pf, value_t dst, value_t src)
 {
   unsigned dst_bit_ofs;
 
+  if (pic_value_is_dynamic_bit_array_element(dst)) {
+    (void) pic_assign_to_dynamic_bit(pf, dst, src);
+    return;
+  }
   dst_bit_ofs  = value_bit_offset_get(dst);
   if (value_sz_get(dst) == 1) {
     if (value_is_const(src)) {
@@ -822,6 +2351,29 @@ static void pic_assign_to_bit(pfile_t *pf, value_t dst, value_t src)
     } else {
       if (value_is_bit(src) && (value_sz_get(src) == 1)) {
         /* single bit --> single bit */
+        if (pic_value_is_dynamic_bit_array_element(src)) {
+          pic_dynamic_bit_load_to_w(pf, src);
+          if (value_is_volatile(dst) || !pic_val_bank_same(pf, dst, src)) {
+            label_t lbl_set;
+            label_t lbl_done;
+
+            lbl_set  = pfile_label_alloc(pf, 0);
+            lbl_done = pfile_label_alloc(pf, 0);
+            pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+            pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_set);
+            pic_instr_append_f(pf, PIC_OPCODE_BCF, dst, 0);
+            pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_done);
+            pic_instr_append_label(pf, lbl_set);
+            pic_instr_append_f(pf, PIC_OPCODE_BSF, dst, 0);
+            pic_instr_append_label(pf, lbl_done);
+            label_release(lbl_done);
+            label_release(lbl_set);
+          } else {
+            pic_instr_append_f(pf, PIC_OPCODE_BCF, dst, 0);
+            pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+            pic_instr_append_f(pf, PIC_OPCODE_BSF, dst, 0);
+          }
+        } else
         if (value_is_volatile(dst) || !pic_val_bank_same(pf, dst, src)) {
           label_t lbl_set;
           label_t lbl_done;
@@ -885,6 +2437,22 @@ static void pic_assign_to_bit(pfile_t *pf, value_t dst, value_t src)
           pic_instr_append_f(pf, PIC_OPCODE_BSF, dst, 0);
         }
       }
+    }
+  } else if (!value_is_const(src) && value_is_bit(src)) {
+    value_t       tmp;
+    variable_sz_t tmp_sz;
+
+    tmp_sz = (value_sz_get(src) + 7) / 8;
+    if (tmp_sz < 1) {
+      tmp_sz = 1;
+    }
+    tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, tmp_sz);
+    if (!tmp) {
+      pfile_log_syserr(pf, ENOMEM);
+    } else {
+      pic_assign_from_bit(pf, tmp, src);
+      pic_assign_to_bit(pf, dst, tmp);
+      pic_var_temp_release(pf, tmp);
     }
   } else if (!pic_work_in_temp(pf, OPERATOR_ASSIGN, dst, src, VALUE_NONE,
     PIC_WORK_IN_TEMP_FLAG_VALS)) {
@@ -1003,7 +2571,7 @@ static void pic_assign_to_bit(pfile_t *pf, value_t dst, value_t src)
         for (ii = 0; ii < dst_byte_sz; ii++) {
           if ((mask & 0xff) == 0x00) {
             /* no mask, this is a straight copy */
-            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, ii, PIC_OPDST_F);
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, ii, PIC_OPDST_W);
             pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, dst_byte_ofs + ii);
           } else {
             pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, mask & 0xff);
@@ -1024,11 +2592,159 @@ static void pic_assign_to_bit(pfile_t *pf, value_t dst, value_t src)
 /* dst is not bit, src is non-const bit */
 static void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
 {
-  if ((value_sz_get(src) == 1) && (value_bit_offset_get(src) != 0)) {
+  if (pic_value_is_dynamic_bit_array_element(src)) {
+    if ((value_sz_get(src) > 1)
+        && pic_dynamic_field_load_to_w(pf, src)) {
+      /* N-bit field: the loader returns the FIELD VALUE in W (Z
+       * reflects it) -- no 0/1 boolean normalization */
+      if (!pic_value_is_w(dst)) {
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
+        pic_value_sign_extend(pf, dst, 0, value_is_signed(src));
+      }
+    } else if (pic_dynamic_bit_load_to_w(pf, src)) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          value_is_signed(src) ? 0xff : 1);
+      if (!pic_value_is_w(dst)) {
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
+        pic_value_sign_extend(pf, dst, 0, value_is_signed(src));
+      }
+    }
+  } else if ((value_sz_get(src) == 1)
+      && (value_is_indirect(src) || (value_bit_offset_get(src) != 0))) {
     variable_sz_t ipos;
 
+    if (value_is_indirect(src)) {
+      /*
+       * A bit read through a pointer (open `bit in bits[]` formal with a
+       * packed actual) carries the bit subscript in baseofs. It is a BIT
+       * index into the packed pointed-to bytes: the FSR byte offset is
+       * baseofs / 8 and the tested bit is baseofs & 7 (plus any value bit
+       * offset). The old code passed the subscript to setup as a plain
+       * BYTE offset and emitted a byte-oriented BTFSC whose bit field then
+       * leaked the INDF file address at encode time (PIC18 INDF0 0xFEF ->
+       * bit 7); classic cores passed only via the _ind-at-address-0 bit-0
+       * coincidence. fix_pic18_open_bit_formal_indirect.md
+       */
+      unsigned long bit_ix;
+      value_t dbo;
+      value_t src_use;
+
+      /*
+       * Contract: an open `bit in bits[]` formal reads buffer-relative bits
+       * (the normalize buffer re-bases the actual's packed bits at 0). The
+       * subscript rides in baseofs; any value bitofs here is the actual's
+       * intra-byte offset leaking through the formal binding (classic
+       * reserved bitbucket bit 0) and must be ignored.
+       */
+      dbo = value_baseofs_get(src);
+      if (dbo && !value_is_const(dbo)) {
+        /*
+         * Runtime subscript: compute byte = i/8 and bit = i&7 at runtime
+         * via the dynamic loader (same shift/mask emission the first
+         * branch uses for array elements); the leaked bitofs is dropped
+         * inside pic_dynamic_bit_ref_prepare for pointer formals.
+         */
+        /*
+         * The array dynamic loader cannot be reused here: its master chain
+         * resolves the pointer SLOT variable as a direct array base (wrong
+         * address in fuller programs). Emit directly: byte = i >> 3 and
+         * mask = 1 << (i & 7) as runtime temps, point the FSR at
+         * slot + byte via a cloned baseofs, read INDF and AND the mask.
+         */
+        {
+          value_t t_idx;
+          value_t t_byt;
+          value_t t_bit;
+          value_t t_msk;
+          value_t c3;
+          value_t c7;
+          value_t c1;
+          value_t ind;
+          boolean_t ok;
+
+          t_idx = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+          t_byt = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+          t_bit = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+          t_msk = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+          c3 = pfile_constant_get(pf, 3, VARIABLE_DEF_NONE);
+          c7 = pfile_constant_get(pf, 7, VARIABLE_DEF_NONE);
+          c1 = pfile_constant_get(pf, 1, VARIABLE_DEF_NONE);
+          ok = t_idx && t_byt && t_bit && t_msk && c3 && c7 && c1;
+          if (ok) {
+            src_use = value_clone(src);
+            value_baseofs_set(src_use, t_byt);
+
+            pic_op(pf, OPERATOR_ASSIGN, t_idx, dbo, VALUE_NONE);
+            pic_op(pf, OPERATOR_SHIFT_RIGHT, t_byt, t_idx, c3);
+            pic_op(pf, OPERATOR_ANDB, t_bit, t_idx, c7);
+            pic_op(pf, OPERATOR_ASSIGN, t_msk, c1, VALUE_NONE);
+            pic_op(pf, OPERATOR_SHIFT_LEFT, t_msk, t_msk, t_bit);
+
+            pic_indirect_setup3(pf, src_use, VALUE_NONE, dst, 0, &ipos);
+            ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+            pic_instr_append_f_d(pf, PIC_OPCODE_ANDWF, t_msk, 0, PIC_OPDST_W);
+            value_release(ind);
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+            pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+                value_is_signed(src) ? 0xff : 1);
+            if (!pic_value_is_w(dst)) {
+              pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
+              pic_value_sign_extend(pf, dst, 0, value_is_signed(src));
+            }
+            value_release(src_use);
+          }
+          value_release(c1);
+          value_release(c7);
+          value_release(c3);
+          pic_var_temp_release(pf, t_msk);
+          pic_var_temp_release(pf, t_bit);
+          pic_var_temp_release(pf, t_byt);
+          pic_var_temp_release(pf, t_idx);
+          if (ok) {
+            return;
+          }
+        }
+        /* OOM: fall through to the original emission */
+      }
+      bit_ix = 0;
+      if (getenv("JALV2_DBG_OBF")) {
+        fprintf(stderr, "OBF pass=%u bitofs=%d baseofs=%d\n",
+          (int) pic_code_gen_pass_get(pf),
+          (int) value_bit_offset_get(src),
+          (int) ((dbo && value_is_const(dbo))
+            ? (long) (value_const_get(dbo) & 0xffff) : -1L));
+      }
+      if (dbo && value_is_const(dbo)) {
+        bit_ix += (unsigned long) (value_const_get(dbo) & 0xffff);
+        src_use = value_clone(src);
+        value_baseofs_set(src_use, VALUE_NONE);
+      } else {
+        src_use = src;
+      }
+      /* the result is either all 0 or all 0xff */
+      pic_indirect_setup3(pf, src_use, VALUE_NONE, dst,
+        (variable_sz_t) (bit_ix / 8), &ipos);
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+      pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, src_use,
+        (size_t) (bit_ix / 8), (variable_const_t) (bit_ix & 7));
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          value_is_signed(src) ? 0xff : 1);
+      if (src_use != src) {
+        value_release(src_use);
+      }
+      if (!pic_value_is_w(dst)) {
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
+        pic_value_sign_extend(pf, dst, 0, value_is_signed(src));
+      }
+      return;
+    }
+    /* non-indirect: original emission (unchanged) */
     /* the result is either all 0 or all 0xff */
-    pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
+    pic_indirect_setup3(pf, src, VALUE_NONE, dst, 0, &ipos);
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
     pic_instr_append_f(pf, PIC_OPCODE_BTFSC, src, 0);
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 
@@ -1038,8 +2754,8 @@ static void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
       pic_value_sign_extend(pf, dst, 0, value_is_signed(src));
     }
   } else if (!value_is_volatile(src)
-      && (value_sz_get(src) < 5)
-      && ((value_bit_offset_get(src) & 7) >= 5)) {
+      && (value_sz_get(src) <= 8)
+      && ((value_bit_offset_get(src) & 7) != 0)) {
     variable_sz_t ipos;
     variable_sz_t ii;
     variable_sz_t src_sz;
@@ -1106,7 +2822,7 @@ static void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
     if (src_bit_ofs) {
       tmp = pfile_constant_get(pf, src_bit_ofs, VARIABLE_DEF_NONE);
       pic_shift_right(pf, OPERATOR_SHIFT_RIGHT, tdst, src, tmp,
-        PIC_SHIFT_FLAG_NONE);
+        PIC_SHIFT_FLAG_MASK_BITS);
       value_release(tmp);
     }
 
@@ -1278,7 +2994,7 @@ static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
           > 255) {
         /* need to pass LSB in _pic_loop, MSB in W */
         tmp = pic_var_loop_get(pf);
-        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 0, PIC_OPDST_W);
+        pic_lookup_index_load_w(pf, baseofs);
         pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tmp, 0);
         if (value_byte_sz_get(baseofs) > 1) {
           pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 1, PIC_OPDST_W);
@@ -1298,12 +3014,7 @@ static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
           pic_code_ofs_set(code, 1);
           pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pclath");
         }
-        if (value_is_bit(baseofs)) {
-          pic_op_assign(pf, OPERATOR_ASSIGN, VALUE_NONE, baseofs, 
-              VALUE_NONE);
-        } else {
-          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 0, PIC_OPDST_W);
-        }
+        pic_lookup_index_load_w(pf, baseofs);
         tmp = baseofs;
       }
     }
@@ -1341,7 +3052,39 @@ static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
   }
 }
 
-static void pic_assign_from_label2(pfile_t *pf, value_t dst, label_t lbl)
+static void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src);
+static boolean_t pic_src_is_data_array(const value_t src);
+static boolean_t pic_variable_is_rom_int_const_table(variable_t sv);
+
+static void pic_assign_lookup_label_to_pointer(pfile_t *pf, value_t dst,
+    label_t lbl, variable_const_t offset)
+{
+  variable_sz_t ii;
+
+  for (ii = 0; ii < pic_pointer_size_get(pf); ii++) {
+    pic_code_t code;
+
+    code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+    pic_code_brdst_set(code, lbl);
+    pic_code_ofs_set(code, ii);
+    if (offset) {
+      if (ii) {
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+        pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+      }
+      pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW,
+          (offset >> (8 * ii)) & 0xff);
+    }
+    if (ii + 1 == pic_pointer_size_get(pf)) {
+      /* jalv25r9: bit 7 marks lookup/flash pointers (issue #30). */
+      pic_instr_append_w_kn(pf, PIC_OPCODE_IORLW, 0x80);
+    }
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+  }
+}
+
+static void pic_assign_from_label_offset(pfile_t *pf, value_t dst, label_t lbl,
+    variable_const_t offset)
 {
   pic_code_t    code;
   variable_sz_t ipos;
@@ -1349,6 +3092,9 @@ static void pic_assign_from_label2(pfile_t *pf, value_t dst, label_t lbl)
   pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
   code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
   pic_code_brdst_set(code, lbl);
+  if (offset) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, offset & 0xff);
+  }
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
   if (value_sz_get(dst) > 1) {
     variable_sz_t ii;
@@ -1357,6 +3103,11 @@ static void pic_assign_from_label2(pfile_t *pf, value_t dst, label_t lbl)
     code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
     pic_code_brdst_set(code, lbl);
     pic_code_ofs_set(code, 1);
+    if (offset) {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+      pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, (offset >> 8) & 0xff);
+    }
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 1);
     for (ii = 2; ii < value_sz_get(dst); ii++) {
       pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
@@ -1365,34 +3116,145 @@ static void pic_assign_from_label2(pfile_t *pf, value_t dst, label_t lbl)
   }
 }
 
+static void pic_assign_from_label2(pfile_t *pf, value_t dst, label_t lbl)
+{
+  pic_assign_from_label_offset(pf, dst, lbl, 0);
+}
+
+typedef enum {
+  PIC_VALUE_TO_W_NONE, /* unused */
+  PIC_VALUE_TO_W_MOV,
+  PIC_VALUE_TO_W_SUB,
+  PIC_VALUE_TO_W_ADD
+} pic_value_to_w_t;
+
+static void pic_value_to_w(pfile_t *pf, pic_value_to_w_t op,
+    value_t val, value_t val_sign, variable_sz_t pos);
+
 static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
 {
   variable_sz_t ipos;
   variable_t    var;
 
+  /* *p = <numeric literal>: dst is indirect (write-through pointer). The const
+   * branch below only runs pass-1 label glue and never emits per-byte INDF
+   * stores on pass 2 — PIC14 movlw 255 / wrong store (volatile byte literal);
+   * extend to word / dword / etc. (little-endian, sign-extend when dst wider
+   * than the constant's byte width). See fix_pic14_volatile_pointer_byte_assign_constant.md. */
+  if (value_is_indirect(dst) && value_is_const(src) && value_is_number(src)) {
+    variable_sz_t       sz;
+    variable_sz_t       ii;
+    variable_sz_t       srcsz;
+    variable_const_t    v;
+    uchar               ch;
+    uchar               msb_ch;
+
+    sz = (pic_value_is_w(dst) ? 1 : value_sz_get(dst));
+    var = value_variable_get(src);
+    if (var) {
+      variable_use_ct_bump(var, CTR_BUMP_INCR);
+    }
+    srcsz = value_byte_sz_get(src);
+    if (0 == srcsz) {
+      srcsz = value_sz_get(src);
+    }
+    if (0 == srcsz) {
+      srcsz = 1;
+    }
+    v = value_const_get(src);
+    msb_ch = (uchar) ((v >> (8 * (srcsz - 1))) & 0xff);
+    pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
+    for (ii = 0; ii < sz; ii++) {
+      pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
+      if (ii < srcsz) {
+        ch = (uchar) ((v >> (8 * ii)) & 0xff);
+      } else if (value_is_signed(src)) {
+        ch = (msb_ch & 0x80) ? (uchar) 0xff : (uchar) 0;
+      } else {
+        ch = 0;
+      }
+      if (ch || pic_value_is_w(dst)) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, ch);
+      }
+      if (!pic_value_is_w(dst)) {
+        pic_instr_append_f(pf, ch ? PIC_OPCODE_MOVWF : PIC_OPCODE_CLRF, dst, ii);
+      }
+    }
+    return;
+  }
+
+  /* Before variable_value_get: folded `p is buf` passes a VALUE aggregate as
+   * `src` (pic_try_bind / value_variable_get miss); PTR_LOOKUP marks the dest
+   * pointer; pic_src_is_data_array includes VALUE_FLAG_ARRAY. */
+  {
+    variable_t dvb;
+
+    dvb = value_variable_get(dst);
+    if (dvb && VARIABLE_NONE != dvb
+        && VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(variable_def_get(dvb))
+        && !value_is_pointer(src)
+        && value_is_value(src)
+        && value_sz_get(src) > 1
+        && value_sz_get(src) == value_sz_get(dst)
+        && (pic_src_is_data_array(src)
+            || pic_variable_is_rom_int_const_table(value_variable_get(src))
+            || value_dflag_test(src, VARIABLE_DEF_FLAG_CONST))) {
+      value_t ptr_slot;
+
+      ptr_slot = value_alloc(dvb);
+      pic_assign_array_to_pointer(pf, ptr_slot, src);
+      value_release(ptr_slot);
+      return;
+    }
+  }
+
   var = value_variable_get(src);
+  /* Mark source variable as used when accessing its value */
+  if (var) {
+    variable_use_ct_bump(var, CTR_BUMP_INCR);
+  }
   src = variable_value_get(var);
 
-  if (value_is_const(src)) {
-	  if (pic_code_gen_pass_get(pf) == 1) {
-		  label_t lbl;
+  if (value_is_const(src)
+      && pic_variable_is_rom_int_const_table(value_variable_get(src))) {
+    if (pic_code_gen_pass_get(pf) == 2) {
+      label_t lbl;
+      variable_const_t offset;
 
-		  lbl = pic_lookup_label_find(pf,
-			  value_variable_get(variable_value_get(var)),
-			  (pic_is_16bit(pf))
-			  ? PIC_LOOKUP_LABEL_FIND_FLAG_DATA
-			  : PIC_LOOKUP_LABEL_FIND_FLAG_NONE);
-		  if (!lbl) {
-			  pfile_log(pf, PFILE_LOG_ERR, "Cannot use whereis() on a constant");
-		  }
-		  else {
-			  pic_assign_from_label2(pf, dst, lbl);
-			  label_release(lbl);
-		  }		  
+      lbl = pic_lookup_label_find(pf,
+          value_variable_get(variable_value_get(var)),
+          (pic_is_16bit(pf))
+          ? PIC_LOOKUP_LABEL_FIND_FLAG_DATA
+          : PIC_LOOKUP_LABEL_FIND_FLAG_NONE);
+      if (lbl) {
+        if (!value_baseofs_const_get(src, &offset)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "WHEREIS() runtime offsets are not supported for constants");
+        } else {
+          pic_assign_from_label_offset(pf, dst, lbl, offset);
+        }
+        label_release(lbl);
+        return;
+      }
     }
-  } else {
+  }
+  {
+    variable_const_t offset;
+    variable_base_t  base;
+
+    if (!value_baseofs_const_get(src, &offset)) {
+      value_t base_val;
+
+      base_val = pfile_constant_get(pf, value_base_get(src),
+          VARIABLE_DEF_NONE);
+      pic_op(pf, OPERATOR_ASSIGN, dst, base_val, VALUE_NONE);
+      pic_op(pf, OPERATOR_ADD, dst, dst, value_baseofs_get(src));
+      value_release(base_val);
+      return;
+    }
+    base = value_base_get(src) + offset;
     pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
-    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, value_base_get(src));
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
 
     if (value_sz_get(dst) > 1) {
@@ -1400,7 +3262,7 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
 
       pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, 1, &ipos);
       pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
-          value_base_get(src) >> 8);
+          base >> 8);
       pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 1);
       for (ii = 2; ii < value_sz_get(dst); ii++) {
         pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
@@ -1410,8 +3272,196 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
   }
 }
 
+/* Store address of a data lvalue (scalar or aggregate) into a data pointer slot.
+ * Unlike pic_assign_from_value, does not replace src with variable_value_get(var)
+ * (which loses the lvalue for const scalars and breaks address extraction). */
+static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
+    value_t src)
+{
+  variable_sz_t   ii;
+  variable_t      src_var;
+  value_t         rt_baseofs;
+  boolean_t       slot_rt;
+
+  src_var = value_variable_get(src);
+  if (src_var) {
+    variable_use_ct_bump(src_var, CTR_BUMP_INCR);
+  }
+  if (value_is_pointer(dst)) {
+    variable_def_t src_def = value_def_get(src);
+    variable_def_t ptr_def = value_def_get(dst);
+    variable_def_member_t existing_mbr = variable_def_member_get(ptr_def);
+
+    if (!existing_mbr) {
+      variable_def_member_add(ptr_def, 0, variable_def_dup(src_def), 1);
+    }
+  }
+
+  {
+    variable_sz_t dst_sz;
+
+    /* Same as pic_assign_array_to_pointer: folded `var pointer const byte p[N]`
+     * is one pointer slot; value_sz_get(dst) can reflect the pointee aggregate. */
+    dst_sz = (value_is_pointer(dst) && !value_is_array(dst))
+      ? pic_pointer_size_get(pf)
+      : value_sz_get(dst);
+
+    /* Runtime-indexed ARRAY-of-pointers element as the bind DESTINATION
+     * (`slots[k] is <var>`): the plain MOVWF dst,ii below resolves a
+     * subscripted destination to the _ind scratch -- both pointer bytes
+     * landed there and the slot was never written (silent no-op bind on
+     * BOTH classic cores, 2026-10-28). Stage FSR = &slot[k] directly --
+     * NOT pic_indirect_setup, which has through-access semantics for
+     * slot elements (it would dereference the slot) -- and store each
+     * byte through INDF with a carry-safe increment on wide cores. */
+    rt_baseofs = value_baseofs_get(dst);
+    slot_rt = pic_value_variable_is_array_of_pointers(dst)
+      && (VALUE_NONE != rt_baseofs) && !value_is_const(rt_baseofs);
+    if (slot_rt) {
+      value_t   indv;
+      value_t   fsrv;
+      boolean_t wide16;
+
+      wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+      indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+      fsrv = pic_fsr_get(pf);
+      pic_classic_fsr_load_base_dynamic_index(pf,
+          value_variable_get(dst), value_base_get(dst), rt_baseofs,
+          (variable_sz_t) value_byte_sz_get(dst));
+      if (src_var) {
+        for (ii = 0; ii < dst_sz; ii++) {
+          pic_code_t code;
+          unsigned   flag;
+
+          code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+          pic_code_value_set(code, src);
+          flag = PIC_CODE_FLAG_NONE;
+          switch (ii) {
+            case 0: break;
+            case 1: flag = PIC_CODE_FLAG_LABEL_HIGH;  break;
+            case 2: flag = PIC_CODE_FLAG_LABEL_UPPER; break;
+          }
+          pic_code_flag_set(code, flag);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indv, 0);
+          if (ii + 1 < dst_sz) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+              PIC_OPDST_F);
+            if (wide16) {
+              pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
+                "_status", "_z");
+              pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+            }
+          }
+        }
+      } else {
+        variable_base_t base;
+
+        for (ii = 0, base = value_base_get(src);
+            ii < dst_sz;
+            ii++, base >>= 8) {
+          if (base & 0xff) {
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+              (uchar) (base & 0xff));
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indv, 0);
+          } else {
+            pic_instr_append_f(pf, PIC_OPCODE_CLRF, indv, 0);
+          }
+          if (ii + 1 < dst_sz) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+              PIC_OPDST_F);
+            if (wide16) {
+              pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
+                "_status", "_z");
+              pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+            }
+          }
+        }
+      }
+      value_release(fsrv);
+      value_release(indv);
+      return;
+    }
+
+    if (src_var) {
+      /* Do not use `if (value_base_get(src))`: the low byte of the address may be
+       * 0 (e.g. 0x100), and bases can be unknown during early passes — still emit
+       * relocatable MOVLW via pic_code_value_set for every pointer byte. */
+      for (ii = 0; ii < dst_sz; ii++) {
+        pic_code_t code;
+        unsigned   flag;
+
+        code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+        pic_code_value_set(code, src);
+        flag = PIC_CODE_FLAG_NONE;
+        switch (ii) {
+          case 0: break;
+          case 1: flag = PIC_CODE_FLAG_LABEL_HIGH;  break;
+          case 2: flag = PIC_CODE_FLAG_LABEL_UPPER; break;
+        }
+        pic_code_flag_set(code, flag);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+      }
+    } else {
+      variable_base_t base;
+
+      for (ii = 0, base = value_base_get(src);
+          ii < dst_sz;
+          ii++, base >>= 8) {
+        if (base & 0xff) {
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (uchar) (base & 0xff));
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+        } else {
+          pic_instr_append_f(pf, PIC_OPCODE_CLRF, dst, ii);
+        }
+      }
+    }
+  }
+}
+
+static boolean_t pic_assign_from_whereis_const(pfile_t *pf, value_t dst,
+    value_t src)
+{
+  variable_t src_var;
+  label_t    lbl;
+  value_t    target;
+
+  src_var = value_variable_get(src);
+  if (!src_var) {
+    return BOOLEAN_FALSE;
+  }
+  lbl = variable_label_get(src_var);
+  if (lbl) {
+    pic_assign_from_label2(pf, dst, lbl);
+    return BOOLEAN_TRUE;
+  }
+  target = variable_value_get(src_var);
+  if (target) {
+    pic_assign_address_of_lvalue_to_pointer(pf, dst, target);
+    return BOOLEAN_TRUE;
+  }
+  return BOOLEAN_FALSE;
+}
+
 static void pic_assign_from_label(pfile_t *pf, value_t dst, value_t src)
 {
+  /* Mark source variable as used for pointer aliasing (current_sensor is sensor1_data) */
+  variable_t src_var = value_variable_get(src);
+  if (src_var) {
+    variable_use_ct_bump(src_var, CTR_BUMP_INCR);
+  }
+  
+  /* For pointer assignments, set up member definition to match the source variable */
+  if (value_is_pointer(dst)) {
+    variable_def_t src_def = value_def_get(src);
+    variable_def_t ptr_def = value_def_get(dst);
+    variable_def_member_t existing_mbr = variable_def_member_get(ptr_def);
+    
+    if (!existing_mbr) {
+      /* No member definition exists - add one that matches the source variable */
+      variable_def_member_add(ptr_def, 0, variable_def_dup(src_def), 1);
+    }
+    /* Continue with the label assignment */
+  }
   pic_assign_from_label2(pf, dst, value_label_get(src));
 }
 
@@ -1431,7 +3481,21 @@ static void pic_assign_from_function(pfile_t *pf, value_t dst,
   dst_def = value_def_get(dst);
   /* dereference dst def */
   dst_def = variable_def_member_def_get(variable_def_member_get(dst_def));
-  assert(variable_def_is_same(src_def, dst_def));
+  
+  /* For generic pointers, set up the member definition to match the function */
+  if (!dst_def || !variable_def_is_same(src_def, dst_def)) {
+    /* The pointer doesn't have a proper member definition - set it up now */
+    variable_def_t ptr_def = value_def_get(dst);
+    variable_def_member_t existing_mbr = variable_def_member_get(ptr_def);
+    
+    if (!existing_mbr) {
+      /* No member definition exists - add one that matches the function */
+      variable_def_member_add(ptr_def, 0, variable_def_dup(src_def), 1);
+    } else {
+      /* Member exists but doesn't match - this is expected for generic pointers */
+      /* Continue with assignment */
+    }
+  }
 
   proc = value_proc_get(src);
   lbl  = pfile_proc_label_get(proc);
@@ -1447,48 +3511,117 @@ static void pic_assign_from_function(pfile_t *pf, value_t dst,
 
 static void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
 {
-  if (value_is_const(src)) {
-    /* this is assign from lookup */
-    pic_code_t code;
-    label_t        lbl;
+  /* Set up member definition for array pointer */
+  if (value_is_pointer(dst) && value_is_array(src)) {
+    variable_def_t src_def = value_def_get(src);
+    variable_def_t ptr_def = value_def_get(dst);
+    variable_def_member_t existing_mbr = variable_def_member_get(ptr_def);
+    
+    if (!existing_mbr) {
+      /* No member definition exists - add one that matches the array element type */
+      variable_def_t array_element_def = variable_def_member_def_get(variable_def_member_get(src_def));
+      if (array_element_def) {
+        variable_def_member_add(ptr_def, 0, variable_def_dup(array_element_def), 1);
+      } else {
+        /* Fallback: assume byte array if no element definition found */
+        variable_def_member_add(ptr_def, 0, 
+          variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, VARIABLE_DEF_FLAG_NONE, 1), 1);
+      }
+    }
+  }
+  
+  {
+    variable_t sv0;
 
-    lbl = pic_lookup_label_find(pf, value_variable_get(src), 
-        PIC_LOOKUP_LABEL_FIND_FLAG_NONE);
-    code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
-    pic_code_brdst_set(code, lbl);
-    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
-    code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
-    pic_code_brdst_set(code, lbl);
-    pic_code_ofs_set(code, 1);
-    /* jalv25r9: We use bit 7 instead of bit 6 to solve issue#30. */
-    pic_instr_append_w_kn(pf, PIC_OPCODE_IORLW, 0x80);
-    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 1);
-    label_release(lbl);
-  } else {
+    sv0 = value_variable_get(src);
+    /* `value_is_const(src)` is false when baseofs is non-const even if the
+     * variable is a const ROM lookup array — still load `_data_<name>`. */
+    if (sv0 && VARIABLE_NONE != sv0
+        && (value_is_const(src) || variable_is_lookup(sv0)
+            || variable_is_const(sv0))) {
+      label_t    lbl;
+
+      lbl = pic_lookup_label_find(pf, sv0,
+          PIC_LOOKUP_LABEL_FIND_FLAG_ALLOC
+          | PIC_LOOKUP_LABEL_FIND_FLAG_DATA);
+      if (lbl) {
+        variable_const_t offset;
+
+        offset = 0;
+        if (value_baseofs_const_get(src, &offset)) {
+          pic_assign_lookup_label_to_pointer(pf, dst, lbl, offset);
+        } else {
+          /* jalv2compiler #36 (runtime-index variant): the actual is
+           * `table[runtime_index].field` -- baseofs is the front end's
+           * index * stride + member-offset expression, not a constant.
+           * Bind the table base, then add that expression; the top-byte
+           * program-memory marker survives the add because real table
+           * addresses keep that bit clear. */
+          pic_assign_lookup_label_to_pointer(pf, dst, lbl, 0);
+          if (value_baseofs_get(src)) {
+            pic_op(pf, OPERATOR_ADD, dst, dst, value_baseofs_get(src));
+          }
+        }
+        label_release(lbl);
+        return;
+      }
+    }
+  }
+  {
     variable_base_t base;
     variable_sz_t   ii;
+    variable_sz_t   dst_sz;
+    variable_t       sv;
+    boolean_t        addr_from_data;
 
-    base = value_base_get(src);
+    sv = value_variable_get(src);
+    addr_from_data = (sv && (variable_data_get(sv) || variable_is_lookup(sv)));
+    /* `var pointer const byte p[N]` folds to one pointer; value_sz_get(dst) is
+     * the pointee aggregate size (N bytes), not the pointer slot width — using
+     * it here wrote N bytes through INDF (e.g. movlw 0xff / movwf v__ind) and
+     * never loaded the array address into the slot. */
+    dst_sz = (value_is_pointer(dst) && !value_is_array(dst))
+      ? pic_pointer_size_get(pf)
+      : value_sz_get(dst);
     for (ii = 0, base = value_base_get(src);
-         ii < value_sz_get(dst);
+         ii < dst_sz;
          ii++, base >>= 8) {
-      if (base) {
+      if (base || addr_from_data) {
         pic_code_t code;
         unsigned   flag;
 
-        code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
-        pic_code_value_set(code, src);
-        flag = PIC_CODE_FLAG_NONE;
-        switch (ii) {
-          case 0: break;
-          case 1: flag = PIC_CODE_FLAG_LABEL_HIGH;  break;
-          case 2: flag = PIC_CODE_FLAG_LABEL_UPPER; break;
+        if (addr_from_data) {
+          code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+          pic_code_value_set(code, src);
+          flag = PIC_CODE_FLAG_NONE;
+          switch (ii) {
+            case 0: break;
+            case 1: flag = PIC_CODE_FLAG_LABEL_HIGH;  break;
+            case 2: flag = PIC_CODE_FLAG_LABEL_UPPER; break;
+          }
+          pic_code_flag_set(code, flag);
+        } else {
+          /* RAM base: emit the address byte as a LITERAL. Binding via
+           * pic_code_value_set resolves through the variable's current
+           * value, which a subscript parse leaves pointing at the
+           * indirect scratch -- `ram_array[index].field` then bound the
+           * scratch address instead of the array (#36 runtime-index). */
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+              (variable_const_t) (base & 0xff));
         }
-        pic_code_flag_set(code, flag);
         pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
       } else {
         pic_instr_append_f(pf, PIC_OPCODE_CLRF, dst, ii);
       }
+    }
+    /* RAM twin of the #36 runtime-index fix: the loop above binds only
+     * the array base; a runtime subscript (`ram_array[index].field`)
+     * rides in baseofs and must be added, or the formal binds the
+     * array start instead of the element. */
+    if (value_baseofs_get(src)
+        && (!value_is_const(value_baseofs_get(src))
+          || value_const_get(value_baseofs_get(src)))) {
+      pic_op(pf, OPERATOR_ADD, dst, dst, value_baseofs_get(src));
     }
   }
 }
@@ -1522,62 +3655,56 @@ static void pic_assign_ptr_to_ptr(pfile_t *pf, value_t dst, value_t src)
 /* dst has one or more of the LOOKUP/EEPROM/FLASH bits set */
 static void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
 {
+  variable_t      dvar;
+  variable_t      svar;
+  variable_def_t  sdef;
+  boolean_t       src_array_like;
+
+  /* PTR_LOOKUP is set on the pointer when a const array is bound for reads, but
+   * `p is buf` is still "store buf's address in p" — not the lookup-label loop
+   * below (which treats dst as an INDF destination). */
+  dvar = value_variable_get(dst);
+  src_array_like = value_is_array(src);
+  if (!src_array_like) {
+    src_array_like = value_flag_test(src, VALUE_FLAG_ARRAY);
+  }
+  if (!src_array_like && (svar = value_variable_get(src)) != VARIABLE_NONE) {
+    sdef = variable_def_get(svar);
+    src_array_like = (sdef != 0)
+      && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(sdef));
+  }
+  /* Folded `var pointer const byte p[N]` is VARIABLE_DEF_TYPE_ARRAY on the
+   * backing var, not POINTER — match pic_dst_backs_pointer_storage /
+   * pic_try_bind_array_to_pointer_slot so `p is rom[]` does not fall through to
+   * "Attempt to assign to a lookup table". */
+  if (pic_dst_backs_pointer_storage(dst) && dvar && VARIABLE_NONE != dvar
+      && src_array_like && !value_is_pointer(src)) {
+    value_t ptr_slot;
+
+    ptr_slot = value_alloc(dvar);
+    if (ptr_slot) {
+      pic_assign_array_to_pointer(pf, ptr_slot, src);
+      value_release(ptr_slot);
+      return;
+    }
+  }
+
   if (value_is_pointer(src)) {
     pic_assign_ptr_to_ptr(pf, dst, src);
   } else if (variable_is_lookup(value_variable_get(src))) {
-    pic_code_t    code;
     label_t       lbl;
-    variable_sz_t ii;
     variable_const_t offset;
 
     lbl = pic_lookup_label_find(pf, value_variable_get(src), 
         PIC_LOOKUP_LABEL_FIND_FLAG_ALLOC
         | PIC_LOOKUP_LABEL_FIND_FLAG_DATA);
-    for (ii = 0; ii < pic_pointer_size_get(pf); ii++) {
-        code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
-        pic_code_brdst_set(code, lbl);
-        pic_code_ofs_set(code, ii);
+    {
+      value_t bofs;
 
-#if 0
-        /* RJ: This code was added to solve issue#36 but introduced another problem
-           with printing strings from both const and var arrays so removed for now. */
-
-           /* If there is an offset to the source then we should add that.
-              This offset is created when going througha subscript
-              (see jal_parse_subscript()). This solves the issue
-              when using arrays in records. */
-        offset = value_baseofs_const_get(src);
-        if ((offset > 255) & (ii == 1)) {
-            /* We have a large offset. Pointer must also be 2 bytes. */
-            pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, offset / 0xff);
-        }
-        else if ((offset > 0) & (ii == 0)) {
-            offset = offset & 0xff;
-            /* Do not add 0 when on the boundary of 255. */
-            if (offset != 00) {
-                pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, offset);
-            }
-        }
-        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+      bofs = value_baseofs_get(src);
+      offset = (bofs && value_baseofs_const_get(src, &offset)) ? offset : 0;
     }
-#else
-        /* RJ: Original code. */
-        /* If the offset is > 0 we have to add that to the label address. */
-        offset = value_const_get(value_baseofs_get(src));
-        if ((ii == 0) && (offset != 0)) {
-            pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, offset);
-        }
-
-        if (ii + 1 == pic_pointer_size_get(pf)) {
-            /* This has to be forced. Previously I optimized this out
-             * in some circumstances, but that lead to bad code
-             */
-             /* jalv25r9 :We will use bit 7 instead of bit 6 to solve issue #30. */
-            pic_instr_append_w_kn(pf, PIC_OPCODE_IORLW, 0x80);
-        }
-        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
-#endif
-    }
+    pic_assign_lookup_label_to_pointer(pf, dst, lbl, offset);
     label_release(lbl);
   } else if (value_is_array(src)) {
     pic_assign_array_to_pointer(pf, dst, src);
@@ -1644,6 +3771,43 @@ static void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
             pic_instr_append_f(pf, PIC_OPCODE_CLRF, tmp, ii);
           }
         }
+      } else if (pic_value_variable_is_array_of_pointers(src)) {
+        /* ARRAY-of-pointers element read at a runtime index: DOUBLE
+         * indirection -- FSR = &slot[k], load the slot's pointer into
+         * tmp, and the existing PTR_READ flow dereferences tmp (the
+         * old *slot0+ofs staging read the bound code address as the
+         * data base). 16-bit core + hybrid variant added 2026-10-28
+         * (carry-safe FSR0 increment; RAM slots carry a zero upper
+         * pointer byte, so byte 2 is cleared rather than loaded) */
+        value_t   indv;
+        value_t   fsrv;
+        boolean_t wide16;
+
+        wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+        indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+        fsrv = pic_fsr_get(pf);
+        pic_classic_fsr_load_base_dynamic_index(pf,
+            value_variable_get(src), value_base_get(src), baseofs,
+            (variable_sz_t) value_byte_sz_get(src));
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
+            PIC_OPDST_W);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tmp, 0);
+        pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+            PIC_OPDST_F);
+        if (wide16) {
+          /* INCF _fsr0l alone cannot cross a 256-byte boundary */
+          pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status",
+              "_z");
+          pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+        }
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
+            PIC_OPDST_W);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tmp, 1);
+        if (wide16 && (value_sz_get(tmp) > 2)) {
+          pic_instr_append_f(pf, PIC_OPCODE_CLRF, tmp, 2);
+        }
+        value_release(fsrv);
+        value_release(indv);
       } else {
         pic_op(pf, OPERATOR_ADD, tmp, src, baseofs);
       }
@@ -1781,21 +3945,362 @@ static void pic_assign_from_float(pfile_t *pf, value_t dst, value_t src)
   value_release(fconv);
 }
 
+/* True if `sv` is a true ARRAY variable (not INTEGER lowered const tables). */
+static boolean_t pic_variable_is_array_table(variable_t sv)
+{
+  variable_def_t sdef;
+
+  if (!sv || VARIABLE_NONE == sv) {
+    return BOOLEAN_FALSE;
+  }
+  sdef = variable_def_get(sv);
+  return sdef && VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(sdef);
+}
+
+/* `const byte buf[N]` may use VARIABLE_DEF_TYPE_INTEGER + CONST on the variable. */
+static boolean_t pic_variable_is_rom_int_const_table(variable_t sv)
+{
+  variable_def_t sdef;
+  const char     *nm;
+
+  if (!sv || VARIABLE_NONE == sv) {
+    return BOOLEAN_FALSE;
+  }
+  nm = variable_name_get(sv);
+  if (!nm || !nm[0]) {
+    /* Anonymous const temps (e.g. literal `7` as a wide INTEGER) are not ROM
+     * tables for `p is buf`; they must not satisfy arraylike-for-bind. */
+    return BOOLEAN_FALSE;
+  }
+  sdef = variable_def_get(sv);
+  if (!sdef) {
+    return BOOLEAN_FALSE;
+  }
+  /* Exclude plain numeric constants: they use INTEGER+CONST with sz>1 but have
+   * no initializer bytes / lookup — only true ROM tables do (e.g. const byte
+   * buf[N] lowered to INTEGER), else `slot[0] = 7` mis-triggers array-to-pointer. */
+  return (VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(sdef)
+      && variable_def_flag_test(sdef, VARIABLE_DEF_FLAG_CONST)
+      && variable_def_sz_get(sdef) > 1
+      && variable_is_const(sv)
+      && !variable_is_pointer(sv)
+      && (variable_data_get(sv) || variable_is_lookup(sv)));
+}
+
+/* True if dst names GPR slot(s) for a data pointer (`var pointer …`). */
+static boolean_t pic_dst_backs_pointer_storage(value_t dst)
+{
+  variable_t         v;
+  variable_def_t    vd;
+  variable_def_member_t mbr;
+  variable_def_t    em;
+
+  if (!dst) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_is_pointer(dst)) {
+    return BOOLEAN_TRUE;
+  }
+  /* `value_dereference` leaves `VALUE_FLAG_POINTER` while `value_type_get` is
+   * the pointee (not VARIABLE_DEF_TYPE_POINTER on the value). */
+  if (value_flag_test(dst, VALUE_FLAG_POINTER)) {
+    return BOOLEAN_TRUE;
+  }
+  v = value_variable_get(dst);
+  if (!v || VARIABLE_NONE == v) {
+    return BOOLEAN_FALSE;
+  }
+  vd = variable_def_get(v);
+  if (!vd) {
+    return BOOLEAN_FALSE;
+  }
+  if (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vd)) {
+    return BOOLEAN_TRUE;
+  }
+  if (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(vd)) {
+    mbr = variable_def_member_get(vd);
+    em  = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+    if (em && VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(em)) {
+      return BOOLEAN_TRUE;
+    }
+    /* Folded `var pointer const byte p[N]`: outer ARRAY, inner ARRAY(pointee). */
+    if (em && VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(em)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* True if src is an array aggregate (value or variable def is ARRAY). */
+static boolean_t pic_src_is_data_array(const value_t src)
+{
+  variable_t sv;
+
+  if (!src) {
+    return BOOLEAN_FALSE;
+  }
+  /* Folded `p is buf` can lower the RHS to VARIABLE_DEF_TYPE_VALUE (aggregate)
+   * while VALUE_FLAG_ARRAY remains set from the array lvalue (value.c). */
+  if (value_flag_test(src, VALUE_FLAG_ARRAY)) {
+    return BOOLEAN_TRUE;
+  }
+  if (value_is_array(src)) {
+    return BOOLEAN_TRUE;
+  }
+  sv = value_variable_get(src);
+  /* Do not reject on value_is_pointer(src): const ROM arrays can still test as
+   * a pointer value (lookup) while variable_def_get(sv) remains ARRAY. */
+  return pic_variable_is_array_table(sv);
+}
+
+static boolean_t pic_try_src_arraylike_for_pointer_bind(const value_t src)
+{
+  if (pic_src_is_data_array(src)) {
+    return BOOLEAN_TRUE;
+  }
+  return pic_variable_is_rom_int_const_table(value_variable_get(src));
+}
+
+/* `p is buf` may reach here as OPERATOR_ASSIGN with dst already dereferenced
+ * (*p in the cmd stream) while the backing variable is still a POINTER def.
+ * pic_assign_array_to_pointer needs a non-indirect value typed as pointer. */
+static boolean_t pic_try_bind_array_to_pointer_slot(pfile_t *pf, value_t dst,
+    value_t src)
+{
+  variable_t      vbind;
+  value_t         ptr_slot;
+  value_t         src_use;
+  boolean_t       src_use_extra;
+
+  if (!pic_dst_backs_pointer_storage(dst)) {
+    return BOOLEAN_FALSE;
+  }
+
+  /* Before `src_use` / name resolution: `pic_try_src_arraylike_for_pointer_bind`
+   * can be true for a plain scalar (VALUE_FLAG_ARRAY) even when `variable_t` is
+   * missing — do not route `slot[i] is v` through pic_assign_array_to_pointer. */
+  if (pic_try_src_arraylike_for_pointer_bind(src)) {
+    variable_t sx;
+
+    sx = value_variable_get(src);
+    if (!sx || VARIABLE_NONE == sx) {
+      if (!pic_src_is_data_array(src)) {
+        return BOOLEAN_FALSE;
+      }
+      /* VALUE_FLAG_ARRAY alone can be set on a 1-byte scalar; require real size. */
+      if ((1 == value_sz_get(src)) && !value_is_array(src)) {
+        return BOOLEAN_FALSE;
+      }
+    } else if (!pic_variable_is_array_table(sx)
+        && !pic_variable_is_rom_int_const_table(sx)) {
+      return BOOLEAN_FALSE;
+    }
+  }
+
+  src_use        = src;
+  src_use_extra  = BOOLEAN_FALSE;
+  ptr_slot       = VALUE_NONE;
+
+  if (!pic_try_src_arraylike_for_pointer_bind(src)) {
+    /* `p is buf`: the RHS can be lowered to a VALUE aggregate whose
+     * variable_t link is gone, so pic_src_is_data_array misses while the
+     * symbol still names a const array — resolve by name for address-of. */
+    const char     *snm;
+    variable_t      vsrc;
+
+    snm = value_name_get(src);
+    if (!snm || !snm[0]) {
+      return BOOLEAN_FALSE;
+    }
+    vsrc = pfile_variable_find(pf, PFILE_LOG_NONE, snm, 0);
+    if (!vsrc || VARIABLE_NONE == vsrc) {
+      return BOOLEAN_FALSE;
+    }
+    if (!pic_variable_is_array_table(vsrc)
+        && !pic_variable_is_rom_int_const_table(vsrc)) {
+      variable_release(vsrc);
+      return BOOLEAN_FALSE;
+    }
+    src_use = value_alloc(vsrc);
+    variable_release(vsrc);
+    if (!src_use) {
+      return BOOLEAN_FALSE;
+    }
+    src_use_extra = BOOLEAN_TRUE;
+  }
+  if (value_is_pointer(dst)) {
+    ptr_slot = value_clone(dst);
+    value_baseofs_set(ptr_slot, VALUE_NONE);
+    value_indirect_clear(ptr_slot);
+  } else if ((vbind = value_variable_get(dst)) != VARIABLE_NONE) {
+    variable_def_t      vdef;
+    variable_def_type_t vdt;
+
+    vdef = variable_def_get(vbind);
+    vdt  = vdef ? variable_def_type_get(vdef) : VARIABLE_DEF_TYPE_NONE;
+    if (VARIABLE_DEF_TYPE_POINTER == vdt) {
+      ptr_slot = value_alloc(vbind);
+    } else if (VARIABLE_DEF_TYPE_ARRAY == vdt) {
+      variable_def_member_t mbr;
+      variable_def_t        em;
+
+      mbr = variable_def_member_get(vdef);
+      em  = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+      if (em && VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(em)) {
+        ptr_slot = value_alloc(vbind);
+      } else if (em && VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(em)) {
+        ptr_slot = value_alloc(vbind);
+      }
+    }
+  }
+  if (!ptr_slot) {
+    if (src_use_extra) {
+      value_release(src_use);
+    }
+    return BOOLEAN_FALSE;
+  }
+  pic_assign_array_to_pointer(pf, ptr_slot, src_use);
+  value_release(ptr_slot);
+  if (src_use_extra) {
+    value_release(src_use);
+  }
+  return BOOLEAN_TRUE;
+}
+
 /* note: dst or src can be W */
-static void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
+static void pic_op_assign(pfile_t *pf, operator_t op, value_t dst, 
     value_t src, value_t val2)
 {
-  UNUSED(op);
   UNUSED(val2);
-
+  /* Layer 2: a pointer bind makes the target's addressing linear (*p +
+   * i cannot walk a chunk map) -- record it for the placement refusal,
+   * before any dispatch (several early branches fold pointer assigns) */
+  if (OPERATOR_POINTER_ASSIGN == op) {
+    pic_var_pointer_target_bump(value_variable_get(src));
+    /* bind registry for the escape analysis: an unescaped pointer's
+     * derefs can walk the target's chunk map (map-carrying open-array
+     * formals included); an ESCAPED one is refused after the scan */
+    pic_var_pointer_bind_record(value_variable_get(dst),
+        value_variable_get(src));
+  }
   if (value_is_same(dst, src)) {
     /* this might happen during some internal work, ignore it */
+  } else if ((OPERATOR_POINTER_ASSIGN == op
+        || (OPERATOR_ASSIGN == op && !value_flag_test(dst, VALUE_FLAG_INDIRECT)))
+      && pic_try_bind_array_to_pointer_slot(pf, dst, src)) {
+    /* `slot[i] = x` is OPERATOR_ASSIGN with INDIRECT (store through the slot's
+     * pointer); do not run array-to-pointer bind (that would treat RHS as an
+     * address source and crash in pic_assign_array_to_pointer). Folded `p is buf`
+     * uses OPERATOR_POINTER_ASSIGN, or ASSIGN without INDIRECT on dst. */
+  } else if ((OPERATOR_ASSIGN == op) && value_is_pointer(dst)
+      && value_is_function(src)) {
+    variable_t dv;
+
+    /* Formal IN parameters use pointer slots for the getter (volatile IN,
+     * etc.); store the function triplet. Other pointer=function assigns
+     * (e.g. in libraries) must still dereference. */
+    dv = value_variable_get(dst);
+    if (dv && variable_dflag_test(dv, VARIABLE_DEF_FLAG_IN)) {
+      pic_assign_from_function(pf, dst, src);
+    } else {
+      value_t indirect_dst;
+
+      indirect_dst = value_clone(dst);
+      value_dereference(indirect_dst);
+      value_indirect_set(indirect_dst);
+      pic_assign_from_value(pf, indirect_dst, src);
+      value_release(indirect_dst);
+    }
+  } else if ((OPERATOR_ASSIGN == op) && value_is_pointer(dst)
+      && !value_is_pointer(src) && !value_is_array(src)
+      && !pic_try_src_arraylike_for_pointer_bind(src)) {
+    /* Dereference assignment only: store a value through a pointer (e.g. *p = x).
+     * If src is another pointer or array, we must copy the address into dst's
+     * slot (pic_assign_array_to_pointer / simple assign), not write through an
+     * uninitialized formal pointer — e.g. checksum_16_byte_calc(buff,...) from
+     * checksum_16_byte_verify where buff is byte in buff[].
+     * Exclude pic_src_is_data_array: `p is buf` for folded pointer-to-const-array
+     * can reach here with src typed as VALUE while the variable is still ARRAY;
+     * without this, we never reach pic_try_bind_array_to_pointer_slot. */
+    value_t indirect_dst = value_clone(dst);
+    value_dereference(indirect_dst);
+    value_indirect_set(indirect_dst);
+    if (value_is_const(src) && value_is_number(src)) {
+      pic_assign_from_value(pf, indirect_dst, src);
+    } else {
+      /* Runtime expression source: store the VALUE through the pointer.
+       * pic_assign_from_value treats a non-const src as an address bind
+       * (pointer-slot semantics), which would clobber the address with
+       * the expression result -- walk the pointee bytes via W instead
+       * (same shape as the const path in pic_assign_from_value).
+       * Widening bytes past the source width store 0; sign extension
+       * needs the runtime top bit and is not attempted here. */
+      variable_sz_t sz;
+      variable_sz_t srcsz;
+      variable_sz_t ii;
+      variable_sz_t ipos;
+      variable_t   var;
+
+      sz    = value_sz_get(indirect_dst);
+      srcsz = value_byte_sz_get(src);
+      if (!srcsz) {
+        srcsz = value_sz_get(src);
+      }
+      if (!srcsz) {
+        srcsz = 1;
+      }
+      var = value_variable_get(src);
+      if (var) {
+        variable_use_ct_bump(var, CTR_BUMP_INCR);
+      }
+      pic_indirect_setup3(pf, indirect_dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
+      for (ii = 0; ii < sz; ii++) {
+        pic_indirect_bump3(pf, indirect_dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
+        if (ii < srcsz) {
+          pic_value_to_w(pf, PIC_VALUE_TO_W_MOV, src, VALUE_NONE, ii);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indirect_dst, ii);
+        } else {
+          pic_instr_append_f(pf, PIC_OPCODE_CLRF, indirect_dst, ii);
+        }
+      }
+    }
+    value_release(indirect_dst);
+  } else if (OPERATOR_POINTER_ASSIGN == op) {
+    /* Handle pointer assignment using 'is' operator */
+    if (value_is_pointer(dst) && value_is_array(src)) {
+      pic_assign_array_to_pointer(pf, dst, src);
+    } else if (value_is_pointer(dst) && value_is_function(src)) {
+      pic_assign_from_function(pf, dst, src);
+    } else if (value_is_pointer(dst) && value_is_pointer(src)) {
+      pic_assign_ptr_to_ptr(pf, dst, src);
+    } else if (value_is_pointer(dst)
+      && (!value_is_const(src) || (value_variable_get(src) != NULL))) {
+      /* Generic pointer assignment - store address of src in dst. Use
+       * pic_assign_from_value for data objects: value_label_get(src) is often
+       * LABEL_NONE for GPR scalars, so pic_assign_from_label2 would emit a bare
+       * movlw with no operand. Code / procedure labels keep pic_assign_from_label. */
+      if (value_is_label(src)) {
+        pic_assign_from_label(pf, dst, src);
+      } else {
+        pic_assign_address_of_lvalue_to_pointer(pf, dst, src);
+      }
+    } else {
+      pfile_log(pf, PFILE_LOG_ERR, "invalid pointer assignment");
+    }
   } else if (value_is_float(dst) && !value_is_float(src)) {
     pic_assign_to_float(pf, dst, src);
   } else if (value_is_float(src) && !value_is_float(dst)) {
     pic_assign_from_float(pf, dst, src);
   } else if (value_is_function(src)) {
-    pic_assign_from_function(pf, dst, src);
+    /* pic_assign_from_function stores a function triplet into a pointer
+     * slot and asserts value_is_pointer(dst). A non-pointer destination
+     * (alias of a procedure: `alias serial_write is serial_hw_write`)
+     * must keep the plain label assignment. */
+    if (value_is_pointer(dst)) {
+      pic_assign_from_function(pf, dst, src);
+    } else {
+      pic_assign_from_label(pf, dst, src);
+    }
   } else if (value_is_label(src)) {
     pic_assign_from_label(pf, dst, src);
   } else if (value_is_value(src)) {
@@ -1806,7 +4311,8 @@ static void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
           | VARIABLE_FLAG_PTR_EEPROM
           | VARIABLE_FLAG_PTR_FLASH))) {
     pic_assign_to_ptr(pf, dst, src);
-  } else if (/*value_flag_test(src, VALUE_FLAG_INDIRECT) && */
+  } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
+      && /*value_flag_test(src, VALUE_FLAG_INDIRECT) && */
       (variable_flags_get_all(value_variable_get(src))
         & (VARIABLE_FLAG_PTR_LOOKUP
           | VARIABLE_FLAG_PTR_EEPROM
@@ -1823,9 +4329,14 @@ static void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
     pic_assign_from_lookup(pf, dst, src);
   } else if (value_is_bit(dst)) {
     pic_assign_to_bit(pf, dst, src);
-  } else if (value_is_pointer(dst) && value_is_array(src)) {
-    pic_assign_array_to_pointer(pf, dst, src);
-  } else if (value_is_const(src)) {
+  } else if (pic_assign_from_whereis_const(pf, dst, src)) {
+    /* Relocatable const initialized from WHEREIS(...). */
+  } else if (value_is_const(src) && !value_is_indirect(src)
+      && !value_flag_test(src, VALUE_FLAG_POINTER)) {
+    /* Const *pointee* lvalues (e.g. read through `var pointer const byte p`) still
+     * have VARIABLE_DEF_FLAG_CONST on the value and test as value_is_const, but
+     * they are RAM/INDF loads — not pic_assign_from_const (ROM/initializer data).
+     * value_is_indirect() alone misses POINTER+const offset (INDIRECT clear). */
     pic_assign_from_const(pf, dst, src);
   } else if (value_is_bit(src)) {
     pic_assign_from_bit(pf, dst, src);
@@ -2227,7 +4738,9 @@ static void pic_add_sub_nbyte(pfile_t *pf, operator_t op,
       if (value_is_signed(val2)) {
         if (ii == value_sz_get(val2)) {
           pic_value_sign_get(pf, val2, accum);
-          pic_instr_append_daop(pf, dst, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          if (!pic_val_movl_bank_equal(pf, accum, 0, dst, ii)) {
+            pic_instr_append_daop(pf, dst, PIC_OPCODE_NONE, BOOLEAN_FALSE, ii);
+          }
         } else {
           pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, accum, 0, PIC_OPDST_W);
         }
@@ -2242,7 +4755,9 @@ static void pic_add_sub_nbyte(pfile_t *pf, operator_t op,
       pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val2, ii, PIC_OPDST_W);
       if (ii && !pic_val_bank_same(pf, dst, val2)) {
         pic_instr_append_f(pf, PIC_OPCODE_MOVWF, accum, 0);
-        pic_instr_append_daop(pf, dst, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+        if (!pic_val_movl_bank_equal(pf, accum, 0, dst, ii)) {
+          pic_instr_append_daop(pf, dst, PIC_OPCODE_NONE, BOOLEAN_FALSE, ii);
+        }
         use = accum;
       } else {
         use = val2;
@@ -2936,13 +5451,6 @@ static void pic_assign_logical_to_dst(pfile_t *pf, value_t dst, uchar n,
   }
 }
 
-typedef enum {
-  PIC_VALUE_TO_W_NONE, /* unused */
-  PIC_VALUE_TO_W_MOV,
-  PIC_VALUE_TO_W_SUB,
-  PIC_VALUE_TO_W_ADD
-} pic_value_to_w_t;
-
 static void pic_value_to_w(pfile_t *pf, pic_value_to_w_t op,
     value_t val, value_t val_sign, variable_sz_t pos)
 {
@@ -3148,6 +5656,24 @@ static void pic_equality(pfile_t *pf, operator_t op, value_t dst,
     variable_const_t cn;
 
     sz = pic_result_sz_get(val1, val2, VALUE_NONE);
+    if (value_is_const(val1) && value_is_const(val2)) {
+      value_t       cfold;
+      variable_sz_t jj;
+      boolean_t     eq_cf;
+
+      eq_cf = BOOLEAN_TRUE;
+      for (jj = 0; (jj < sz) && eq_cf; jj++) {
+        if (pic_value_const_byte_get(val1, jj)
+          != pic_value_const_byte_get(val2, jj)) {
+          eq_cf = BOOLEAN_FALSE;
+        }
+      }
+      cfold = pfile_constant_get(pf,
+          (OPERATOR_EQ == op) ? (eq_cf ? 1 : 0) : (eq_cf ? 0 : 1),
+          VARIABLE_DEF_NONE);
+      pic_op(pf, OPERATOR_ASSIGN, dst, cfold, VALUE_NONE);
+      value_release(cfold);
+    } else {
     val1_sign = VALUE_NONE;
     val2_sign = VALUE_NONE;
     tmp       = VALUE_NONE;
@@ -3277,6 +5803,7 @@ static void pic_equality(pfile_t *pf, operator_t op, value_t dst,
       }
     } else if (!pic_value_is_w(dst)) {
       pic_assign_from_w(pf, dst, BOOLEAN_FALSE);
+    }
     }
   }
 }
@@ -3721,7 +6248,7 @@ static void pic_op_logical_and(pfile_t *pf, operator_t op, value_t dst,
       label_release(lbl_done);
     } else {
       pic_assign_logical_to_dst(pf, dst, 1, PIC_ASSIGN_LOGICAL_TO_DST_NONE);
-      pic_instr_append_daop(pf, val1, PIC_OPCODE_BTFSS, BOOLEAN_FALSE);
+      pic_instr_append_daop(pf, val1, PIC_OPCODE_BTFSS, BOOLEAN_FALSE, 0);
       pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
       pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val1, 0);
       pic_assign_logical_to_dst(pf, dst, 0, PIC_ASSIGN_LOGICAL_TO_DST_NONE);
@@ -3860,7 +6387,7 @@ static void pic_op_logical_or(pfile_t *pf, operator_t op, value_t dst,
       label_release(lbl_done);
     } else {
       pic_assign_logical_to_dst(pf, dst, 0, PIC_ASSIGN_LOGICAL_TO_DST_NONE);
-      pic_instr_append_daop(pf, val1, PIC_OPCODE_BTFSS, BOOLEAN_FALSE);
+      pic_instr_append_daop(pf, val1, PIC_OPCODE_BTFSS, BOOLEAN_FALSE, 0);
       pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
       pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val1, 0);
       pic_assign_logical_to_dst(pf, dst, 1, PIC_ASSIGN_LOGICAL_TO_DST_NONE);
@@ -4017,12 +6544,42 @@ static void pic_binary_and_or_xor(pfile_t *pf, operator_t op,
               pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, ch);
             }
           } else {
-            /* if val1 & dst are different, W was destroyed */
-            if (!value_is_same(dst, val1) || (ch != ch_last) || (0 == ii)) {
-              pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, ch);
-              ch_last = ch;
+            /* an in-place mask changing a single bit of this byte is one
+             * BCF/BSF (e.g. lookup pointers mask their top byte with
+             * 0x7f); same math as the whole-value single-bit fold above,
+             * applied per byte */
+            boolean_t folded;
+
+            folded = BOOLEAN_FALSE;
+            if (((OPERATOR_ANDB == op) || (OPERATOR_ORB == op))
+                && value_is_same(dst, val1)) {
+              unsigned bmask;
+              unsigned bbit;
+
+              bmask = (OPERATOR_ANDB == op)
+                ? ((unsigned)(~ch) & 0xffU) : (unsigned) ch;
+              for (bbit = 0; bbit < 8; bbit++) {
+                if (bmask == (1U << bbit)) {
+                  break;
+                }
+              }
+              if (bbit < 8) {
+                pic_instr_append_f_bn(pf,
+                  (OPERATOR_ANDB == op) ? PIC_OPCODE_BCF : PIC_OPCODE_BSF,
+                  val1, val1_ofs, bbit);
+                folded = BOOLEAN_TRUE;
+              }
             }
-            opcode = pop;
+            if (folded) {
+              opcode = PIC_OPCODE_MOVF;
+            } else {
+              /* if val1 & dst are different, W was destroyed */
+              if (!value_is_same(dst, val1) || (ch != ch_last) || (0 == ii)) {
+                pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, ch);
+                ch_last = ch;
+              }
+              opcode = pop;
+            }
           }
           if (value_is_same(dst, val1)) {
             if (opcode != PIC_OPCODE_MOVF) {
@@ -4163,7 +6720,7 @@ static void pic_op_binary_and(pfile_t *pf, operator_t op, value_t dst,
           pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, true_value);
         }
         if (value_is_shared(val1)) {
-          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
         }
         pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val1, 0);
         pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val2, 0);
@@ -4179,7 +6736,7 @@ static void pic_op_binary_and(pfile_t *pf, operator_t op, value_t dst,
         /* 5 instructions */
         pic_instr_append_f(pf, PIC_OPCODE_BCF, dst, 0);
         if (value_is_shared(val2)) {
-          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
         }
         pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val1, 0);
         pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val2, 0);
@@ -4193,7 +6750,7 @@ static void pic_op_binary_and(pfile_t *pf, operator_t op, value_t dst,
       } else {
         /* 6 instructions */
         if (value_is_shared(val1)) {
-          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
         }
         pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val1, 0);
         pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val2, 0);
@@ -4213,7 +6770,7 @@ static void pic_op_binary_and(pfile_t *pf, operator_t op, value_t dst,
         pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
       }
       if (value_is_shared(val1)) {
-        pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+        pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
       }
       pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val1, 0);
       pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_done);
@@ -4291,7 +6848,7 @@ static void pic_op_binary_or(pfile_t *pf, operator_t op, value_t dst,
           pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
         }
         if (value_is_shared(val1)) {
-          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
         }
         pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val1, 0);
         pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val2, 0);
@@ -4306,7 +6863,7 @@ static void pic_op_binary_or(pfile_t *pf, operator_t op, value_t dst,
         /* 5 instructions */
         pic_instr_append_f(pf, PIC_OPCODE_BSF, dst, 0);
         if (value_is_shared(val1)) {
-          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
         }
         pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val1, 0);
         pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val2, 0);
@@ -4318,7 +6875,7 @@ static void pic_op_binary_or(pfile_t *pf, operator_t op, value_t dst,
       } else {
         /* 6 instructions */
         if (value_is_shared(val1)) {
-          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE);
+          pic_instr_append_daop(pf, val2, PIC_OPCODE_NONE, BOOLEAN_FALSE, 0);
         }
         pic_instr_append_f(pf, PIC_OPCODE_BTFSS, val1, 0);
         pic_instr_append_f(pf, PIC_OPCODE_BTFSC, val2, 0);
@@ -5906,11 +8463,37 @@ static void pic_op_shift_right(pfile_t *pf, operator_t op, value_t dst,
 static void pic_op_logical_or_not(pfile_t *pf, operator_t op, value_t dst,
   value_t src, value_t val2)
 {
+  value_t res_tmp;
+
   UNUSED(val2);
 
   assert(!pic_value_is_w(src));
 
-  if (value_is_single_bit(src)) {
+  if (value_is_single_bit(dst)
+      && pic_value_is_dynamic_bit_array_element(dst)) {
+    /* A runtime-indexed bit-array element destination cannot take the
+     * raw BSF/BCF forms below (they hardcode bit 0 of an INDIRECT
+     * pseudo with no FSR setup): evaluate the 0/1 result into a temp
+     * and go through the dynamic-bit store. */
+    res_tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+    if (res_tmp) {
+      pic_value_is_zero(pf, src); /* Z is set if src is zero */
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (OPERATOR_LOGICAL == op) ? 0 : 1);
+      pic_instr_append_reg_flag(pf, (OPERATOR_LOGICAL == op)
+          ? PIC_OPCODE_BTFSC : PIC_OPCODE_BTFSS, "_status", "_z");
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (OPERATOR_LOGICAL == op) ? 1 : 0);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, res_tmp, 0);
+      pic_assign_to_bit(pf, dst, res_tmp);
+      pic_var_temp_release(pf, res_tmp);
+      return;
+    }
+  }
+
+  if (value_is_single_bit(src)
+      && !value_is_indirect(src)
+      && !pic_value_is_dynamic_bit_array_element(src)) {
     if (value_is_single_bit(dst)) {
       pic_opcode_t opcode;
 
@@ -6034,6 +8617,7 @@ static const struct operator_fn_tbl_ {
   { OPERATOR_XORB,        pic_op_binary_xor,     0},
   { OPERATOR_CMPB,        pic_op_cmp,            0},
   { OPERATOR_ASSIGN,      pic_op_assign,         0},
+  { OPERATOR_POINTER_ASSIGN, pic_op_assign,      0},
   { OPERATOR_NEG,         pic_op_neg,            0},
   { OPERATOR_INCR,        pic_op_incr,           0},
   { OPERATOR_DECR,        pic_op_decr,           0},
@@ -6048,8 +8632,9 @@ void pic_op(pfile_t *pf, operator_t op, value_t dst, value_t val1,
 {
   variable_sz_t    init;
 
+
   init = pic_temp_sz_in_use;
-  if ((OPERATOR_ASSIGN != op) 
+  if ((OPERATOR_ASSIGN != op) && (OPERATOR_POINTER_ASSIGN != op)
       && (value_is_label(val1) || value_is_label(val2))) {
     if (value_is_label(val1)) {
       value_t tmp;
@@ -6075,7 +8660,7 @@ void pic_op(pfile_t *pf, operator_t op, value_t dst, value_t val1,
         val1 = dst;
       }
     }
-    if ((OPERATOR_ASSIGN != op)
+    if ((OPERATOR_ASSIGN != op) && (OPERATOR_POINTER_ASSIGN != op)
         && value_is_const(val1)
         && (operator_is_unary(op) || value_is_const(val2))) {
       value_t    tmp;

@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ** $Log: cmd.h,v $
  ** Revision 1.33  2012/03/30 21:02:57  kyle
  ** Minor tweaks to improve debugging
@@ -139,6 +142,8 @@ typedef struct {
 #define CMD_FLAG_INTERRUPT 0x0001 /* used at interrupt level */
 #define CMD_FLAG_USER      0x0002 /* used at user level      */
 #define CMD_FLAG_SPEED     0x0004 /* optimize for speed      */
+/* BLOCK_START from pfile_cmd_block_dup (pragma inline body); see pfile_temp_fixup */
+#define CMD_FLAG_INLINE_DUP_BLOCK 0x0008
 cmd_t           cmd_alloc(cmd_type_t type, const cmd_vtbl_t *vtbl);
 void            cmd_free(cmd_t cmd);
 cmd_t           cmd_dup(const cmd_t cmd);

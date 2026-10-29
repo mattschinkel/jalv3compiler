@@ -7,13 +7,18 @@
  **
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
 #include "../libutils/mem.h"
+#include "../libutils/hash.h"
 #include "expr.h"
 #include "cmd_brch.h"
 #include "cmd_optm.h"
@@ -28,7 +33,99 @@
 #include "pf_expr.h"
 #include "pf_op.h"
 
+typedef struct uncfind_data_ {
+  variable_const_t n;
+  variable_def_t   def;
+} uncfind_data_t;
+
+static unsigned long pfile_const_hash(const void *key)
+{
+  const uncfind_data_t *data;
+  unsigned long         hash;
+
+  /* the value bits drive the bucket; the def is compared exactly in
+   * pfile_const_eq (variable_def_is_same is a content comparison) */
+  data = key;
+  hash = (unsigned long) (data->n & 0xFFFFFFFFUL);
+  hash *= 2654435761UL;
+  hash ^= (unsigned long) ((data->n >> 64) & 0xFFFFFFFFUL);
+  return hash;
+}
+
+/* mirrors uncfind_cb (variable_list_find's callback takes a non-const
+ * arg; the hash key here stays const) */
+static boolean_t pfile_const_eq(const void *key, void *value)
+{
+  const uncfind_data_t *data;
+  variable_t            var;
+
+  data = key;
+  var  = value;
+  return (variable_is_const(var))
+    && (data->n == variable_const_get(var, variable_def_get(var), 0))
+    && (!data->def
+        || (variable_def_is_same(data->def, variable_def_get(var))));
+}
+
+static unsigned long pfile_tagname_hash(const void *key)
+{
+  const char     *name;
+  unsigned long   hash;
+
+  hash = 5381;
+  for (name = key; *name; name++) {
+    hash = ((hash << 5) + hash) + (unsigned char) *name;
+  }
+  return hash;
+}
+
+static boolean_t pfile_tagname_eq(const void *key, void *value)
+{
+  return !strcmp(tag_name_get(value), key);
+}
+
+#include "value.h"
+
 #include "exprnode.h"
+
+/* jal_string.c — string heap compact deferred pcode expansion (Phase B) */
+extern void jal_string_heap_compact_defer_expand(pfile_t *pf);
+
+void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result)
+{
+  pfile_str_heap_defer_t *d;
+
+  /* the list owns a reference: on the error/abort path
+   * pfile_str_heap_defer_free releases it, and must not steal the
+   * last reference from cmds that still hold the value */
+  if (result) {
+    value_lock(result);
+  }
+  d = MALLOC(sizeof *d);
+  if (!d) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+  d->link   = pf->str_heap_defer;
+  d->marker = marker;
+  d->result = result;
+  pf->str_heap_defer = d;
+}
+
+void pfile_str_heap_defer_free(pfile_t *pf)
+{
+  pfile_str_heap_defer_t *d;
+  pfile_str_heap_defer_t *n;
+
+  for (d = pf->str_heap_defer; d; d = n) {
+    n = d->link;
+    if (d->result) {
+      value_release(d->result);
+    }
+    FREE(d);
+  }
+  pf->str_heap_defer = 0;
+}
 
 /* when the opt loop reaches this, assume we're in some
  * oscillating state and stop looping
@@ -93,11 +190,17 @@ result_t pfile_open(pfile_t **dst,
     pf->cmd_head    = CMD_NONE;
     pf->cmd_tail    = CMD_NONE;
     pf->cmd_cursor  = CMD_NONE;
+    /* Before any pfile_cmd_add: pfile_block_enter uses pfile_cmd_special_add. */
+    pf->cmd_bld         = 0U;
+    pf->cmd_bld_head    = CMD_NONE;
+    pf->cmd_bld_tail    = CMD_NONE;
     pf->proc_root   = pfile_proc_alloc(PFILE_PROC_NONE, LABEL_NONE, 
         LABEL_NONE, LABEL_NONE, VARIABLE_DEF_NONE);
     pf->proc_active = pf->proc_root;
     (void) pfile_block_enter(pf);
     variable_list_init(&pf->var_const);
+    pf->const_idx = hash_alloc(pfile_const_hash, pfile_const_eq,
+        sizeof(uncfind_data_t));
 
     pf->label_temp_ct = 0;
     label_list_init(&pf->label_temp);
@@ -111,12 +214,19 @@ result_t pfile_open(pfile_t **dst,
     pf->hex.pc     = 0;
     pf->hex.ct     = 0;
     pf->flags      = flags;
+    pf->debug_sub  = 0;
+    pf->loader_offset = 0;
+    pf->code_location = 0;
+    pf->data_low      = 0;
+    pf->data_high     = 0;
 
     pf->vectors    = vectors;
     pf->vector_arg = arg;
     pf->include_path  = 0;
     pf->unnamed_vdefs = 0;
     pf->tag_list      = TAG_NONE;
+    pf->tag_idx       = hash_alloc(pfile_tagname_hash,
+        pfile_tagname_eq, 0);
     pf->src_list      = PFILE_SOURCE_NONE;
     pf->stats.lines   = 0;
     pf->stats.chars   = 0;
@@ -132,6 +242,16 @@ result_t pfile_open(pfile_t **dst,
     pf->task_ct = task_ct;
     pf->exit_label = LABEL_NONE;
     pf->multiply_ct = 0;
+    pf->parse_suppress_implicit_data_ptr_deref = 0;
+    pf->parse_count_operand = 0;
+    pf->parse_lvalue_ctx = 0;
+    pf->str_heap_defer  = 0;
+    pf->dynstr_reg         = 0;
+    pf->dynstr_reg_ct     = 0U;
+    pf->dynstr_reg_alloc  = 0U;
+    pf->jal_str_heap_alloc_policy  = 0U;  /* first_fit=0, best_fit=1 */
+    pf->parse_runtime_block_depth = 0U;
+    pf->jal_str_heap_alloc_retry  = 0U;   /* opt-in: pragma string retry on */
 
 	  rc = pf->vectors->pf_open_fn(pf);
     if (RESULT_OK != rc) {
@@ -198,6 +318,7 @@ static void pfile_hex_line_flush(pfile_t *pf)
 void pfile_close(pfile_t *pf)
 {
   COD_directory_free(pf->COD_dir);
+  pfile_str_heap_defer_free(pf);
   pf->vectors->pf_cmd_cleanup(pf);
   pf->vectors->pf_close_fn(pf);
   cmd_list_free(pf->cmd_head);
@@ -209,7 +330,21 @@ void pfile_close(pfile_t *pf)
 
   label_list_reset(&pf->label_temp);
 
+  hash_free(pf->const_idx);
   variable_list_reset(&pf->var_const);
+  {
+    size_t id;
+
+    for (id = 0; id < pf->dynstr_reg_ct; id++) {
+      if (pf->dynstr_reg[id]) {
+        variable_release(pf->dynstr_reg[id]);
+      }
+    }
+  }
+  FREE(pf->dynstr_reg);
+  pf->dynstr_reg = 0;
+  pf->dynstr_reg_ct    = 0;
+  pf->dynstr_reg_alloc = 0;
   pfile_hex_line_flush(pf);
   if (pf->f_hex) {
     fprintf(pf->f_hex, ":00000001FF\n");
@@ -230,6 +365,7 @@ void pfile_close(pfile_t *pf)
     }
     tag_release(tag);
   }
+  hash_free(pf->tag_idx);
   variable_def_ugly_hack_cleanup();
     
   FREE(pf);
@@ -347,10 +483,6 @@ void pfile_ch_unget(pfile_t *pf, int ch)
  */
 
 /* unnamed constant find */
-typedef struct uncfind_data_ {
-  variable_const_t n;
-  variable_def_t   def;
-} uncfind_data_t;
 
 static boolean_t uncfind_cb(void *arg, const variable_t var, 
     const void *unused)
@@ -378,15 +510,28 @@ value_t pfile_constant_get(pfile_t *pf, variable_const_t n, variable_def_t def)
   data.n   = n;
   data.def = def;
 
-  /* now that we know what to look for, find it! */
-  var = variable_list_find(&pf->var_const, uncfind_cb, &data, 0);
+  /* now that we know what to look for, find it!  every integer
+   * constant in var_const is in the index (this is the only integer
+   * append site), so a miss means absent; float constants stay on
+   * the linear path in pfile_constant_float_get */
+  var = pf->const_idx
+    ? hash_find(pf->const_idx, &data)
+    : variable_list_find(&pf->var_const, uncfind_cb, &data, 0);
+  if (var && pf->const_idx) {
+    variable_lock(var);
+  }
   if (var) {
     val = value_alloc(var);
     variable_release(var);
   } else {
     val = value_constant_get(n, def);
-    if (var) {
+    if (val) {
       variable_list_append(&pf->var_const, value_variable_get(val));
+      if (pf->const_idx
+          && !hash_add(pf->const_idx, &data, value_variable_get(val))) {
+        hash_free(pf->const_idx);
+        pf->const_idx = 0;
+      }
     }
   }
   if (!val) {
@@ -409,10 +554,25 @@ static boolean_t uncffind_cb(void *arg, const variable_t var,
 
   data = arg;
 
-  return (variable_is_const(var))
-    && (data->n == variable_const_float_get(var, 0))
-    && (!data->def 
-        || (variable_def_is_same(data->def, variable_def_get(var))));
+  /* compare BIT PATTERNS, not float equality: -0.0 == +0.0 numerically,
+   * so an == dedup would merge a negative-zero literal onto an earlier
+   * +0.0 entry and silently drop its sign.  The float read must happen
+   * only for FLOAT consts -- cflt.array on a byte const array would
+   * dereference a non-pointer. */
+  if (variable_is_const(var)
+      && (VARIABLE_DEF_TYPE_FLOAT == variable_type_get(var))) {
+    unsigned long a = 0;
+    unsigned long b = 0;
+    float         vf;
+
+    vf = variable_const_float_get(var, 0);
+    memcpy(&a, &data->n, sizeof(data->n));
+    memcpy(&b, &vf, sizeof(vf));
+    return (a == b)
+      && (!data->def 
+          || (variable_def_is_same(data->def, variable_def_get(var))));
+  }
+  return BOOLEAN_FALSE;
 }
 
 value_t pfile_constant_float_get(pfile_t *pf, float n, variable_def_t def)
@@ -433,7 +593,7 @@ value_t pfile_constant_float_get(pfile_t *pf, float n, variable_def_t def)
     variable_release(var);
   } else {
     val = value_constant_float_get(n, def);
-    if (var) {
+    if (val) {
       variable_list_append(&pf->var_const, value_variable_get(val));
     }
   }
@@ -584,7 +744,8 @@ void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
         sev_str = (pfile_flag_test(pf, PFILE_FLAG_MISC_QUIET)) ? 0 : ""; 
         break;
       case PFILE_LOG_DEBUG: 
-        sev_str = (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)) ? "" : 0; 
+        sev_str = (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)
+            || (pf && ((pf->debug_sub & PFILE_DBGSUB_STACK) != 0))) ? "" : 0; 
         break;
     }
     if (sev_str) {
@@ -905,11 +1066,22 @@ static void pfile_mem_minimize(pfile_t *pf)
 boolean_t value_is_temp(const value_t val)
 {
   const char *ptr;
+  size_t name_len;
 
   ptr = value_name_get(val);
-  return ptr 
-    && (!memcmp(ptr, PFILE_TMP_VARNAME, sizeof(PFILE_TMP_VARNAME) - 1) 
-        || !memcmp(ptr, PFILE_BTMP_VARNAME, sizeof(PFILE_BTMP_VARNAME) - 1));
+  if (!ptr) return BOOLEAN_FALSE;
+  
+  name_len = strlen(ptr);
+  
+  /* Check bounds before memcmp to prevent buffer overflow */
+  if (name_len < (sizeof(PFILE_TMP_VARNAME) - 1) && 
+      name_len < (sizeof(PFILE_BTMP_VARNAME) - 1)) {
+    return BOOLEAN_FALSE;
+  }
+  
+  return (!memcmp(ptr, PFILE_TMP_VARNAME, sizeof(PFILE_TMP_VARNAME) - 1) 
+          || !memcmp(ptr, PFILE_BTMP_VARNAME, sizeof(PFILE_BTMP_VARNAME) - 1)) 
+         ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
 #if 0
@@ -935,82 +1107,759 @@ static void pfile_temp_op_fixup(cmd_t cmd, value_t val, unsigned *tmppos)
 }
 #endif
 
+/*
+ * Interval-based `_temp` offset allocation (replaces the per-statement
+ * stack discipline, 2026-10-05).
+ *
+ * Every temp of a procedure lives inside that procedure's single `_temp`
+ * variable; each temp value's byte offset rides in its private baseofs
+ * constant. The old walk handed every destination temp a fresh offset and
+ * only reset the cursor at STATEMENT_END, so any compiler-generated
+ * expansion without statement markers (the heap-string assign/append
+ * runtimes are one giant statement) stacked every temp it touched: a
+ * single `s = "..."` on a 14-bit core grew `_temp` to 216 bytes although
+ * only a fraction of those bytes are simultaneously live, which is what
+ * made dynamic strings unusable on 128-byte-bank parts.
+ *
+ * Each temp's live interval is [first destination, last reference] over
+ * the cmd list. Every dynamic access to a temp happens inside its static
+ * interval (first-dst is the earliest write, last-ref the latest
+ * read/write), so two temps whose intervals do not overlap can never be
+ * live at the same dynamic point and may share bytes. Offsets are
+ * allocated with a first-fit free list per `_temp` variable; the old
+ * guarantee -- distinct offsets for simultaneously live temps -- is
+ * preserved exactly, and strictly nested statement expressions keep their
+ * old sequential offsets.
+ */
+struct pfile_temp_ent_ {
+  value_t        baseofs;  /* the entry key: baseofs const or the value */
+  variable_t     var;      /* the owning `_temp` variable */
+  size_t         first;    /* cmd position of first destination */
+  size_t         last;     /* cmd position of last reference */
+  variable_sz_t  sz;
+  variable_sz_t  offset;
+  boolean_t      placed;
+  boolean_t      was_read; /* read as an operand/parameter anywhere */
+  boolean_t      has_const; /* key is a real baseofs const */
+};
+
+struct pfile_temp_set_ {
+  struct pfile_temp_ent_ *ents;
+  size_t                  ct;
+  size_t                  alloc;
+  /* open-addressing index over the baseofs const pointers */
+  size_t                 *htab;
+  size_t                  hsz;
+};
+
+#define PFILE_TEMP_ENT_NONE ((size_t) -1)
+
+/* entry key: the temp's baseofs const (clones share it -- one storage
+ * slot), or the value pointer itself for temps that carry no baseofs
+ * (each such temp is its own slot; keying them all on NULL would merge
+ * unrelated temps) */
+static value_t pfile_temp_ent_key(const value_t val)
+{
+  value_t baseofs;
+
+  baseofs = value_baseofs_get(val);
+  return baseofs ? baseofs : val;
+}
+
+static size_t pfile_temp_ent_hash(const value_t key)
+{
+  return ((size_t) key) >> 3;
+}
+
+static size_t pfile_temp_ent_lookup(const struct pfile_temp_set_ *set,
+    const value_t key)
+{
+  size_t hh;
+
+  if (!set->hsz || !key) {
+    return PFILE_TEMP_ENT_NONE;
+  }
+  for (hh = pfile_temp_ent_hash(key) & (set->hsz - 1);
+      set->htab[hh];
+      hh = (hh + 1) & (set->hsz - 1)) {
+    if (set->ents[set->htab[hh] - 1].baseofs == key) {
+      return set->htab[hh] - 1;
+    }
+  }
+  return PFILE_TEMP_ENT_NONE;
+}
+
+static boolean_t pfile_temp_ent_add(struct pfile_temp_set_ *set, value_t val,
+    size_t pos)
+{
+  value_t key;
+  size_t  ii;
+
+  /* value_clone copies the baseofs const by reference: clones are one
+   * storage slot, so the slot's const is the entry identity -- keying
+   * on the value pointer would let two clones be placed independently
+   * while the shared const records only whichever offset was assigned
+   * last. Temps with no baseofs const key on the value itself. */
+  key = pfile_temp_ent_key(val);
+  ii = pfile_temp_ent_lookup(set, key);
+  if (PFILE_TEMP_ENT_NONE != ii) {
+    if (pos > set->ents[ii].last) {
+      set->ents[ii].last = pos;
+    }
+    if (pos < set->ents[ii].first) {
+      set->ents[ii].first = pos;
+    }
+    return BOOLEAN_TRUE;
+  }
+  if (set->ct == set->alloc) {
+    size_t naw;
+
+    naw = set->alloc ? set->alloc * 2 : 64;
+    set->ents = REALLOC(set->ents, naw * sizeof(*set->ents));
+    if (!set->ents) {
+      return BOOLEAN_FALSE;
+    }
+    set->alloc = naw;
+  }
+  if (set->ct * 2 >= set->hsz) {
+    size_t nsz;
+    size_t hh;
+
+    nsz = set->hsz ? set->hsz * 2 : 256;
+    set->htab = REALLOC(set->htab, nsz * sizeof(*set->htab));
+    if (!set->htab) {
+      return BOOLEAN_FALSE;
+    }
+    set->hsz = nsz;
+    for (hh = 0; hh < set->hsz; hh++) {
+      set->htab[hh] = 0;
+    }
+    for (hh = 0; hh < set->ct; hh++) {
+      size_t jj;
+
+      for (jj = pfile_temp_ent_hash(set->ents[hh].baseofs) & (set->hsz - 1);
+          set->htab[jj];
+          jj = (jj + 1) & (set->hsz - 1)) {
+        ; /* null body */
+      }
+      set->htab[jj] = hh + 1;
+    }
+  }
+  set->ents[set->ct].baseofs = key;
+  set->ents[set->ct].var     = value_variable_get(val);
+  set->ents[set->ct].first   = pos;
+  set->ents[set->ct].last    = pos;
+  set->ents[set->ct].sz      = value_sz_get(val);
+  set->ents[set->ct].offset  = 0;
+  set->ents[set->ct].placed  = BOOLEAN_FALSE;
+  set->ents[set->ct].was_read = BOOLEAN_FALSE;
+  set->ents[set->ct].has_const =
+    (key != val) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  {
+    size_t hh;
+
+    for (hh = pfile_temp_ent_hash(key) & (set->hsz - 1);
+        set->htab[hh];
+        hh = (hh + 1) & (set->hsz - 1)) {
+      ; /* null body */
+    }
+    set->htab[hh] = set->ct + 1;
+  }
+  set->ct++;
+  return BOOLEAN_TRUE;
+}
+
+static void pfile_temp_ent_touch(struct pfile_temp_set_ *set, value_t val,
+    size_t pos, boolean_t is_read)
+{
+  size_t ii;
+
+  if (!val) {
+    return;
+  }
+  ii = pfile_temp_ent_lookup(set, pfile_temp_ent_key(val));
+  if (PFILE_TEMP_ENT_NONE != ii) {
+    if (pos > set->ents[ii].last) {
+      set->ents[ii].last = pos;
+    }
+    if (pos < set->ents[ii].first) {
+      /* reference before the first destination -- extend the interval
+       * so the temp cannot alias an earlier temp over that span */
+      set->ents[ii].first = pos;
+    }
+    if (is_read) {
+      set->ents[ii].was_read = BOOLEAN_TRUE;
+    }
+  }
+}
+
+/* a subscripted value (heap-array element) is addressed at run time
+ * through its baseofs chain: every temp in the chain is read here even
+ * though it is not a direct cmd operand. Without this touch the temp
+ * fixup can hand the chain's slot to another temp written between the
+ * chain temp's last direct use and this use -- the load `t = 0;
+ * t += heap[idx]` then zeroes idx and dereferences heap[0]. */
+static void pfile_temp_ent_touch_baseofs(struct pfile_temp_set_ *set,
+    value_t val, size_t pos)
+{
+  value_t  ofs;
+  unsigned depth;
+
+  for (ofs = val ? value_baseofs_get(val) : 0, depth = 0;
+      ofs && (depth < 4);
+      ofs = value_baseofs_get(ofs), depth++) {
+    pfile_temp_ent_touch(set, ofs, pos, BOOLEAN_TRUE);
+  }
+}
+
+struct pfile_temp_event_ {
+  size_t   pos;
+  unsigned kind;   /* 0 = allocate, 1 = free */
+  size_t   ent;
+};
+
+/* a loop region is the position hull of one backward branch: any temp
+ * whose interval touches it may execute around the back edge, so its
+ * value must survive the whole region -- extend the interval to the hull
+ * before placement or a loop-carried temp (written before the loop, read
+ * at the loop top every iteration) could share bytes with a temp written
+ * inside the loop whose static interval sits after the loop-top read */
+struct pfile_temp_region_ {
+  size_t lo;
+  size_t hi;
+};
+
+struct pfile_temp_lblpos_ {
+  label_t lbl;
+  size_t  pos;
+  boolean_t is_label;
+};
+
+static int pfile_temp_lblpos_cmp(const void *A, const void *B)
+{
+  const struct pfile_temp_lblpos_ *a = A;
+  const struct pfile_temp_lblpos_ *b = B;
+
+  if (a->lbl != b->lbl) {
+    return ((uintptr_t) a->lbl > (uintptr_t) b->lbl)
+      - ((uintptr_t) a->lbl < (uintptr_t) b->lbl);
+  }
+  if (a->pos != b->pos) {
+    return (a->pos > b->pos) - (a->pos < b->pos);
+  }
+  return (int) a->is_label - (int) b->is_label;
+}
+
+static int pfile_temp_region_cmp(const void *A, const void *B)
+{
+  const struct pfile_temp_region_ *a = A;
+  const struct pfile_temp_region_ *b = B;
+
+  if (a->lo != b->lo) {
+    return (a->lo > b->lo) - (a->lo < b->lo);
+  }
+  return (a->hi > b->hi) - (a->hi < b->hi);
+}
+
+static int pfile_temp_event_cmp(const void *A, const void *B)
+{
+  const struct pfile_temp_event_ *a = A;
+  const struct pfile_temp_event_ *b = B;
+
+  if (a->pos != b->pos) {
+    return (a->pos > b->pos) - (a->pos < b->pos);
+  }
+  /* allocations sort before frees at one position: the read/write order
+   * inside a single cmd is not guaranteed, so a temp first written where
+   * another has its last reference must not take its bytes */
+  return (int) a->kind - (int) b->kind;
+}
+
+/* one interval sweep over the entries sharing `var`; returns the extent */
+static variable_sz_t pfile_temp_group_place(
+    struct pfile_temp_set_ *set, variable_t var)
+{
+  struct pfile_temp_event_ *events;
+  size_t                    evt_ct;
+  variable_sz_t             top;
+  variable_sz_t            *hole_off;
+  variable_sz_t            *hole_sz;
+  size_t                    hole_ct;
+  size_t                    ii;
+
+  events = MALLOC(set->ct * 2 * sizeof(*events));
+  if (!events) {
+    return 0;
+  }
+  evt_ct = 0;
+  for (ii = 0; ii < set->ct; ii++) {
+    if (set->ents[ii].var != var) {
+      continue;
+    }
+    events[evt_ct].pos  = set->ents[ii].first;
+    events[evt_ct].kind = 0;
+    events[evt_ct].ent  = ii;
+    evt_ct++;
+    events[evt_ct].pos  = set->ents[ii].last;
+    events[evt_ct].kind = 1;
+    events[evt_ct].ent  = ii;
+    evt_ct++;
+  }
+  qsort(events, evt_ct, sizeof(*events), pfile_temp_event_cmp);
+  hole_off = MALLOC((evt_ct + 1) * sizeof(*hole_off));
+  hole_sz  = MALLOC((evt_ct + 1) * sizeof(*hole_sz));
+  if (!hole_off || !hole_sz) {
+    FREE(events);
+    FREE(hole_off);
+    FREE(hole_sz);
+    return 0;
+  }
+  hole_ct = 0;
+  top     = 0;
+  for (ii = 0; ii < evt_ct; ii++) {
+    struct pfile_temp_ent_ *ent;
+
+    ent = &set->ents[events[ii].ent];
+    if (events[ii].kind) {
+      /* free: merge into the offset-sorted hole list */
+      size_t jj;
+      size_t kk;
+
+      for (jj = 0;
+          (jj < hole_ct) && (hole_off[jj] < ent->offset);
+          jj++) {
+        ; /* null body */
+      }
+      for (kk = hole_ct; kk > jj; kk--) {
+        hole_off[kk] = hole_off[kk - 1];
+        hole_sz[kk]  = hole_sz[kk - 1];
+      }
+      hole_off[jj] = ent->offset;
+      hole_sz[jj]  = ent->sz;
+      hole_ct++;
+      if ((jj + 1 < hole_ct)
+        && (hole_off[jj] + hole_sz[jj] == hole_off[jj + 1])) {
+        hole_sz[jj] += hole_sz[jj + 1];
+        for (kk = jj + 1; kk + 1 < hole_ct; kk++) {
+          hole_off[kk] = hole_off[kk + 1];
+          hole_sz[kk]  = hole_sz[kk + 1];
+        }
+        hole_ct--;
+      }
+      if (jj && (hole_off[jj - 1] + hole_sz[jj - 1] == hole_off[jj])) {
+        hole_sz[jj - 1] += hole_sz[jj];
+        for (kk = jj; kk + 1 < hole_ct; kk++) {
+          hole_off[kk] = hole_off[kk + 1];
+          hole_sz[kk]  = hole_sz[kk + 1];
+        }
+        hole_ct--;
+      }
+    } else {
+      size_t jj;
+
+      for (jj = 0; jj < hole_ct; jj++) {
+        if (hole_sz[jj] >= ent->sz) {
+          break;
+        }
+      }
+      if (jj < hole_ct) {
+        ent->offset = hole_off[jj];
+        if (hole_sz[jj] == ent->sz) {
+          for (; jj + 1 < hole_ct; jj++) {
+            hole_off[jj] = hole_off[jj + 1];
+            hole_sz[jj]  = hole_sz[jj + 1];
+          }
+          hole_ct--;
+        } else {
+          hole_off[jj] += ent->sz;
+          hole_sz[jj]  -= ent->sz;
+        }
+      } else {
+        ent->offset = top;
+        top        += ent->sz;
+      }
+      ent->placed = BOOLEAN_TRUE;
+    }
+  }
+  FREE(events);
+  FREE(hole_off);
+  FREE(hole_sz);
+  return top;
+}
+
 void pfile_temp_fixup(pfile_t *pf)
 {
-  cmd_t         cmd;
-  variable_sz_t tmppos;    /* current hi position */
+  struct pfile_temp_set_ set;
+  cmd_t                  cmd;
+  size_t                 pos;
+  size_t                 ii;
+  size_t                *eos_list;
+  size_t                 eos_ct;
+  unsigned char          inline_stk[128];
+  unsigned               isp;
 
-  tmppos = 0;
-  for (cmd = pf->cmd_head; cmd; cmd = cmd_link_get(cmd)) {
-    if (CMD_TYPE_BRANCH == cmd_type_get(cmd)) {
+  UNUSED(pf);
+  set.ents  = 0;
+  set.ct    = 0;
+  set.alloc = 0;
+  set.htab  = 0;
+  set.hsz   = 0;
+  eos_list  = 0;
+  eos_ct    = 0;
+  isp       = 0;
+
+  pos = 0;
+  for (cmd = pf->cmd_head; cmd; cmd = cmd_link_get(cmd), pos++) {
+    cmd_type_t type;
+
+    type = cmd_type_get(cmd);
+    if (CMD_TYPE_BLOCK_START == type) {
+      if (isp < sizeof(inline_stk)) {
+        inline_stk[isp++] =
+          cmd_flag_test(cmd, CMD_FLAG_INLINE_DUP_BLOCK) ? 1 : 0;
+      }
+    } else if (CMD_TYPE_BLOCK_END == type) {
+      if (isp) {
+        isp--;
+      }
+    }
+    if (CMD_TYPE_OPERATOR == type) {
+      value_t dst;
+      value_t val1;
+      value_t val2;
+
+      dst  = cmd_opdst_get(cmd);
+      val1 = cmd_opval1_get(cmd);
+      val2 = cmd_opval2_get(cmd);
+      if (dst
+        && value_is_temp(dst)
+        && !value_is_boolean(dst)
+        && !value_flag_test(dst, VALUE_FLAG_TEMPSET)) {
+        value_flag_set(dst, VALUE_FLAG_TEMPSET);
+        (void) pfile_temp_ent_add(&set, dst, pos);
+      }
+      pfile_temp_ent_touch(&set, val1, pos, BOOLEAN_TRUE);
+      pfile_temp_ent_touch(&set, val2, pos, BOOLEAN_TRUE);
+      pfile_temp_ent_touch(&set, dst, pos, BOOLEAN_FALSE);
+      pfile_temp_ent_touch_baseofs(&set, val1, pos);
+      pfile_temp_ent_touch_baseofs(&set, val2, pos);
+      pfile_temp_ent_touch_baseofs(&set, dst, pos);
+    } else if (CMD_TYPE_BRANCH == type) {
       const value_t *brproc_params;
+      value_t        brval;
+      size_t         ct;
+      size_t         jj;
 
       brproc_params = cmd_brproc_params_get(cmd);
-
+      brval         = cmd_brval_get(cmd);
+      ct            = cmd_brproc_param_ct_get(cmd);
       if (brproc_params) {
-        size_t ii;
-        size_t ct;
+        for (jj = 0; jj < ct; jj++) {
+          value_t dst;
+          boolean_t is_out;
 
-        ct = cmd_brproc_param_ct_get(cmd);
-        for (ii = 0; ii < ct; ii++) {
-          value_t    dst;
-          variable_t dst_var;
-
-          dst = brproc_params[ii];
-          if ((!ii || value_dflag_test(dst, VARIABLE_DEF_FLAG_OUT))
-            && value_is_temp(dst) 
+          dst = brproc_params[jj];
+          is_out = !jj
+            || (dst && value_dflag_test(dst, VARIABLE_DEF_FLAG_OUT));
+          if (dst
+            && is_out
+            && value_is_temp(dst)
             && !value_flag_test(dst, VALUE_FLAG_TEMPSET)
             && !value_is_boolean(dst)) {
             value_flag_set(dst, VALUE_FLAG_TEMPSET);
-            value_const_set(value_baseofs_get(dst), tmppos);
-            tmppos += value_sz_get(dst);
-            dst_var = value_variable_get(dst);
-            if (variable_sz_get(dst_var) < tmppos) {
-              variable_def_t def;
+            (void) pfile_temp_ent_add(&set, dst, pos);
+          }
+          pfile_temp_ent_touch(&set, dst, pos, !is_out);
+          pfile_temp_ent_touch_baseofs(&set, dst, pos);
+        }
+      }
+      pfile_temp_ent_touch(&set, brval, pos, BOOLEAN_TRUE);
+      pfile_temp_ent_touch_baseofs(&set, brval, pos);
+    } else if (CMD_TYPE_ASSERT == type) {
+      pfile_temp_ent_touch(&set, cmd_assert_value_get(cmd), pos,
+          BOOLEAN_TRUE);
+    } else if (CMD_TYPE_ASM == type) {
+      pfile_temp_ent_touch(&set, cmd_asm_val_get(cmd), pos, BOOLEAN_TRUE);
+    } else if (CMD_TYPE_STATEMENT_END == type) {
+      unsigned kk;
+      unsigned in_inline;
 
-              def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, 
-                  VARIABLE_DEF_FLAG_NONE, tmppos);
-              variable_def_set(dst_var, def);
-            }
+      /* an EOS inside an inlined procedure body (duplicate BLOCK from
+       * pfile_cmd_block_dup) does not end the enclosing user statement
+       * -- the caller's write-only temps may be consumed by codegen
+       * addressing past it (jalv2compiler #26 shape) */
+      in_inline = 0;
+      for (kk = 0; kk < isp; kk++) {
+        in_inline += inline_stk[kk];
+      }
+      if (!in_inline) {
+        size_t *nl;
+
+        nl = REALLOC(eos_list, (eos_ct + 1) * sizeof(*eos_list));
+        if (nl) {
+          eos_list = nl;
+          eos_list[eos_ct] = pos;
+          eos_ct++;
+        }
+      }
+    }
+  }
+
+  /* a temp never read as an operand/parameter may still be consumed by
+   * codegen-internal machinery (the word promotion of a byte temp reads
+   * its slot AND its hi-twin's slot inside one ADD, invisible at cmd
+   * level) -- keep such write-only temps alive to the end of their
+   * statement, exactly the span the old per-statement discipline gave
+   * them, so no later temp in the statement reuses their bytes */
+  for (ii = 0; ii < set.ct; ii++) {
+    if (!set.ents[ii].was_read) {
+      size_t kk;
+
+      for (kk = 0; kk < eos_ct; kk++) {
+        if (eos_list[kk] > set.ents[ii].first) {
+          if (eos_list[kk] > set.ents[ii].last) {
+            set.ents[ii].last = eos_list[kk];
+          }
+          break;
+        }
+      }
+      if (kk == eos_ct) {
+        /* no statement end follows (proc tail / generated code) --
+         * hold the slot to the end of the walk */
+        if (pos > set.ents[ii].last) {
+          set.ents[ii].last = pos;
+        }
+      }
+    }
+  }
+  FREE(eos_list);
+
+  /* loop regions: hulls of backward branches. A temp interval touching
+   * a region is extended to the region hull (to fixpoint), because the
+   * back edge carries values around that a straight-line interval model
+   * would consider dead. */
+  {
+    struct pfile_temp_lblpos_  *lpos;
+    size_t                       lpos_ct;
+    struct pfile_temp_region_  *regions;
+    size_t                       region_ct;
+    size_t                       pos2;
+    cmd_t                        cmd2;
+    boolean_t                    changed;
+
+    lpos     = MALLOC((pos + 1) * sizeof(*lpos));
+    regions  = MALLOC((pos + 1) * sizeof(*regions));
+    if (lpos && regions) {
+      lpos_ct   = 0;
+      region_ct = 0;
+      for (cmd2 = pf->cmd_head, pos2 = 0; cmd2; cmd2 = cmd_link_get(cmd2), pos2++) {
+        label_t lbl;
+
+        if (CMD_TYPE_LABEL == cmd_type_get(cmd2)) {
+          lbl = cmd_label_get(cmd2);
+          if (lbl) {
+            lpos[lpos_ct].lbl     = lbl;
+            lpos[lpos_ct].pos     = pos2;
+            lpos[lpos_ct].is_label = BOOLEAN_TRUE;
+            lpos_ct++;
+          }
+        } else if (CMD_TYPE_BRANCH == cmd_type_get(cmd2)) {
+          lbl = cmd_brdst_get(cmd2);
+          if (lbl) {
+            lpos[lpos_ct].lbl      = lbl;
+            lpos[lpos_ct].pos      = pos2;
+            lpos[lpos_ct].is_label = BOOLEAN_FALSE;
+            lpos_ct++;
           }
         }
       }
-    } else if (CMD_TYPE_OPERATOR == cmd_type_get(cmd)) {
-      value_t dst;
+      qsort(lpos, lpos_ct, sizeof(*lpos), pfile_temp_lblpos_cmp);
+      /* per label group (ascending position): the LABEL record anchors
+       * the site; every branch record after it is a backward branch */
+      {
+        size_t gg;
 
-      dst = cmd_opdst_get(cmd);
+        gg = 0;
+        while (gg < lpos_ct) {
+          size_t hh;
+          size_t anchor;
 
-      if (value_is_temp(dst)
-        && !value_is_boolean(dst)  
-        && !value_flag_test(dst, VALUE_FLAG_TEMPSET)) {
-        /* we only need to adjust the offset when the temp
-         * is used as a destination */
-        variable_t dst_var;
+          anchor = PFILE_TEMP_ENT_NONE;
+          for (hh = gg; hh < lpos_ct && lpos[hh].lbl == lpos[gg].lbl; hh++) {
+            if (lpos[hh].is_label && PFILE_TEMP_ENT_NONE == anchor) {
+              anchor = hh;
+            }
+          }
+          if (PFILE_TEMP_ENT_NONE != anchor) {
+            size_t ii2;
 
-        value_flag_set(dst, VALUE_FLAG_TEMPSET);
-        value_const_set(value_baseofs_get(dst), tmppos);
-        tmppos += value_sz_get(dst);
-        dst_var = value_variable_get(dst);
-        if (variable_sz_get(dst_var) < tmppos) {
-          variable_def_t def;
-
-          def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, 
-              VARIABLE_DEF_FLAG_NONE, tmppos);
-          variable_def_set(dst_var, def);
+            for (ii2 = gg; ii2 < hh; ii2++) {
+              if (!lpos[ii2].is_label && (lpos[ii2].pos > lpos[anchor].pos)) {
+                regions[region_ct].lo = lpos[anchor].pos;
+                regions[region_ct].hi = lpos[ii2].pos;
+                region_ct++;
+              }
+            }
+          }
+          gg = hh;
         }
       }
-#if 0
-      if (value_is_temp(val1)) {
-        /* make sure this has been set. if it's no longer used, remove it */
-        pfile_temp_op_fixup(cmd, val1, &tmppos);
+      qsort(regions, region_ct, sizeof(*regions), pfile_temp_region_cmp);
+      /* merge overlapping/touching hulls into disjoint regions */
+      {
+        size_t rr;
+        size_t gg2;
+
+        rr = 0;
+        for (gg2 = 1; gg2 < region_ct; gg2++) {
+          if (regions[gg2].lo <= regions[rr].hi) {
+            if (regions[gg2].hi > regions[rr].hi) {
+              regions[rr].hi = regions[gg2].hi;
+            }
+          } else {
+            rr++;
+            regions[rr] = regions[gg2];
+          }
+        }
+        region_ct = region_ct ? rr + 1 : 0;
       }
-      if (value_is_temp(val2)) {
-        /* make sure this has been set */
-        pfile_temp_op_fixup(cmd, val2, &tmppos);
+      /* extend crossing intervals to region hulls until stable. Only
+       * temps that CROSS a region boundary are loop-carried: a temp
+       * written before the region and read inside must survive every
+       * iteration (extend `last` over the region), a temp written inside
+       * and read after must not share with anything in the region
+       * (extend `first` under it). A temp entirely inside the region is
+       * rewritten before it is read on every path and may keep sharing. */
+      do {
+        size_t rr;
+
+        changed = BOOLEAN_FALSE;
+        for (rr = 0; rr < region_ct; rr++) {
+          for (ii = 0; ii < set.ct; ii++) {
+            if (set.ents[ii].first > regions[rr].hi) {
+              continue;
+            }
+            if (set.ents[ii].last < regions[rr].lo) {
+              continue;
+            }
+            if (set.ents[ii].first < regions[rr].lo) {
+              /* enters the region from before */
+              if (set.ents[ii].last < regions[rr].hi) {
+                set.ents[ii].last = regions[rr].hi;
+                changed = BOOLEAN_TRUE;
+              }
+            }
+            if (set.ents[ii].last > regions[rr].hi) {
+              /* leaves the region */
+              if (set.ents[ii].first > regions[rr].lo) {
+                set.ents[ii].first = regions[rr].lo;
+                changed = BOOLEAN_TRUE;
+              }
+            }
+          }
+        }
+      } while (changed);
+    }
+    FREE(lpos);
+    FREE(regions);
+  }
+
+  /* place each procedure's temps as one interval group */
+  for (ii = 0; ii < set.ct; ii++) {
+    variable_t var;
+
+    if (set.ents[ii].placed) {
+      continue;
+    }
+    var = set.ents[ii].var;
+    if (!pfile_temp_group_place(&set, var)) {
+      /* allocation failure -- fall back to sequential packing for this
+       * procedure's temps (the old stack shape) */
+      variable_sz_t seq;
+      size_t        jj;
+
+      seq = 0;
+      for (jj = ii; jj < set.ct; jj++) {
+        if (set.ents[jj].var == var) {
+          set.ents[jj].offset = seq;
+          set.ents[jj].placed = BOOLEAN_TRUE;
+          seq += set.ents[jj].sz;
+        }
       }
-#endif
-    } else if (CMD_TYPE_STATEMENT_END == cmd_type_get(cmd)) {
-      tmppos    = 0;
+    }
+  }
+  /* assign the offsets (and grow each `_temp` def to its peak) */
+  for (ii = 0; ii < set.ct; ii++) {
+    variable_sz_t need;
+
+    if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
+      fprintf(stderr, "jal tempfix: sz=%u first=%lu last=%lu -> ofs=%u\n",
+          (unsigned) set.ents[ii].sz,
+          (unsigned long) set.ents[ii].first,
+          (unsigned long) set.ents[ii].last,
+          (unsigned) set.ents[ii].offset);
+    }
+    if (set.ents[ii].has_const) {
+      value_const_set(set.ents[ii].baseofs, set.ents[ii].offset);
+    }
+    need = set.ents[ii].offset + set.ents[ii].sz;
+    if (variable_sz_get(set.ents[ii].var) < need) {
+      variable_def_t def;
+
+      def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+          VARIABLE_DEF_FLAG_NONE, need);
+      variable_def_set(set.ents[ii].var, def);
+    }
+  }
+  FREE(set.ents);
+  FREE(set.htab);
+  /* a `_temp` variable is created lazily but its def is only grown by
+   * entries above; if every temp it holds was eliminated from the cmd
+   * list before this pass (or carried a zero-size def), placement would
+   * see a zero-byte variable and abort. Inline-body duplication can
+   * also copy a `_temp` into a caller block before any growth, so walk
+   * every block, not just the proc's own slot. Reserve one byte -- the
+   * same minimum the old sequential discipline left behind. */
+  {
+    pfile_proc_t *proc;
+
+    for (proc = pfile_proc_root_get(pf); proc;
+        proc = pfile_proc_next(proc)) {
+      pfile_block_t *stk[64];
+      size_t        sp;
+
+      sp = 0;
+      if (sp < sizeof(stk) / sizeof(*stk)) {
+        stk[sp++] = pfile_proc_block_root_get(proc);
+      }
+      while (sp) {
+        pfile_block_t *blk;
+        variable_t     tvar;
+        pfile_block_t *child;
+
+        blk = stk[--sp];
+        for (tvar = pfile_block_variable_list_head(blk); tvar;
+            tvar = variable_link_get(tvar)) {
+          const char *nm;
+
+          nm = variable_name_get(tvar);
+          if (nm
+            && !strcmp(nm, PFILE_TMP_VARNAME)
+            && !variable_sz_get(tvar)) {
+            variable_def_t def;
+
+            def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+                VARIABLE_DEF_FLAG_NONE, 1);
+            variable_def_set(tvar, def);
+          }
+        }
+        for (child = pfile_block_child_get(blk); child;
+            child = pfile_block_sibbling_get(child)) {
+          if (sp < sizeof(stk) / sizeof(*stk)) {
+            stk[sp++] = child;
+          }
+        }
+      }
     }
   }
 }
@@ -1673,6 +2522,7 @@ static void pfile_expr_node_fixup(pfile_t *pf, expr_node_t node)
     case OPERATOR_XORB:
     case OPERATOR_CMPB:
     case OPERATOR_ASSIGN:
+    case OPERATOR_POINTER_ASSIGN:
     case OPERATOR_NEG:
     case OPERATOR_INCR:
     case OPERATOR_DECR:
@@ -2010,6 +2860,17 @@ static void pfile_temp_reduction(pfile_t *pf)
       cptr = cmd_link_get(cmd);
       if ((OPERATOR_ASSIGN == cmd_optype_get(cptr))
         && value_is_same(dst, cmd_opval1_get(cptr))
+        /* don't fold through a float<->int conversion assign: deleting
+         * it re-targets the producer into the differently-typed
+         * destination and the raw bits flow unconverted (sdword(f * c)
+         * stored f's bit pattern). value_is_same proves the temp
+         * identity, not def compatibility. */
+        && (value_is_float(dst) == value_is_float(cmd_opdst_get(cptr)))
+        /* don't fold through a pointer dereference assign: `p = expr' stores
+         * THROUGH the pointer (pic_op's dereference branch); deleting it
+         * re-targets the producer into the pointer variable itself and the
+         * expression value clobbers the address (classic cores). */
+        && !value_is_pointer(cmd_opdst_get(cptr))
         /* the following is needed for `return expr' because the return
          * variable isn't allocated here; it's allocated by the PIC lib
          */
@@ -2166,15 +3027,46 @@ static boolean_t var_const_data_assign(value_t val,
   return rc;
 }
 
-/* return a new, constant value if val has become const, 
+/* return a new, constant value if val has become const,
  * otherwise return VALUE_NONE */
-boolean_t pfile_opt_single_constant_assign_val(pfile_t *pf, cmd_t cmd, 
+/* does this command reference var in any operand position? used to veto
+ * const promotion when the variable is referenced before the candidate
+ * assign (reads of the not-yet-assigned variable would silently fold to
+ * the constant) */
+static boolean_t
+pfile_cmd_references_var(cmd_t cmd, variable_t var)
+{
+  size_t              ii;
+  const value_t      *proc_params;
+  size_t              proc_param_ct;
+
+  if ((var == value_variable_get(cmd_opdst_get(cmd)))
+      || (var == value_variable_get(cmd_opval1_get(cmd)))
+      || (var == value_variable_get(cmd_opval2_get(cmd)))) {
+    return BOOLEAN_TRUE;
+  }
+  proc_param_ct = cmd_brproc_param_ct_get(cmd);
+  proc_params   = cmd_brproc_params_get(cmd);
+  for (ii = 0; ii < proc_param_ct; ii++) {
+    if (var == value_variable_get(proc_params[ii])) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  if (CMD_TYPE_ASM == cmd_type_get(cmd)) {
+    if ((var == value_variable_get(cmd_asm_val_get(cmd)))
+        || (var == value_variable_get(cmd_asm_n_get(cmd)))) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+boolean_t pfile_opt_single_constant_assign_val(pfile_t *pf, cmd_t cmd,
   value_t val, value_t val1, unsigned pass)
 {
   variable_t var;
   boolean_t  is_const;
 
-  UNUSED(pf);
   UNUSED(pass);
 
   is_const = BOOLEAN_FALSE;
@@ -2184,18 +3076,40 @@ boolean_t pfile_opt_single_constant_assign_val(pfile_t *pf, cmd_t cmd,
       && !variable_flag_test(var, VARIABLE_FLAG_CONST_TESTED)
       && !variable_is_const(var)) {
     variable_sz_t sz;
+    boolean_t     referenced_before;
+    cmd_t         cmd_scan;
 
     variable_flag_set(var, VARIABLE_FLAG_CONST_TESTED);
     /* nothing to do if the value is volatile or being assigned
        a non-constant */
-    sz = (variable_is_array(var)) 
+    sz = (variable_is_array(var))
       ? variable_def_sz_get(
           variable_def_member_def_get(
             variable_def_member_get(
               variable_def_get(var))))
       : variable_sz_get(var);
+    /* any reference to the variable before this assign reads storage
+       that has not been assigned the constant yet; folding would
+       silently change what those reads see */
+    referenced_before = BOOLEAN_FALSE;
+    for (cmd_scan = pf->cmd_head;
+         (cmd_scan) && (cmd_scan != cmd);
+         cmd_scan = cmd_link_get(cmd_scan)) {
+      if (pfile_cmd_references_var(cmd_scan, var)) {
+        referenced_before = BOOLEAN_TRUE;
+        cmd_scan = CMD_NONE;
+      }
+    }
+    /* an overlay host must not fold: writes through the overlay
+       reference the overlay's variable, never the host */
     if (!variable_dflag_test(var, VARIABLE_DEF_FLAG_VOLATILE)
+      && !referenced_before
+      && !value_dflag_test(val, VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT
+          | VARIABLE_DEF_FLAG_BYREF)
+      && !value_is_pointer(val)
+      && !value_is_array(val)
       && !variable_master_get(var)
+      && !variable_flag_test(var, VARIABLE_FLAG_OVERLAY_HOST)
       && !value_baseofs_get(val)
       && (!variable_is_array(var) || (1 == sz))
       && value_is_const(val1)) {
@@ -2248,6 +3162,16 @@ boolean_t pfile_opt_single_constant_assign_val(pfile_t *pf, cmd_t cmd,
             proc_param_ct = cmd_brproc_param_ct_get(cmd_ptr);
             proc_params   = cmd_brproc_params_get(cmd_ptr);
 
+            if (!proc) {
+              /* indirect (pointer) call: the formal directions cannot
+                 be known, so any appearance of var in the actuals must
+                 veto (an OUT write would be missed) */
+              for (ii = 0; is_const && (ii < proc_param_ct); ii++) {
+                if (value_variable_get(proc_params[ii]) == var) {
+                  is_const = BOOLEAN_FALSE;
+                }
+              }
+            }
             for (ii = 0; is_const && (ii < proc_param_ct); ii++) {
               value_t pparam;
 
@@ -2462,8 +3386,13 @@ boolean_t pfile_opt_single_constant_assign(pfile_t *pf, unsigned pass)
            *     (since a temp used as an OUT parameter clearly isn't
            *     going to be const), and asm values (same reason)
            */
-          pfile_log(pf, PFILE_LOG_DEBUG, "_temp is const!: %lu", 
-            value_const_get(val_const));
+          {
+            char cbuf[50];
+
+            variable_const_str_get(value_const_get(val_const),
+              value_is_signed(val_const), cbuf, sizeof(cbuf));
+            pfile_log(pf, PFILE_LOG_DEBUG, "_temp is const!: %s", cbuf);
+          }
           pfile_opt_temp_replace(pf, cmd_pv, cmd, val, val_const); 
           value_release(val_const);
           any_changed = BOOLEAN_TRUE;
@@ -2482,9 +3411,14 @@ boolean_t pfile_opt_single_constant_assign(pfile_t *pf, unsigned pass)
         any_changed = BOOLEAN_TRUE;
         var = value_variable_get(val);
 #if 1
-        pfile_log(pf, PFILE_LOG_DEBUG, "variable is const!: %s%u (%lu)",
-            variable_name_get(var), variable_tag_n_get(var),
-            value_const_get(cmd_opval1_get(cmd)));
+        {
+          char cbuf[50];
+
+          variable_const_str_get(value_const_get(cmd_opval1_get(cmd)),
+            value_is_signed(cmd_opval1_get(cmd)), cbuf, sizeof(cbuf));
+          pfile_log(pf, PFILE_LOG_DEBUG, "variable is const!: %s%u (%s)",
+              variable_name_get(var), variable_tag_n_get(var), cbuf);
+        }
 #endif
         for (cmd_pv2 = cmd_pv, cmd_ptr = cmd;
              cmd_ptr;
@@ -2517,16 +3451,11 @@ boolean_t pfile_opt_single_constant_assign(pfile_t *pf, unsigned pass)
         value_t val;
 
         val = pfile_proc_param_get(proc, ii);
-        if (value_dflag_test(val, VARIABLE_DEF_FLAG_IN)) {
-          /* implicit assignment */
-          if (pfile_opt_single_constant_assign_val(pf, cmd, val, 
-                proc_params[ii], pass)) {
-            any_changed = BOOLEAN_TRUE;
-            /* since this has gone CONST, 
-             * remove the `VARIABLE_DEF_FLAG_IN' flag */
-            /*assert(0);*/
-          }
-        }
+        /* Do not turn formals into constants from call arguments here. Open-array
+         * formals can be written through by legacy libraries even when declared
+         * with `in`, and marking the formal const turns those writes into lookup
+         * table assignments. Local single-assignment const detection still runs
+         * through the normal OPERATOR_ASSIGN path above. */
         if (value_dflag_test(val, VARIABLE_DEF_FLAG_OUT)) {
           if (pfile_opt_single_constant_assign_val(pf, cmd, proc_params[ii], 
                 val, pass)) {
@@ -2560,6 +3489,50 @@ static boolean_t pfile_ptr_flag_set(variable_t dst, flag_t flag)
   return rc;
 }
 
+/* `const byte a[N]` may use an ARRAY def without CONST on the wrapper while the
+ * element type is const; treat like variable_is_const for lookup / pointer `is`.
+ */
+static boolean_t pfile_variable_is_constish_array(variable_t var)
+{
+  variable_def_t        def;
+  variable_def_member_t m;
+  variable_def_t        elem;
+
+  if (!var) {
+    return BOOLEAN_FALSE;
+  }
+  def = variable_def_get(var);
+  if (!def || VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(def)) {
+    return BOOLEAN_FALSE;
+  }
+  m = variable_def_member_get(def);
+  if (!m || variable_def_member_link_get(m)) {
+    return BOOLEAN_FALSE;
+  }
+  elem = variable_def_member_def_get(m);
+  return elem && variable_def_flag_test(elem, VARIABLE_DEF_FLAG_CONST);
+}
+
+/* `p is <var>`: the target's address escapes into the pointer slot, and
+ * stores through the pointer are invisible to the use/assign counters.
+ * Without this, a never-directly-assigned target fails the
+ * assigned-and-used test in pfile_block_variable_fixup, its def is
+ * rewritten CONST, pfile_lookup_mark_val then marks the pointer
+ * PTR_LOOKUP (ROM table), and every store through the pointer is
+ * refused ("Attempt to assign to a lookup table"). Counting the bind
+ * as an assignment keeps the target allocated in RAM (the C
+ * address-taken rule). Declared-const and constish-array targets keep
+ * their ROM semantics -- those pointers are read-only by design. */
+void pfile_pointer_bind_target_note(variable_t var)
+{
+  if (var
+      && !variable_is_const(var)
+      && !pfile_variable_is_constish_array(var)
+      && !variable_is_pointer(var)) {
+    variable_assign_ct_bump(var, CTR_BUMP_INCR);
+  }
+}
+
 static boolean_t pfile_lookup_mark_val(value_t val, value_t dst)
 {
   variable_t var;
@@ -2569,7 +3542,7 @@ static boolean_t pfile_lookup_mark_val(value_t val, value_t dst)
   var  = value_variable_get(val);
   dvar = value_variable_get(dst);
   rc   = BOOLEAN_FALSE;
-  if (variable_is_const(var)) {
+  if (variable_is_const(var) || pfile_variable_is_constish_array(var)) {
     if (value_is_pointer(dst)) {
       variable_flag_set(var, VARIABLE_FLAG_LOOKUP);
       rc = pfile_ptr_flag_set(dvar, VARIABLE_FLAG_PTR_LOOKUP);
@@ -2603,6 +3576,28 @@ static boolean_t pfile_lookup_mark_val(value_t val, value_t dst)
   } else if (value_is_pointer(dst)) {
     rc = pfile_ptr_flag_set(dvar, VARIABLE_FLAG_PTR_PTR);
   }
+  /* Pointer-to-const-array (`var pointer const byte p[N]` … `is buf`): outer
+   * pointee ARRAY may omit CONST; still ROM/lookup like `const byte buf[N]`. */
+  if (value_is_pointer(dst) && var
+      && VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(variable_def_get(var))) {
+    variable_def_t        pdef;
+    variable_def_member_t pm;
+    variable_def_t      pto;
+    variable_def_member_t am;
+    variable_def_t      elem;
+
+    pdef = value_def_get(dst);
+    pm = pdef ? variable_def_member_get(pdef) : 0;
+    pto = pm ? variable_def_member_def_get(pm) : VARIABLE_DEF_NONE;
+    if (pto && VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(pto)) {
+      am = variable_def_member_get(pto);
+      elem = am ? variable_def_member_def_get(am) : VARIABLE_DEF_NONE;
+      if (elem && variable_def_flag_test(elem, VARIABLE_DEF_FLAG_CONST)) {
+        variable_flag_set(var, VARIABLE_FLAG_LOOKUP);
+        rc = pfile_ptr_flag_set(dvar, VARIABLE_FLAG_PTR_LOOKUP) || rc;
+      }
+    }
+  }
   return rc;
 }
 
@@ -2617,6 +3612,9 @@ static void pfile_lookup_mark(pfile_t *pf)
   do {
     rc = BOOLEAN_FALSE;
     for (cmd = pf->cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+      if (!cmd_is_reachable(cmd)) {
+        continue;
+      }
       if (CMD_TYPE_OPERATOR == cmd_type_get(cmd)) {
         value_t dst;
 
@@ -2862,6 +3860,257 @@ static void pfile_cmd_arithmetic_check(pfile_t *pf)
   }
 }
 
+/*
+ * True if var is a procedure parameter (any formal); those are bound by the
+ * caller / calling convention, not by `is` in the callee body.
+ */
+static boolean_t pfile_var_is_any_formal(pfile_t *pf, variable_t var)
+{
+  pfile_proc_t *proc;
+  size_t        ii;
+  unsigned      n;
+
+  if (!var) {
+    return BOOLEAN_FALSE;
+  }
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    n = (unsigned) pfile_proc_param_ct_get(proc);
+    for (ii = 0; ii < n; ii++) {
+      value_t pv;
+
+      pv = pfile_proc_param_get(proc, ii);
+      if (pv && (value_variable_get(pv) == var)) {
+        return BOOLEAN_TRUE;
+      }
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/*
+ * Require every non-formal pointer variable that is used to be BOUND at
+ * least once (`p is x`, a slot copy `q = p` / `p = arr`). This catches
+ * dereferencing or reading through a pointer slot that was never given
+ * an address. Boundness is tracked separately from ctr_assign because
+ * store-through forms (`p = 42`) bump ctr_assign via cmd_opdst_set and
+ * must NOT silence the check. Pointer SLOT arrays get the same test at
+ * array granularity, plus an element-granular pass for const-indexed
+ * accesses when every bind was const-indexed too.
+ */
+static void pfile_pointer_must_bind_check(pfile_t *pf, pfile_block_t *blk)
+{
+  variable_t v;
+
+  if (!blk) {
+    return;
+  }
+  for (v = pfile_block_variable_list_head(blk);
+       v;
+       v = variable_link_get(v)) {
+    variable_def_t def;
+
+    if (variable_is_alias(v) || variable_is_lookup(v)) {
+      continue;
+    }
+    if (pfile_var_is_any_formal(pf, v)) {
+      continue;
+    }
+    if (!variable_is_used(v)) {
+      continue;
+    }
+    def = variable_def_get(v);
+    if (variable_is_pointer(v)) {
+      if (variable_pointer_bound_p(v)) {
+        continue;
+      }
+      pfile_log(pf, PFILE_LOG_ERR,
+          "pointer '%s' is used but never bound "
+          "(use `is` to bind, copy a bound pointer, or pass it as a"
+          " parameter)",
+          variable_name_get(v));
+    } else if (def && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def))) {
+      variable_def_t        mdef;
+      variable_def_member_t mbr;
+
+      mbr  = variable_def_member_get(def);
+      mdef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+      if (mdef
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))) {
+        if (!variable_pointer_bound_p(v)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "pointer-array '%s' is used but no element is ever bound"
+              " (use `slot[i] is ...`)",
+              variable_name_get(v));
+        } else if (!variable_pointer_slot_rt_bind_ct_get(v)) {
+          size_t ii;
+
+          for (ii = 0; ii < variable_pointer_slot_use_ct_get(v); ii++) {
+            variable_const_t ofs;
+
+            ofs = variable_pointer_slot_use_get(v, ii);
+            if (!variable_pointer_whereis_slot_target_get(v, ofs)) {
+              pfile_log(pf, PFILE_LOG_ERR,
+                  "pointer-array '%s': the element at slot offset %ld"
+                  " is used but never bound",
+                  variable_name_get(v), (long) ofs);
+            }
+          }
+        }
+      }
+    }
+  }
+  {
+    pfile_block_t *ch;
+
+    for (ch = pfile_block_child_get(blk); ch; ch = pfile_block_sibbling_get(ch)) {
+      pfile_pointer_must_bind_check(pf, ch);
+    }
+  }
+}
+
+void pfile_pointer_slot_bind_check(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  if (!pf) {
+    return;
+  }
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    pfile_pointer_must_bind_check(pf, pfile_proc_block_root_get(proc));
+  }
+}
+
+/* --- dynamic string handle registry (heap compaction, Phase A) --- */
+
+static boolean_t pfile_dynstr_reg_has(pfile_t *pf, const variable_t var)
+{
+  size_t i;
+
+  for (i = 0; i < pf->dynstr_reg_ct; i++) {
+    if (pf->dynstr_reg[i] == var) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static void pfile_dynstr_reg_add(pfile_t *pf, variable_t var)
+{
+  if (pfile_dynstr_reg_has(pf, var)) {
+    return;
+  }
+  if (pf->dynstr_reg_ct >= pf->dynstr_reg_alloc) {
+    size_t next_alloc;
+    void  *n;
+
+    next_alloc = (pf->dynstr_reg_alloc) ? (2 * pf->dynstr_reg_alloc) : 8U;
+    n = REALLOC(pf->dynstr_reg, next_alloc * sizeof(*pf->dynstr_reg));
+    if (!n) {
+      pfile_log(pf, PFILE_LOG_ERR, "out of memory (dynamic string registry)");
+      return;
+    }
+    pf->dynstr_reg         = n;
+    pf->dynstr_reg_alloc = next_alloc;
+  }
+  variable_lock(var);
+  pf->dynstr_reg[pf->dynstr_reg_ct++] = var;
+}
+
+static int pfile_dynstr_id_cmp(const void *a, const void *b)
+{
+  variable_t va;
+  variable_t vb;
+  unsigned   ida;
+  unsigned   idb;
+
+  va  = *(const variable_t *) a;
+  vb  = *(const variable_t *) b;
+  ida = variable_id_get(va);
+  idb = variable_id_get(vb);
+  if (ida < idb) {
+    return -1;
+  }
+  if (ida > idb) {
+    return 1;
+  }
+  return 0;
+}
+
+static void pfile_dynstr_reg_block(pfile_t *pf, pfile_block_t *blk)
+{
+  variable_t     v;
+  pfile_block_t *ch;
+  variable_t     stor;
+
+  if (!blk) {
+    return;
+  }
+  for (v = pfile_block_variable_list_head(blk);
+       v;
+       v = variable_link_get(v)) {
+    if (variable_is_const(v) || (VARIABLE_DEF_TYPE_FUNCTION == variable_type_get(v))) {
+      continue;
+    }
+    stor = v;
+    if (variable_is_alias(v)) {
+      stor = variable_master_get(v);
+      if (!stor) {
+        continue;
+      }
+    }
+    /* N.B. VARIABLE_FLAG_AUTO is set for most data vars until the PIC
+     * backend places them; banked globals are "auto" too. */
+    if (!variable_dflag_test(stor, VARIABLE_DEF_FLAG_STRING
+        | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+      continue;
+    }
+    if (pfile_var_is_any_formal(pf, stor)) {
+      continue;
+    }
+    pfile_dynstr_reg_add(pf, stor);
+  }
+  for (ch = pfile_block_child_get(blk);
+       ch;
+       ch = pfile_block_sibbling_get(ch)) {
+    pfile_dynstr_reg_block(pf, ch);
+  }
+}
+
+void pfile_dynstr_reg_build(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  if (!pf) {
+    return;
+  }
+  pf->dynstr_reg_ct = 0;
+  for (proc = pfile_proc_root_get(pf);
+       proc;
+       proc = pfile_proc_next(proc)) {
+    pfile_dynstr_reg_block(pf, pfile_proc_block_root_get(proc));
+  }
+  if (pf->dynstr_reg_ct > 1U) {
+    qsort(pf->dynstr_reg, pf->dynstr_reg_ct, sizeof(pf->dynstr_reg[0]),
+        pfile_dynstr_id_cmp);
+  }
+}
+
+size_t pfile_dynstr_reg_ct_get(const pfile_t *pf)
+{
+  if (!pf) {
+    return 0;
+  }
+  return pf->dynstr_reg_ct;
+}
+
+variable_t pfile_dynstr_reg_get(const pfile_t *pf, size_t i)
+{
+  if (!pf || i >= pf->dynstr_reg_ct) {
+    return VARIABLE_NONE;
+  }
+  return pf->dynstr_reg[i];
+}
+
 
 /*
  * NAME
@@ -2916,6 +4165,16 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
   if (pfile_flag_test(pf, PFILE_FLAG_OPT_EXPR_SIMPLIFY)) {
     pfile_expr_simplify(pf);
   }
+  /* Register dynamic string variables, then expand string_heap_compact()
+   * p-code (NOP splice) before temp reduction / cexpr so the call's result
+   * temp is assigned in the p-code and not marked an uninitialised const. */
+  pfile_dynstr_reg_build(pf);
+  jal_string_heap_compact_defer_expand(pf);
+  /* `string_heap_compact()` expands at a NOP splice; `if !…` often leaves
+   * NOTL on the result temp immediately before a branch on that temp.
+   * cmd_opt_branch2 (see cmd_optm.c) must run here — not only under
+   * PFILE_FLAG_DEBUG_DEADCODE — or the PIC back end sees a wrong polarity. */
+  (void) cmd_opt_branch2(&pf->cmd_head);
   pfile_temp_reduction(pf);
   /* this needs to be done again because temp_reduction tends to
    * lead to a lot of assignments to self */
@@ -2939,22 +4198,39 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
   /* this call to cmd_opt_branch is needed to get the true destination
    * of a branch */
   (void) cmd_opt_branch(&pf->cmd_head);
+  (void) cmd_opt_tail_return(&pf->cmd_head);
+  (void) cmd_opt_branch(&pf->cmd_head);
   lbl = pfile_isr_entry_get(pf);
   if (lbl) {
-    cmd_analyze(pf->cmd_head, cmd_label_find(pf->cmd_head, lbl), 
-      CMD_FLAG_INTERRUPT, 0, pf);
+    cmd_analyze(pf->cmd_head, cmd_label_find(pf->cmd_head, lbl),
+        CMD_FLAG_INTERRUPT, 0, pf);
     label_release(lbl);
+  }
+  /* Numbered PIC32 OFFx ISRs are independent (no chain GOTO). Mark each. */
+  for (proc = pfile_proc_root_get(pf);
+       proc;
+       proc = pfile_proc_next(proc)) {
+    if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INTERRUPT)
+        && (pfile_proc_irq_get(proc) >= 0)) {
+      lbl = pfile_proc_label_get(proc);
+      if (lbl) {
+        cmd_analyze(pf->cmd_head, cmd_label_find(pf->cmd_head, lbl),
+            CMD_FLAG_INTERRUPT, 0, pf);
+      }
+    }
   }
   lbl = pfile_user_entry_get(pf);
   if (lbl) {
     cmd_analyze(pf->cmd_head, cmd_label_find(pf->cmd_head, lbl),
-      CMD_FLAG_USER, 0, pf);
+        CMD_FLAG_USER, 0, pf);
     label_release(lbl);
   }
+  (void) cmd_analyze_link_inline_procs_for_alloc(pf);
   /* remove all code that is unreachable.
    * note that pfile_cmd_remove_unreachable() must be called at least
    * once before pic_cmd_alloc() or the variable allocator will not
    * see variables in unused space & issue a bunch of errors! */
+  (void) pfile_cmd_remove_unreachable(pf);
 #if 0
   pfile_variable_fixup(pf);
   pfile_cexpr_reduction(pf);
@@ -2981,6 +4257,9 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
       pfile_log(pf, PFILE_LOG_DEBUG, "opt pass %u", opt_pass);
     }
   }
+  /* Late pass: other optimizations may expose call+assign+exit patterns */
+  (void) cmd_opt_tail_return(&pf->cmd_head);
+  (void) cmd_opt_branch(&pf->cmd_head);
   /* now that its been analyzed, add in the isr preamble */
   pfile_variable_fixup(pf, pfile_flag_get_all(pf));
   pfile_cexpr_reduction(pf);
@@ -3003,6 +4282,7 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
   pfile_proc_block_reset(pf->proc_active);
 
   pfile_cmd_arithmetic_check(pf);
+  pfile_pointer_slot_bind_check(pf);
 
   /* first, write the program name, version, and command line */
   pfile_write(pf, pfile_write_asm, "; compiler: %s\n", prog_name);
@@ -3443,6 +4723,17 @@ label_t pfile_isr_entry_get(pfile_t *pf)
   return lbl;
 }
 
+/* Existence probe WITHOUT taking a reference: pfile_isr_entry_get
+ * locks (ref+1), so boolean "is there an ISR" checks -- layout gates,
+ * emission conditionals -- must use this one or they leak refs
+ * (label_list_reset's "label leak" diagnostic fired on every ISR
+ * compile; five such probes leaked in mips.c -- 2026-10-17). */
+boolean_t pfile_isr_entry_active(const pfile_t *pf)
+{
+  return (pf->label_isr) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+
 /*
  * nb : don't rely on the output of this, as the file written
  *      may not exist, hence the returned value will be 0
@@ -3590,6 +4881,114 @@ void pfile_flag_clr(pfile_t *pf, flag_t flag)
 void pfile_flag_change(pfile_t *pf, flag_t mask, flag_t flag)
 {
   pf->flags = (pf->flags & mask) | flag;
+}
+
+void pfile_relation_warning_hold(pfile_t *pf)
+{
+  if (pf) {
+    pf->relwarn_hold++;
+  }
+}
+
+void pfile_relation_warning_release(pfile_t *pf)
+{
+  assert(pf && pf->relwarn_hold);
+  if (pf && pf->relwarn_hold) {
+    pf->relwarn_hold--;
+  }
+}
+
+void pfile_parse_lvalue_ctx_push(pfile_t *pf)
+{
+  if (pf) {
+    pf->parse_lvalue_ctx++;
+  }
+}
+
+void pfile_parse_lvalue_ctx_pop(pfile_t *pf)
+{
+  if (pf && pf->parse_lvalue_ctx) {
+    pf->parse_lvalue_ctx--;
+  }
+}
+
+boolean_t pfile_parse_lvalue_ctx(const pfile_t *pf)
+{
+  return (pf && pf->parse_lvalue_ctx) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+void pfile_parse_count_operand_push(pfile_t *pf)
+{
+  if (pf) {
+    pf->parse_count_operand++;
+  }
+}
+
+void pfile_parse_count_operand_pop(pfile_t *pf)
+{
+  if (pf && pf->parse_count_operand) {
+    pf->parse_count_operand--;
+  }
+}
+
+boolean_t pfile_parse_count_operand(const pfile_t *pf)
+{
+  return (pf && pf->parse_count_operand) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+void pfile_parse_call_data_ptr_arg_push(pfile_t *pf)
+{
+  if (pf) {
+    pf->parse_suppress_implicit_data_ptr_deref++;
+  }
+}
+
+void pfile_parse_call_data_ptr_arg_pop(pfile_t *pf)
+{
+  if (pf && pf->parse_suppress_implicit_data_ptr_deref) {
+    pf->parse_suppress_implicit_data_ptr_deref--;
+  }
+}
+
+boolean_t pfile_parse_call_data_ptr_arg(const pfile_t *pf)
+{
+  return pf && (0 != pf->parse_suppress_implicit_data_ptr_deref);
+}
+
+void pfile_runtime_block_push(pfile_t *pf)
+{
+  if (pf) {
+    pf->parse_runtime_block_depth++;
+  }
+}
+
+void pfile_runtime_block_pop(pfile_t *pf)
+{
+  if (pf && pf->parse_runtime_block_depth) {
+    pf->parse_runtime_block_depth--;
+  }
+}
+
+boolean_t pfile_runtime_block_test(const pfile_t *pf)
+{
+  return pf && (0 != pf->parse_runtime_block_depth);
+}
+
+void pfile_debug_sub_set(pfile_t *pf, flag_t sub)
+{
+  if (pf) {
+    pf->debug_sub = sub;
+  }
+}
+
+flag_t pfile_debug_sub_get(const pfile_t *pf)
+{
+  return (pf) ? pf->debug_sub : 0;
+}
+
+boolean_t pfile_debug_sub_test(const pfile_t *pf, flag_t bit)
+{
+  return (pf) && ((pf->debug_sub & bit) != 0);
 }
 
 label_t pfile_isr_preamble_entry_get(pfile_t *pf)
@@ -3765,14 +5164,21 @@ result_t pfile_proc_leave(pfile_t *pf)
         pfile_proc_ret_ptr_alloc(pf->proc_active, pf);
       }
     } else {
-      if (pf->label_isr) {
+      /* Numbered PIC32 OFFx handlers return to their own stub. */
+      if (pfile_proc_irq_get(pf->proc_active) >= 0) {
+        pfile_cmd_special_add(pf, CMD_TYPE_ISR_CLEANUP, PFILE_PROC_NONE);
+        if (!pf->label_isr) {
+          pf->label_isr = pfile_proc_label_get(pf->proc_active);
+        }
+      } else if (pf->label_isr) {
         pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
             CMD_BRANCHCOND_NONE, pf->label_isr, VALUE_NONE, VALUE_NONE,
             0);
+        pf->label_isr = pfile_proc_label_get(pf->proc_active);
       } else {
         pfile_cmd_special_add(pf, CMD_TYPE_ISR_CLEANUP, PFILE_PROC_NONE);
+        pf->label_isr = pfile_proc_label_get(pf->proc_active);
       }
-      pf->label_isr = pfile_proc_label_get(pf->proc_active);
     }
       
     pf->proc_active = pfile_proc_parent_get(pf->proc_active);
@@ -3783,11 +5189,21 @@ result_t pfile_proc_leave(pfile_t *pf)
 
 result_t pfile_block_enter(pfile_t *pf)
 {
+  return pfile_block_enter_flags(pf, PFILE_BLOCK_FLAG_NONE);
+}
+
+result_t pfile_block_enter_flags(pfile_t *pf, flag_t flags)
+{
   result_t rc;
+  flag_t   cmdf;
 
   rc = pfile_proc_block_enter(pf->proc_active);
   if (RESULT_OK == rc) {
-    pfile_cmd_special_add(pf, CMD_TYPE_BLOCK_START, 0);
+    cmdf = 0;
+    if (flags & PFILE_BLOCK_FLAG_INLINE_DUP) {
+      cmdf |= CMD_FLAG_INLINE_DUP_BLOCK;
+    }
+    pfile_cmd_special_add_flags(pf, CMD_TYPE_BLOCK_START, 0, cmdf);
   }
   return rc;
 }
@@ -3958,6 +5374,20 @@ void pfile_include_process(pfile_t *pf, size_t fname_sz,
 const char *pfile_include_path_get(pfile_t *pf)
 {
   return pf->include_path;
+}
+
+void pfile_mips_sim_hex_set(pfile_t *pf, unsigned on)
+{
+  if (pf) {
+    pf->mips_sim_hex = (unsigned char) (on ? 1u : 0u);
+  }
+}
+
+unsigned long mips_hex_addr(const pfile_t *pf, unsigned long addr)
+{
+  /* physical by default (direct ipecmd programming); KSEG virtual
+   * under -sim-hex (QEMU loader form) -- see mips.h / mips_hex.c */
+  return (pf && pf->mips_sim_hex) ? addr : (addr & 0x1FFFFFFFUL);
 }
 
 result_t pfile_include_path_set(pfile_t *pf, const char *inc_path)
@@ -4144,15 +5574,26 @@ tag_t pfile_tag_alloc(pfile_t *pf, const char *name)
 {
   tag_t tag;
 
-  for (tag = pf->tag_list;
-       tag && strcmp(tag_name_get(tag), name); 
-       tag = tag_link_get(tag))
-    ; /* null body */
+  if (pf->tag_idx) {
+    tag = hash_find(pf->tag_idx, name);
+  } else {
+    for (tag = pf->tag_list;
+         tag && strcmp(tag_name_get(tag), name); 
+         tag = tag_link_get(tag))
+      ; /* null body */
+  }
   if (!tag) {
     tag = tag_alloc(name);
     if (tag) {
       tag_link_set(tag, pf->tag_list);
       pf->tag_list = tag;
+      /* the key must be the tag's own copy: callers may pass transient
+       * token buffers, and a rehash reading a stale key would scatter
+       * the entry into the wrong bucket */
+      if (pf->tag_idx && !hash_add(pf->tag_idx, tag_name_get(tag), tag)) {
+        hash_free(pf->tag_idx);
+        pf->tag_idx = 0;
+      }
     }
   }
   return tag;
@@ -4183,9 +5624,115 @@ void pfile_cmd_cursor_set(pfile_t *pf, cmd_t cmd)
   pf->cmd_cursor = cmd;
 }
 
+/* Real storage size of a def under a FLAT 32-bit address space (ESP32 /
+ * PIC32 linear allocators): the built-in "pointer" def carries a nominal
+ * size of 2 (the PIC FSR width) which under-allocates 4-byte pointers, so
+ * pfile_pointer_size_get() overrides it; recurses through arrays,
+ * structures and unions so pointer members are sized correctly.  Shared
+ * from esp_var.c / mips_var.c (was duplicated as esp_/mips_def_storage_sz
+ * -- sizing policy must not diverge between the 32-bit back ends). */
+variable_sz_t pfile_flat_def_storage_sz(pfile_t *pf, variable_def_t def)
+{
+  variable_def_member_t mbr;
+  variable_sz_t         need;
+
+  if (!def) {
+    return 0;
+  }
+  switch (variable_def_type_get(def)) {
+    case VARIABLE_DEF_TYPE_POINTER:
+      return pfile_pointer_size_get(pf);
+
+    case VARIABLE_DEF_TYPE_ARRAY:
+      mbr = variable_def_member_get(def);
+      if (mbr && (VARIABLE_CT_UNKNOWN != variable_def_member_ct_get(mbr))) {
+        variable_ct_t ct;
+
+        ct = variable_def_member_ct_get(mbr);
+        need = pfile_flat_def_storage_sz(pf, variable_def_member_def_get(mbr));
+        return (variable_sz_t) (ct * need);
+      }
+      /* Open `name[]` formals are pointers at the call boundary. */
+      return pfile_pointer_size_get(pf);
+
+    case VARIABLE_DEF_TYPE_STRUCTURE:
+      need = 0;
+      for (mbr = variable_def_member_get(def);
+           mbr;
+           mbr = variable_def_member_link_get(mbr)) {
+        variable_ct_t ct;
+
+        ct = variable_def_member_ct_get(mbr);
+        if (VARIABLE_CT_UNKNOWN == ct) {
+          return variable_def_sz_get(def);
+        }
+        need += (variable_sz_t) (ct * pfile_flat_def_storage_sz(pf,
+            variable_def_member_def_get(mbr)));
+      }
+      return need;
+
+    case VARIABLE_DEF_TYPE_UNION:
+      need = 0;
+      for (mbr = variable_def_member_get(def);
+           mbr;
+           mbr = variable_def_member_link_get(mbr)) {
+        variable_ct_t ct;
+        variable_sz_t mneed;
+
+        ct = variable_def_member_ct_get(mbr);
+        if (VARIABLE_CT_UNKNOWN == ct) {
+          return variable_def_sz_get(def);
+        }
+        mneed = (variable_sz_t) (ct * pfile_flat_def_storage_sz(pf,
+            variable_def_member_def_get(mbr)));
+        if (mneed > need) {
+          need = mneed;
+        }
+      }
+      return need;
+
+    default:
+      break;
+  }
+  if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_BIT)) {
+    variable_sz_t bits;
+
+    bits = variable_def_sz_get(def);
+    return (variable_sz_t) ((bits + 7) / 8);
+  }
+  return variable_def_sz_get(def);
+}
+
 unsigned pfile_task_ct_get(pfile_t *pf)
 {
   return (pf) ? pf->task_ct : 0;
+}
+
+/* Effective scheduler slot count: the `pragma task N` value (kept for
+ * backwards compatibility / explicit sizing) grown to hold every
+ * declared task plus main's slot 0, minimum 2.  Programs therefore no
+ * longer need the pragma at all -- `task ... end task` alone sizes the
+ * scheduler. */
+unsigned pfile_task_slot_ct_get(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+  unsigned      ct;
+  unsigned      tasks;
+
+  tasks = 0;
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_TASK)) {
+      tasks++;
+    }
+  }
+  ct = pfile_task_ct_get(pf);
+  if (ct < tasks + 1U) {
+    ct = tasks + 1U;
+  }
+  if (ct < 2U) {
+    ct = 2U;
+  }
+  return ct;
 }
 
 void pfile_task_ct_set(pfile_t *pf, unsigned ct)
@@ -4247,6 +5794,54 @@ void pfile_loader_offset_set(pfile_t *pf, ulong offset)
 ulong pfile_loader_offset_get(pfile_t *pf)
 {
   return (pf) ? pf->loader_offset : 0;
+}
+
+void pfile_code_location_set(pfile_t *pf, ulong addr)
+{
+  if (pf) {
+    pf->code_location = addr;
+  }
+}
+
+ulong pfile_code_location_get(pfile_t *pf)
+{
+  return (pf) ? pf->code_location : 0;
+}
+
+/* Record a `pragma data` range for back ends that size RAM from the
+ * device file (libpic32).  The extents are the union of all ranges;
+ * 0/0 means "no pragma data seen". */
+void pfile_data_range_add(pfile_t *pf, ulong lo, ulong hi)
+{
+  if (!pf) {
+    return;
+  }
+  if (hi < lo) {
+    ulong tmp = lo;
+    lo = hi;
+    hi = tmp;
+  }
+  if (!pf->data_high && !pf->data_low) {
+    pf->data_low  = lo;
+    pf->data_high = hi;
+    return;
+  }
+  if (lo < pf->data_low) {
+    pf->data_low = lo;
+  }
+  if (hi > pf->data_high) {
+    pf->data_high = hi;
+  }
+}
+
+ulong pfile_data_low_get(const pfile_t *pf)
+{
+  return (pf) ? pf->data_low : 0;
+}
+
+ulong pfile_data_high_get(const pfile_t *pf)
+{
+  return (pf) ? pf->data_high : 0;
 }
 
 const pfile_multiply_width_table_entry_t *

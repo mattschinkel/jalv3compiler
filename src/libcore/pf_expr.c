@@ -5,8 +5,12 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: fork extensions (heavy rework)
+ **
  ************************************************************/
 #include <assert.h>
+#include <string.h>
 #include "pfiled.h"
 #include "pf_cmd.h"
 #include "pf_op.h"
@@ -39,6 +43,10 @@ variable_def_t pfile_variable_def_promotion_get_default(pfile_t *pf,
   if (!def2 || variable_def_is_same(def1, def2)) {
     /* (1) definition is the same */
     rdef = def1;
+  } else if ((OPERATOR_ASSIGN == op) && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def1))) {
+    /* Handle pointer dereference assignment (pointer = value) */
+    /* For pointer assignments, use the type of the value being assigned */
+    rdef = def2;
   } else if (VARIABLE_DEF_TYPE_FLOAT == variable_def_type_get(def1)) {
     rdef = def1;
   } else if (VARIABLE_DEF_TYPE_FLOAT == variable_def_type_get(def2)) {
@@ -88,7 +96,10 @@ variable_def_t pfile_variable_def_promotion_get(pfile_t *pf,
     ? pf->vectors->pf_expr_result_def_get_fn(pf, op, val1, val2)
     : pfile_variable_def_promotion_get_default(pf, op, val1, val2);
   if (!rdef) {
-    pfile_log(pf, PFILE_LOG_ERR, "invalid operation");
+    pfile_log(pf, PFILE_LOG_ERR, "invalid operation (op=%d, val1_type=%d, val2_type=%d)", 
+              (int)op, 
+              val1 ? (int)value_type_get(val1) : -1, 
+              val2 ? (int)value_type_get(val2) : -1);
   }
   return rdef;
 }
@@ -141,6 +152,14 @@ result_t pfile_expr_push(pfile_t *pf, expr_t **stk, value_t val,
         operator_t s_op;
 
         s_op = expr_operator_get(stkptr);
+        if (!expr_val_get(stkptr) || !expr_val_get(expr)) {
+          /* an operand never parsed (error already logged, e.g. an
+           * invalid operation on a name-collided symbol): skip the op
+           * instead of asserting on VALUE_NONE during recovery */
+          expr_val_set(expr, VALUE_NONE);
+          expr_free(stkptr);
+          continue;
+        }
         if ((OPERATOR_SHIFT_RIGHT == s_op)
           && value_is_signed(expr_val_get(stkptr))) {
           s_op = OPERATOR_SHIFT_RIGHT_ARITHMETIC;
@@ -176,8 +195,10 @@ static relation_result_t pfile_expr_relation_check(pfile_t *pf, operator_t op,
   size_t            val1_sz;
   const char       *wstr;
   relation_result_t result;
+  boolean_t         both_const;
 
   result = RELATION_RESULT_UNKNOWN;
+  both_const = value_is_const(val1) && value_is_const(val2);
   if (value_is_const(val1) || value_is_const(val2)) {
     /* first, force the constant to the right side */
     if (value_is_const(val1)) {
@@ -206,70 +227,71 @@ static relation_result_t pfile_expr_relation_check(pfile_t *pf, operator_t op,
       val1_sz *= 8;
     }
     if (value_is_signed(val1)) {
-      if (!value_is_signed(val2) && (cn & 0x80000000)) {
-        switch (op) {
-          case OPERATOR_LT:
-          case OPERATOR_LE:
-          case OPERATOR_NE: result = RELATION_RESULT_TRUE;  break;
-          case OPERATOR_EQ:
-          case OPERATOR_GE:
-          case OPERATOR_GT: result = RELATION_RESULT_FALSE;  break;
-          default: break;
-        }
-      } else if (val1_sz < 32) {
-        long cn_low;
-        long cn_high;
-        long cns;
+      variable_const_t cn_low;
+      variable_const_t cn_high;
+      boolean_t        below;
+      boolean_t        above;
 
-        cn_high = (long) (1L << (val1_sz - 1)) - 1;
-        cn_low  = (long) -(1L << (val1_sz - 1));
-        cns     = (long) cn;
-
-        switch (op) {
-          case OPERATOR_LT:
-            if (cns <= cn_low) {
-              result = RELATION_RESULT_FALSE;
-            } else if (cns > cn_high) {
-              result = RELATION_RESULT_TRUE;
-            }
-            break;
-          case OPERATOR_LE:
-            if (cns < cn_low) {
-              result = RELATION_RESULT_FALSE;
-            } else if (cns >= cn_high) {
-              result = RELATION_RESULT_TRUE;
-            }
-            break;
-          case OPERATOR_EQ:
-            if ((cns < cn_low) || (cns > cn_high)) {
-              result = RELATION_RESULT_FALSE;
-            }
-            break;
-          case OPERATOR_NE:
-            if ((cns < cn_low) || (cns > cn_high)) {
-              result = RELATION_RESULT_TRUE;
-            }
-            break;
-          case OPERATOR_GE:
-            if (cns <= cn_low) {
-              result = RELATION_RESULT_TRUE;
-            } else if (cns > cn_high) {
-              result = RELATION_RESULT_FALSE;
-            }
-            break;
-          case OPERATOR_GT:
-            if (cns < cn_low) {
-              result = RELATION_RESULT_TRUE;
-            } else if (cns >= cn_high) {
-              result = RELATION_RESULT_FALSE;
-            }
-            break;
-          default:
-            break;
-        }
+      cn_high = (val1_sz >= VARIABLE_CONST_BIT_CT)
+        ? (variable_const_mask_get(VARIABLE_CONST_BIT_CT - 1))
+        : (variable_const_mask_get((unsigned) val1_sz - 1));
+      cn_low = variable_const_sign_extend(
+        ((variable_const_t) 1) << ((val1_sz >= VARIABLE_CONST_BIT_CT)
+        ? (VARIABLE_CONST_BIT_CT - 1) : ((unsigned) val1_sz - 1)),
+        (unsigned) val1_sz);
+      below = (variable_const_cmp(cn, cn_low, VARIABLE_CONST_BIT_CT,
+          BOOLEAN_TRUE) < 0);
+      above = (variable_const_cmp(cn, cn_high, VARIABLE_CONST_BIT_CT,
+          BOOLEAN_TRUE) > 0);
+      switch (op) {
+        case OPERATOR_LT:
+          if (below || (0 == variable_const_cmp(cn, cn_low,
+              VARIABLE_CONST_BIT_CT, BOOLEAN_TRUE))) {
+            result = RELATION_RESULT_FALSE;
+          } else if (above) {
+            result = RELATION_RESULT_TRUE;
+          }
+          break;
+        case OPERATOR_LE:
+          if (below) {
+            result = RELATION_RESULT_FALSE;
+          } else if (above || (0 == variable_const_cmp(cn, cn_high,
+              VARIABLE_CONST_BIT_CT, BOOLEAN_TRUE))) {
+            result = RELATION_RESULT_TRUE;
+          }
+          break;
+        case OPERATOR_EQ:
+          if (below || above) {
+            result = RELATION_RESULT_FALSE;
+          }
+          break;
+        case OPERATOR_NE:
+          if (below || above) {
+            result = RELATION_RESULT_TRUE;
+          }
+          break;
+        case OPERATOR_GE:
+          if (below || (0 == variable_const_cmp(cn, cn_low,
+              VARIABLE_CONST_BIT_CT, BOOLEAN_TRUE))) {
+            result = RELATION_RESULT_TRUE;
+          } else if (above) {
+            result = RELATION_RESULT_FALSE;
+          }
+          break;
+        case OPERATOR_GT:
+          if (below) {
+            result = RELATION_RESULT_TRUE;
+          } else if (above || (0 == variable_const_cmp(cn, cn_high,
+              VARIABLE_CONST_BIT_CT, BOOLEAN_TRUE))) {
+            result = RELATION_RESULT_FALSE;
+          }
+          break;
+        default:
+          break;
       }
     } else {
-      if (value_is_signed(val2) && (cn & 0x80000000)) {
+      if (value_is_signed(val2)
+          && variable_const_is_negative(cn, VARIABLE_CONST_BIT_CT)) {
         switch (op) {
           case OPERATOR_LT: /* an unsigned value can never be <= a negative #*/
           case OPERATOR_LE:
@@ -279,11 +301,11 @@ static relation_result_t pfile_expr_relation_check(pfile_t *pf, operator_t op,
           case OPERATOR_GT: result = RELATION_RESULT_TRUE;  break;
           default: break;
         }
-      } else if (val1_sz < 32) {
+      } else {
         variable_const_t cn_high;
 
         /* the highest possible number that can fit into val1 */
-        cn_high = (1ul << val1_sz) - 1;
+        cn_high = variable_const_mask_get((unsigned) val1_sz);
         switch (op) {
           case OPERATOR_LT:
             if (cn == 0) {
@@ -329,7 +351,10 @@ static relation_result_t pfile_expr_relation_check(pfile_t *pf, operator_t op,
       case RELATION_RESULT_TRUE:    wstr = "operation is always TRUE";  break;
       case RELATION_RESULT_FALSE:   wstr = "operation is always FALSE"; break;
     }
-    if (wstr) {
+    if (wstr
+      && !both_const
+      && !pf->relwarn_hold
+      && pfile_flag_test(pf, PFILE_FLAG_WARN_MISC)) {
       pfile_log(pf, PFILE_LOG_WARN, "%s", wstr);
     }
   }
@@ -362,7 +387,7 @@ boolean_t pfile_value_def_overflow_check(pfile_t *pf,
     if (!variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_BIT)) {
       vdef_sz *= 8;
     }
-    if ((OPERATOR_ANDB == op) && (vdef_sz < 32)) {
+    if ((OPERATOR_ANDB == op) && (vdef_sz < VARIABLE_CONST_BIT_CT)) {
       /*
        * in this case, as long as all of the high order bits are set
        * there is no overflow since x & 0xff == x
@@ -372,7 +397,7 @@ boolean_t pfile_value_def_overflow_check(pfile_t *pf,
       variable_const_t mask;
       
       hbits = cn;
-      lbit  = 1UL << vdef_sz;
+      lbit  = ((variable_const_t) 1) << vdef_sz;
       mask  = lbit - 1;
       hbits = hbits & ~mask;
       if ((0 == hbits) || (0 == hbits + lbit)) {
@@ -380,34 +405,56 @@ boolean_t pfile_value_def_overflow_check(pfile_t *pf,
       }
     }
     if (variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_SIGNED)) {
-      long hi;
-      long lo;
+      variable_const_t hi;
+      variable_const_t lo;
+      char             cn_buf[50];
+      char             lo_buf[50];
+      char             hi_buf[50];
       
-      hi = (long) (1L << (vdef_sz - 1)) - 1;
-      lo = (long) -(1L << (vdef_sz - 1));
+      hi = variable_const_mask_get((unsigned) vdef_sz - 1);
+      lo = variable_const_sign_extend(
+        ((variable_const_t) 1) << ((unsigned) vdef_sz - 1),
+        (unsigned) vdef_sz);
       if (value_is_signed(val)) {
-        overflow = (((long) cn < lo) || ((long) cn > hi));
+        overflow = (variable_const_cmp(cn, lo, VARIABLE_CONST_BIT_CT,
+            BOOLEAN_TRUE) < 0)
+          || (variable_const_cmp(cn, hi, VARIABLE_CONST_BIT_CT,
+            BOOLEAN_TRUE) > 0);
       } else {
-        overflow = (long) cn > hi;
+        overflow = (cn > hi);
       }
       if (overflow) {
-        pfile_log(pf, PFILE_LOG_WARN, "value out of range (%ld:%ld...%ld)",
-          (long) cn,
-          lo,
-          hi);
+        variable_const_str_get(cn, value_is_signed(val), cn_buf,
+            sizeof(cn_buf));
+        variable_const_str_get(lo, BOOLEAN_TRUE, lo_buf, sizeof(lo_buf));
+        variable_const_str_get(hi, BOOLEAN_TRUE, hi_buf, sizeof(hi_buf));
+        pfile_log(pf, PFILE_LOG_WARN, "value out of range (%s:%s...%s)",
+          cn_buf, lo_buf, hi_buf);
       }
-    } else if (vdef_sz < 32) { /* vdef is unsigned */
-      ulong hi;
+    } else if (vdef_sz < VARIABLE_CONST_BIT_CT) { /* vdef is unsigned */
+      variable_const_t hi;
 
-      hi = (1ul << vdef_sz) - 1;
-      overflow = cn > hi;
+      hi = variable_const_mask_get((unsigned) vdef_sz);
+      if (((OPERATOR_ADD == op) || (OPERATOR_SUB == op))
+        && value_is_signed(val)
+        && variable_const_is_negative(cn, VARIABLE_CONST_BIT_CT)) {
+        overflow = BOOLEAN_FALSE;
+      } else {
+        overflow = cn > hi;
+      }
       if (overflow) {
+        char cn_buf[50];
+        char hi_buf[50];
+
+        variable_const_str_get(cn, value_is_signed(val), cn_buf,
+            sizeof(cn_buf));
+        variable_const_str_get(hi, BOOLEAN_FALSE, hi_buf, sizeof(hi_buf));
         if (value_is_signed(val)) {
-          pfile_log(pf, PFILE_LOG_WARN, "value out of range (%ld:0...%lu)",
-            (long) cn, hi);
+          pfile_log(pf, PFILE_LOG_WARN, "value out of range (%s:0...%s)",
+            cn_buf, hi_buf);
         } else {
-          pfile_log(pf, PFILE_LOG_WARN, "value out of range (%lu:0...%lu)",
-            cn, hi);
+          pfile_log(pf, PFILE_LOG_WARN, "value out of range (%s:0...%s)",
+            cn_buf, hi_buf);
         }
       }
     } else {
@@ -438,6 +485,45 @@ static boolean_t pfile_value_overflow_check(pfile_t *pf,
   return overflow;
 }
 
+static boolean_t pfile_const_value_fits_def(
+    variable_const_t      cn,
+    boolean_t             cn_signed,
+    const variable_def_t  vdef)
+{
+  variable_sz_t vdef_sz;
+  boolean_t     fits;
+
+  vdef_sz = variable_def_sz_get(vdef);
+  if (!variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_BIT)) {
+    vdef_sz *= 8;
+  }
+  if (variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_SIGNED)) {
+    variable_const_t hi;
+    variable_const_t lo;
+
+    hi = variable_const_mask_get((unsigned) vdef_sz - 1);
+    lo = variable_const_sign_extend(
+      ((variable_const_t) 1) << ((unsigned) vdef_sz - 1),
+      (unsigned) vdef_sz);
+    if (cn_signed) {
+      fits = (variable_const_cmp(cn, lo, VARIABLE_CONST_BIT_CT,
+          BOOLEAN_TRUE) >= 0)
+        && (variable_const_cmp(cn, hi, VARIABLE_CONST_BIT_CT,
+          BOOLEAN_TRUE) <= 0);
+    } else {
+      fits = cn <= hi;
+    }
+  } else if (vdef_sz < VARIABLE_CONST_BIT_CT) {
+    variable_const_t hi;
+
+    hi = variable_const_mask_get((unsigned) vdef_sz);
+    fits = cn <= hi;
+  } else {
+    fits = BOOLEAN_TRUE;
+  }
+  return fits;
+}
+
 /* do two things
  *   1. if val2 exists, make sure val1 & val2 are compatible
  *   2. make sure the result of (val1/val2) is compatible with dst
@@ -463,15 +549,22 @@ void pfile_value_def_type_check(pfile_t *pf, operator_t op,
       val2 = tmp;
     }
     if (!value_is_universal(val1)) {
-      if (((VALUE_NONE != val2) 
+      if ((VALUE_NONE == val2) && value_is_const(val1)) {
+        if (!pfile_const_value_fits_def(value_const_get(val1),
+            value_is_signed(val1), dst_def)) {
+          warnings |= PFILE_FLAG_WARN_TRUNCATE;
+        }
+      } else {
+        if (((VALUE_NONE != val2) 
               && (value_is_signed(val1) ^ value_is_signed(val2))) 
             || ((VALUE_NONE == val2)
               && (variable_def_flag_test(dst_def, VARIABLE_DEF_FLAG_SIGNED) 
                 ^ variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_SIGNED)))) {
-        warnings |= PFILE_FLAG_WARN_CONVERSION;
-      }
-      if (variable_def_sz_get(dst_def) < variable_def_sz_get(rdef)) {
-        warnings |= PFILE_FLAG_WARN_TRUNCATE;
+          warnings |= PFILE_FLAG_WARN_CONVERSION;
+        }
+        if (variable_def_sz_get(dst_def) < variable_def_sz_get(rdef)) {
+          warnings |= PFILE_FLAG_WARN_TRUNCATE;
+        }
       }
     } else {
       /* determine which warnings are appropriate; these are done
@@ -549,8 +642,11 @@ void pfile_value_def_type_check(pfile_t *pf, operator_t op,
     switch (op) {
       case OPERATOR_EQ:
       case OPERATOR_NE:
-        pfile_log(pf, PFILE_LOG_WARN, 
-          "You should not compare floating values for equality");
+        if (pfile_flag_test(pf, PFILE_FLAG_WARN_MISC)) {
+          pfile_log(pf, PFILE_LOG_WARN,
+            "You should not compare floating values for equality");
+        }
+        break;
       case OPERATOR_ADD:
       case OPERATOR_SUB:
       case OPERATOR_MUL:
@@ -564,6 +660,7 @@ void pfile_value_def_type_check(pfile_t *pf, operator_t op,
       case OPERATOR_ORL:
       case OPERATOR_NOTL:
       case OPERATOR_ASSIGN:
+      case OPERATOR_POINTER_ASSIGN:
       case OPERATOR_NEG:
       case OPERATOR_INCR:
       case OPERATOR_DECR:
@@ -637,22 +734,21 @@ void pfile_cmd_op_add_assign(pfile_t *pf, operator_t op,
       dst = pfile_value_temp_get_from_def(pf, value_def_get(src));
       *pdst = dst;
     }
-    /* assignment is allowed between variables that are logically
-       the same (the definitions match), and between any two
-       numbers */
-    if ((variable_def_is_same(value_def_get(dst), value_def_get(src)))
-      || (value_is_number(dst) && value_is_number(src))) {
+    /* `p is x` must bind an address before the same-def aggregate fast path:
+     * pointer-to-const-byte[N] and const byte x[N] have matching array shapes
+     * and would otherwise emit a bulk copy through the pointer slot. */
+    if ((OPERATOR_POINTER_ASSIGN == op) && value_is_pointer(dst)
+        && (value_is_array(src) || value_is_function(src) || !value_is_const(src)
+            || (value_variable_get(src) != NULL))) {
       cmd_t cmd;
 
       cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
       pfile_cmd_add(pf, cmd);
-    } else if (value_is_pointer(dst) 
-      && value_is_array(src)
-      && variable_def_is_same(variable_def_member_def_get(
-        variable_def_member_get(value_def_get(dst))),
-          variable_def_member_def_get(variable_def_member_get(
-          value_def_get(src))))) {
-      /* assign array to pointer */
+    /* assignment is allowed between variables that are logically
+       the same (the definitions match), and between any two
+       numbers */
+    } else if ((variable_def_is_same(value_def_get(dst), value_def_get(src)))
+      || (value_is_number(dst) && value_is_number(src))) {
       cmd_t cmd;
 
       cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
@@ -667,8 +763,58 @@ void pfile_cmd_op_add_assign(pfile_t *pf, operator_t op,
 
       cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
       pfile_cmd_add(pf, cmd);
+    } else if ((OPERATOR_ASSIGN == op)
+        && value_is_array(dst) && value_is_array(src)
+        && (value_ct_get(dst) == value_ct_get(src))
+        && variable_def_is_same(
+            variable_def_member_def_get(
+              variable_def_member_get(value_def_get(dst))),
+            variable_def_member_def_get(
+              variable_def_member_get(value_def_get(src))))) {
+      /* Aggregate init uses a temp array whose outer def may differ from the
+       * destination (e.g. const/volatile flags) even when element type and
+       * length match; allow the bulk copy. */
+      cmd_t cmd;
+
+      cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
+      pfile_cmd_add(pf, cmd);
+    } else if ((OPERATOR_ASSIGN == op) && value_is_pointer(dst)) {
+      /* Handle pointer dereference assignment (pointer = value) */
+      cmd_t cmd;
+      cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
+      pfile_cmd_add(pf, cmd);
+    } else if ((OPERATOR_POINTER_ASSIGN == op) && value_is_pointer(dst)) {
+      /* `p is rhs` missed the branches above (e.g. pseudo-variable RHS that is
+       * const with no variable_t, or other bindable shapes). Still emit the
+       * bind so pointer assign_ct is bumped and slot_bind_check passes. */
+      cmd_t cmd;
+
+      cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
+      pfile_cmd_add(pf, cmd);
     } else {
-      pfile_log(pf, PFILE_LOG_ERR, "invalid operation");
+      /* Provide more helpful error messages for common assignment errors */
+      if (dst && src) {
+        variable_def_type_t dst_type = value_type_get(dst);
+        variable_def_type_t src_type = value_type_get(src);
+        
+        if (dst_type == VARIABLE_DEF_TYPE_ARRAY && src_type == VARIABLE_DEF_TYPE_VALUE) {
+          pfile_log(pf, PFILE_LOG_ERR, "Cannot assign single value to array. Use array[index] = value instead");
+        } else if (dst_type == VARIABLE_DEF_TYPE_ARRAY && value_is_number(src)) {
+          pfile_log(pf, PFILE_LOG_ERR, "Cannot assign number to array. Use array[index] = value instead");
+        } else if (dst_type == VARIABLE_DEF_TYPE_FUNCTION && src_type == VARIABLE_DEF_TYPE_VALUE) {
+          pfile_log(pf, PFILE_LOG_ERR, "Cannot assign value to function. Functions cannot be assigned values");
+        } else if (dst_type == VARIABLE_DEF_TYPE_POINTER && !value_is_pointer(src) && !value_is_number(src)) {
+          pfile_log(pf, PFILE_LOG_ERR, "Cannot assign incompatible type to pointer. Use pointer is variable_name instead");
+        } else {
+          pfile_log(pf, PFILE_LOG_ERR, "Invalid assignment: incompatible types (destination type %d, source type %d)", 
+                    (int)dst_type, (int)src_type);
+        }
+      } else {
+        pfile_log(pf, PFILE_LOG_ERR, "invalid operation (assign: op=%d, dst_type=%d, src_type=%d)", 
+                  (int)op, 
+                  dst ? (int)value_type_get(dst) : -1, 
+                  src ? (int)value_type_get(src) : -1);
+      }
     }
   }
 }
@@ -676,7 +822,8 @@ void pfile_cmd_op_add_assign(pfile_t *pf, operator_t op,
 static void pfile_cmd_op_add_unary(pfile_t *pf, operator_t op,
     value_t *pdst, value_t src)
 {
-  value_t dst;
+  value_t       dst;
+  variable_def_t def;
 
   if (!value_is_number(src)) {
     pfile_log(pf, PFILE_LOG_ERR, "invalid operation");
@@ -687,7 +834,14 @@ static void pfile_cmd_op_add_unary(pfile_t *pf, operator_t op,
     if (value_is_bit(src)) {
       n.u.n &= (1 << value_sz_get(src)) - 1;
     }
-    *pdst = pf_const_to_const(pf, n, value_def_get(src));
+    def = value_def_get(src);
+    if ((PF_CONST_TYPE_INTEGER == n.type)
+        && variable_const_is_negative(n.u.n, VARIABLE_CONST_BIT_CT)
+        && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
+      def = variable_def_flags_change(def,
+          variable_def_flags_get_all(def) | VARIABLE_DEF_FLAG_SIGNED);
+    }
+    *pdst = pf_const_to_const(pf, n, def);
   } else {
     cmd_t cmd;
 
@@ -728,6 +882,14 @@ static void pfile_cmd_op_add_binary(pfile_t *pf, operator_t op,
     n.type = PF_CONST_TYPE_NONE;
     def = pfile_variable_def_promotion_get(pf, op, val1, val2);
     n = pfile_op_const_exec(pf, op, val1, val2);
+    if ((PF_CONST_TYPE_INTEGER == n.type)
+        && variable_const_is_negative(n.u.n, VARIABLE_CONST_BIT_CT)
+        && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED)) {
+      /* a negative fold result must carry a signed def, otherwise range
+       * checks and later folds read the two's complement as huge unsigned */
+      def = variable_def_flags_change(def,
+          variable_def_flags_get_all(def) | VARIABLE_DEF_FLAG_SIGNED);
+    }
     *pdst = pf_const_to_const(pf, n, def);
   } else {
     value_t dst;
@@ -759,6 +921,46 @@ static void pfile_cmd_op_add_binary(pfile_t *pf, operator_t op,
       pfile_cmd_add(pf, cmd);
     }
   }
+}
+
+/*
+ * True if dst is a store through a data pointer whose pointee type is const
+ * (e.g. var pointer const byte p then p = x, p[i] = x, or p[i]++).
+ * POINTER_ASSIGN (p is x) binds an address; it is not a store through the pointee.
+ */
+static boolean_t pfile_value_writes_through_const_pointee(const value_t val)
+{
+  variable_def_t         def;
+  variable_def_member_t  mbr;
+  variable_def_t         pointee;
+
+  if (!val) {
+    return BOOLEAN_FALSE;
+  }
+  def = value_def_get(val);
+  if (!def) {
+    return BOOLEAN_FALSE;
+  }
+  /* After subscript: type is the element; flags include POINTER + INDIRECT. */
+  if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_CONST)
+      && value_flag_test(val, VALUE_FLAG_POINTER)
+      && value_flag_test(val, VALUE_FLAG_INDIRECT)) {
+    return BOOLEAN_TRUE;
+  }
+  /* Scalar write-through: destination value is still typed as pointer. */
+  if (value_is_pointer(val)) {
+    mbr = variable_def_member_get(def);
+    if (mbr) {
+      pointee = variable_def_member_def_get(mbr);
+      if (pointee && variable_def_flag_test(pointee, VARIABLE_DEF_FLAG_CONST)) {
+        if (VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(pointee)) {
+          return BOOLEAN_FALSE;
+        }
+        return BOOLEAN_TRUE;
+      }
+    }
+  }
+  return BOOLEAN_FALSE;
 }
 
 void pfile_cmd_op_add(pfile_t *pf,
@@ -831,6 +1033,11 @@ void pfile_cmd_op_add(pfile_t *pf,
         value_name_get(val2));
     } else if (dst && (value_is_const(dst) || value_is_lookup(dst))) {
       pfile_log(pf, PFILE_LOG_ERR, "assign to constant");
+    } else if (dst
+        && (OPERATOR_ASSIGN == op || OPERATOR_INCR == op || OPERATOR_DECR == op)
+        && pfile_value_writes_through_const_pointee(dst)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "cannot assign or modify through pointer to const data");
     } else if (OPERATOR_NULL == op) {
     } else if (operator_is_assign(op)) {
       (void) pfile_value_overflow_check(pf, op, dst, val1);
@@ -912,6 +1119,21 @@ boolean_t pfile_expr_string_fix(pfile_t *pf, value_t val)
   rc = BOOLEAN_TRUE;
   if (value_is_array(val)
     && value_is_string(val)) {
+    /* Heap `var string`: one array member with ct = 3×index width (header +
+     * payload). Not the lowered literal / fixed `string[N]` shape where this
+     * hack resolves char vs string; dereferencing would strip the string def
+     * and `value_ct_get` != 1 was wrongly rejected (e.g. `p is dyn_string`). */
+    if (value_dflag_test(val,
+        VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+      return BOOLEAN_TRUE;
+    }
+    /* Fixed `string[N]` (STRING only): multi-element array is never the
+     * char-vs-string literal ambiguity this routine resolves; ct>1 must not
+     * error (e.g. RHS of `pointer is fixed_string` before assign lowering). */
+    if (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+        && (1 != value_ct_get(val))) {
+      return BOOLEAN_TRUE;
+    }
     if (1 != value_ct_get(val)) {
       pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
       rc = BOOLEAN_FALSE;

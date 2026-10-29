@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef operator_h__
 #define operator_h__
@@ -37,6 +40,7 @@ typedef enum operator_ {
   OPERATOR_CMPB, /* unary */
   /* misc */
   OPERATOR_ASSIGN,  /* unary */
+  OPERATOR_POINTER_ASSIGN,  /* unary : pointer assignment with 'is' */
   OPERATOR_NEG,     /* unary */
   OPERATOR_INCR,    /* unary */
   OPERATOR_DECR,    /* unary */

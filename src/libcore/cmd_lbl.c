@@ -5,6 +5,9 @@
  ** Copyright (c) 2008, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include "cmdd.h"
 
@@ -94,7 +97,15 @@ void cmd_label_set(cmd_t cmd, label_t lbl)
     if (ptr) {
       label_lock(lbl);
       if (ptr->u.label) {
-        label_release(ptr->u.label);
+        label_t old;
+
+        old = ptr->u.label;
+        if (old != lbl) {
+          /* If refct>0 the label stays alive; clear its cmd back-pointer before
+           * this command drops the label. */
+          label_cmd_set(old, CMD_NONE);
+        }
+        label_release(old);
       }
       ptr->u.label = lbl;
       label_cmd_set(lbl, cmd);
@@ -117,31 +128,26 @@ void cmd_label_set(cmd_t cmd, label_t lbl)
  *
  * NOTES
  */
-cmd_t cmd_label_find(cmd_t cmd, const label_t lbl)
+cmd_t cmd_label_find(cmd_t cmd_head, const label_t lbl)
 {
+  cmd_t cmd;
+  cmd_t scan;
+
   if (!lbl) {
-    cmd = 0;
-  } else {
-#if 0
-    while (cmd && (cmd_label_get(cmd) != lbl)) {
-      cmd = cmd_link_get(cmd);
-    }
-#else
-    cmd = label_cmd_get(lbl);
-    if (cmd) {
-      if (cmd_label_get(cmd) != lbl) {
-        fprintf(stderr, "looking for %s got %s\n",
-            label_name_get(lbl),
-            label_name_get(cmd_label_get(cmd)));
-      }
-    }
-#endif
-#if 0
-    if (!cmd) {
-      fprintf(stderr, "!!!LABEL %s NOT FOUND!!!\n", label_name_get(lbl));
-    }
-#endif
+    return 0;
   }
-  return cmd;
+  /* Fast path: label records its defining command. */
+  cmd = label_cmd_get(lbl);
+  if (cmd && cmd_label_get(cmd) == lbl) {
+    return cmd;
+  }
+  /* Stale label->cmd (e.g. label moved to another command but still referenced):
+   * scan the list. */
+  for (scan = cmd_head; scan; scan = cmd_link_get(scan)) {
+    if (cmd_label_get(scan) == lbl) {
+      return scan;
+    }
+  }
+  return 0;
 }
 

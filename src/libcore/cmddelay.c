@@ -5,13 +5,20 @@
  ** Copyright (c) 2006, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include "cmd_usec.h"
 #include "cmdd.h"
 
 static void cmd_usec_delay_dump(cmd_t cmd, FILE *dst)
 {
-  fprintf(dst, "usec_delay(%lu)", cmd_usec_delay_get(cmd));
+  char cbuf[50];
+
+  variable_const_str_get(cmd_usec_delay_get(cmd), BOOLEAN_FALSE, cbuf,
+    sizeof(cbuf));
+  fprintf(dst, "usec_delay(%s)", cbuf);
 }
 
 static cmd_t cmd_usec_delay_dup(const cmd_t cmd)

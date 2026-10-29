@@ -5,11 +5,36 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <assert.h>
 #include "../libutils/mem.h"
 #include "cmdd.h"
 #include "cmd_brch.h"
+
+static variable_def_t cmd_branch_callable_def_get(value_t proc)
+{
+  variable_def_t def;
+
+  def = value_def_get(proc);
+  if (def && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))) {
+    variable_def_member_t mbr;
+
+    mbr = variable_def_member_get(def);
+    if (mbr) {
+      variable_def_t target_def;
+
+      target_def = variable_def_member_def_get(mbr);
+      if (target_def
+          && (VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(target_def))) {
+        def = target_def;
+      }
+    }
+  }
+  return def;
+}
 
 static void cmd_branch_dump(cmd_t cmd, FILE *dst)
 {
@@ -23,8 +48,12 @@ static void cmd_branch_dump(cmd_t cmd, FILE *dst)
     case CMD_BRANCHTYPE_CALL:         tstr = "call";         break;
     case CMD_BRANCHTYPE_RETURN:       tstr = "return";       break;
     case CMD_BRANCHTYPE_TASK_START:   tstr = "task_start";   break;
-    case CMD_BRANCHTYPE_TASK_SUSPEND: tstr = "task_suspend"; break;
+    case CMD_BRANCHTYPE_TASK_YIELD: tstr = "task_yield"; break;
     case CMD_BRANCHTYPE_TASK_END:     tstr = "task_end";     break;
+    case CMD_BRANCHTYPE_TASK_SUSPEND: tstr = "task_suspend"; break;
+    case CMD_BRANCHTYPE_TASK_RESUME:  tstr = "task_resume";  break;
+    case CMD_BRANCHTYPE_TASK_KILL:    tstr = "task_kill";    break;
+    case CMD_BRANCHTYPE_TASK_RESTART: tstr = "task_restart"; break;
   }
   cstr = "{unknown}";
   switch (cmd_brcond_get(cmd)) {
@@ -57,7 +86,7 @@ static void cmd_branch_dump(cmd_t cmd, FILE *dst)
     }
     fprintf(dst, "%s%s(", value_is_indirect(proc)
       ? "&" : "", value_name_get(proc));
-    vdef = value_def_get(proc);
+    vdef = cmd_branch_callable_def_get(proc);
     for (mbr = variable_def_member_get(vdef), ii = 0;
          mbr;
          mbr = variable_def_member_link_get(mbr), ii++) {
@@ -87,7 +116,7 @@ static void cmd_branch_free(cmd_t cmd)
       pfile_proc_t         *proc_ptr;
 
       value_use_ct_bump(ptr->u.br.proc, CTR_BUMP_DECR);
-      def    = value_def_get(ptr->u.br.proc);
+      def    = cmd_branch_callable_def_get(ptr->u.br.proc);
       params = ptr->u.br.proc_params;
       for (ii = 0, mbr = variable_def_member_get(def);
            mbr;
@@ -95,11 +124,12 @@ static void cmd_branch_free(cmd_t cmd)
         variable_def_t mdef;
 
         mdef = variable_def_member_def_get(mbr);
-        if (variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_IN)) {
+        if (mdef && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_IN)) {
           value_use_ct_bump(params[ii], CTR_BUMP_DECR);
         }
         /* if ii == 0 this is the return value, which is an implied OUT */
-        if (!ii || variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OUT)) {
+        if (!ii || (mdef && variable_def_flag_test(mdef,
+            VARIABLE_DEF_FLAG_OUT))) {
           value_assign_ct_bump(params[ii], CTR_BUMP_DECR);
         }
         value_release(params[ii]);
@@ -121,7 +151,7 @@ static cmd_t cmd_branch_dup(const cmd_t cmd)
 
   params = cmd_brproc_params_get(cmd);
   if (params) {
-    dup_params = CALLOC(sizeof(*dup_params), cmd_brproc_param_ct_get(cmd));
+    dup_params = CALLOC(cmd_brproc_param_ct_get(cmd), sizeof(*dup_params));
     if (dup_params) {
       size_t ii;
 
@@ -194,7 +224,7 @@ static flag_t cmd_branch_variable_accessed(const cmd_t cmd, variable_t var)
   if (value_variable_get(cmd_brval_get(cmd)) == var) {
     flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
   }
-  def = value_def_get(cmd_brproc_get(cmd));
+  def = cmd_branch_callable_def_get(cmd_brproc_get(cmd));
   params = cmd_brproc_params_get(cmd);
   for (ii = 0, mbr = variable_def_member_get(def);
        mbr;
@@ -225,7 +255,7 @@ static flag_t cmd_branch_value_accessed(const cmd_t cmd, value_t val)
   if (cmd_brval_get(cmd) == val) {
     flags |= CMD_VARIABLE_ACCESS_FLAG_READ;
   }
-  def = value_def_get(cmd_brproc_get(cmd));
+  def = cmd_branch_callable_def_get(cmd_brproc_get(cmd));
   params = cmd_brproc_params_get(cmd);
   for (ii = 0, mbr = variable_def_member_get(def);
        mbr;
@@ -342,8 +372,8 @@ cmd_t cmd_branch_alloc(
 
         value_lock(proc);
 
-        def = value_def_get(proc);
-        assert(VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(def));
+        def = cmd_branch_callable_def_get(proc);
+        /* assert(VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(def)); */
         value_use_ct_bump(proc, CTR_BUMP_INCR);
         for (mbr = variable_def_member_get(def), ii = 0;
              mbr;
@@ -547,7 +577,7 @@ size_t cmd_brproc_param_ct_get(const cmd_t cmd)
   variable_def_member_t mbr;
   size_t                ct;
 
-  def = value_def_get(cmd_brproc_get(cmd));
+  def = cmd_branch_callable_def_get(cmd_brproc_get(cmd));
   for (ct = 0, mbr = variable_def_member_get(def);
        mbr;
        ct++, mbr = variable_def_member_link_get(mbr))
@@ -567,7 +597,7 @@ void cmd_brproc_param_set(cmd_t cmd, size_t ix, value_t val)
     
     old_val = params[ix];
     params[ix] = val;
-    def = value_def_get(cmd_brproc_get(cmd));
+    def = cmd_branch_callable_def_get(cmd_brproc_get(cmd));
     for (mbr = variable_def_member_get(def);
          mbr && ix;
          mbr = variable_def_member_link_get(mbr), ix--)

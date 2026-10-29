@@ -7,6 +7,9 @@
  **
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pic_gop_h__
 #define pic_gop_h__
@@ -16,7 +19,7 @@
 
 /* This is the maximum depth the optimizer should reach! 
    It is an artbitrary choice. Changed from 128 to 256 in 
-   jalv25r5, fixing issue #19.*/
+   jalv25r5, fixing issue #19. */
 #define PIC_CODE_GOP_DEPTH 256
 
 typedef enum {
@@ -53,6 +56,24 @@ void pic_code_gop_optimize(
   pic_code_gop_optimize_cb_t optimize_cb,
   pic_code_gop_analyze_cb_t  analyze_cb,
   void                      *data
+  );
+
+/* One step of the same CFG the gop walk uses: (code, pv) -> up to 3
+ * successors, where pv is "prev insn was a skip/conditional" (gop
+ * pv_code_is_cond). GOTO/CALL/RCALL and PIC18 BRA / BC..BZ share the
+ * branch+fall-through pattern (BRA also matches unconditional GOTO).
+ * Used by BSR worklist. */
+typedef struct pic_bsr_gop_succ_ {
+  pic_code_t  c;
+  boolean_t  pv;
+} pic_bsr_gop_succ_t;
+
+void pic_bsr_gop_state_succ(
+  pfile_t          *pf,
+  pic_code_t        code,
+  boolean_t         pv_in,
+  pic_bsr_gop_succ_t o[3],
+  unsigned         *nout
   );
 
 #endif /* pic_gop_h__ */

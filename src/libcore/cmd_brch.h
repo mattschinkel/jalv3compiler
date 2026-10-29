@@ -11,6 +11,11 @@
 
 #include "cmd.h"
 
+/* APPEND-ONLY: new members go at the END. Every addition must also add a
+ * case to the dump switch (cmd_brch.c), the cmd_analyze fall-through group
+ * (cmd_optm.c), and each back end's dispatch (pic.c has two switches incl.
+ * an assert(0) site; mips_op.c / esp_op.c) -- a missed switch aborts the
+ * compiler instead of erroring cleanly. */
 typedef enum {
   CMD_BRANCHTYPE_NONE,
   CMD_BRANCHTYPE_GOTO,
@@ -18,7 +23,11 @@ typedef enum {
   CMD_BRANCHTYPE_RETURN,
   CMD_BRANCHTYPE_TASK_START,
   CMD_BRANCHTYPE_TASK_END,
-  CMD_BRANCHTYPE_TASK_SUSPEND
+  CMD_BRANCHTYPE_TASK_YIELD,
+  CMD_BRANCHTYPE_TASK_SUSPEND,
+  CMD_BRANCHTYPE_TASK_RESUME,
+  CMD_BRANCHTYPE_TASK_KILL,
+  CMD_BRANCHTYPE_TASK_RESTART
 } cmd_branchtype_t;
 
 typedef enum {

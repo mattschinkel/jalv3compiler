@@ -5,11 +5,69 @@
  ** Copyright (c) 2004-2006, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include <math.h>
 #include "pic_inst.h"
 #include "pic_stvar.h"
 #include "picdelay.h"
+
+/*
+ * PIC12 inline delay loops historically always emitted two instructions
+ * (datalo_clr + datahi_clr) before the first movwf so the preamble was
+ * exactly two cycles. That is only correct when the temp file lives in
+ * bank 0 (RP0=RP1=0). Compiler temps in _pic_state may be placed in the
+ * high GPR bank (e.g. 0xA0); emit the RP ops required for bank_for.
+ * Pad with NOPs so the preamble remains two cycles (delay math).
+ * shared_if matches the prior value_is_shared(delay0) probe.
+ */
+static void pic12_delay_emit_data_bank_preamble(pfile_t *pf, value_t bank_for,
+    value_t shared_if)
+{
+  pic_opcode_t lo;
+  pic_opcode_t hi;
+  unsigned     emitted;
+
+  if (value_is_shared(shared_if)) {
+    pic_instr_append(pf, PIC_OPCODE_NOP);
+    pic_instr_append(pf, PIC_OPCODE_NOP);
+    return;
+  }
+  lo = pic_value_datalo_get(pf, bank_for);
+  hi = pic_value_datahi_get(pf, bank_for);
+  emitted = 0;
+  if (PIC_OPCODE_NONE != lo) {
+    (void) pic_instr_append_f(pf, lo, bank_for, 0);
+    emitted++;
+  }
+  if (PIC_OPCODE_NONE != hi) {
+    (void) pic_instr_append_f(pf, hi, bank_for, 0);
+    emitted++;
+  }
+  for (; emitted < 2U; emitted++) {
+    pic_instr_append(pf, PIC_OPCODE_NOP);
+  }
+}
+
+/*
+ * MOVLW does not change RP/STATUS bank bits. When pic12_delay_emit_data_bank_preamble
+ * ran immediately before the matching MOVLW, skip pic_instr_append_f's forced daop
+ * (pic_instr_force_daop_pic14 always runs under NO_OPTIMIZE for MOVWF).
+ */
+static void pic12_delay_movwf_after_movlw(pfile_t *pf, value_t dst)
+{
+  pic_code_t code;
+
+  code = pic_instr_alloc(pf, LABEL_NONE, PIC_OPCODE_MOVWF);
+  if (code) {
+    value_variable_get(dst);
+    pic_code_value_set(code, dst);
+    pic_code_ofs_set(code, 0);
+    pic_instr_bank_op_linear_try_record(pf, code);
+  }
+}
 
 /*
  * NAME
@@ -88,17 +146,16 @@ static unsigned long pic12_delay3_create(pfile_t *pf, unsigned long cycles)
     pic_instr_append(pf, PIC_OPCODE_NOP);
     pic_instr_append(pf, PIC_OPCODE_NOP);
   } else {
-    pic_instr_append_f(pf, PIC_OPCODE_DATALO_CLR, delay2, 0);
-    pic_instr_append_f(pf, PIC_OPCODE_DATAHI_CLR, delay2, 0);
+    pic12_delay_emit_data_bank_preamble(pf, delay2, delay0);
   }
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_z);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay2, 0);
+  pic12_delay_movwf_after_movlw(pf, delay2);
   pic_instr_append_label(pf, lblz);
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_y);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay1, 0);
+  pic12_delay_movwf_after_movlw(pf, delay1);
   pic_instr_append_label(pf, lbly);
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_x);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay0, 0);
+  pic12_delay_movwf_after_movlw(pf, delay0);
   pic_instr_append_label(pf, lblx);
   pic_instr_append_n(pf, PIC_OPCODE_BRANCHHI_CLR, lblx);
   pic_instr_append_n(pf, PIC_OPCODE_BRANCHLO_CLR, lblx);
@@ -167,14 +224,13 @@ static unsigned long pic12_delay2_create(pfile_t *pf, unsigned long cycles)
     pic_instr_append(pf, PIC_OPCODE_NOP);
     pic_instr_append(pf, PIC_OPCODE_NOP);
   } else {
-    pic_instr_append_f(pf, PIC_OPCODE_DATALO_CLR, delay1, 0);
-    pic_instr_append_f(pf, PIC_OPCODE_DATAHI_CLR, delay1, 0);
+    pic12_delay_emit_data_bank_preamble(pf, delay1, delay0);
   }
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_y);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay1, 0);
+  pic12_delay_movwf_after_movlw(pf, delay1);
   pic_instr_append_label(pf, lbly);
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_x);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay0, 0);
+  pic12_delay_movwf_after_movlw(pf, delay0);
   pic_instr_append_label(pf, lblx);
   pic_instr_append_n(pf, PIC_OPCODE_BRANCHHI_CLR, lblx);
   pic_instr_append_n(pf, PIC_OPCODE_BRANCHLO_CLR, lblx);
@@ -234,11 +290,10 @@ static unsigned long pic12_delay_create(pfile_t *pf, unsigned long cycles)
       pic_instr_append(pf, PIC_OPCODE_NOP);
       pic_instr_append(pf, PIC_OPCODE_NOP);
     } else {
-      pic_instr_append_f(pf, PIC_OPCODE_DATALO_CLR, delay0, 0);
-      pic_instr_append_f(pf, PIC_OPCODE_DATAHI_CLR, delay0, 0);
+      pic12_delay_emit_data_bank_preamble(pf, delay0, delay0);
     }
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (x == 256) ? 0 : x);
-    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay0, 0);
+    pic12_delay_movwf_after_movlw(pf, delay0);
     pic_instr_append_n(pf, PIC_OPCODE_BRANCHHI_CLR, lbl);
     pic_instr_append_n(pf, PIC_OPCODE_BRANCHLO_CLR, lbl);
     pic_instr_append_label(pf, lbl);
@@ -339,7 +394,8 @@ static unsigned long pic16_delay3_create(pfile_t *pf, unsigned long cycles,
   delay1 = pic_var_temp_get(pf, VARIABLE_FLAG_NONE, 1);
   delay0 = pic_var_temp_get(pf, VARIABLE_FLAG_NONE, 1);
 
-  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB, value_base_get(delay0) / 256);
+  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB,
+      value_base_get(delay0) / pic_target_bank_size_get(pf));
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_z);
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay2, 0);
   pic_instr_append_label(pf, lblz);
@@ -444,7 +500,8 @@ static unsigned long pic16_delay2_create(pfile_t *pf, unsigned long cycles,
 
   delay1 = pic_var_temp_get(pf, VARIABLE_FLAG_NONE, 1);
   delay0 = pic_var_temp_get(pf, VARIABLE_FLAG_NONE, 1);
-  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB, value_base_get(delay0) / 256);
+  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB,
+      value_base_get(delay0) / pic_target_bank_size_get(pf));
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, best_y & 0xff);
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay1, 0);
   pic_instr_append_label(pf, lbly);
@@ -513,7 +570,8 @@ static unsigned long pic16_delay_create(pfile_t *pf, unsigned long cycles,
     lbl = pfile_label_alloc(pf, 0);
     delay0 = pic_var_temp_get(pf, VARIABLE_FLAG_NONE, 1);
 
-    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB, value_base_get(delay0) / 256);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB,
+        value_base_get(delay0) / pic_target_bank_size_get(pf));
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (x == 256) ? 0 : x);
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, delay0, 0);
     if (flag & PIC16_DELAY_CREATE_FLAG_MOVLP) {
@@ -545,8 +603,13 @@ void pic_delay_create(pfile_t *pf, variable_const_t usec)
   dcycles = 1.0 * usec * value_const_get(freq) / 4000000;
   cycles = ceil(dcycles);
   value_release(freq);
-  pfile_log(pf, PFILE_LOG_DEBUG, "delay %lu requires %lu cycles", 
-      usec, cycles);
+  {
+    char usec_buf[50];
+
+    variable_const_str_get(usec, BOOLEAN_FALSE, usec_buf, sizeof(usec_buf));
+    pfile_log(pf, PFILE_LOG_DEBUG, "delay %s requires %lu cycles", 
+        usec_buf, cycles);
+  }
   used = 0;
   switch (pic_target_cpu_get(pf)) {
     case PIC_TARGET_CPU_NONE:
@@ -562,6 +625,10 @@ void pic_delay_create(pfile_t *pf, variable_const_t usec)
     case PIC_TARGET_CPU_16BIT:
         used = pic16_delay_create(pf, cycles, PIC16_DELAY_CREATE_FLAG_NONE);
         break;
+    case PIC_TARGET_CPU_MIPS32:
+        break;
+    case PIC_TARGET_CPU_ESP32:
+        break;  /* ESP32 uses esp_delay_create */
   }
   if (used) {
     pfile_log(pf, PFILE_LOG_DEBUG, 

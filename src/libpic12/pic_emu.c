@@ -5,9 +5,13 @@
  ** Copyright (c) 2007, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #include <string.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include "../libcore/cmd.h"
 #include "piccolst.h"
@@ -743,6 +747,12 @@ pic_emu_state_t pic_emu_state_alloc(pfile_t *pf, pic_target_cpu_t cpu)
       pic_target_page_size_set(pf, 0x8000);
       state->status                 = 0x0fd8;
       break;
+    case PIC_TARGET_CPU_MIPS32:
+      /* PIC32 uses mips_code_emu; this PIC emulator is never selected. */
+      break;
+    case PIC_TARGET_CPU_ESP32:
+      /* ESP32 uses esp_code_emu (stub); never selected here either. */
+      break;
   }
   pic_emu_data_mem_init(state);
   return state;
@@ -1401,7 +1411,9 @@ pic_code_t pic_emu_instr(pfile_t *pf,
 
 void pic_emu(pfile_t *pf, pic_emu_state_t state)
 {
-  pic_code_t code;
+  pic_code_t   code;
+  const char  *cap_env;
+  unsigned long step_cap;
 
   state->mem[state->status] = 0;
   if (PIC_TARGET_CPU_14BIT == state->target) {
@@ -1417,8 +1429,23 @@ void pic_emu(pfile_t *pf, pic_emu_state_t state)
        && !pic_code_is_exec(code);
        code = pic_code_next_get(code))
     ; /* empty body */
+  /* the emulator faithfully executes `forever loop` main loops, which
+   * burns unbounded CPU under -debug=all (one server incident).  Bound
+   * the run: the 10M default is generous for terminating programs
+   * (~90 s worst case with the -debug listing print) and JALV2_EMU_STEP_CAP=N
+   * raises it, =0 disables the bound. */
+  cap_env = getenv("JALV2_EMU_STEP_CAP");
+  step_cap = (cap_env && cap_env[0])
+    ? strtoul(cap_env, 0, 0) : 10000000UL;
   while (PIC_CODE_NONE != code) {
-     code = pic_emu_instr(pf, state, code);
+    if (step_cap && ((unsigned long) pic_emu_instr_ct >= step_cap)) {
+      pfile_log(pf, PFILE_LOG_WARN,
+          "emulator step cap %lu reached -- endless main loop? "
+          "(JALV2_EMU_STEP_CAP=N to raise, =0 to disable)",
+          step_cap);
+      break;
+    }
+    code = pic_emu_instr(pf, state, code);
   }
   if (!pfile_flag_test(pf, PFILE_FLAG_MISC_QUIET)) {
     printf("%u instructions executed\n", pic_emu_instr_ct);

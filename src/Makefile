@@ -3,7 +3,10 @@
 # Copyright (c) 2008, Kyle A. York
 # All rights reserved
 #
-PARTS = libutils libcore libpic12 jal
+# Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+# Changes: minor fork edits -- see fixes/ and git history
+#
+PARTS = libutils libcore libpic12 libpic32 libesp32 jal
 
 include Makefile.inc
 

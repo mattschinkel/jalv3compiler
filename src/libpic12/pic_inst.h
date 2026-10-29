@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ************************************************************/
 #ifndef pic_inst_h__
 #define pic_inst_h__
@@ -55,14 +58,26 @@ boolean_t pic_opcode_is_branch_bit(pic_opcode_t op);
 boolean_t pic_opcode_is_data_bit(pic_opcode_t op);
 
 void pic_instr_append_daop(pfile_t *pf, value_t f, pic_opcode_t op,
-    boolean_t force);
+    boolean_t force, size_t file_ofs);
+/* Cleared when the PIC code list is reset between codegen passes. */
+void pic_instr_emit_bsr_cache_reset(void);
+
 boolean_t pic_are_variable_databits_different(pfile_t *pf, value_t a, 
     value_t b);
+
+/* PIC18 / hybrid: annotate skip-cond + MOVLB with linear file byte for
+ * pic_opt_verify_skip (same resolution as pic_code_bsr_verify_data_addr). */
+void pic_instr_bank_op_linear_try_record(pfile_t *pf, pic_code_t code);
 
 pic_opcode_t pic_value_datalo_get(pfile_t *pf, value_t val);
 pic_opcode_t pic_value_datahi_get(pfile_t *pf, value_t val);
 
 pic_code_t pic_instr_append_lfsr(pfile_t *pf, unsigned which,
     value_t val, size_t ofs);
+
+/* True when the value operand is a direct banked file address; *paddr is the
+ * full file address (same as pic_code_to_pcode's pre-mask sum for that case). */
+boolean_t pic_code_bsr_verify_data_addr(pfile_t *pf, const pic_code_t code,
+    unsigned long *paddr);
 #endif /* pic_inst_h__ */
 

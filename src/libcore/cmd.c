@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Changes: minor fork edits
+ **
  ***********************************************************/
 #include <assert.h>
 #include <stddef.h>
@@ -98,6 +101,7 @@ cmd_t cmd_dup(const cmd_t cmd)
     }
     if (dup) {
       cmd_flag_set_all(dup, cmd_flag_get_all(cmd));
+      cmd_opt_set(dup, cmd_opt_get(cmd));
       cmd_line_set(dup, cmd_line_get(cmd));
       cmd_source_set(dup, cmd_source_get(cmd));
     }
