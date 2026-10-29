@@ -1,0 +1,52 @@
+# jallib upstream files excluded from the fetched tree (dead device libs and
+# their samples; removing them keeps a fetch byte-equivalent to the verified
+# corpus this repo is gated against).
+12f1572_steppermotor.jal
+12lf1840t39a_blink_hs.jal
+12lf1840t39a_blink_intosc.jal
+12lf1840t39a.jal
+12lf1840t48a_blink_hs.jal
+12lf1840t48a_blink_intosc.jal
+12lf1840t48a.jal
+16f13115_vl53l0x_continuous .jal
+16f1519_bmp085.jal
+16f1615_steppermotor.jal
+16f1765_steppermotor.jal
+16f1829lin_blink_hs.jal
+16f1829lin_blink_intosc.jal
+16f1829lin.jal
+16f18325_steppermotor.jal
+16f83_blink_hs.jal
+16f83.jal
+16f84_blink_hs.jal
+16f84.jal
+16lf1824t39a_blink_hs.jal
+16lf1824t39a_blink_intosc.jal
+16lf1824t39a.jal
+18f06q41_blink_hs.jal
+18f2585_oxygen_goel370.jal
+18f26k22_sst25vf.jal
+18f27j53_sst25vf.jal
+18f27q84_blink_hs.jal
+18f4620_rotary_encoder_e6b2.jal
+18f4620_rtc_mcp7940.jal
+18f4620_timer.jal
+18f47q84_blink_hs.jal
+18f57q84_blink_hs.jal
+18f67j50_debug_queue.jal
+18f86j72_blink_hs.jal
+18f86j72_blink_intosc.jal
+18f86j72_blink_intosc_usb.jal
+18f86j72.jal
+18f87j72_blink_hs.jal
+18f87j72_blink_intosc.jal
+18f87j72_blink_intosc_usb.jal
+18f87j72.jal
+beep.jal
+bmp085.jal
+debug_queue.jal
+flash_sst25vf.jal
+glcd_digits.jal
+goel370.jal
+ltc2942.jal
+rtc_mcp7940.jal

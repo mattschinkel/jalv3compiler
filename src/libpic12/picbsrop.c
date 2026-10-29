@@ -357,7 +357,19 @@ static void pic_code_bsr_wl(pfile_t *pf)
   in_cur  = (uchar *) MALLOC((size_t) nst * sizeof (uchar));
   in_nxt  = (uchar *) MALLOC((size_t) nst * sizeof (uchar));
   reached  = (boolean_t *) MALLOC((size_t) nst * sizeof (boolean_t));
-  ent  = (unsigned *) MALLOC((size_t) 64U * sizeof (unsigned));
+  /* entry states: RESET + ISR + every proc label (all-proc BSR-indeterminate
+   * entry) -- size by the proc count, big libraries exceed any fixed cap
+   * (the network/mp3 corpus samples found the 64-entry heap overflow) */
+  {
+    unsigned ent_need;
+
+    ent_need  = 2U;
+    for (proc = pfile_proc_root_get(pf); proc;
+        proc = pfile_proc_next(proc)) {
+      ent_need++;
+    }
+    ent  = (unsigned *) MALLOC((size_t) ent_need * sizeof (unsigned));
+  }
   if (!at || !map || !in_cur || !in_nxt || !reached || !ent) {
     FREE(ent);
     FREE(reached);
@@ -473,6 +485,63 @@ static void pic_code_bsr_annotation_reset(pfile_t *pf)
   }
 }
 
+/* A MOVLB in the straight-line prologue of a proc (from the entry label
+ * to the first control-flow op) executes with the CALLER's arbitrary BSR:
+ * the runtime call edge is invisible to the linear fixpoint, which only
+ * sees the physical list predecessor. Never remove such a MOVLB -- the
+ * prologue's first banked op depends on it (the j50 stale-print defect).
+ * MOVLBs after any other label, or below control flow, are ordinary CFG
+ * merges and stay optimizable. */
+static boolean_t pic_bsr_movlb_is_proc_entry(pfile_t *pf, pic_code_t code)
+{
+  pic_code_t    pr;
+  pfile_proc_t *proc;
+
+  /* walk back through the prologue: only non-control-flow instructions
+   * may separate the entry label from this MOVLB (e.g. a leading MOVLW
+   * or an access-mode op). Any control flow, another MOVLB, or a
+   * non-entry label ends the protected region. */
+  for (pr = pic_code_prev_get(code); pr; pr = pic_code_prev_get(pr)) {
+    pic_opcode_t op;
+
+    op = pic_code_op_get(pr);
+    /* label instructions are PIC_OPCODE_NONE with the label attached */
+    if ((PIC_OPCODE_NONE == op) && (LABEL_NONE != pic_code_label_get(pr))) {
+      label_t lbl;
+
+      lbl = pic_code_label_get(pr);
+      for (proc = pfile_proc_root_get(pf); proc;
+          proc = pfile_proc_next(proc)) {
+        if (pfile_proc_label_get(proc) == lbl) {
+          return BOOLEAN_TRUE;
+        }
+      }
+      return BOOLEAN_FALSE;
+    }
+    switch (op) {
+      case PIC_OPCODE_GOTO:
+      case PIC_OPCODE_CALL:
+      case PIC_OPCODE_RETURN:
+      case PIC_OPCODE_RETLW:
+      case PIC_OPCODE_RETFIE:
+      case PIC_OPCODE_RESET:
+      case PIC_OPCODE_BRA:
+      case PIC_OPCODE_BTFSC:
+      case PIC_OPCODE_BTFSS:
+      case PIC_OPCODE_DECFSZ:
+      case PIC_OPCODE_INCFSZ:
+      case PIC_OPCODE_DCFSNZ:
+      case PIC_OPCODE_INFSNZ:
+      case PIC_OPCODE_TSTFSZ:
+      case PIC_OPCODE_MOVLB:
+        return BOOLEAN_FALSE;
+      default:
+        break;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 static unsigned pic_code_bsr_post_analyze(pfile_t *pf)
 {
   pic_code_t code;
@@ -491,9 +560,11 @@ static unsigned pic_code_bsr_post_analyze(pfile_t *pf)
       switch (pic_code_op_get(code)) {
         case PIC_OPCODE_MOVLB:
           /* Incoming BSR at this line (from worklist fixpoint) matches the
-           * literal: the MOVLB is redundant (same rule as GOP-era pass). */
-          cremove = value_const_get(pic_code_literal_get(code))
-              == pic_code_bsr_get(code);
+           * literal: the MOVLB is redundant (same rule as GOP-era pass) --
+           * unless it anchors a proc entry (caller BSR is arbitrary). */
+          cremove = (value_const_get(pic_code_literal_get(code))
+              == pic_code_bsr_get(code))
+              && !pic_bsr_movlb_is_proc_entry(pf, code);
           break;
         default:
           cremove = BOOLEAN_FALSE;

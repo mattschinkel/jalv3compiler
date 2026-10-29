@@ -29,10 +29,15 @@ DEFAULT_JAL = REPO / "sims/uart_txreg/issue_36_record_const_print.jal"
 NEEDLE = "a_1\r\na_2\r\na_3\r\nb_001\r\nb_002\r\nb_003\r\n\r\n"
 
 # Cross-architecture UART TXREG tests (same print sequence / needle).
+STALE_PRINT_NEEDLE = "snap:88\r\ncmp:88\r\n" + NEEDLE
+
 ARCH_TESTS = [
-    (DEFAULT_JAL, "p16f1823", 32_000_000),
-    (REPO / "sims/uart_txreg/uart_18f4620_print.jal", "p18f4620", 20_000_000),
-    (REPO / "sims/uart_txreg/uart_16f877_print.jal", "p16f877", 20_000_000),
+    (DEFAULT_JAL, "p16f1823", 32_000_000, NEEDLE),
+    (REPO / "sims/uart_txreg/uart_18f4620_print.jal", "p18f4620", 20_000_000, NEEDLE),
+    (REPO / "sims/uart_txreg/uart_16f877_print.jal", "p16f877", 20_000_000, NEEDLE),
+    # stale-print witness: the printed digits and the compare must agree
+    (REPO / "sims/uart_txreg/uart_18f4620_stale_print.jal", "p18f4620",
+     20_000_000, STALE_PRINT_NEEDLE),
 ]
 
 
@@ -87,9 +92,9 @@ def main() -> int:
 
     if args.all:
         rc = 0
-        for jal_p, proc, freq in ARCH_TESTS:
+        for jal_p, proc, freq, needle in ARCH_TESTS:
             print(f"=== {jal_p.name} on {proc}")
-            rc |= run_one(jal_p, proc, freq, args.steps, args.compiler, args.quiet)
+            rc |= run_one(jal_p, proc, freq, args.steps, args.compiler, args.quiet, needle)
         return rc
 
     return run_one(args.jal, args.processor, args.frequency, args.steps,
@@ -97,7 +102,7 @@ def main() -> int:
 
 
 def run_one(jal_arg: Path, processor: str, frequency: int, steps: int,
-            compiler: Path, quiet: bool) -> int:
+            compiler: Path, quiet: bool, needle: str = NEEDLE) -> int:
     class _A:
         pass
 
@@ -119,7 +124,7 @@ def run_one(jal_arg: Path, processor: str, frequency: int, steps: int,
         print("error: gpsim not on PATH", file=sys.stderr)
         return 2
 
-    gp_s = f"{REPO / 'third_party/jallib/lib'};{REPO / 'tests'}"
+    gp_s = f"{REPO / 'third_party/jallib/lib'};{REPO / 'sims'}"
     with tempfile.TemporaryDirectory(prefix="jal_issue36_uart_") as td:
         tdir = Path(td)
         hex_path = tdir / "issue_36.hex"
@@ -179,15 +184,15 @@ def run_one(jal_arg: Path, processor: str, frequency: int, steps: int,
         log_text = log_path.read_text(errors="replace")
         blob = parse_txreg_writes(log_text)
         s = blob.decode("latin-1", errors="replace")
-        if NEEDLE not in s:
+        if needle not in s:
             print("error: expected UART fragment not found in TXREG log", file=sys.stderr)
-            print(f"  want substring (repr): {NEEDLE!r}", file=sys.stderr)
+            print(f"  want substring (repr): {needle!r}", file=sys.stderr)
             print(f"  got {len(blob)} bytes, head repr: {s[:120]!r}", file=sys.stderr)
             return 1
         if not args.quiet:
-            i = s.find(NEEDLE)
+            i = s.find(needle)
             print(f"OK: TXREG log has {len(blob)} bytes; needle at offset {i}")
-            print(f"    sample: {s[i : i + len(NEEDLE) + 20]!r}")
+            print(f"    sample: {s[i : i + len(needle) + 20]!r}")
     return 0
 
 

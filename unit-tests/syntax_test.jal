@@ -1,0 +1,1401 @@
+-- syntax_test.jal
+-- Comprehensive JAL syntax test file
+-- Tests all grammar features to ensure parser works correctly
+-- Author: Matthew Schinkel
+
+include 18f67j50                     -- target PICmicro
+--
+-- This program assumes that a 20 MHz resonator or crystal
+-- is connected to pins OSC1 and OSC2.
+pragma target clock 20_000_000      -- oscillator frequency
+--
+pragma target OSC      HS                        -- crystal or resonator
+pragma target PLLDIV   P1                        -- clock postscaler
+pragma target CPUDIV   P1                        -- Fosc divisor
+pragma target WDT      CONTROL                   -- watchdog
+pragma target XINST    DISABLED                  -- do not use extended instructionset
+pragma target DEBUG    DISABLED                  -- no debugging
+pragma target FCMEN    DISABLED                  -- no clock monitoring
+pragma target IESO     DISABLED                  -- no int/ext osc switching
+--
+-- The configuration bit settings above are only a selection, sufficient
+-- for this program. Other programs may need more or different settings.
+--
+WDTCON_SWDTEN = OFF                 -- disable WDT
+OSCCON_SCS = 0                      -- select primary oscillator
+OSCTUNE_PLLEN = FALSE               -- no PLL
+--
+enable_digital_io()                 -- make all pins digital I/O
+_usec_delay (100_000) -- wait for power to stablilize
+
+-- ============================================
+-- INCLUDES
+-- ============================================
+-- include board_16f877_dwarf  -- commented out, file not found
+
+-- ============================================
+-- CONSTANTS
+-- ============================================
+const byte MAX_COUNT = 100
+const word TIMEOUT = 5000
+const byte MESSAGE[] = "Hello World"
+const byte ARRAY[] = {1, 2, 3, 4, 5}
+const byte OCTAL_VAL = 0q12  -- Octal constant (0q prefix)
+const byte OCTAL_MAX = 0q77  -- Octal 77 = decimal 63
+const byte MULTI[] = {
+    1, 2, 3,
+    4, 5, 6
+}
+const byte name = 42
+const byte value = 100
+
+-- ============================================
+-- VARIABLES - Basic Types
+-- ============================================
+var byte counter = 0
+var word timer_value
+var bit flag = 0
+-- var sbit status_bit at PORTA : 0  -- SBIT: 1-bit signed value (-1..0) - may need initialization
+-- var sbyte signed_value  -- JALv2 doesn't support sbyte initialization
+-- var sword signed_word  -- JALv2 doesn't support sword initialization
+-- var dword large_value  -- JALv2 doesn't support dword initialization
+-- var sdword signed_large = -1000000  -- JALv2 doesn't support negative initialization
+-- var float pi  -- JALv2 may not support float type
+-- var pointer ptr  -- JALv2 doesn't support pointer type
+
+-- ============================================
+-- VARIABLES - Arrays
+-- ============================================
+var byte buffer[10]
+var byte data[3] = {1, 2, 3}
+var word values[5] = {100, 200, 300, 400, 500}
+var string[8] fixed_string = "syntax"
+-- Array with empty dimensions - size determined by initializers
+-- Documentation: "If cexpr is omitted, the '=' term must exist and the size
+-- of the array will be set to the number of initializers present."
+var byte auto_size[] = {10, 20, 30, 40}  -- Size automatically set to 4
+var byte auto_str[] = "Auto"  -- Size automatically set to 4
+-- var byte matrix[3][4]  -- JALv2 doesn't support multi-dimensional arrays
+
+-- ============================================
+-- VARIABLES - With Modifiers
+-- ============================================
+var volatile byte status_reg
+-- var shared byte global_var  -- JALv2 requires initialization or different syntax
+var byte global_var
+var volatile byte shared_status
+
+-- ============================================
+-- VARIABLES - With AT Clauses
+-- ============================================
+var byte port_a at 0x05
+var bit led at PORTA : 0
+-- var byte bank0 at 0x20 : 0x7F  -- JALv2 doesn't support range syntax
+var byte bank0 at 0x20
+var byte regs at {0x20, 0x21, 0x22}
+-- AT var [':bit] - Place variable at same location as another variable
+var byte port_a_copy at port_a  -- Same location as port_a
+var bit led_copy at PORTA : 1   -- Same location as PORTA, different bit
+
+-- ============================================
+-- ALIASES
+-- ============================================
+alias led_output is PORTA
+-- alias serial_out is serial_hw_data  -- serial_hw_data not defined
+alias counter_alias is counter
+
+-- ============================================
+-- RECORDS
+-- ============================================
+record Point is
+    word x
+    word y
+end record
+
+record Config is
+    byte mode
+    word timeout
+    bit enabled
+end record
+
+-- ============================================
+-- PROCEDURES - Basic
+-- ============================================
+procedure test_procedure is
+    var byte local_var = 10
+    counter = counter + 1
+end procedure
+
+procedure one_line_procedure is end procedure
+
+-- ============================================
+-- PROCEDURES - With Parameters
+-- ============================================
+procedure set_value(byte in value) is
+    counter = value
+end procedure
+
+procedure swap(byte in a, byte in b) is
+    var byte temp
+    temp = a
+    -- Note: JALv2 doesn't support inout, so this is just a test of parameter syntax
+end procedure
+
+procedure complex_params(
+    byte in input_val,
+    word out result,
+    byte in buffer
+) is
+    result = input_val * 2
+    -- Note: JALv2 doesn't support inout, so buffer modification removed
+end procedure
+
+-- ============================================
+-- FUNCTIONS
+-- ============================================
+function get_count return byte is
+    return counter
+end function
+
+function add(byte in a, byte in b) return byte is
+    return a + b
+end function
+
+function compute(word in x, word in y) return word is
+    var word result
+    result = x * y + 10
+    return result
+end function
+
+-- ============================================
+-- RECURSION
+-- ============================================
+-- Documentation: "Recursion is fully supported but due to the overhead it is discouraged."
+function factorial(byte in n) return word is
+    if n <= 1 then
+        return 1
+    else
+        return n * factorial(n - 1)
+    end if
+end function
+
+function fibonacci(byte in n) return word is
+    if n <= 1 then
+        return n
+    else
+        return fibonacci(n - 1) + fibonacci(n - 2)
+    end if
+end function
+
+procedure test_recursion is
+    var word fact_result
+    var word fib_result
+    fact_result = factorial(5)
+    fib_result = fibonacci(6)
+end procedure
+
+-- ============================================
+-- PROCEDURE/FUNCTION PROTOTYPES
+-- ============================================
+procedure forward_decl(byte in x)
+function forward_func(byte in x) return byte
+
+-- ============================================
+-- LARGE ARRAY 'GET/'PUT FUNCTION SYNTAX TESTS
+-- ============================================
+-- Based on PSEUDO_ARRAY.md Step 3 and Step 4
+-- These demonstrate the actual syntax used in large_array_6 library
+
+-- Simulate internal arrays (library creates these)
+var byte*1 _test_large_array_1_00[256]  -- Segment 0 (bytes 256-511)
+var byte*1 _test_large_array_1_01[256]  -- Segment 1 (bytes 0-255)
+const TEST_LARGE_ARRAY_SIZE = 512
+
+-- Test 'get function syntax (actual code from demo_lib/large_array_6.jal)
+-- From PSEUDO_ARRAY.md Step 3
+function test_large_array'get(word in address) return byte*1 is
+   var byte address_lo at address      -- Low byte of address (0-255)
+   var byte address_hi at address+1    -- High byte of address (segment number)
+   var byte section at address_hi      -- section = segment number
+   
+   -- For 512-byte array (TEST_LARGE_ARRAY_SIZE <= 512)
+   if TEST_LARGE_ARRAY_SIZE <= 512 then
+   case section of
+         00: return _test_large_array_1_01[address_lo]  -- Section 0: bytes 0-255
+         01: return _test_large_array_1_00[address_lo]  -- Section 1: bytes 256-511
+   end case
+   end if
+   -- Larger sizes have additional elsif blocks for more segments
+end function
+
+-- Test 'put procedure syntax (actual code from demo_lib/large_array_6.jal)
+-- From PSEUDO_ARRAY.md Step 4
+procedure test_large_array'put(word in address, byte*1 in data) is
+   var byte address_lo at address+0    -- Low byte of address (0-255)
+   var byte address_hi at address+1    -- High byte of address (segment number)
+   var byte section at address_hi      -- section = segment number
+   
+   -- For 512-byte array (TEST_LARGE_ARRAY_SIZE <= 512)
+   if TEST_LARGE_ARRAY_SIZE <= 512 then
+   case section of
+         00: _test_large_array_1_01[address_lo] = data  -- Section 0: bytes 0-255
+         01: _test_large_array_1_00[address_lo] = data  -- Section 1: bytes 256-511
+   end case
+   end if
+   -- Larger sizes have additional elsif blocks for more segments
+end procedure
+
+-- ============================================
+-- IF STATEMENTS
+-- ============================================
+procedure test_if is
+    if counter > 10 then
+        flag = high
+    end if
+    
+    if counter > 10 then
+        flag = high
+    else
+        flag = low
+    end if
+    
+    if counter > 100 then
+        flag = high
+    elsif counter > 50 then
+        flag = low
+    else
+        flag = low
+    end if
+end procedure
+
+-- ============================================
+-- WHILE LOOPS
+-- ============================================
+procedure test_while is
+    while counter < 100 loop
+        counter = counter + 1
+    end loop
+end procedure
+
+-- ============================================
+-- REPEAT LOOPS
+-- ============================================
+procedure test_repeat is
+    repeat
+        counter = counter + 1
+    until counter > 100
+    
+    -- JALv2 doesn't support 'end repeat', only 'until'
+end procedure
+
+-- ============================================
+-- FOR LOOPS
+-- ============================================
+procedure test_for is
+    var byte i
+    for 10 using counter loop
+        flag = high
+    end loop
+    
+    for 10 loop
+        counter = counter + 1
+    end loop
+    
+    for 10 using i loop
+        flag = high
+    end loop
+    
+    -- FOR loop rollover behavior (November 2010 enhancement)
+    -- If expr is a cexpr and is one larger than var can hold,
+    -- the loop exits when var rolls over to zero
+    var byte n
+    for 256 using n loop
+        -- loop body
+        counter = counter + 1
+    end loop
+    -- On exit, n will be zero (rollover behavior)
+end procedure
+
+-- ============================================
+-- FOREVER LOOPS
+-- ============================================
+procedure test_forever is
+    forever loop
+        counter = counter + 1
+        if counter > 100 then
+            exit loop
+        end if
+    end loop
+end procedure
+
+-- ============================================
+-- CASE STATEMENTS
+-- ============================================
+procedure test_case is
+    case counter of
+        0: flag = low
+        1, 2, 3: flag = high
+        10: counter = 0
+        otherwise
+            flag = low
+    end case
+end procedure
+
+-- ============================================
+-- BLOCK STATEMENTS
+-- ============================================
+procedure test_block is
+    block
+        var byte block_var = 5
+        counter = block_var
+    end block
+end procedure
+
+-- ============================================
+-- ASSEMBLY STATEMENTS
+-- ============================================
+procedure test_asm is
+    asm nop
+    asm sleep
+    asm movlw 0x10
+    asm movwf counter
+end procedure
+
+procedure test_assembler is
+    assembler
+        movlw 0x10
+        movwf counter
+        nop
+    end assembler
+end procedure
+
+-- ============================================
+-- EXPRESSIONS
+-- ============================================
+procedure test_expressions is
+    var byte a, b, c
+    var word w1, w2
+    
+    -- Arithmetic
+    a = 10 + 20
+    b = 100 - 50
+    c = 5 * 6
+    a = 100 / 10
+    b = 17 % 5
+    
+    -- Bitwise
+    a = b & c
+    a = b | c
+    a = b ^ c
+    a = !b
+    a = !!b
+    
+    -- Shift
+    a = b << 2
+    a = b >> 1
+    
+    -- Comparison
+    if a == b then
+        flag = high
+    end if
+    if a != b then
+        flag = low
+    end if
+    if a < b then
+        flag = high
+    end if
+    if a <= b then
+        flag = high
+    end if
+    if a > b then
+        flag = low
+    end if
+    if a >= b then
+        flag = low
+    end if
+    
+    -- Logical (use !! for logical operations, not bitwise)
+    if !!(a & b) then
+        flag = high
+    end if
+    if !!(a | b) then
+        flag = high
+    end if
+    if !!(a ^ b) then
+        flag = high
+    end if
+    
+    -- Complex expressions
+    a = (b + c) * 2
+    w1 = word(a) * 10
+    -- COUNT(buffer) returns an element count; scalar COUNT() returns byte length.
+    flag = defined(counter)
+    w1 = whereis(buffer)
+    
+    -- Division result and remainder optimization
+    -- Documentation: "The compiler keeps track of the last operation, so if you find
+    -- yourself needing both the division result and the remainder of a certain operation,
+    -- make sure to put the assignments close together, thus saving a function call"
+    var word x = 123
+    var word n, r
+    n = x / 10  -- Division
+    r = x % 10  -- Remainder (uses same division call as above)
+    
+    -- WHEREIS with different identifier types
+    -- Documentation: WHEREIS returns different values for:
+    -- - Procedure/function: CODE address of entry point
+    -- - Assembly label: CODE address of label
+    -- - Variable: DATA address
+    -- - Constant array: CODE address (16-bit) or lookup function (non-16-bit)
+    w1 = whereis(test_procedure)  -- Procedure: CODE address
+    w1 = whereis(get_count)       -- Function: CODE address
+    w1 = whereis(counter)         -- Variable: DATA address
+    w1 = whereis(buffer[1])       -- Array element: DATA address plus constant offset
+    w1 = whereis(ARRAY)           -- Constant array: CODE address or lookup function
+end procedure
+
+-- ============================================
+-- ARRAY OPERATIONS
+-- ============================================
+procedure test_arrays is
+    var byte arr[10]
+    var byte matrix[2][3]
+    var byte cube[2][2][2]
+    var byte val
+    
+    val = arr[0]
+    arr[5] = 42
+    arr[counter] = val
+    val = arr[counter + 1]
+    matrix[1][2] = 7
+    val = matrix[1][2]
+    cube[1][0][1] = val
+    val = cube[1][0][1]
+end procedure
+
+-- ============================================
+-- FUNCTION/PROCEDURE CALLS
+-- ============================================
+procedure test_calls is
+    test_procedure()
+    set_value(10)
+    var byte temp_counter
+    temp_counter = BYTE(timer_value)
+    swap(counter, temp_counter)  -- Fixed: swap expects byte parameters
+    var byte result
+    result = get_count()
+    result = add(5, 10)
+    var word word_result
+    word_result = compute(100, 200)  -- Fixed: compute returns word
+end procedure
+
+-- ============================================
+-- RETURN STATEMENTS
+-- ============================================
+function test_return return byte is
+    if counter > 10 then
+        return 0
+    end if
+    return counter
+end function
+
+procedure test_return_void is
+    if counter > 100 then
+        return
+    end if
+    counter = counter + 1
+end procedure
+
+-- ============================================
+-- EXIT STATEMENTS
+-- ============================================
+procedure test_exit is
+    forever loop
+        counter = counter + 1
+        if counter > 100 then
+            exit loop
+        end if
+    end loop
+end procedure
+
+-- ============================================
+-- TASKS
+-- ============================================
+task blink_task is
+    forever loop
+        led = high
+        -- delay_ms(100)  -- delay_ms not included
+        led = low
+        -- delay_ms(100)  -- delay_ms not included
+    end loop
+end task
+
+var byte task_loop_count = 0
+
+task worker(byte in id) is
+    -- var byte loop_count = 0  -- variables cannot be declared inside a task body
+    while task_loop_count != 10 loop
+        task_loop_count = task_loop_count + 1
+        _task_yield
+    end loop
+end task
+
+-- ============================================
+-- TASK CONTROL
+-- ============================================
+procedure test_tasks is
+    -- start blink_task  -- START can only be used in main program
+    -- start worker(1)  -- START can only be used in main program
+    -- _task_yield  -- _task_yield can only be used in a TASK
+    -- sleep  -- sleep not defined
+end procedure
+
+-- ============================================
+-- FLOATING POINT CONSTANT FORMATS
+-- ============================================
+procedure test_float_formats is
+    -- Floating point constant formats
+    -- Full format: [+|-]###.[###[e[+|-]###]]
+    var float f1 = 1.23
+    var float f2 = 1.23e2
+    var float f3 = 1.23e-2
+    var float f4 = +1.23
+    var float f5 = -1.23
+    var float f6 = 3.14159
+end procedure
+
+-- ============================================
+-- TYPE CASTS
+-- ============================================
+procedure test_casts is
+    var byte b
+    var word w
+    
+    b = byte(w)
+    w = word(b)
+    b = byte(1000)
+end procedure
+
+-- ============================================
+-- LITERALS
+-- ============================================
+procedure test_literals is
+    var byte dec = 42
+    var byte hex = 0xFF
+    var byte bin = 0b10101010
+    var byte oct = 0q77
+    var float f = 3.14159
+    var byte ch = "A"
+    var byte str[5] = "Hello"
+    var byte mask1 = 0b_0001_1000
+    var byte mask2 = 0x_1_4
+    var byte mask3 = 0b_1010
+    var bit bool1 = TRUE
+    var bit bool2 = FALSE
+end procedure
+
+-- ============================================
+-- COMPLEX INITIALIZERS
+-- ============================================
+procedure test_initializers is
+    var byte arr1[5] = {1, 2, 3, 4, 5}
+    var byte arr2[3] = {10, 20, 30}
+    var byte arr3[5] = "Hello"
+    -- var byte matrix[2][3] = {  -- JALv2 doesn't support multi-dimensional arrays
+    --     {1, 2, 3},
+    --     {4, 5, 6}
+    -- }
+end procedure
+
+-- ============================================
+-- NESTED STRUCTURES
+-- ============================================
+procedure test_nested is
+    var byte i
+    if counter > 10 then
+        while flag loop
+            for 6 using i loop
+                if i == 3 then
+                    exit loop
+                end if
+            end loop
+        end loop
+    else
+        case counter of
+            0: flag = low
+            otherwise
+                flag = high
+        end case
+    end if
+end procedure
+
+-- ============================================
+-- RECORD USAGE
+-- ============================================
+procedure test_records is
+    var Point p1, p2
+    var word field_address
+    p1.x = 10
+    p1.y = 20
+    p2 = p1
+    field_address = whereis(p1.y)
+end procedure
+
+-- ============================================
+-- PRAGMA IN PROCEDURES
+-- ============================================
+procedure interrupt_handler is
+    pragma interrupt
+    counter = counter + 1
+end procedure
+
+procedure inline_proc is
+    pragma inline
+    counter = counter + 1
+end procedure
+
+-- PRAGMA INTERRUPT FAST (assembly only)
+procedure fast_interrupt_handler is
+    pragma interrupt fast
+    -- FAST interrupt handlers can only use assembly, not JAL statements
+    asm nop
+end procedure
+
+-- ============================================
+-- EDGE CASES
+-- ============================================
+procedure test_edge_cases is
+    -- Empty procedure
+    procedure empty_proc is
+    end procedure
+    
+    -- Single statement
+    procedure single_stmt is
+        counter = 0
+    end procedure
+    
+    -- Multiple declarations
+    var byte a, b, c
+    var word x = 100, y = 200, z = 300
+    
+    -- Chained assignments (JALv2 doesn't support chained assignments)
+    a = 0
+    b = 0
+    c = 0
+    
+    -- Complex array indexing (JALv2 doesn't support multi-dimensional arrays)
+    var byte arr[50]  -- 10*5 = 50 elements
+    arr[0] = 1
+    arr[counter + 1] = 2
+end procedure
+
+-- ============================================
+-- TYPE MULTIPLIERS (BIT*cexpr, BYTE*cexpr)
+-- ============================================
+procedure test_type_multipliers is
+    var bit*2 two_bit_field
+    var byte*3 three_byte_value
+    
+    -- BIT*cexpr vs BYTE*cexpr distinction
+    -- Documentation: "BIT*24 is not the same as BYTE*3"
+    var bit*24 bit_field_24  -- NOT the same as BYTE*3
+    var byte*3 byte_field_3  -- Different from BIT*24
+    bit_field_24 = 0x123456
+    byte_field_3 = 0x123456
+    var byte*24 large_value
+    var sbyte*2 signed_two_byte
+    two_bit_field = 3
+    three_byte_value = 0x123456
+end procedure
+
+-- ============================================
+-- VARIABLES WITH IS (deprecated alias syntax)
+-- ============================================
+procedure test_is_var is
+    var byte original
+    var byte alias_var is original
+end procedure
+
+-- ============================================
+-- ASSERT STATEMENT
+-- ============================================
+procedure test_assert is
+    assert counter > 0
+    assert flag
+    assert (counter + 10) < 100
+end procedure
+
+-- ============================================
+-- MESSAGE GENERATING (_DEBUG, _ERROR, _WARN)
+-- ============================================
+procedure test_messages is
+    _debug "Debug message here"
+    _error "Error message here"
+    _warn "Warning message here"
+    
+    if !defined(undefined_var) then
+        _warn "undefined_var is not defined"
+    end if
+end procedure
+
+-- ============================================
+-- PSEUDO-VARIABLES
+-- ============================================
+-- Note: PORTA'get and PORTA'put may already be defined by device file
+-- Using a different name to avoid conflicts
+var byte my_port_shadow
+
+function my_port'get return byte is
+    return my_port_shadow
+end function
+
+procedure my_port'put(byte in value) is
+    my_port_shadow = value
+end procedure
+
+-- Bit-level pseudo-variables (JALv2 syntax)
+-- Note: Bit access syntax in return statements may be limited
+function my_pin'get return bit is
+    var bit result at my_port_shadow : 0
+    return result
+end function
+
+procedure my_pin'put(bit in value) is
+    var bit bit0 at my_port_shadow : 0
+    bit0 = value  -- Assign bit value
+end procedure
+
+-- ============================================
+-- PROCEDURES WITH ARRAY PARAMETERS
+-- ============================================
+procedure fixed_array_param(byte in str[5]) is
+    var byte i
+    for 5 using i loop
+        counter = str[i]
+    end loop
+end procedure
+
+procedure flexible_array_param(byte in str[]) is
+    var byte i
+    var word size = COUNT(str)
+    var word size_preferred = COUNT(str)
+    var byte scalar_bytes = COUNT(counter)
+    counter = scalar_bytes
+    counter = byte(size_preferred)
+    for size using i loop
+        counter = str[i]
+    end loop
+end procedure
+
+-- ============================================
+-- VOLATILE PARAMETERS
+-- ============================================
+procedure serial_write(VOLATILE byte IN OUT port_var) is
+    port_var = "A"
+    port_var = "B"
+    port_var = "C"
+end procedure
+
+procedure read_adc(VOLATILE byte IN channel, byte OUT result) is
+    result = channel + 10
+end procedure
+
+-- ============================================
+-- NESTED PROCEDURES/FUNCTIONS
+-- ============================================
+procedure outer_proc is
+    var byte outer_var = 10
+    
+    procedure inner_proc is
+        var byte inner_var = 20
+        outer_var = inner_var
+    end procedure
+    
+    function inner_func(byte in x) return byte is
+        return x + outer_var
+    end function
+    
+    inner_proc()
+    counter = inner_func(5)
+end procedure
+
+-- ============================================
+-- IF 0 (BLOCK COMMENTS)
+-- ============================================
+procedure test_if_zero is
+    if FALSE then
+        -- this is a block comment
+        -- that won't be parsed
+        procedure fake_proc is
+            var byte fake_var
+        end procedure
+    end if
+end procedure
+
+-- ============================================
+-- STRING LITERALS WITH ESCAPE SEQUENCES
+-- ============================================
+procedure test_string_escapes is
+    -- String literal NUL termination
+    -- Documentation: "a string literal terminates with the first NUL characters (0x00)"
+    var byte str_nul[] = "Hello\0World"  -- Terminates at \0, so only "Hello" is stored
+    var byte str_nul2[] = "Test\x00End"  -- Also terminates at \x00
+    
+    var byte str1[] = "Hello\nWorld"
+    var byte str2[] = "Tab\tHere"
+    var byte str3[] = "Bell\aBackspace\b"
+    var byte str4[] = "Formfeed\fCarriage\r"
+    var byte str5[] = "Vertical\vTab"
+    var byte str6[] = "Octal\123Hex\xFF"
+    var byte str7[] = "Binary\z1010"
+    var byte str8[] = "Quote\q123"
+    var byte str9[] = "Backslash\\"
+    var byte ch1 = "\n"
+    var byte ch2 = "\x41"
+    var byte ch3 = "\123"
+end procedure
+
+-- ============================================
+-- ASSEMBLY - LOCAL LABELS
+-- ============================================
+procedure test_assembly_local is
+    assembler
+        local loop_start, loop_end
+        loop_start:
+            movlw 0x10
+            movwf counter
+            nop
+        loop_end:
+            goto loop_start
+    end assembler
+end procedure
+
+-- ============================================
+-- ASSEMBLY - BANK AND PAGE DIRECTIVES
+-- ============================================
+procedure test_assembly_bank_page is
+    assembler
+        local loop_label
+        bank PORTA
+        movf PORTA, w
+        -- page loop_label  -- PAGE has no meaning on 16-bit cores
+        goto loop_label
+        loop_label:
+            nop
+    end assembler
+end procedure
+
+-- ============================================
+-- PRAGMA KEEP PAGE/BANK
+-- ============================================
+procedure test_pragma_keep is
+    pragma keep page
+    pragma keep bank
+    var byte test_var
+    test_var = 10
+end procedure
+
+-- PRAGMA KEEP in procedures (test that it works inside procedures)
+procedure test_keep_in_procedure is
+    pragma keep page
+    pragma keep bank
+    assembler
+        movlw 0x10
+        movwf counter
+    end assembler
+end procedure
+
+-- ============================================
+-- ASSEMBLY DATA DIRECTIVES
+-- ============================================
+procedure test_assembly_data is
+    assembler
+        -- Note: Data directives may have different syntax or may not be supported
+        -- dblist 1, 2, 3, 4, 5
+        -- dwlist 100, 200, 300
+        -- dslist 65, 66, 67
+        nop
+    end assembler
+end procedure
+
+-- ============================================
+-- RECORD ARRAYS WITH INITIALIZATION
+-- ============================================
+procedure test_record_arrays is
+    record Point is
+        word x
+        word y
+    end record
+    
+    var Point points[3] = {
+        {10, 20},
+        {30, 40},
+        {50, 60}
+    }
+    points[0].x = 11
+    points[1].y = points[2].x
+    
+    record Config is
+        byte mode
+        word timeout
+    end record
+    
+    var Config configs[2] = {
+        {1, 1000},
+        {2, 2000}
+    }
+end procedure
+
+-- ============================================
+-- NESTED RECORDS
+-- ============================================
+procedure test_nested_records is
+    record Inner is
+        byte value
+    end record
+    
+    record Outer is
+        Inner inner
+        byte extra
+    end record
+    
+    var Outer outer_var
+    outer_var.inner.value = 10
+    outer_var.extra = 20
+    
+    record Complex is
+        Inner data[3]
+        byte count
+    end record
+    
+    var Complex complex_var = {
+        {{1}, {2}, {3}},
+        3
+    }
+    complex_var.data[1].value = 4
+    counter = complex_var.data[2].value
+end procedure
+
+-- ============================================
+-- FOR WITH ROLLOVER (256 USING byte)
+-- ============================================
+procedure test_for_rollover is
+    var byte n
+    for 256 using n loop
+        counter = counter + 1
+    end loop
+    -- On exit, n will be zero due to rollover
+end procedure
+
+-- ============================================
+-- CONSTANTS WITH TYPE MULTIPLIERS
+-- ============================================
+const byte*2 two_byte_const = 0x1234
+const bit*3 three_bit_const = 0b101
+
+-- ============================================
+-- VARIABLES WITH MULTIPLE AT LOCATIONS
+-- ============================================
+procedure test_multiple_at is
+    var byte mirrored_reg at {0x20, 0xA0, 0x120}
+    var byte status_reg at {0x05, 0x85}
+end procedure
+
+-- ============================================
+-- PROCEDURE CALLS WITHOUT PARENTHESES
+-- ============================================
+procedure test_no_parens is
+    procedure no_params is
+        counter = 10
+    end procedure
+    
+    no_params
+    test_procedure
+end procedure
+
+-- ============================================
+-- COMPLEX EXPRESSIONS WITH UNDERSCORES
+-- ============================================
+procedure test_underscores is
+    var byte val1 = 0b0000_1111
+    var dword val2 = 0x1234_5678  -- Changed to dword (0x1234_5678 > 0xFFFF)
+    var dword val3 = 1_000_000
+    var byte val4 = 0b_1010_0101
+end procedure
+
+-- ============================================
+-- PSEUDO-VARIABLE ARRAYS (large_array)
+-- ============================================
+-- Based on PSEUDO_ARRAY.md documentation
+
+-- Normal multi-bank arrays (current compiler enhancement)
+procedure test_normal_multi_bank_array is
+    var byte normal_array[512]  -- OK: Allocated across multiple RAM banks
+    normal_array[0] = 1
+    normal_array[255] = 2
+    normal_array[256] = 3
+    normal_array[511] = 4
+end procedure
+
+-- Test large_array 'get function usage (actual code from demo_lib/large_array_6.jal)
+-- From PSEUDO_ARRAY.md Step 3
+-- Tests the 'get function via pseudo-variable syntax
+procedure test_large_array_get_function_usage is
+    -- Test usage: Read from address 100 (section 0) using pseudo-variable syntax
+    -- User code: test_large_array[100]
+    -- Compiler translates to: test_large_array'get(100)
+    -- address = 100 = 0x0064
+    -- address_lo = 0x64 = 100, address_hi = 0x00 = 0
+    -- section = 0 → returns _test_large_array_1_01[100]
+    var byte result1
+    result1 = test_large_array[100]
+    
+    -- Test usage: Read from address 300 (section 1) using pseudo-variable syntax
+    -- User code: test_large_array[300]
+    -- Compiler translates to: test_large_array'get(300)
+    -- address = 300 = 0x012C
+    -- address_lo = 0x2C = 44, address_hi = 0x01 = 1
+    -- section = 1 → returns _test_large_array_1_00[44]
+    var byte result2
+    result2 = test_large_array[300]
+end procedure
+
+-- Test large_array 'put procedure usage (actual code from demo_lib/large_array_6.jal)
+-- From PSEUDO_ARRAY.md Step 4
+-- Tests the 'put procedure via pseudo-variable syntax
+procedure test_large_array_put_procedure_usage is
+    -- Test usage: Write to address 100 (section 0) using pseudo-variable syntax
+    -- User code: test_large_array[100] = 0xAA
+    -- Compiler translates to: test_large_array'put(100, 0xAA)
+    -- address = 100 = 0x0064
+    -- address_lo = 0x64 = 100, address_hi = 0x00 = 0
+    -- section = 0 → executes case 00: _test_large_array_1_01[100] = 0xAA
+    test_large_array[100] = 0xAA
+    
+    -- Test usage: Write to address 300 (section 1) using pseudo-variable syntax
+    -- User code: test_large_array[300] = 0x42
+    -- Compiler translates to: test_large_array'put(300, 0x42)
+    -- address = 300 = 0x012C
+    -- address_lo = 0x2C = 44, address_hi = 0x01 = 1
+    -- section = 1 → executes case 01: _test_large_array_1_00[44] = 0x42
+    test_large_array[300] = 0x42
+end procedure
+
+-- Test large_array library usage (pseudo-variable syntax)
+-- Note: This demonstrates how the library would be used, but library may not be available
+procedure test_large_array_usage is
+    -- Example: How large_array_6 library would be used
+    -- const LARGE_ARRAY_6_SIZE = 512
+    -- const LARGE_ARRAY_6_VARIABLE_SIZE = 1
+    -- include large_array_6
+    -- alias sd_sector_buffer is large_array_6
+    --
+    -- Example 1: Write to address 100 (section 0)
+    -- User code: sd_sector_buffer[100] = 0xAA
+    -- Compiler translates to: large_array_6'put(100, 0xAA)
+    -- Function executes: section = 0 → _large_array_6_1_01[100] = 0xAA
+    --
+    -- Example 2: Write to address 300 (section 1)
+    -- User code: sd_sector_buffer[300] = 0x42
+    -- Compiler translates to: large_array_6'put(300, 0x42)
+    -- Function executes: section = 1 → _large_array_6_1_00[44] = 0x42
+    --
+    -- Example 3: Read from address 100
+    -- User code: var byte val = sd_sector_buffer[100]
+    -- Compiler translates to: val = large_array_6'get(100)
+    
+    -- Use our test_large_array instead for actual testing
+    test_large_array[100] = 0xAA
+    test_large_array[300] = 0x42
+    var byte val
+    val = test_large_array[100]
+end procedure
+
+-- Custom dual-array approach (PATA style)
+procedure test_custom_dual_array is
+    var byte buffer_low[256]
+    var byte buffer_high[256]
+    
+    function custom_buffer'get(word in address) return byte is
+        pragma inline
+        if bit(address) == 0 then
+            return buffer_low[address / 2]
+        else
+            return buffer_high[address / 2]
+        end if
+    end function
+    
+    procedure custom_buffer'put(word in address, byte in data) is
+        pragma inline
+        if bit(address) == 0 then
+            buffer_low[address / 2] = data
+        else
+            buffer_high[address / 2] = data
+        end if
+    end procedure
+    
+    -- Usage
+    custom_buffer[0] = 0xAA
+    custom_buffer[1] = 0xBB
+    var byte val = custom_buffer[2]
+end procedure
+
+-- Multiple large arrays (FAT32 example)
+-- Note: Library includes may not be available in all environments
+procedure test_multiple_large_arrays is
+    -- Example: How multiple large arrays would be used
+    -- SD card uses large_array_6
+    -- const dword LARGE_ARRAY_6_SIZE = 512
+    -- const dword LARGE_ARRAY_6_VARIABLE_SIZE = 1
+    -- include large_array_6
+    -- alias sd_sector_buffer is large_array_6
+    --
+    -- FAT32 uses large_array_2
+    -- const dword LARGE_ARRAY_2_SIZE = 20
+    -- const dword LARGE_ARRAY_2_VARIABLE_SIZE = 2
+    -- include large_array_2
+    -- alias fat32_entry_location is large_array_2
+    --
+    -- Both arrays coexist independently
+    -- sd_sector_buffer[0] = 1
+    -- fat32_entry_location[0] = 2
+    
+    -- Use our test_large_array for actual testing
+    test_large_array[0] = 1
+end procedure
+
+-- large_array with different variable sizes
+procedure test_large_array_variable_sizes is
+    -- byte*1 elements
+    const LARGE_ARRAY_3_SIZE = 256
+    const LARGE_ARRAY_3_VARIABLE_SIZE = 1
+    include large_array_3
+    alias byte_array is large_array_3
+    
+    -- word*2 elements
+    const LARGE_ARRAY_4_SIZE = 100
+    const LARGE_ARRAY_4_VARIABLE_SIZE = 2
+    include large_array_4
+    alias word_array is large_array_4
+    
+    byte_array[0] = 0xFF
+    word_array[0] = 0x1234
+end procedure
+
+-- External memory alternative
+procedure test_external_memory is
+    -- Note: External memory libraries may not be available in all environments
+    -- const bit FAT32_USE_INTERNAL_MEMORY = FALSE
+    -- include sram_23k256
+    -- alias fat32_entry_location is sram_23k256_word
+end procedure
+
+-- large_array segment access patterns
+-- Shows how 'get/'put functions handle different segments
+procedure test_large_array_access is
+    const LARGE_ARRAY_5_SIZE = 1024
+    const LARGE_ARRAY_5_VARIABLE_SIZE = 1
+    include large_array_5
+    alias large_buffer is large_array_5
+    
+    var word idx  -- Changed to word to handle values up to 1023
+    -- Access different segments (compiler translates to 'get/'put calls)
+    -- Example: large_buffer[100] = 0x42
+    --   address = 100 = 0x0064
+    --   address_lo = 0x64 = 100, address_hi = 0x00 = 0
+    --   section = 0 → _large_array_5_1_01[100] = 0x42
+    
+    -- Example: large_buffer[300] = 0xAA
+    --   address = 300 = 0x012C
+    --   address_lo = 0x2C = 44, address_hi = 0x01 = 1
+    --   section = 1 → _large_array_5_1_00[44] = 0xAA
+    
+    large_buffer[0] = 1      -- Section 0, offset 0
+    large_buffer[255] = 2    -- Section 0, offset 255
+    large_buffer[256] = 3    -- Section 1, offset 0
+    large_buffer[511] = 4   -- Section 1, offset 255
+    large_buffer[512] = 5    -- Section 2, offset 0
+    large_buffer[1023] = 6   -- Section 3, offset 255
+    
+    -- Loop example (using word for idx to handle 256 iterations safely)
+    for 256 using idx loop
+        large_buffer[idx] = BYTE(idx)
+    end loop
+end procedure
+
+-- PATA-style fast read pattern
+procedure test_pata_fast_read is
+    var byte buffer_low[256]
+    var byte buffer_high[256]
+    
+    -- Read word 0 (bytes 0 and 1) simultaneously
+    buffer_low[0] = 0xAA
+    buffer_high[0] = 0xBB
+    
+    -- Read word 1 (bytes 2 and 3)
+    buffer_low[1] = 0xCC
+    buffer_high[1] = 0xDD
+end procedure
+
+-- large_array with conditional compilation
+procedure test_large_array_conditional is
+    -- Note: large_array_1 library may not be available in all environments
+    -- const LARGE_ARRAY_1_SIZE = 512
+    -- const LARGE_ARRAY_1_VARIABLE_SIZE = 1
+    -- include large_array_1
+    -- alias test_buffer is large_array_1
+    --
+    -- For 512-byte array (LARGE_ARRAY_1_SIZE <= 512)
+    -- Note: Constants must be defined before use in conditionals
+    -- test_buffer[100] = 0x42
+    -- test_buffer[300] = 0xAA
+end procedure
+
+-- ============================================
+-- ADDITIONAL EDGE CASES
+-- ============================================
+-- Test variable shadowing in nested blocks
+procedure test_variable_shadowing is
+    var byte x = 10
+    var byte z = 20
+    
+    if x != 0 then
+        var word x = 100  -- Shadows outer x
+        var word y = 200
+        -- All references to x here refer to the inner definition
+        z = BYTE(x)  -- Use inner x
+    end if
+    -- x here refers to the outer definition again
+    z = x  -- Use outer x
+end procedure
+
+-- Test constant array indexing with non-constant subscript
+procedure test_constant_array_indexing is
+    -- Documentation: "A constant array will not take any space unless it
+    -- is indexed at least once with a non-constant subscript."
+    const byte lookup_table[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    var byte index = 5
+    var byte value
+    value = lookup_table[index]  -- Non-constant subscript - array takes code space
+    value = lookup_table[3]      -- Constant subscript - may be optimized
+end procedure
+
+-- ============================================
+-- POINTER SYNTAX — basic data pointers (JALv2 supported forms)
+-- ============================================
+-- Procedure/function pointers: see pointers.jal. Data-pointer smoke:
+-- 16f877_pointer_basic_test.jal. Pointer-to-pseudo rvalue (**`x = p`** after
+-- **`p is <pseudo>`**): fixes/fix_pointer_pseudo_rvalue_via_get.md;
+-- gpsim_tests/16f877_gpsim_pointer_pseudo_rvalue_get.jal
+
+var byte _syntax_ptr_pseudo_shadow
+
+function _syntax_ptr_pseudo'get return byte is
+   return _syntax_ptr_pseudo_shadow
+end function
+
+procedure _syntax_ptr_pseudo'put(byte in v) is
+   _syntax_ptr_pseudo_shadow = v
+end procedure
+
+procedure _syntax_proc_ptr_target(byte in v) is
+   counter = v
+end procedure
+
+function _syntax_func_ptr_target(byte in v) return byte is
+   return v + 1
+end function
+
+procedure test_jalv2_pointers is
+    -- Basic data pointer declarations (signature: shorthand type after pointer)
+    var pointer ptr_byte as var byte
+    var pointer ptr_word as var word
+    var pointer ptr_dword as var dword
+    var pointer ptr_sbyte as var sbyte
+    var pointer ptr_sword as var sword
+    var pointer ptr_sdword as var sdword
+
+    var byte arr[10]
+    var pointer ptr_to_array as var byte[10]
+    ptr_to_array is arr
+
+    var byte temperature
+    var byte pressure
+    var pointer temp_sensor as var byte
+    var pointer pressure_sensor as var byte
+
+    temp_sensor is temperature
+    pressure_sensor is pressure
+    temp_sensor = 30
+    pressure_sensor = 75
+
+    var byte sensor_data[4]
+    var pointer current_element as var byte[4]
+    current_element is sensor_data
+    sensor_data[0] = 50
+    sensor_data[2] = 80
+
+    var byte data[4]
+    var pointer current_element2 as var byte[4]
+    current_element2 is data
+    var byte i
+    for 4 using i loop
+        var byte storage_var
+        storage_var = data[i]
+        storage_var = storage_var + 2
+        data[i] = storage_var
+    end loop
+
+    var byte ptr_fold_buf[10]
+    var pointer ptr_folded as var byte[10]
+    ptr_folded is ptr_fold_buf
+    -- Indexed store through this pointer shape can be lowered to a lookup path
+    -- on some PIC18 builds; keep the `is` bind and mutate the backing array.
+    ptr_fold_buf[0] = 100
+    ptr_fold_buf[1] = 101
+
+    -- Const-pointee pointer: reads OK; writes rejected at compile time
+    -- (see fixes/fix_pointer_const_pointee_write.md).
+    var pointer ptr_const_read as const byte[2]
+    var byte const_read_buf[2]
+    var byte const_read_tmp
+    ptr_const_read is const_read_buf
+    const_read_tmp = const_read_buf[0]
+
+    -- Pointer bound to a pseudo: rvalue **`byte = pointer`** uses **`'get`**
+    -- (not an indirect load through the pointer slot).
+    var pointer ptr_syn_pseudo as var byte
+    var byte ptr_syn_rvalue_snap
+    _syntax_ptr_pseudo_shadow = 0x5A
+    ptr_syn_pseudo is _syntax_ptr_pseudo
+    ptr_syn_rvalue_snap = ptr_syn_pseudo
+    if ptr_syn_rvalue_snap != 0x5A then
+        counter = counter + 1
+    end if
+    -- Direct pseudo read should match
+    if _syntax_ptr_pseudo != ptr_syn_rvalue_snap then
+        counter = counter + 1
+    end if
+
+    -- Indexed procedure-pointer slots: each array element is a pointer slot.
+    var pointer ptr_proc_slots as procedure(byte in)[2]
+    ptr_proc_slots[0] is _syntax_proc_ptr_target
+    ptr_proc_slots[1] is _syntax_proc_ptr_target
+    ptr_proc_slots[1](7)
+
+    -- Name-side function-pointer slots parse/bind like procedure slots; actual
+    -- function-pointer calls are covered separately from this syntax smoke.
+    var pointer ptr_func_slots[2] as function(byte in) return byte
+    ptr_func_slots[0] is _syntax_func_ptr_target
+    ptr_func_slots[1] is _syntax_func_ptr_target
+end procedure
+
+-- ---------------------------------------------------------------------------
+-- Main program (required for PIC reset path and so procedure bodies are not
+-- dead-stripped before pointer bind-check; POINTER_ASSIGN must stay emitted.)
+-- ---------------------------------------------------------------------------
+forever loop
+    test_jalv2_pointers()
+    _usec_delay(10_000)
+end loop
+

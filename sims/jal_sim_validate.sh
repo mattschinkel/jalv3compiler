@@ -137,7 +137,7 @@ fi
 # UART model has a single-byte RX holding register, so the feed is paced).
 UART_INPUT="$(python3 - "$JAL_ABS" <<'PY'
 import sys
-sys.path.insert(0, "tests")
+sys.path.insert(0, "sims")
 from sim_validate_engine import parse_validate_block
 from pathlib import Path
 m = parse_validate_block(Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace"))
@@ -146,7 +146,7 @@ PY
 )"
 NEEDS_UART="$(python3 - "$JAL_ABS" <<'PY'
 import sys
-sys.path.insert(0, "tests")
+sys.path.insert(0, "sims")
 from sim_validate_engine import parse_validate_block
 from pathlib import Path
 m = parse_validate_block(Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace"))

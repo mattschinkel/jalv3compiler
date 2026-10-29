@@ -470,17 +470,17 @@ def main() -> int:
     ap.add_argument(
         "--base-dir",
         default=os.path.join("compilertest", "Output_Baseline"),
-        help="Directory containing hex/ and asm/ (default: compilertest/Output_Baseline)",
+        help="Directory containing hex/ and asm/ (default: unit-tests/Output_Baseline)",
     )
     ap.add_argument(
         "--curr-dir",
         default=os.path.join("compilertest", "Output_Current"),
-        help="Directory containing hex/ and asm/ (default: compilertest/Output_Current)",
+        help="Directory containing hex/ and asm/ (default: unit-tests/Output_Current)",
     )
     ap.add_argument(
         "--compare-dir",
         default=os.path.join("compilertest", "Output_Compare"),
-        help="Where to write static_validation/ (default: compilertest/Output_Compare)",
+        help="Where to write static_validation/ (default: unit-tests/Output_Compare)",
     )
     args = ap.parse_args()
     run_static_validation(args.base_dir, args.curr_dir, args.compare_dir, quiet=False)

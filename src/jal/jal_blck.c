@@ -925,7 +925,7 @@ static boolean_t jal_parse_assign(pfile_t *pf)
                 smmbr = variable_def_member_get(variable_def_get(sv));
                 smdef = smmbr ? variable_def_member_def_get(smmbr)
                     : VARIABLE_DEF_NONE;
-                ssz   = smdef ? variable_def_byte_sz_get(smdef) : 0;
+                ssz   = smdef ? pfile_flat_def_storage_sz(pf, smdef) : 0;
                 if (ssz && jal_value_const_baseofs_get(val, &sofs)) {
                   const char *slink;
 
@@ -1247,7 +1247,8 @@ static boolean_t jal_parse_assign(pfile_t *pf)
                         hhdef = hhdef_mbr
                             ? variable_def_member_def_get(hhdef_mbr)
                             : VARIABLE_DEF_NONE;
-                        hhsz = hhdef ? variable_def_byte_sz_get(hhdef) : 0;
+                        hhsz = hhdef
+                            ? pfile_flat_def_storage_sz(pf, hhdef) : 0;
                         hkind = (jal_pointer_slot_rt_enabled()
                             && hhsz
                             && variable_is_array(dvv))
@@ -1308,7 +1309,7 @@ static boolean_t jal_parse_assign(pfile_t *pf)
                             ? variable_def_member_def_get(hhdef_mbr)
                             : VARIABLE_DEF_NONE;
                         hhsz = hhdef
-                            ? variable_def_byte_sz_get(hhdef) : 0;
+                            ? pfile_flat_def_storage_sz(pf, hhdef) : 0;
                         if (hhsz) {
                           jal_pointer_slot_kind_store(pf, hkind,
                               slot_ofs, 0);

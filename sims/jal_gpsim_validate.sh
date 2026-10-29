@@ -159,6 +159,9 @@ infer_include() {
       return 0
     fi
     frag="${core_dir}/${inc}.jal"
+    if [[ ! -f "$frag" ]]; then
+      frag="${ROOT}/sims/shared/${inc}.jal"   # shared/ device preludes
+    fi
     if [[ -f "$frag" ]]; then
       while IFS= read -r frag_line; do
         frag_line="${frag_line%%--*}"

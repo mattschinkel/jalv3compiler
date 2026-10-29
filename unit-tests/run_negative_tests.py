@@ -8,7 +8,7 @@ institutionalizes what the per-fix scripts asserted one at a time
 (SDCC survey: "diagnostics are recorded, never asserted").
 
 Run:
-  python3 tests/run_negative_tests.py [--compiler ./bin/jalv3-x86-64] [--jobs 8]
+  python3 unit-tests/run_negative_tests.py [--compiler ./bin/jalv3-x86-64] [--jobs 8]
 
 Exit 0 iff every entry fails to compile with its expected diagnostic.
 Compile-only -- no simulator, safe at any gate level.
@@ -98,7 +98,7 @@ TABLE = [
 # generated on demand by gen_ptr_bound_script() (the proven script shape)
 # ESCAPED bind (re-bound through q): keeps the holed-run refusal. An
 # unescaped bind now walks the chunks (escape analysis, 2026-10-26) --
-# the walk shapes live in scripts/test_openarray_chunked_pins.sh.
+# the walk shapes live in unit-tests/test_openarray_chunked_pins.sh.
 PTR_BOUND_SCRIPT = """include 16f1825
 pragma target clock 20_000_000
 var byte buf[200]

@@ -1,0 +1,691 @@
+-- ----------------------------------------------------------------------------
+-- Title: Runtime-index slot read vs print/compare agreement under pressure
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    The j50 pointers-tour stale-print shape: a declaration initializer
+--    reading through a runtime-index slot, then print_byte_dec and an
+--    equality compare of the SAME variable. The printed digits and the
+--    compare must agree (the tour once printed 0 while the compare saw
+--    the true value -- print-param home vs compare home divergence).
+--    Allocation pressure mimics the tour (pads push the snap variable
+--    out of the access bank). Validated through the TXREG byte log.
+-- ----------------------------------------------------------------------------
+
+include 18f4620
+
+pragma target clock 20_000_000
+pragma target OSC      hs
+pragma target LVP      enabled
+pragma target WDT      control
+
+enable_digital_io()
+_usec_delay(100_000)
+
+const serial_hw_baudrate = 115_200
+include serial_hardware
+serial_hw_init()
+alias serial is serial_hw_data
+
+include print
+
+var byte pad_00 = 0
+var byte pad_01 = 0
+var byte pad_02 = 0
+var byte pad_03 = 0
+var byte pad_04 = 0
+var byte pad_05 = 0
+var byte pad_06 = 0
+var byte pad_07 = 0
+var byte pad_08 = 0
+var byte pad_09 = 0
+var byte pad_10 = 0
+var byte pad_11 = 0
+var volatile byte pad_s000
+var volatile byte pad_s001
+var volatile byte pad_s002
+var volatile byte pad_s003
+var volatile byte pad_s004
+var volatile byte pad_s005
+var volatile byte pad_s006
+var volatile byte pad_s007
+var volatile byte pad_s008
+var volatile byte pad_s009
+var volatile byte pad_s010
+var volatile byte pad_s011
+var volatile byte pad_s012
+var volatile byte pad_s013
+var volatile byte pad_s014
+var volatile byte pad_s015
+var volatile byte pad_s016
+var volatile byte pad_s017
+var volatile byte pad_s018
+var volatile byte pad_s019
+var volatile byte pad_s020
+var volatile byte pad_s021
+var volatile byte pad_s022
+var volatile byte pad_s023
+var volatile byte pad_s024
+var volatile byte pad_s025
+var volatile byte pad_s026
+var volatile byte pad_s027
+var volatile byte pad_s028
+var volatile byte pad_s029
+var volatile byte pad_s030
+var volatile byte pad_s031
+var volatile byte pad_s032
+var volatile byte pad_s033
+var volatile byte pad_s034
+var volatile byte pad_s035
+var volatile byte pad_s036
+var volatile byte pad_s037
+var volatile byte pad_s038
+var volatile byte pad_s039
+var volatile byte pad_s040
+var volatile byte pad_s041
+var volatile byte pad_s042
+var volatile byte pad_s043
+var volatile byte pad_s044
+var volatile byte pad_s045
+var volatile byte pad_s046
+var volatile byte pad_s047
+var volatile byte pad_s048
+var volatile byte pad_s049
+var volatile byte pad_s050
+var volatile byte pad_s051
+var volatile byte pad_s052
+var volatile byte pad_s053
+var volatile byte pad_s054
+var volatile byte pad_s055
+var volatile byte pad_s056
+var volatile byte pad_s057
+var volatile byte pad_s058
+var volatile byte pad_s059
+var volatile byte pad_s060
+var volatile byte pad_s061
+var volatile byte pad_s062
+var volatile byte pad_s063
+var volatile byte pad_s064
+var volatile byte pad_s065
+var volatile byte pad_s066
+var volatile byte pad_s067
+var volatile byte pad_s068
+var volatile byte pad_s069
+var volatile byte pad_s070
+var volatile byte pad_s071
+var volatile byte pad_s072
+var volatile byte pad_s073
+var volatile byte pad_s074
+var volatile byte pad_s075
+var volatile byte pad_s076
+var volatile byte pad_s077
+var volatile byte pad_s078
+var volatile byte pad_s079
+var volatile byte pad_s080
+var volatile byte pad_s081
+var volatile byte pad_s082
+var volatile byte pad_s083
+var volatile byte pad_s084
+var volatile byte pad_s085
+var volatile byte pad_s086
+var volatile byte pad_s087
+var volatile byte pad_s088
+var volatile byte pad_s089
+var volatile byte pad_s090
+var volatile byte pad_s091
+var volatile byte pad_s092
+var volatile byte pad_s093
+var volatile byte pad_s094
+var volatile byte pad_s095
+var volatile byte pad_s096
+var volatile byte pad_s097
+var volatile byte pad_s098
+var volatile byte pad_s099
+var volatile byte pad_s100
+var volatile byte pad_s101
+var volatile byte pad_s102
+var volatile byte pad_s103
+var volatile byte pad_s104
+var volatile byte pad_s105
+var volatile byte pad_s106
+var volatile byte pad_s107
+var volatile byte pad_s108
+var volatile byte pad_s109
+var volatile byte pad_s110
+var volatile byte pad_s111
+var volatile byte pad_s112
+var volatile byte pad_s113
+var volatile byte pad_s114
+var volatile byte pad_s115
+var volatile byte pad_s116
+var volatile byte pad_s117
+var volatile byte pad_s118
+var volatile byte pad_s119
+var volatile byte pad_s120
+var volatile byte pad_s121
+var volatile byte pad_s122
+var volatile byte pad_s123
+var volatile byte pad_s124
+var volatile byte pad_s125
+var volatile byte pad_s126
+var volatile byte pad_s127
+var volatile byte pad_s128
+var volatile byte pad_s129
+var volatile byte pad_s130
+var volatile byte pad_s131
+var volatile byte pad_s132
+var volatile byte pad_s133
+var volatile byte pad_s134
+var volatile byte pad_s135
+var volatile byte pad_s136
+var volatile byte pad_s137
+var volatile byte pad_s138
+var volatile byte pad_s139
+var volatile byte pad_s140
+var volatile byte pad_s141
+var volatile byte pad_s142
+var volatile byte pad_s143
+var volatile byte pad_s144
+var volatile byte pad_s145
+var volatile byte pad_s146
+var volatile byte pad_s147
+var volatile byte pad_s148
+var volatile byte pad_s149
+var volatile byte pad_s150
+var volatile byte pad_s151
+var volatile byte pad_s152
+var volatile byte pad_s153
+var volatile byte pad_s154
+var volatile byte pad_s155
+var volatile byte pad_s156
+var volatile byte pad_s157
+var volatile byte pad_s158
+var volatile byte pad_s159
+var volatile byte pad_s160
+var volatile byte pad_s161
+var volatile byte pad_s162
+var volatile byte pad_s163
+var volatile byte pad_s164
+var volatile byte pad_s165
+var volatile byte pad_s166
+var volatile byte pad_s167
+var volatile byte pad_s168
+var volatile byte pad_s169
+var volatile byte pad_s170
+var volatile byte pad_s171
+var volatile byte pad_s172
+var volatile byte pad_s173
+var volatile byte pad_s174
+var volatile byte pad_s175
+var volatile byte pad_s176
+var volatile byte pad_s177
+var volatile byte pad_s178
+var volatile byte pad_s179
+var volatile byte pad_s180
+var volatile byte pad_s181
+var volatile byte pad_s182
+var volatile byte pad_s183
+var volatile byte pad_s184
+var volatile byte pad_s185
+var volatile byte pad_s186
+var volatile byte pad_s187
+var volatile byte pad_s188
+var volatile byte pad_s189
+var volatile byte pad_s190
+var volatile byte pad_s191
+var volatile byte pad_s192
+var volatile byte pad_s193
+var volatile byte pad_s194
+var volatile byte pad_s195
+var volatile byte pad_s196
+var volatile byte pad_s197
+var volatile byte pad_s198
+var volatile byte pad_s199
+var volatile byte pad_s200
+var volatile byte pad_s201
+var volatile byte pad_s202
+var volatile byte pad_s203
+var volatile byte pad_s204
+var volatile byte pad_s205
+var volatile byte pad_s206
+var volatile byte pad_s207
+var volatile byte pad_s208
+var volatile byte pad_s209
+var volatile byte pad_s210
+var volatile byte pad_s211
+var volatile byte pad_s212
+var volatile byte pad_s213
+var volatile byte pad_s214
+var volatile byte pad_s215
+var volatile byte pad_s216
+var volatile byte pad_s217
+var volatile byte pad_s218
+var volatile byte pad_s219
+var byte pad_block_a[64]
+var byte pad_block_b[64]
+var byte pad_block_c[64]
+var byte da_a = 0
+var byte da_b = 0
+var byte da_c = 88
+
+var pointer slots[3] as var byte
+slots[0] is da_a
+slots[1] is da_b
+slots[2] is da_c
+
+record array_def is
+   byte a_array[3]
+   byte b_array[5]
+end record
+
+const array_def array[] = { {"a_1", "b_001"}, {"a_2", "b_002"}, {"a_3", "b_003"} }
+
+var byte rti = 1
+slots[rti] is da_c
+var byte rti_snap = slots[rti]
+
+forever loop
+pad_s002 = pad_s001
+pad_s003 = pad_s002
+pad_s004 = pad_s003
+pad_s005 = pad_s004
+pad_s006 = pad_s005
+pad_s007 = pad_s006
+pad_s008 = pad_s007
+pad_s009 = pad_s008
+pad_s010 = pad_s009
+pad_s011 = pad_s010
+pad_s012 = pad_s011
+pad_s013 = pad_s012
+pad_s014 = pad_s013
+pad_s015 = pad_s014
+pad_s016 = pad_s015
+pad_s017 = pad_s016
+pad_s018 = pad_s017
+pad_s019 = pad_s018
+pad_s020 = pad_s019
+pad_s021 = pad_s020
+pad_s022 = pad_s021
+pad_s023 = pad_s022
+pad_s024 = pad_s023
+pad_s025 = pad_s024
+pad_s026 = pad_s025
+pad_s027 = pad_s026
+pad_s028 = pad_s027
+pad_s029 = pad_s028
+pad_s030 = pad_s029
+pad_s031 = pad_s030
+pad_s032 = pad_s031
+pad_s033 = pad_s032
+pad_s034 = pad_s033
+pad_s035 = pad_s034
+pad_s036 = pad_s035
+pad_s037 = pad_s036
+pad_s038 = pad_s037
+pad_s039 = pad_s038
+pad_s040 = pad_s039
+pad_s041 = pad_s040
+pad_s042 = pad_s041
+pad_s043 = pad_s042
+pad_s044 = pad_s043
+pad_s045 = pad_s044
+pad_s046 = pad_s045
+pad_s047 = pad_s046
+pad_s048 = pad_s047
+pad_s049 = pad_s048
+pad_s050 = pad_s049
+pad_s051 = pad_s050
+pad_s052 = pad_s051
+pad_s053 = pad_s052
+pad_s054 = pad_s053
+pad_s055 = pad_s054
+pad_s056 = pad_s055
+pad_s057 = pad_s056
+pad_s058 = pad_s057
+pad_s059 = pad_s058
+pad_s060 = pad_s059
+pad_s061 = pad_s060
+pad_s062 = pad_s061
+pad_s063 = pad_s062
+pad_s064 = pad_s063
+pad_s065 = pad_s064
+pad_s066 = pad_s065
+pad_s067 = pad_s066
+pad_s068 = pad_s067
+pad_s069 = pad_s068
+pad_s070 = pad_s069
+pad_s071 = pad_s070
+pad_s072 = pad_s071
+pad_s073 = pad_s072
+pad_s074 = pad_s073
+pad_s075 = pad_s074
+pad_s076 = pad_s075
+pad_s077 = pad_s076
+pad_s078 = pad_s077
+pad_s079 = pad_s078
+pad_s080 = pad_s079
+pad_s081 = pad_s080
+pad_s082 = pad_s081
+pad_s083 = pad_s082
+pad_s084 = pad_s083
+pad_s085 = pad_s084
+pad_s086 = pad_s085
+pad_s087 = pad_s086
+pad_s088 = pad_s087
+pad_s089 = pad_s088
+pad_s090 = pad_s089
+pad_s091 = pad_s090
+pad_s092 = pad_s091
+pad_s093 = pad_s092
+pad_s094 = pad_s093
+pad_s095 = pad_s094
+pad_s096 = pad_s095
+pad_s097 = pad_s096
+pad_s098 = pad_s097
+pad_s099 = pad_s098
+pad_s100 = pad_s099
+pad_s101 = pad_s100
+pad_s102 = pad_s101
+pad_s103 = pad_s102
+pad_s104 = pad_s103
+pad_s105 = pad_s104
+pad_s106 = pad_s105
+pad_s107 = pad_s106
+pad_s108 = pad_s107
+pad_s109 = pad_s108
+pad_s110 = pad_s109
+pad_s111 = pad_s110
+pad_s112 = pad_s111
+pad_s113 = pad_s112
+pad_s114 = pad_s113
+pad_s115 = pad_s114
+pad_s116 = pad_s115
+pad_s117 = pad_s116
+pad_s118 = pad_s117
+pad_s119 = pad_s118
+pad_s120 = pad_s119
+pad_s121 = pad_s120
+pad_s122 = pad_s121
+pad_s123 = pad_s122
+pad_s124 = pad_s123
+pad_s125 = pad_s124
+pad_s126 = pad_s125
+pad_s127 = pad_s126
+pad_s128 = pad_s127
+pad_s129 = pad_s128
+pad_s130 = pad_s129
+pad_s131 = pad_s130
+pad_s132 = pad_s131
+pad_s133 = pad_s132
+pad_s134 = pad_s133
+pad_s135 = pad_s134
+pad_s136 = pad_s135
+pad_s137 = pad_s136
+pad_s138 = pad_s137
+pad_s139 = pad_s138
+pad_s140 = pad_s139
+pad_s141 = pad_s140
+pad_s142 = pad_s141
+pad_s143 = pad_s142
+pad_s144 = pad_s143
+pad_s145 = pad_s144
+pad_s146 = pad_s145
+pad_s147 = pad_s146
+pad_s148 = pad_s147
+pad_s149 = pad_s148
+pad_s150 = pad_s149
+pad_s151 = pad_s150
+pad_s152 = pad_s151
+pad_s153 = pad_s152
+pad_s154 = pad_s153
+pad_s155 = pad_s154
+pad_s156 = pad_s155
+pad_s157 = pad_s156
+pad_s158 = pad_s157
+pad_s159 = pad_s158
+   pad_s000 = 1
+   pad_s001 = pad_s000
+   pad_s002 = pad_s001
+   pad_s003 = pad_s002
+   pad_s004 = pad_s003
+   pad_s005 = pad_s004
+   pad_s006 = pad_s005
+   pad_s007 = pad_s006
+   pad_s008 = pad_s007
+   pad_s009 = pad_s008
+   pad_s010 = pad_s009
+   pad_s011 = pad_s010
+   pad_s012 = pad_s011
+   pad_s013 = pad_s012
+   pad_s014 = pad_s013
+   pad_s015 = pad_s014
+   pad_s016 = pad_s015
+   pad_s017 = pad_s016
+   pad_s018 = pad_s017
+   pad_s019 = pad_s018
+   pad_s020 = pad_s019
+   pad_s021 = pad_s020
+   pad_s022 = pad_s021
+   pad_s023 = pad_s022
+   pad_s024 = pad_s023
+   pad_s025 = pad_s024
+   pad_s026 = pad_s025
+   pad_s027 = pad_s026
+   pad_s028 = pad_s027
+   pad_s029 = pad_s028
+   pad_s030 = pad_s029
+   pad_s031 = pad_s030
+   pad_s032 = pad_s031
+   pad_s033 = pad_s032
+   pad_s034 = pad_s033
+   pad_s035 = pad_s034
+   pad_s036 = pad_s035
+   pad_s037 = pad_s036
+   pad_s038 = pad_s037
+   pad_s039 = pad_s038
+   pad_s040 = pad_s039
+   pad_s041 = pad_s040
+   pad_s042 = pad_s041
+   pad_s043 = pad_s042
+   pad_s044 = pad_s043
+   pad_s045 = pad_s044
+   pad_s046 = pad_s045
+   pad_s047 = pad_s046
+   pad_s048 = pad_s047
+   pad_s049 = pad_s048
+   pad_s050 = pad_s049
+   pad_s051 = pad_s050
+   pad_s052 = pad_s051
+   pad_s053 = pad_s052
+   pad_s054 = pad_s053
+   pad_s055 = pad_s054
+   pad_s056 = pad_s055
+   pad_s057 = pad_s056
+   pad_s058 = pad_s057
+   pad_s059 = pad_s058
+   pad_s060 = pad_s059
+   pad_s061 = pad_s060
+   pad_s062 = pad_s061
+   pad_s063 = pad_s062
+   pad_s064 = pad_s063
+   pad_s065 = pad_s064
+   pad_s066 = pad_s065
+   pad_s067 = pad_s066
+   pad_s068 = pad_s067
+   pad_s069 = pad_s068
+   pad_s070 = pad_s069
+   pad_s071 = pad_s070
+   pad_s072 = pad_s071
+   pad_s073 = pad_s072
+   pad_s074 = pad_s073
+   pad_s075 = pad_s074
+   pad_s076 = pad_s075
+   pad_s077 = pad_s076
+   pad_s078 = pad_s077
+   pad_s079 = pad_s078
+   pad_s080 = pad_s079
+   pad_s081 = pad_s080
+   pad_s082 = pad_s081
+   pad_s083 = pad_s082
+   pad_s084 = pad_s083
+   pad_s085 = pad_s084
+   pad_s086 = pad_s085
+   pad_s087 = pad_s086
+   pad_s088 = pad_s087
+   pad_s089 = pad_s088
+   pad_s090 = pad_s089
+   pad_s091 = pad_s090
+   pad_s092 = pad_s091
+   pad_s093 = pad_s092
+   pad_s094 = pad_s093
+   pad_s095 = pad_s094
+   pad_s096 = pad_s095
+   pad_s097 = pad_s096
+   pad_s098 = pad_s097
+   pad_s099 = pad_s098
+   pad_s100 = pad_s099
+   pad_s101 = pad_s100
+   pad_s102 = pad_s101
+   pad_s103 = pad_s102
+   pad_s104 = pad_s103
+   pad_s105 = pad_s104
+   pad_s106 = pad_s105
+   pad_s107 = pad_s106
+   pad_s108 = pad_s107
+   pad_s109 = pad_s108
+   pad_s110 = pad_s109
+   pad_s111 = pad_s110
+   pad_s112 = pad_s111
+   pad_s113 = pad_s112
+   pad_s114 = pad_s113
+   pad_s115 = pad_s114
+   pad_s116 = pad_s115
+   pad_s117 = pad_s116
+   pad_s118 = pad_s117
+   pad_s119 = pad_s118
+   pad_s120 = pad_s119
+   pad_s121 = pad_s120
+   pad_s122 = pad_s121
+   pad_s123 = pad_s122
+   pad_s124 = pad_s123
+   pad_s125 = pad_s124
+   pad_s126 = pad_s125
+   pad_s127 = pad_s126
+   pad_s128 = pad_s127
+   pad_s129 = pad_s128
+   pad_s130 = pad_s129
+   pad_s131 = pad_s130
+   pad_s132 = pad_s131
+   pad_s133 = pad_s132
+   pad_s134 = pad_s133
+   pad_s135 = pad_s134
+   pad_s136 = pad_s135
+   pad_s137 = pad_s136
+   pad_s138 = pad_s137
+   pad_s139 = pad_s138
+   pad_s140 = pad_s139
+   pad_s141 = pad_s140
+   pad_s142 = pad_s141
+   pad_s143 = pad_s142
+   pad_s144 = pad_s143
+   pad_s145 = pad_s144
+   pad_s146 = pad_s145
+   pad_s147 = pad_s146
+   pad_s148 = pad_s147
+   pad_s149 = pad_s148
+   pad_s150 = pad_s149
+   pad_s151 = pad_s150
+   pad_s152 = pad_s151
+   pad_s153 = pad_s152
+   pad_s154 = pad_s153
+   pad_s155 = pad_s154
+   pad_s156 = pad_s155
+   pad_s157 = pad_s156
+   pad_s158 = pad_s157
+   pad_s159 = pad_s158
+   pad_s160 = pad_s159
+   pad_s161 = pad_s160
+   pad_s162 = pad_s161
+   pad_s163 = pad_s162
+   pad_s164 = pad_s163
+   pad_s165 = pad_s164
+   pad_s166 = pad_s165
+   pad_s167 = pad_s166
+   pad_s168 = pad_s167
+   pad_s169 = pad_s168
+   pad_s170 = pad_s169
+   pad_s171 = pad_s170
+   pad_s172 = pad_s171
+   pad_s173 = pad_s172
+   pad_s174 = pad_s173
+   pad_s175 = pad_s174
+   pad_s176 = pad_s175
+   pad_s177 = pad_s176
+   pad_s178 = pad_s177
+   pad_s179 = pad_s178
+   pad_s180 = pad_s179
+   pad_s181 = pad_s180
+   pad_s182 = pad_s181
+   pad_s183 = pad_s182
+   pad_s184 = pad_s183
+   pad_s185 = pad_s184
+   pad_s186 = pad_s185
+   pad_s187 = pad_s186
+   pad_s188 = pad_s187
+   pad_s189 = pad_s188
+   pad_s190 = pad_s189
+   pad_s191 = pad_s190
+   pad_s192 = pad_s191
+   pad_s193 = pad_s192
+   pad_s194 = pad_s193
+   pad_s195 = pad_s194
+   pad_s196 = pad_s195
+   pad_s197 = pad_s196
+   pad_s198 = pad_s197
+   pad_s199 = pad_s198
+   pad_s200 = pad_s199
+   pad_s201 = pad_s200
+   pad_s202 = pad_s201
+   pad_s203 = pad_s202
+   pad_s204 = pad_s203
+   pad_s205 = pad_s204
+   pad_s206 = pad_s205
+   pad_s207 = pad_s206
+   pad_s208 = pad_s207
+   pad_s209 = pad_s208
+   pad_s210 = pad_s209
+   pad_s211 = pad_s210
+   pad_s212 = pad_s211
+   pad_s213 = pad_s212
+   pad_s214 = pad_s213
+   pad_s215 = pad_s214
+   pad_s216 = pad_s215
+   pad_s217 = pad_s216
+   pad_s218 = pad_s217
+   pad_s219 = pad_s218
+   print_byte_dec(serial, pad_s219)
+   print_crlf(serial)
+   print_string(serial, "snap:")
+   print_byte_dec(serial, rti_snap)
+   print_crlf(serial)
+   if rti_snap == 88 then
+      print_string(serial, "cmp:88")
+   else
+      print_string(serial, "cmp:BAD")
+   end if
+   print_crlf(serial)
+   print_string(serial, array[0].a_array)
+   print_crlf(serial)
+   print_string(serial, array[1].a_array)
+   print_crlf(serial)
+   print_string(serial, array[2].a_array)
+   print_crlf(serial)
+   print_string(serial, array[0].b_array)
+   print_crlf(serial)
+   print_string(serial, array[1].b_array)
+   print_crlf(serial)
+   print_string(serial, array[2].b_array)
+   print_crlf(serial)
+   print_crlf(serial)
+end loop

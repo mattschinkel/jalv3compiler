@@ -286,7 +286,7 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
             pmmbr = variable_def_member_get(variable_def_get(psv));
             pmdef = pmmbr ? variable_def_member_def_get(pmmbr)
                 : VARIABLE_DEF_NONE;
-            psz   = pmdef ? variable_def_byte_sz_get(pmdef) : 0;
+            psz   = pmdef ? pfile_flat_def_storage_sz(pf, pmdef) : 0;
             if (psz && value_is_const(n)) {
               const char *plink;
 

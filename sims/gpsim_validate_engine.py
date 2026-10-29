@@ -30,6 +30,7 @@ def gather_jal_with_local_includes(jal_path: str) -> str:
     Library includes (e.g. 18f4620 from demo_lib/) are skipped when not present locally.
     """
     root = Path(jal_path).resolve()
+    shared_dir = Path(__file__).resolve().parent / "shared"
 
     def _walk(path: Path, seen: set[Path]) -> str:
         path = path.resolve()
@@ -45,6 +46,10 @@ def gather_jal_with_local_includes(jal_path: str) -> str:
             if not m:
                 continue
             child = here / f"{m.group(1).lower()}.jal"
+            if not child.is_file():
+                alt = shared_dir / child.name   # shared/ regression bodies
+                if alt.is_file():
+                    child = alt
             if child.is_file():
                 parts.append(_walk(child, seen))
         return "\n".join(parts)

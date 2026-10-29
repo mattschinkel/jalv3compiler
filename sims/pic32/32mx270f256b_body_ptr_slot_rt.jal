@@ -1,0 +1,21 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — runtime-indexed pseudo slot dispatch
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Stage-2 runtime-indexed dispatch through `_regression_ptr_slot_pseudo_body`:
+--    kind[]-test reads (pseudo 'get + plain deref, expression context) and
+--    compare-chain writes at runtime indices. Pins the 2026-10-29 flat-storage
+--    element-size fix (pointer slots are 4 bytes here, not the nominal 2).
+--
+-- @sim_validate begin
+-- duration_s: 2.0
+-- machine: pic32mx7-explorer16
+-- expect byte v__check_step 5
+-- @sim_validate end
+--
+include regression_32mx270f256b_device
+include regression_pic32
+pragma target image pfm
+include _regression_ptr_slot_pseudo_body

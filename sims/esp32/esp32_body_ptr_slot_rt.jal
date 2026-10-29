@@ -1,0 +1,20 @@
+-- ------------------------------------------------------
+-- Title: ESP32 @sim_validate — runtime-indexed pseudo slot dispatch
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Stage-2 runtime-indexed dispatch through `_regression_ptr_slot_pseudo_body`:
+--    kind[]-test reads (pseudo 'get + plain deref, expression context) and
+--    compare-chain writes at runtime indices. Pins the 2026-10-29 flat-storage
+--    element-size fix (pointer slots are 4 bytes here, not the nominal 2).
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- expect byte v__check_step 5
+-- @sim_validate end
+--
+include regression_esp32_device
+include regression_esp32
+include _regression_ptr_slot_pseudo_body

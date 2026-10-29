@@ -13,14 +13,14 @@
 #   - tests/corpus_overlays/* overwrite their corpus counterparts (fork
 #     adaptations recorded in name_changes.md, e.g. 12f617_tasks.jal)
 #
-# Usage: scripts/fetch_jallib.sh [--force]
+# Usage: unit-tests/fetch_jallib.sh [--force]
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${JALLIB_DEST:-$ROOT/third_party/jallib}"
 PIN="$(dirname "$0")/jallib_pinned.txt"
-EXCL="$ROOT/scripts/jallib_exclusions.txt"
-OVERLAYS="$ROOT/tests/corpus_overlays"
+EXCL="$ROOT/unit-tests/jallib_exclusions.txt"
+OVERLAYS="$ROOT/unit-tests/corpus_overlays"
 
 TAG="$(sed -n 's/^tag=//p' "$PIN")"
 URL="$(sed -n 's/^url=//p' "$PIN")"

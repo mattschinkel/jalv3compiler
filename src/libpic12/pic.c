@@ -1717,6 +1717,13 @@ void pic_proc_enter(pfile_t *pf, pfile_proc_t *proc)
   }
 
   (void) pic_instr_append_label(pf, pfile_proc_label_get(proc));
+  /* Runtime entry BSR is whatever the CALLER last selected -- the sequential
+   * emit cache describes only emission-adjacent code and must not vouch for
+   * it here (a caller that loads the final W param from a bank-1 variable
+   * enters with BSR=1; the first banked param save then stores into the
+   * wrong bank -- the j50 stale-print defect). Reset so the prologue's first
+   * banked op emits its own MOVLB. */
+  pic_instr_emit_bsr_cache_reset();
 
   if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_REENTRANT)
     || pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INDIRECT)) {

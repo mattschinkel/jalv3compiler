@@ -1,3 +1,20 @@
+# Private by default: nothing new is tracked unless named below.
+# New root files or folders stay untracked; add them here deliberately.
+/*
+!/.gitignore
+!/.github/
+!/README.md
+!/README.txt
+!/NOTICE
+!/bin/
+!/demo_lib/
+!/demo_sample/
+!/doc/
+!/documentation/
+!/sims/
+!/src/
+!/unit-tests/
+
 # build artifacts (compile outputs land here from src/)
 src/*/.obj-*/
 src/*/.dep/
@@ -11,11 +28,29 @@ __pycache__/
 *.hex
 *.out
 *.bin
-demo_sample/old/
-demo_sample/backup/
+
+# golden canary fixtures are inputs, not artifacts
 !sims/golden/*.hex
+
+# fetched corpus (pinned by unit-tests/fetch_jallib.sh)
 /third_party/
+
+# unit-test runtime outputs
 unit-tests/Output_*/
 unit-tests/Comparison/
 unit-tests/.unittests_shadow/
 unit-tests/reports/
+
+# sims runtime outputs (reports land here at runtime)
+sims/reports/
+sims/report_archive/
+sims/output_compare/
+
+# superseded samples kept locally
+demo_sample/old/
+demo_sample/backup/
+
+# scratch / tooling
+tmp/
+.zcodeignore
+bin/jalv3-x86-64-san

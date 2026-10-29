@@ -1,7 +1,7 @@
 -- ------------------------------------------------------
 -- Title: PIC32MZ1024EFH064 @sim_validate — pseudo in a pointer-slot array
 --
--- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Author: Matthew Schinkel
 -- Compiler: JALv2
 --
 -- Description:
@@ -15,7 +15,7 @@
 -- @sim_validate begin
 -- duration_s: 3.0
 -- machine: pic32mz-explorer16
--- expect byte v__check_step 2
+-- expect byte v__check_step 5
 -- @sim_validate end
 --
 include regression_32mz1024efh064_device

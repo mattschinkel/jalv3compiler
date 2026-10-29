@@ -71,7 +71,7 @@ if [[ ! -f "$ENGINE" ]] || [[ ! -f "$QEMU_PY" ]]; then
 fi
 
 JAL_ABS="$(cd "$(dirname "$JAL")" && pwd)/$(basename "$JAL")"
-GP_S="${LIBDIR};${ROOT}/tests"
+GP_S="${LIBDIR};${ROOT}/sims/shared"
 
 META_JSON="$(python3 "$ENGINE" meta "$JAL_ABS")"
 DURATION="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["duration_s"])' <<<"$META_JSON")"
@@ -141,7 +141,7 @@ fi
 # capture UART0 output into UART_ABS for the engine to compare.
 NEEDS_UART="$(python3 - "$JAL_ABS" <<'PY'
 import sys
-sys.path.insert(0, "tests")
+sys.path.insert(0, "sims")
 from sim_validate_engine import parse_validate_block
 from pathlib import Path
 m = parse_validate_block(Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace"))

@@ -14,3 +14,8 @@ compare modes against the original jalv2 (bin/old_versions/).
 `validate_hex_static.py` — static HEX sanity checks used by the gate.
 
 Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+
+`run_gates.sh` — the tiered gate ladder (L0 build+syntax smoke,
+L1 runtime suites + compile-pin tests, L2 unit/compare + HEX manifest,
+L3 second QEMU suite + ASan corpus). `run_compile_pin_tests.sh` runs the
+`test_*` pin scripts in this folder.
