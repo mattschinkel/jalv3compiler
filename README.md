@@ -1,15 +1,16 @@
 # JALv3 Compiler
 
-JALv3 is a fork of the JALv2 compiler (original by Kyle A. York). JAL is a
-high level language designed to hide the general nuisance of programming a
-Microchip PIC processor. The language is loosely based on Pascal.
+JALv3 is a fork of the JALv2 compiler, originally developed by Kyle A. York. 
+JAL is a high-level programming language designed to simplify development 
+for Microchip PIC microcontrollers by abstracting away many of the complexities 
+of low-level hardware programming. Its syntax is loosely based on Pascal.
 
 **About half of this compiler is new code.** Measured against the last
 JALv2 release (2.5r9) it is based on, roughly **50% of the code by line
 count** in `src/` is new fork work (51,354 of 101,276 lines), including
 two complete back ends. Original copyright notices are retained in every
-derived file; modified files carry a "Co-author: Matthew Schinkel" mark.
-See [NOTICE](NOTICE) for full attribution.
+derived file; modified files carry a Co-author or New author: Matthew Schinkel mark.
+See NOTICE for full attribution.
 
 ## New in JALv3 — what this means for your programs
 
@@ -38,8 +39,9 @@ See [NOTICE](NOTICE) for full attribution.
 ## Device files and libraries
 
 Device files and include files for classic PICs live in the jallib
-repository: https://github.com/jallib/jallib — samples and fork libraries
-are in [demo_sample/](demo_sample/) and [demo_lib/](demo_lib/).
+repository: https://github.com/jallib/jallib — some samples and fork 
+libraries built for jalv3 are in [demo_sample/](demo_sample/) and
+[demo_lib/](demo_lib/).
 
 ## Building and testing
 
