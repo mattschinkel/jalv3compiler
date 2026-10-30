@@ -88,16 +88,17 @@ print_crlf(serial_data)
 -- Concatenate onto an existing string and compare with a literal
 print_string(serial_data, "--- assignment chain + compare ----------\r\n")
 greeting = "Hello, " & name          -- assignment chains: string operands
--- KNOWN COMPILER DEFECT (enhanced midrange only, found 2026-10-30):
--- `var string == <literal>` returns FALSE even when content and length
--- are byte-exact (16f877 and PIC18 compare correctly; cast- and
--- from_array-built strings compare correctly everywhere). Tracked with
--- repro tmp/f1825/cmplen.jal; length checks pin the assign meanwhile.
+-- OPEN ITEM (2026-10-30, unreduced): in THIS full program the literal
+-- compare `greeting == "Hello, JALv2 ESP32!"` returns FALSE although
+-- content and COUNT are byte-exact; the identical statements in a
+-- minimal program compare TRUE (tmp/f1825/sd1cmp.jal). A compile-time
+-- context effect on the compare emission; length check pins the chain
+-- meanwhile. (The earlier "all literal compares false on 16f1825"
+-- reading was a gpsim/WDT artifact: probes without
+-- `pragma target WDT DISABLED` reset-loop on this part's ON-by-default
+-- watchdog -- see tmp/f1825/asn.jal + the fix record.)
 print_string(serial_data, "combined content: ")
 print_string(serial_data, greeting)
-print_crlf(serial_data)
-print_string(serial_data, "combined length:  ")
-print_byte_dec(serial_data, COUNT(greeting))
 print_crlf(serial_data)
 if COUNT(greeting) == 19 then
    checks = checks + 1
