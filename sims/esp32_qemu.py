@@ -22,13 +22,21 @@ import socket
 import subprocess
 import sys
 import tempfile
+import shutil
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from esp32_hex2flashbin import FLASH_SIZE, hex_to_flash  # noqa: E402
 
-QEMU_DEFAULT = "/opt/qemu-esp32/qemu/bin/qemu-system-xtensa"
+def _qemu_default() -> str:
+    # PATH lookup first (stock espressif/qemu wrapper or distro install);
+    # the espressif qemu build tree is the /opt fallback.
+    p = shutil.which("qemu-system-xtensa")
+    return p if p else "/opt/qemu-esp32/qemu/bin/qemu-system-xtensa"
+
+
+QEMU_DEFAULT = _qemu_default()
 QEMU_LIB = "/opt/qemu-esp32/qemu/lib/x86_64-linux-gnu"
 DEFAULT_MACHINE = "esp32"
 # Under -icount 3 the ESP32 ROM boot itself takes 1.5-3 s of wall time

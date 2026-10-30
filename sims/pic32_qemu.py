@@ -18,6 +18,7 @@ Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -25,7 +26,14 @@ import threading
 import time
 from pathlib import Path
 
-QEMU_DEFAULT = "/opt/qemu-pic32/mipsel-softmmu/qemu-system-mipsel"
+def _qemu_default() -> str:
+    # PATH lookup first so a stock install works without /opt; the
+    # sergev/qemu build (all 6 PIC32 machines) is the /opt fallback.
+    p = shutil.which("qemu-system-mipsel")
+    return p if p else "/opt/qemu-pic32/mipsel-softmmu/qemu-system-mipsel"
+
+
+QEMU_DEFAULT = _qemu_default()
 DEFAULT_MACHINE = "pic32mz-explorer16"
 DEFAULT_DURATION = 0.5
 
