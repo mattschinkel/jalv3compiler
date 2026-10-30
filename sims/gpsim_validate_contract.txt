@@ -88,6 +88,17 @@ Directives (each starts with **`-- `**, keyword, colon or space-separated fields
     (defaults to the same value as **`steps:`**). Lower values shorten the extra gpsim pass but may miss a deeper
     nest that occurs later on the simulated path.
 
+  poke byte <asm_symbol> <0-255 or 0xNN>
+    gpsim-only, executed right after load and BEFORE the first step (line
+    order: frequency, pokes, step). Writes the value into file RAM at the
+    symbol's address — simulates non-zero power-on RAM (classic cores do
+    not zero GPRs; gpsim does, which hides uninitialized-RAM defects).
+    Same `sym` / `sym+N` grammar as `expect`. Fail-fast if the symbol has
+    no EQU or resolves outside file RAM. Pokes are NOT validated against
+    the dump; pair them with `expect` lines that prove the program
+    defended itself (e.g.
+    `sims/gpsim/16f1825_gpsim_string_bare_decl.jal`).
+
   expect bit_clear <asm_symbol> <bit 0-7>
     PASS if (byte at file address of symbol) & (1<<bit) == 0.
 

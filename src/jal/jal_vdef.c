@@ -2282,11 +2282,24 @@ void jal_parse_var_common(pfile_t *pf,
           pfile_log(pf, PFILE_LOG_ERR,
             "Flexible arrays can only be used as parameters");
         }
-        var = jal_variable_alloc(pf, &inf, dst != 0, 0, 0, 
+        var = jal_variable_alloc(pf, &inf, dst != 0, 0, 0,
             PFILE_VARIABLE_ALLOC_LOCAL);
+        if (!dst && variable_def_flag_test(inf.vdef,
+            VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+          /* zero the fresh handle here too: classic cores do not zero
+           * RAM, and a power-on CAP >= len makes the first statement
+           * assign copy through a garbage block pointer (the same
+           * hazard the initializer lowering above guards against;
+           * formals are skipped -- the caller passes the handle value) */
+          value_t dval;
+
+          dval = value_alloc(var);
+          jal_string_handle_zero_emit(pf, dval);
+          value_release(dval);
+        }
 #if 0
         if (variable_master_get(var)) {
-          variable_flag_set(variable_master_get(var), 
+          variable_flag_set(variable_master_get(var),
             VARIABLE_FLAG_UNREPLACEABLE);
         }
 #endif

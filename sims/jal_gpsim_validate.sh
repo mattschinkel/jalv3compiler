@@ -357,6 +357,18 @@ if [[ "$QUIET" -eq 0 ]]; then
 fi
 GPSIM_OUT="$(mktemp)"
 
+# `poke byte <sym> <val>` lines from @gpsim_validate: written into file RAM
+# after load, BEFORE the first step (simulates non-zero power-on RAM; symbols
+# resolve against the compiled .asm). Empty for blocks without poke lines.
+set +e
+POKE_LINES="$(python3 "$ENGINE" poke-lines "$JAL_ABS" "$ASM_ABS")"
+POKE_RC=$?
+set -e
+if [[ "$POKE_RC" -ne 0 ]]; then
+  echo "error: poke-lines failed (bad poke directive?)" >&2
+  exit "$POKE_RC"
+fi
+
 _JGV_GPSIM_EXTRA=()
 if [[ -n "${JAL_GPSIM_GPSIM_OPTS+x}" ]]; then
   read -r -a _JGV_GPSIM_EXTRA <<< "${JAL_GPSIM_GPSIM_OPTS}"
@@ -368,6 +380,7 @@ set +e
 if [[ "$QUIET" -eq 0 ]]; then
   gpsim -i "${_JGV_GPSIM_EXTRA[@]}" -p "$PROCESSOR" "$HEX_ABS" 2>&1 <<EOF | tee "$GPSIM_OUT"
 frequency $FREQ
+$POKE_LINES
 step $STEPS
 dump r
 quit
@@ -376,6 +389,7 @@ EOF
 else
   gpsim -i "${_JGV_GPSIM_EXTRA[@]}" -p "$PROCESSOR" "$HEX_ABS" >"$GPSIM_OUT" 2>&1 <<EOF
 frequency $FREQ
+$POKE_LINES
 step $STEPS
 dump r
 quit

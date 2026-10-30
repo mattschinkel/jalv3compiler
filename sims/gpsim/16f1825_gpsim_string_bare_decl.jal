@@ -1,0 +1,82 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — bare `var string` handle starts zeroed
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Silicon report (2026-10-29, 16F1825 user program): a BARE
+--    `var string` followed by a statement assign deranged the program on
+--    real silicon while every gpsim witness passed. Root cause: the
+--    3-byte heap handle (offset/length/cap) was only zeroed for
+--    declaration-INITIALIZER strings; a bare declaration left power-on
+--    garbage in CAP, and the first statement assign's CAP >= len reuse
+--    check copied the payload through the garbage OFFSET -- outside the
+--    heap, over live RAM/SFRs, with the handle left garbage (prints
+--    nothing/garbage). gpsim zeroes GPR at reset, which is why the hole
+--    hid from every classic witness: this file POKES garbage into the
+--    handle bytes before the first step to simulate non-zero power-on
+--    RAM (the harness `poke byte` directive).
+--
+--    Post-fix the declaration-time zeroing clears the poked garbage, the
+--    assign allocates block 0 (cap 12 = whole heap minus header, no
+--    split), the payload lands in the heap, and the capture device sees
+--    "My string" byte-exact. The never-assigned bare string also reads
+--    as empty (COUNT == 0).
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- poke byte v_my_string 0x5c
+-- poke byte v_my_string+1 0x99
+-- poke byte v_my_string+2 0xff
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 2
+-- expect byte v_my_string 0
+-- expect byte v_my_string+1 9
+-- expect byte v_my_string+2 12
+-- expect byte v__string_heap+3 77
+-- expect byte v_sc_n 9
+-- expect byte v_sc_b0 77
+-- expect byte v_sc_b8 103
+-- expect byte v_bare_n 0
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+include print
+
+const word _string_heap_size = 15
+include strings_dynamic
+
+var string my_string
+var string bare_string
+
+my_string = "My string"
+
+-- capture pseudo-device: same 'put dispatch a serial device uses
+var byte _cap[40]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+var volatile byte sc_n = 0
+var volatile byte sc_b0 = 0
+var volatile byte sc_b8 = 0
+var volatile byte bare_n = 0
+
+bare_n = COUNT(bare_string)
+regression_checkpoint()
+
+_capn = 0
+print_string(cap, my_string)
+sc_n = _capn
+sc_b0 = _cap[0]
+sc_b8 = _cap[8]
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+forever loop end loop

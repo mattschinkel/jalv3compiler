@@ -83,6 +83,7 @@ def parse_validate_block(jal_text: str) -> dict[str, Any]:
             "frequency_hz": None,
             "compiler_args": [],
             "checks": [],
+            "pokes": [],
             "skip_gpsim": False,
             "allow_compiler_warnings": False,
             "expect_hw_stkptr_le_compiler_depth": False,
@@ -94,6 +95,7 @@ def parse_validate_block(jal_text: str) -> dict[str, Any]:
     frequency_hz: int | None | str = None
     compiler_args: list[str] = []
     checks: list[dict[str, Any]] = []
+    pokes: list[dict[str, str]] = []
     skip_gpsim = False
     allow_compiler_warnings = False
     expect_hw_stkptr_le_compiler_depth = False
@@ -160,12 +162,22 @@ def parse_validate_block(jal_text: str) -> dict[str, Any]:
             checks.append({"kind": kind, "sym": sym, "args": args})
             continue
 
+        if low.startswith("poke "):
+            parts = line.split()
+            # poke byte <sym> <value> -- written into file RAM after load,
+            # BEFORE the first step (simulates non-zero power-on RAM;
+            # symbol resolved against the compiled .asm, +offset allowed)
+            if len(parts) >= 4 and parts[1].lower() == "byte":
+                pokes.append({"sym": parts[2], "value": parts[3]})
+            continue
+
     return {
         "has_block": True,
         "steps": steps,
         "frequency_hz": frequency_hz,
         "compiler_args": compiler_args,
         "checks": checks,
+        "pokes": pokes,
         "skip_gpsim": skip_gpsim,
         "allow_compiler_warnings": allow_compiler_warnings,
         "expect_hw_stkptr_le_compiler_depth": expect_hw_stkptr_le_compiler_depth,
@@ -551,6 +563,34 @@ def cmd_check_asm_symbols(jal_path: str, asm_path: str) -> int:
     return 0
 
 
+def cmd_poke_lines(jal_path: str, asm_path: str) -> int:
+    """Print gpsim `reg(0xNN) = 0xVV` lines for every `poke byte <sym> <val>`
+    in the @gpsim_validate block (symbols resolved against the compiled .asm,
+    same `sym`/`sym+N` grammar as expect). Exit 1 with a named symbol error
+    if any poke target has no EQU or resolves out of file-RAM range."""
+    jal_text = _read_text(jal_path)
+    asm_text = _read_text(asm_path)
+    meta = parse_validate_block(jal_text)
+    for p in meta.get("pokes", []):
+        addr, err = expect_sym_file_addr(asm_text, p["sym"])
+        if addr is None:
+            print(f"error: poke symbol {err!r} not found in .asm (EQU)", file=sys.stderr)
+            return 1
+        try:
+            val = parse_int_token(p["value"])
+        except (ValueError, TypeError):
+            print(f"error: poke value {p['value']!r} not an integer", file=sys.stderr)
+            return 1
+        if not (0 <= addr <= 0xFFFF):
+            print(f"error: poke {p['sym']!r} resolves outside file RAM (0x{addr:x})", file=sys.stderr)
+            return 1
+        if not (0 <= val <= 0xFF):
+            print(f"error: poke value {p['value']!r} not a byte", file=sys.stderr)
+            return 1
+        print(f"reg(0x{addr:x}) = 0x{val:x}")
+    return 0
+
+
 def cmd_check_contract(jal_path: str) -> int:
     """Exit 0 if @gpsim_validate exists with at least one expect line; else 1 + stderr."""
     meta = parse_validate_block(_read_text(jal_path))
@@ -669,6 +709,10 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
+            "       gpsim_validate_engine.py poke-lines <file.jal> <file.asm>",
+            file=sys.stderr,
+        )
+        print(
             "       gpsim_validate_engine.py check-config <file.jal> <file.asm> [<file.hex>]",
             file=sys.stderr,
         )
@@ -700,6 +744,14 @@ def main() -> int:
             )
             return 2
         return cmd_check_asm_symbols(sys.argv[2], sys.argv[3])
+    if cmd == "poke-lines":
+        if len(sys.argv) < 4:
+            print(
+                "usage: gpsim_validate_engine.py poke-lines <file.jal> <file.asm>",
+                file=sys.stderr,
+            )
+            return 2
+        return cmd_poke_lines(sys.argv[2], sys.argv[3])
     if cmd == "check-contract":
         if len(sys.argv) < 3:
             print("usage: gpsim_validate_engine.py check-contract <file.jal>", file=sys.stderr)
