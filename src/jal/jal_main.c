@@ -14,6 +14,8 @@
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include "../libutils/mem.h"
 #include "../libcore/pf_msg.h"
 #include "../libcore/pf_expr.h"
@@ -486,7 +488,34 @@ static void file_remove(const char *name, const char *ext,
     strcpy(namebuf + base_sz, ext);
     name = namebuf;
   }
+  /* never remove a destination that is not a regular file: the error path
+   * runs on -asm/-hex/-cod targets too, and remove("/dev/null") (probe
+   * habit) unlinks the device node -- every later process spawn needing
+   * it dies with ENOENT (found 2026-10-30: repeated /dev/null loss on
+   * the bench host) */
+  {
+    struct stat st;
+
+    if ((0 == stat(name, &st)) && !S_ISREG(st.st_mode)) {
+      return;
+    }
+  }
   remove(name);
+}
+
+/* Atomic output (write <name>.part, rename over <name>) is only safe when
+ * the destination is a regular file or does not exist yet: rename() over
+ * e.g. /dev/null replaces the device node with the temp regular file.
+ * Non-regular destinations fall back to a direct truncating write (for
+ * /dev/null that is the correct discard behavior). */
+static boolean_t file_replace_is_safe(const char *name)
+{
+  struct stat st;
+
+  if (0 != stat(name, &st)) {
+    return BOOLEAN_TRUE; /* absent: rename creates it */
+  }
+  return S_ISREG(st.st_mode) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
 /* Intel HEX is written to temp_out first, then renamed to final_out on success. */
@@ -1125,6 +1154,11 @@ int main(int argc, char **argv)
             namebuf)) {
         fprintf(stderr, "jal: hex output path too long\n");
         err = BOOLEAN_TRUE;
+      } else if (!file_replace_is_safe(hexb_final)) {
+        /* non-regular destination (e.g. /dev/null): write directly,
+         * never rename over it */
+        hex_atomic_pending = BOOLEAN_FALSE;
+        hex_atomic_output = BOOLEAN_FALSE;
       } else {
         hex_atomic_pending = BOOLEAN_TRUE;
         hex_atomic_output = BOOLEAN_TRUE;
