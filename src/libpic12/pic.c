@@ -6741,7 +6741,8 @@ boolean_t pic_task_locals_allowed(pfile_t *pf)
     }
   }
   be = pic_backend_get(pf);
-  return (0 != be) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  return ((0 != be) && be->task_locals_allowed)
+      ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
 

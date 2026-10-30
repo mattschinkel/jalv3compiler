@@ -272,7 +272,8 @@ const pic_backend_t *pic32_backend_get(void)
     mips_code_cleanup,
     mips_code_emu,
     mips_pointer_size_get,
-    mips_clock_solve_maybe
+    mips_clock_solve_maybe,
+    BOOLEAN_TRUE              /* task_locals_allowed */
   };
 
   return &pic32_backend;

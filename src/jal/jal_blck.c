@@ -549,8 +549,6 @@ static void jal_assign_lhs_resolve(jal_assign_ctx_t *ctx)
     is_put = BOOLEAN_TRUE;
   } else if (jval[JAL_VAL_TYPE_BASE]) {
     val = jval[JAL_VAL_TYPE_BASE];
-    if (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(val)) {
-    }
     if (value_vflag_test(val, VARIABLE_FLAG_READ)
       && !value_vflag_test(val, VARIABLE_FLAG_WRITE)) {
       pfile_log(pf, PFILE_LOG_ERR, "cannot write to %s",

@@ -576,15 +576,16 @@ void variable_base_set(variable_t var, variable_base_t base, size_t which)
 {
   struct variable_ *ptr;
 
-  if (getenv("JALV2_DBG_VBS") && variable_name_get(var)
-      && 0 == strcmp(variable_name_get(var), "_pic_isr_w")) {
+  if (getenv("JALV2_DBG_VBS") && variable_name_get(var)) {
 #if defined(__linux__)
     void *bt[8];
     int  n = backtrace(bt, 8);
-    fprintf(stderr, "VBS _pic_isr_w -> 0x%04X\n", (unsigned) base);
+    fprintf(stderr, "VBS %s -> 0x%04X\n", variable_name_get(var),
+        (unsigned) base);
     backtrace_symbols_fd(bt, n, 2);
 #else
-    fprintf(stderr, "VBS _pic_isr_w -> 0x%04X\n", (unsigned) base);
+    fprintf(stderr, "VBS %s -> 0x%04X\n", variable_name_get(var),
+        (unsigned) base);
 #endif
   }
   ptr = variable_element_seek(var, BOOLEAN_TRUE);

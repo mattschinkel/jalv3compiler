@@ -34,6 +34,10 @@ typedef struct pic_backend_s {
   /* optional: clock-tree solve hook (pragma target OSC/clock), routed
    * by pic32_clock_solve_maybe -- NULL means no clock solver */
   void          (*clock_solve_maybe)(pfile_t *pf);
+  /* TRUE when every auto local gets a UNIQUE static address (the 32-bit
+   * linear allocators) -- task bodies may then declare variables; a
+   * frame-sharing back end (classic) keeps the var-in-task error */
+  boolean_t      task_locals_allowed;
 } pic_backend_t;
 
 #endif /* _pic_backend_h__ */

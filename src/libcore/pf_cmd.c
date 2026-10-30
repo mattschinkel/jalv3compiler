@@ -270,12 +270,11 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
         }
 
         map->var_map.used++;
-        if (getenv("JALV2_DBG_DUP")
-            && variable_name_get(new)
-            && 0 == strcmp(variable_name_get(new), "_pic_isr_w")) {
-          fprintf(stderr, "DUPSET _pic_isr_w old=%s oldbase=0x%04X\n",
-                  variable_name_get(var) ? variable_name_get(var) : "?",
-                  (unsigned) variable_base_get(var, 0));
+        if (getenv("JALV2_DBG_DUP") && variable_name_get(new)) {
+          fprintf(stderr, "DUPSET %s old=%s oldbase=0x%04X\n",
+              variable_name_get(new),
+              variable_name_get(var) ? variable_name_get(var) : "?",
+              (unsigned) variable_base_get(var, 0));
         }
       }
     }

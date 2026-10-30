@@ -85,7 +85,8 @@ const pic_backend_t *esp32_backend_get(void)
     esp_code_cleanup,
     esp_code_emu,
     esp_pointer_size_get,
-    esp32_clock_solve_maybe
+    esp32_clock_solve_maybe,
+    BOOLEAN_TRUE              /* task_locals_allowed */
   };
 
   return &esp32_backend;
