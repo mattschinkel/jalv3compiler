@@ -1883,10 +1883,139 @@ static void pic_software_stack_calc(pfile_t *pf)
   }
 }
 
+static unsigned pic_dbg_round;
+
+/* element size (bytes) of an array member, for chunk-boundary
+ * alignment checks; 1 when not an array / not derivable */
+static variable_sz_t pic_var_elem_sz_get(variable_t var)
+{
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        edef;
+  variable_sz_t         esz;
+
+  def  = variable_def_get(var);
+  mbr  = def ? variable_def_member_get(def) : 0;
+  edef = mbr ? variable_def_member_def_get(mbr) : 0;
+  esz  = edef ? variable_def_byte_sz_get(edef) : 0;
+  return esz ? esz : 1;
+}
+
+/* Alias groups (frame reuse): a chunked group placement is physical
+ * storage shared by every member, but each member's subscript walk
+ * consults ITS OWN chunk map -- the map the multibank path registers
+ * on the group head alone leaves any OTHER array member walking
+ * linearly from the first chunk straight across bank holes (silent
+ * corruption: proc-local arrays chunked over fragments). Validate and
+ * register each array member's PREFIX of the layout here (the head's
+ * full map already covers a max-size member).
+ *
+ * Pass A validates: every array member's storage extent must be
+ * coverable by the chunk layout with no element straddling an interior
+ * chunk boundary. Pass B registers the prefix maps. Returns FALSE
+ * (after setting the trial-safe refusal) when a member cannot be
+ * addressed -- the caller must then not consume the free list. */
+static boolean_t pic_var_group_member_chunk_maps(pfile_t *pf,
+    struct variable_ **data, size_t ii, size_t jj,
+    const variable_base_t *chunk_base, const variable_sz_t *chunk_sz,
+    variable_ct_t chunk_ct)
+{
+  size_t gix;
+
+  for (gix = ii; gix < jj; gix++) {
+    variable_t    memb;
+    variable_sz_t msz;
+
+    if (gix == ii) {
+      continue; /* head: full map registered by the caller */
+    }
+    memb = data[gix];
+    msz  = pic_variable_storage_need_get(pf, memb, 0);
+    if (variable_is_array(memb) || pic_variable_is_bit_array(memb)) {
+      variable_sz_t    esz;
+      variable_sz_t    cov;
+      variable_ct_t    cix;
+      variable_base_t *pbase;
+      variable_sz_t   *psz;
+      variable_ct_t    pct;
+
+      esz = pic_var_elem_sz_get(memb);
+      /* pass A: coverage + element-boundary alignment of the prefix */
+      cov = 0;
+      for (cix = 0; (cix < chunk_ct) && (cov < msz); cix++) {
+        if (cov && (cov % esz)) {
+          /* element straddles this chunk boundary */
+          if (!pic_var_refused) {
+            pic_var_refused      = BOOLEAN_TRUE;
+            pic_var_refused_ptr  = pic_var_pointer_target_test(memb);
+            pic_var_refused_call = !pic_var_refused_ptr;
+            pic_var_refused_var  = memb;
+            pic_var_refused_sz   = msz;
+            pic_var_refused_best = 0;
+          }
+          return BOOLEAN_FALSE;
+        }
+        cov += chunk_sz[cix];
+      }
+      if (cov < msz) {
+        /* layout shorter than the member (cannot happen: the group
+         * size is the largest member) -- refuse rather than corrupt */
+        if (!pic_var_refused) {
+          pic_var_refused      = BOOLEAN_TRUE;
+          pic_var_refused_ptr  = pic_var_pointer_target_test(memb);
+          pic_var_refused_call = !pic_var_refused_ptr;
+          pic_var_refused_var  = memb;
+          pic_var_refused_sz   = msz;
+          pic_var_refused_best = 0;
+        }
+        return BOOLEAN_FALSE;
+      }
+      /* pass B: build and register this member's prefix map (a
+       * max-size member's prefix IS the full layout) */
+      pbase = MALLOC(chunk_ct * sizeof(*pbase));
+      psz   = MALLOC(chunk_ct * sizeof(*psz));
+      if (!pbase || !psz) {
+        FREE(pbase);
+        FREE(psz);
+        pfile_log_syserr(pf, ENOMEM);
+        return BOOLEAN_FALSE;
+      }
+      cov = 0;
+      pct = 0;
+      for (cix = 0; (cix < chunk_ct) && (cov < msz); cix++) {
+        variable_sz_t take;
+
+        take = chunk_sz[cix];
+        if (cov + take > msz) {
+          take = msz - cov;
+        }
+        pbase[pct] = chunk_base[cix];
+        psz[pct]   = take;
+        pct++;
+        cov += take;
+      }
+      if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
+        variable_ct_t dbg_ci;
+
+        for (dbg_ci = 0; dbg_ci < pct; dbg_ci++) {
+          fprintf(stderr, "jal CHUNKMAP r%u %s[%u] = 0x%04X..0x%04X\n",
+              (unsigned) pic_dbg_round, variable_name_get(memb), dbg_ci,
+              (unsigned) pbase[dbg_ci],
+              (unsigned) (pbase[dbg_ci] + psz[dbg_ci] - 1));
+        }
+      }
+      pic_variable_chunk_map_set(pf, memb, pct, pbase, psz);
+      pic_var_chunk_map_propagate(pf, memb);
+      FREE(pbase);
+      FREE(psz);
+    }
+  }
+  return BOOLEAN_TRUE;
+}
+
 /* place every candidate group physically (the original fixup loop);
  * runs the fragmentation analysis and software-stack sizing against
  * the resulting layout (both read-only) */
-static unsigned pic_dbg_round;
 static void pic_variable_fixup_place(pfile_t *pf,
     struct variable_ **data, size_t used)
 {
@@ -1931,6 +2060,24 @@ static void pic_variable_fixup_place(pfile_t *pf,
       }
     }
     virt_base = variable_base_get(data[ii], 0);
+    if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
+      /* alias-group membership: every member shares the physical
+       * placement below (frame reuse); chunk maps, however, are
+       * per-variable -- see the multibank branch */
+      size_t dbg_ix;
+
+      fprintf(stderr, "jal GROUP r%u virt=0x%04X sz=%u members:",
+          (unsigned) pic_dbg_round, (unsigned) virt_base,
+          (unsigned) sz_reqd);
+      for (dbg_ix = ii; dbg_ix < jj; dbg_ix++) {
+        fprintf(stderr, " %s(%uB,arr=%d,bitarr=%d)",
+            variable_name_get(data[dbg_ix]) ? variable_name_get(data[dbg_ix]) : "?",
+            (unsigned) pic_variable_storage_need_get(pf, data[dbg_ix], 0),
+            (int) variable_is_array(data[dbg_ix]),
+            (int) pic_variable_is_bit_array(data[dbg_ix]));
+      }
+      fprintf(stderr, "\n");
+    }
     base = pic_data_alloc(pf, &pic_data_bank_list, sz_reqd,
         pointer_slots_reqd);
     if (VARIABLE_BASE_UNKNOWN == base) {
@@ -2167,7 +2314,9 @@ static void pic_variable_fixup_place(pfile_t *pf,
         if (pic_var_refused && (VARIABLE_BASE_UNKNOWN == base)) {
           /* refused above; stop placing (the driver reports it) */
           break;
-        } else if (remaining == 0) {
+        } else if (remaining == 0
+            && pic_var_group_member_chunk_maps(pf, data, ii, jj,
+              chunk_base, chunk_sz, chunk_ct)) {
           /* Multi-bank allocation is possible - now actually do it */
           base = first_base;
           /* remove the ACCEPTED chunks by base (a contiguous run may
