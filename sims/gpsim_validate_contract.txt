@@ -146,3 +146,30 @@ Do not rely on **PORT vs LATA** reads in checks that must pass in **gpsim** unle
 you model pins; drive outputs with **`lat`** / aliases as needed.
 
 See also **`instructions_gpsim_test.txt`** (repo root: harness + writing good tests).
+
+Known pitfalls (learned 2026-10-30, all cost hours — read before writing a witness)
+--------------------------------------------------------------------------------
+1. WDT-ON DEFAULT FUSES: bare `include 16f1825` (16F1-class) leaves the
+   watchdog ON; gpsim models it and minimal probes without
+   `pragma target WDT DISABLED` reset-loop mid-flight -- every check reads
+   false with plausible-looking RAM. The regression device preludes disable
+   it; hand-written witnesses must too. 16f877/18F default WDT off, which
+   fakes a "this core only" pattern (see
+   docs/investigations/string_literal_compare_16f1825_20261030.md).
+2. STEP BUDGET: anything carrying the split-sample header runs
+   `_usec_delay(100_000)` first = ~800k instructions at 32 MHz. Budget
+   >= 5M steps (the string-cmp witness uses 12M). A probe that "fails"
+   with partial output may simply still be in the delay.
+3. `-hex /dev/null` is SAFE since fix 003494b (atomic-rename + error-path
+   remove now guard non-regular destinations). Before that commit the
+   compiler DESTROYED the device node and took the host's process
+   spawning down with it -- never point old binaries at /dev/null.
+4. LAYOUT-SENSITIVE WITNESSES: some defects only reproduce under a
+   specific include order (the string-cmp witness needs demo_lib-first;
+   its suite passes -s explicitly). Prefer promoting the failing PROGRAM
+   VERBATIM (plus a comments-only @gpsim_validate block) over hand-trimming
+   a reduced variant -- trimming can un-flip the layout or trip unrelated
+   pre-existing defects.
+5. Non-movlb/movlp/label asm diffs in a manifest drift are worth one look,
+   but temp reloads (`movf temp,w`) after a removed movlb are the normal
+   emitter response, not a defect.
