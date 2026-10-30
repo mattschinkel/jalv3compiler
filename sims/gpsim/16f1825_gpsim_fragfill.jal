@@ -1,0 +1,511 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim regression — fragmented-fill placement parity
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    RAM-placement parity surrogate for the JALPIC-One 16F1455 report
+--    (2026-10-26 email): near-capacity odd-sized arrays fragment all
+--    GPR windows; jalv3 fills the fragments (and, on real 16F1455
+--    compiles, the 48-byte partial window) where jalv25r9 refuses
+--    ("Out of data space!"). This witness proves the fragment-filled
+--    placements are runtime-SOUND: every array is filled with a
+--    position-dependent pattern, byte-summed against compile-time
+--    expectations, then two frame-sharing procedures (40-byte locals,
+--    called sequentially) run OVER the globals' lifetimes and every
+--    global pattern is fully re-verified afterwards — any storage
+--    overlap or misplacement fails an expect. 16f1825 = the 16F1455's
+--    byte-identical RAM-map twin (gpsim has no p16f1455 model); the
+--    0x620-0x64F partial window is sim-trimmed, so this stays inside
+--    the 12 full windows. NB: `for N using i` is 0-based (i = 0..N-1,
+--    byte-identical to jalv25r9) — element writes use f[i].
+--
+-- @gpsim_validate begin
+-- steps: 40000000
+-- frequency_hz: 4000000
+-- expect byte v__check_step 6
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_r_bad 0
+-- expect byte v_r_fa 0
+-- expect byte v_r_fb 0
+-- @gpsim_validate end
+
+include regression_16f1825_device
+include regression
+var byte f0[7]
+var byte f1[12]
+var byte f2[50]
+var byte f3[37]
+var byte f4[34]
+var byte f5[11]
+var byte f6[31]
+var byte f7[69]
+var byte f8[9]
+var byte f9[54]
+var byte f10[22]
+var byte f11[66]
+var byte f12[66]
+var byte f13[67]
+var byte f14[57]
+var byte f15[57]
+var byte f16[45]
+var byte f17[29]
+var byte f18[23]
+var byte f19[60]
+var volatile byte r_bad = 0
+var volatile byte r_fa = 255
+var volatile byte r_fb = 255
+var word i
+var word sum
+
+const word E0 = 273
+const word E1 = 1206
+const word E2 = 6281
+const word E3 = 4709
+const word E4 = 4581
+const word E5 = 1798
+const word E6 = 4015
+const word E7 = 8921
+const word E8 = 764
+const word E9 = 6329
+const word E10 = 2727
+const word E11 = 8235
+const word E12 = 8357
+const word E13 = 8946
+const word E14 = 7282
+const word E15 = 7143
+const word E16 = 6102
+const word E17 = 3447
+const word E18 = 2495
+const word E19 = 7686
+
+procedure p_a() is
+  var byte loc[40]
+  var word s
+  for 40 using i loop
+    loc[i] = byte(i * 11 + 3)
+  end loop
+  s = 0
+  for 40 using i loop
+    s = s + loc[i]
+  end loop
+  if s != 4348 then
+    r_fa = 1
+  else
+    r_fa = 0
+  end if
+end procedure
+
+procedure p_b() is
+  var byte loc[40]
+  var word s
+  for 40 using i loop
+    loc[i] = 255 - byte(i * 5)
+  end loop
+  s = 0
+  for 40 using i loop
+    s = s + loc[i]
+  end loop
+  if s != 6300 then
+    r_fb = 1
+  else
+    r_fb = 0
+  end if
+end procedure
+regression_begin_run()
+
+-- fill every array: f_k[e] holds byte(e*13 + k*29 mod 256), e = 0..N-1
+for 7 using i loop
+  f0[i] = byte(i * 13 + 0)
+end loop
+for 12 using i loop
+  f1[i] = byte(i * 13 + 29)
+end loop
+for 50 using i loop
+  f2[i] = byte(i * 13 + 58)
+end loop
+for 37 using i loop
+  f3[i] = byte(i * 13 + 87)
+end loop
+for 34 using i loop
+  f4[i] = byte(i * 13 + 116)
+end loop
+for 11 using i loop
+  f5[i] = byte(i * 13 + 145)
+end loop
+for 31 using i loop
+  f6[i] = byte(i * 13 + 174)
+end loop
+for 69 using i loop
+  f7[i] = byte(i * 13 + 203)
+end loop
+for 9 using i loop
+  f8[i] = byte(i * 13 + 232)
+end loop
+for 54 using i loop
+  f9[i] = byte(i * 13 + 5)
+end loop
+for 22 using i loop
+  f10[i] = byte(i * 13 + 34)
+end loop
+for 66 using i loop
+  f11[i] = byte(i * 13 + 63)
+end loop
+for 66 using i loop
+  f12[i] = byte(i * 13 + 92)
+end loop
+for 67 using i loop
+  f13[i] = byte(i * 13 + 121)
+end loop
+for 57 using i loop
+  f14[i] = byte(i * 13 + 150)
+end loop
+for 57 using i loop
+  f15[i] = byte(i * 13 + 179)
+end loop
+for 45 using i loop
+  f16[i] = byte(i * 13 + 208)
+end loop
+for 29 using i loop
+  f17[i] = byte(i * 13 + 237)
+end loop
+for 23 using i loop
+  f18[i] = byte(i * 13 + 10)
+end loop
+for 60 using i loop
+  f19[i] = byte(i * 13 + 39)
+end loop
+regression_checkpoint()                       -- 1
+
+-- verify every array against its compile-time byte-sum
+sum = 0
+for 7 using i loop
+  sum = sum + f0[i]
+end loop
+if sum != E0 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 12 using i loop
+  sum = sum + f1[i]
+end loop
+if sum != E1 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 50 using i loop
+  sum = sum + f2[i]
+end loop
+if sum != E2 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 37 using i loop
+  sum = sum + f3[i]
+end loop
+if sum != E3 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 34 using i loop
+  sum = sum + f4[i]
+end loop
+if sum != E4 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 11 using i loop
+  sum = sum + f5[i]
+end loop
+if sum != E5 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 31 using i loop
+  sum = sum + f6[i]
+end loop
+if sum != E6 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 69 using i loop
+  sum = sum + f7[i]
+end loop
+if sum != E7 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 9 using i loop
+  sum = sum + f8[i]
+end loop
+if sum != E8 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 54 using i loop
+  sum = sum + f9[i]
+end loop
+if sum != E9 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 22 using i loop
+  sum = sum + f10[i]
+end loop
+if sum != E10 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 66 using i loop
+  sum = sum + f11[i]
+end loop
+if sum != E11 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 66 using i loop
+  sum = sum + f12[i]
+end loop
+if sum != E12 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 67 using i loop
+  sum = sum + f13[i]
+end loop
+if sum != E13 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 57 using i loop
+  sum = sum + f14[i]
+end loop
+if sum != E14 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 57 using i loop
+  sum = sum + f15[i]
+end loop
+if sum != E15 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 45 using i loop
+  sum = sum + f16[i]
+end loop
+if sum != E16 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 29 using i loop
+  sum = sum + f17[i]
+end loop
+if sum != E17 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 23 using i loop
+  sum = sum + f18[i]
+end loop
+if sum != E18 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 60 using i loop
+  sum = sum + f19[i]
+end loop
+if sum != E19 then
+  r_bad = r_bad + 1
+end if
+regression_checkpoint()                       -- 2
+
+-- frame-sharing procedures run over the globals
+p_a()
+p_b()
+regression_checkpoint()                       -- 3
+
+-- spot re-verification after the procedures returned
+if f0[0] != 0 then
+  r_bad = r_bad + 1
+end if
+if f19[59] != 38 then
+  r_bad = r_bad + 1
+end if
+if f10[0] != 34 then
+  r_bad = r_bad + 1
+end if
+regression_checkpoint()                       -- 4
+
+-- rewrite the last array's tail and verify both halves exactly
+for 8 using i loop
+  f19[52 + i] = byte(i * 31 + 7)
+end loop
+sum = 0
+for 8 using i loop
+  sum = sum + f19[52 + i]
+end loop
+if sum != 924 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 52 using i loop
+  sum = sum + f19[i]
+end loop
+if sum != 6466 then
+  r_bad = r_bad + 1
+end if
+regression_checkpoint()                       -- 5
+
+-- full re-verification of every array (the strongest overlap check)
+sum = 0
+for 7 using i loop
+  sum = sum + f0[i]
+end loop
+if sum != E0 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 12 using i loop
+  sum = sum + f1[i]
+end loop
+if sum != E1 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 50 using i loop
+  sum = sum + f2[i]
+end loop
+if sum != E2 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 37 using i loop
+  sum = sum + f3[i]
+end loop
+if sum != E3 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 34 using i loop
+  sum = sum + f4[i]
+end loop
+if sum != E4 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 11 using i loop
+  sum = sum + f5[i]
+end loop
+if sum != E5 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 31 using i loop
+  sum = sum + f6[i]
+end loop
+if sum != E6 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 69 using i loop
+  sum = sum + f7[i]
+end loop
+if sum != E7 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 9 using i loop
+  sum = sum + f8[i]
+end loop
+if sum != E8 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 54 using i loop
+  sum = sum + f9[i]
+end loop
+if sum != E9 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 22 using i loop
+  sum = sum + f10[i]
+end loop
+if sum != E10 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 66 using i loop
+  sum = sum + f11[i]
+end loop
+if sum != E11 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 66 using i loop
+  sum = sum + f12[i]
+end loop
+if sum != E12 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 67 using i loop
+  sum = sum + f13[i]
+end loop
+if sum != E13 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 57 using i loop
+  sum = sum + f14[i]
+end loop
+if sum != E14 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 57 using i loop
+  sum = sum + f15[i]
+end loop
+if sum != E15 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 45 using i loop
+  sum = sum + f16[i]
+end loop
+if sum != E16 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 29 using i loop
+  sum = sum + f17[i]
+end loop
+if sum != E17 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 23 using i loop
+  sum = sum + f18[i]
+end loop
+if sum != E18 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 8 using i loop
+  sum = sum + f19[52 + i]
+end loop
+if sum != 924 then
+  r_bad = r_bad + 1
+end if
+sum = 0
+for 52 using i loop
+  sum = sum + f19[i]
+end loop
+if sum != 6466 then
+  r_bad = r_bad + 1
+end if
+regression_checkpoint()                       -- 6
+
+regression_pass_led_if_clean()
