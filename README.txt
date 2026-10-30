@@ -4,7 +4,7 @@ Included in this archive:
 
 README.txt        : this file
 src/              : compiler sources (build with make in src/)
-bin/              : jalv3-x86-64 (Linux) and jalv3-x86-64.exe (Windows);
+bin/              : jalv3-x86-64 (Linux) and jalv3-win64.exe (Windows);
                     bin/old_versions/ holds the jalv2 release binaries
 demo_lib/         : fork libraries and 32-bit device files
 demo_sample/      : sample programs

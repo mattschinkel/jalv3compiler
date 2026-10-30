@@ -55,4 +55,4 @@ tmp/
 .zcodeignore
 bin/jalv3-x86-64-san
 unit-tests/.cache/
-bin/jalv3-win64.exe
+bin/jalv3-x86-64.exe

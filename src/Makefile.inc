@@ -56,9 +56,9 @@ else ifeq ($(ARCH),win64)
    # 64-bit Windows, cross-compiled from Linux (packages:
    # gcc-mingw-w64-x86-64).  Own obj-dir/lib tags via ARCH=win64 so the
    # mingw objects never mix with the Linux build (mixed-object lesson).
-   # Output stem `win64` -> bin/jalv3-win64.exe is then published as
-   # bin/jalv3-x86-64.exe (the share's name) -- one file, no duplicate
-   # (the share already symlinks that name).
+   # Output stem `win64` -> bin/jalv3-win64.exe is the ONLY Windows
+   # binary (no duplicate: the old cp-to-x86-64.exe twin was removed
+   # 2026-10-30 -- it was a manual copy under the jalv25r9 share name).
    MARCH = -m64
    CC = x86_64-w64-mingw32-gcc   # plain assignment: CC is a make builtin default, `?=` never fires
    CFLAGS=-O2 -Werror -Wstringop-overflow=0 -ansi -pedantic -W -Wall -Wshadow -Wcast-qual $(MARCH) $(DEBUG) $(PROFILE) $(COVERAGE)
