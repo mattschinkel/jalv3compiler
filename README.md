@@ -5,7 +5,7 @@ JAL is a high-level programming language designed to simplify development
 for Microchip PIC microcontrollers by abstracting away many of the complexities 
 of low-level hardware programming. Its syntax is loosely based on Pascal.
 
-**About half of this compiler is new code.** Measured against the last
+**About half of this compiler is new or modified code.** Measured against the last
 JALv2 release (2.5r9) it is based on, roughly **50% of the code by line
 count** in `src/` is new fork work (51,354 of 101,276 lines), including
 two complete back ends. Original copyright notices are retained in every
