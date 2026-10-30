@@ -1,0 +1,41 @@
+-- ------------------------------------------------------
+-- Title: gpsim witness — const-index element bind `p is arr[k]`
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Binds a scalar pointer to an ARRAY ELEMENT at a const index and
+--    exercises read/store-through. Before the slot-add fix the classic
+--    (14-bit) cores emitted the baseofs ADD through the pointer's value
+--    view: the element ADDRESS was stored into arr[0] through the
+--    freshly-bound slot and the slot stayed at the array base (found
+--    2026-10-30 by runtime-verifying the split 16f1825 pointers sample;
+--    18f4620 was always fine -- its add emitters update the slot in
+--    place). Twin: 16f1825_gpsim_pointer_elem_bind.jal.
+--
+-- @gpsim_validate begin
+-- steps: 500000
+-- checkpoint_verify: off
+-- expect byte v_arr 10
+-- expect byte v_arr+2 80
+-- expect byte v_chk0 10
+-- expect byte v_chk2 30
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include 16f877
+var byte arr[4]
+var byte rd = 0
+var volatile byte chk0 = 0
+var volatile byte chk1 = 0
+var volatile byte chk2 = 0
+var pointer p as var byte
+arr[0] = 10
+arr[2] = 30
+p is arr[2]
+rd = p              -- read-through before the store: 30
+p = 80              -- store-through: arr[2] must become 80
+chk0 = arr[0]       -- 10 (store must not land here)
+chk1 = arr[2]       -- 80
+chk2 = rd           -- 30

@@ -3131,6 +3131,55 @@ typedef enum {
 static void pic_value_to_w(pfile_t *pf, pic_value_to_w_t op,
     value_t val, value_t val_sign, variable_sz_t pos);
 
+static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src);
+
+/* In-place add of an offset expression into a pointer SLOT. dst here is a
+ * pointer VALUE-VIEW (`*-V-`): routing the add through pic_op's generic
+ * emitters computes into a temp and stores the result THROUGH the view --
+ * store-through semantics (bound-trap + FSR + INDF), correct for `p = v`
+ * but wrong for a slot update: it writes the pointee instead of the slot
+ * and left `p is arr[k]` pointing at the array base with the element
+ * address smashed over arr[0] (both 14-bit cores; the 16-bit core adds
+ * in place and was fine). A plain slot view over the same variable stores
+ * to the slot bytes on every core. */
+static void pic_pointer_slot_add_emit(pfile_t *pf, value_t dst, value_t ofs)
+{
+  value_t       slot;
+  value_t       tmp;
+  variable_sz_t ii;
+  variable_sz_t psz;
+
+  if (pic_is_16bit(pf)) {
+    /* the wide core's add emitters update the slot in place (addwf ,f) */
+    pic_op(pf, OPERATOR_ADD, dst, dst, ofs);
+    return;
+  }
+  /* 14-bit: pic_op on a pointer-typed dst is store-through semantics
+   * (bound-trap + FSR + INDF) -- compute into a temp, then move the
+   * bytes into a cleaned slot view (pic_assign_ptr_to_ptr's recipe) */
+  slot = value_clone(dst);
+  tmp  = VALUE_NONE;
+  if (slot) {
+    value_baseofs_set(slot, VALUE_NONE);
+    value_indirect_clear(slot);
+    psz = pic_pointer_size_get(pf);
+    tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, psz);
+  }
+  if (slot && tmp) {
+    pic_op(pf, OPERATOR_ADD, tmp, slot, ofs);
+    for (ii = 0; ii < psz; ii++) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, ii, PIC_OPDST_W);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, slot, ii);
+    }
+  } else {
+    pic_op(pf, OPERATOR_ADD, dst, dst, ofs);
+  }
+  if (VALUE_NONE != tmp) {
+    pic_var_temp_release(pf, tmp);
+  }
+  value_release(slot);
+}
+
 static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
 {
   variable_sz_t ipos;
@@ -3248,7 +3297,7 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
       base_val = pfile_constant_get(pf, value_base_get(src),
           VARIABLE_DEF_NONE);
       pic_op(pf, OPERATOR_ASSIGN, dst, base_val, VALUE_NONE);
-      pic_op(pf, OPERATOR_ADD, dst, dst, value_baseofs_get(src));
+      pic_pointer_slot_add_emit(pf, dst, value_baseofs_get(src));
       value_release(base_val);
       return;
     }
@@ -3559,7 +3608,7 @@ static void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
            * addresses keep that bit clear. */
           pic_assign_lookup_label_to_pointer(pf, dst, lbl, 0);
           if (value_baseofs_get(src)) {
-            pic_op(pf, OPERATOR_ADD, dst, dst, value_baseofs_get(src));
+            pic_pointer_slot_add_emit(pf, dst, value_baseofs_get(src));
           }
         }
         label_release(lbl);
@@ -3621,7 +3670,7 @@ static void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
     if (value_baseofs_get(src)
         && (!value_is_const(value_baseofs_get(src))
           || value_const_get(value_baseofs_get(src)))) {
-      pic_op(pf, OPERATOR_ADD, dst, dst, value_baseofs_get(src));
+      pic_pointer_slot_add_emit(pf, dst, value_baseofs_get(src));
     }
   }
 }
