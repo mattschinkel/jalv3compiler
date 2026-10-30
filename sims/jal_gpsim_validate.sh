@@ -227,7 +227,7 @@ fi
 
 FREQ="$(pick_freq)"
 if [[ -z "$FREQ" ]]; then
-  FREQ="$(infer_frequency_bash)"
+  FREQ="$(infer_frequency_bash || true)"
 fi
 if [[ -z "$FREQ" ]]; then
   FREQ=40000000
