@@ -23,7 +23,7 @@
 
 /* in[][] before first merge from predecessors (separate from PIC_BSR_UNKNOWN) */
 #define PIC_BSR_IN_UNINIT ((uchar) 0xfd)
-#define PIC_BSR_WL_MAXRND 400U
+#define PIC_BSR_WL_MAXRND 20000U
 
 typedef struct pic_bsr_ci_ {
   pic_code_t  c;
@@ -151,29 +151,18 @@ static void pic_bsr_wl_xfr(
   uchar        b_pre_post; /* after PRE, before POST */
   uchar        b_post;
 
+  UNUSED(reached);
   *n_succ   = 0U;
   pv0       = (0 != (sid % 2U)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
   b_in      = in[sid];
   if (b_in == PIC_BSR_IN_UNINIT) {
     return;
   }
-  {
-    unsigned  i0;
-    uchar     G;
-    unsigned  s0;
-    unsigned  s1;
-
-    i0 = sid / 2U;
-    G  = pic_bsr_g_line(i0, in, reached);
-    s0 = 2U * i0;
-    s1 = s0 + 1U;
-    /* GOP PRE STOP on G==b_in only when both (code,pv) halves are reachable.
-     * The lone half at RESET had G==b_in with only pv=0 reachable, which
-     * suppressed all outgoing edges from the first instruction (gpsim jallib). */
-    if (G == b_in && reached[s0] && reached[s1]) {
-      return;
-    }
-  }
+  /* (the GOP-era PRE STOP that used to open this function is removed:
+   * in a worklist it suppressed a state's out-edges every round, so a
+   * successor needing this state's contribution merged only its other
+   * in-edges -- with in-place propagation the worklist terminates on
+   * its own and the stop is neither needed nor sound) */
   op  = pic_code_op_get(code);
   b_flow = b_in;
   if (PIC_OPCODE_MOVLB == op) {
@@ -270,6 +259,97 @@ static void pic_bsr_wl_bfs(
   FREE(q);
 }
 
+/* Labels that are the target of a CALL instruction.  They are entry points
+ * just like procedures: the caller's BSR is arbitrary, so the first banked
+ * op of their body must select its own bank and the MOVLB that does it may
+ * never be removed.  Compiler-synthesized helpers (`_pic_indirect`,
+ * `_pic_multiply`, the float/wide kernels, ...) are ordinary labels, not
+ * pfile procs, so the proc-entry protection alone missed them -- the j50
+ * float demo read `_pic_pointer+1` through a stale BSR and jumped through a
+ * garbage indirect-call target (2026-10-30). */
+static int pic_bsr_lbl_cmp(const void *A, const void *B)
+{
+  uintptr_t a;
+  uintptr_t b;
+
+  a = (uintptr_t) *(const label_t *) A;
+  b = (uintptr_t) *(const label_t *) B;
+  return (a < b) ? -1 : ((a > b) ? 1 : 0);
+}
+
+static label_t *pic_bsr_call_lbl;
+static size_t   pic_bsr_call_lbl_ct;
+
+static void pic_bsr_call_targets_build(pfile_t *pf)
+{
+  pic_code_t code;
+  size_t     n;
+
+  FREE(pic_bsr_call_lbl);
+  pic_bsr_call_lbl    = 0;
+  pic_bsr_call_lbl_ct = 0;
+  n = 0;
+  for (code = pic_code_list_head_get(pf); code;
+       code = pic_code_next_get(code)) {
+    if (PIC_OPCODE_CALL == pic_code_op_get(code)) {
+      n++;
+    }
+  }
+  if (0 == n) {
+    return;
+  }
+  pic_bsr_call_lbl = (label_t *) MALLOC(n * sizeof(label_t));
+  if (!pic_bsr_call_lbl) {
+    return;
+  }
+  for (code = pic_code_list_head_get(pf); code;
+       code = pic_code_next_get(code)) {
+    if (PIC_OPCODE_CALL == pic_code_op_get(code)) {
+      label_t lbl;
+
+      lbl = pic_code_brdst_get(code);
+      if ((LABEL_NONE != lbl) && (pic_bsr_call_lbl_ct < n)) {
+        pic_bsr_call_lbl[pic_bsr_call_lbl_ct++] = lbl;
+      }
+    }
+  }
+  qsort(pic_bsr_call_lbl, pic_bsr_call_lbl_ct, sizeof(label_t),
+      pic_bsr_lbl_cmp);
+}
+
+static void pic_bsr_call_targets_free(void)
+{
+  FREE(pic_bsr_call_lbl);
+  pic_bsr_call_lbl    = 0;
+  pic_bsr_call_lbl_ct = 0;
+}
+
+static boolean_t pic_bsr_label_is_call_target(pfile_t *pf, label_t lbl)
+{
+  size_t lo;
+  size_t hi;
+
+  UNUSED(pf);
+  /* the array is sorted at build time; membership is checked once per
+   * candidate MOVLB, so keep it O(log n) */
+  lo = 0;
+  hi = pic_bsr_call_lbl_ct;
+  while (lo < hi) {
+    size_t mid;
+
+    mid = lo + (hi - lo) / 2;
+    if (pic_bsr_call_lbl[mid] == lbl) {
+      return BOOLEAN_TRUE;
+    }
+    if ((uintptr_t) pic_bsr_call_lbl[mid] < (uintptr_t) lbl) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 /* Same entry BSR as pic_code_bsr_opt + pic_code_gop: reset=0, isr/indirect=INDET. */
 static void pic_bsr_wl_entry_inits(
   pfile_t *pf, const pic_bsr_ci_t *map, size_t n, uchar *in, unsigned nst)
@@ -317,6 +397,9 @@ static void pic_bsr_wl_entry_inits(
       }
     }
   }
+  /* nb: CALL targets are not seeded INDETERMINATE here either -- their
+   * entry MOVLB is never removed (pic_bsr_movlb_is_proc_entry), i.e. the
+   * bank is re-established before any downstream op depends on it. */
 }
 
 /* CFG worklist fixpoint: same (code, pv) semantics as pic_gop, without DFS stack. */
@@ -422,43 +505,89 @@ static void pic_code_bsr_wl(pfile_t *pf)
       }
     }
   }
+  /* nb: CALL targets are deliberately NOT added to the BFS entry set.
+   * They are reached through the linear list (the helper bodies are laid out
+   * contiguously), and seeding every call target explodes the state worklist
+   * on big programs (18f67j50_fat32_usb_msd_pata ~11x slower).  The entry
+   * MOVLB protection below is what keeps their prologue correct. */
   pic_bsr_wl_bfs(pf, at, n, map, reached, nst, ent, ent_ct);
   for (s = 0U; s < nst; s++) {
     in_cur[s]  = PIC_BSR_IN_UNINIT;
   }
   pic_bsr_wl_entry_inits(pf, map, (size_t) n, in_cur, nst);
-  rnd  = 0U;
-  chg  = 1;
-  while (0 != chg && rnd < PIC_BSR_WL_MAXRND) {
-    rnd++;
-    for (t = 0U; t < nst; t++) {
-      in_nxt[t]  = PIC_BSR_IN_UNINIT;
-    }
-    pic_bsr_wl_entry_inits(pf, map, (size_t) n, in_nxt, nst);
-    for (s = 0U; s < nst; s++) {
-      if (!reached[s] || in_cur[s] == PIC_BSR_IN_UNINIT) {
-        continue;
+  /* Dirty-state FIFO worklist. The previous round-robin form advanced
+   * exactly one hop per round (xfr read the previous round's array), so
+   * loops and nested callee chains needed far more rounds than the cap
+   * -- the truncated fixpoint dropped later-arriving edges, label merges
+   * "converged" without the loop-body contribution, and post_analyze
+   * removed load-bearing MOVLBs (the 16F1825 string-compare defect:
+   * `var string == <literal>` read false with byte-exact content).
+   * Raising the cap alone fixed correctness but made the fat32/mp3
+   * giants explode (thousands of full sweeps). This processes ONLY
+   * states whose in[] changed: correct by construction and linear in
+   * relabelings. The lattice is monotone toward INDETERMINATE, so every
+   * state changes value at most twice -- the loop terminates without
+   * the cap (kept as a safety valve). */
+  {
+    unsigned *queue;
+    boolean_t *queued;
+    unsigned qh;
+    unsigned qt;
+    unsigned processed;
+
+    queue   = (unsigned *) MALLOC(((size_t) nst + 1U) * sizeof (unsigned));
+    queued  = (boolean_t *) MALLOC((size_t) nst * sizeof (boolean_t));
+    if (queue && queued) {
+      for (s = 0U; s < nst; s++) {
+        queued[s] = BOOLEAN_FALSE;
       }
-      ns  = 0U;
-      pic_bsr_wl_xfr(
-        pf, at[s / 2U], n, map, reached, in_cur, s, &ns, &ss[0], &sb[0]);
-      for (kx = 0U; kx < ns; kx++) {
-        if (ss[kx] < nst) {
-          pic_bsr_in_merge(&in_nxt[ss[kx]], sb[kx]);
+      qh  = 0U;
+      qt  = 0U;
+      /* seed: every reached state with an entry value (RESET/ISR/...) */
+      for (s = 0U; s < nst; s++) {
+        if (reached[s] && (PIC_BSR_IN_UNINIT != in_cur[s])) {
+          queue[qt++]      = s;
+          queued[s]        = BOOLEAN_TRUE;
+        }
+      }
+      processed = 0U;
+      while ((qh != qt) && (processed < PIC_BSR_WL_MAXRND)) {
+        s = queue[qh++];
+        if (qh > nst) {
+          qh = 0U;
+        }
+        queued[s]  = BOOLEAN_FALSE;
+        processed++;
+        ns  = 0U;
+        pic_bsr_wl_xfr(
+          pf, at[s / 2U], n, map, reached, in_cur, s, &ns, &ss[0], &sb[0]);
+        for (kx = 0U; kx < ns; kx++) {
+          uchar  before;
+
+          if (ss[kx] >= nst) {
+            continue;
+          }
+          before  = in_cur[ss[kx]];
+          pic_bsr_in_merge(&in_cur[ss[kx]], sb[kx]);
+          if ((in_cur[ss[kx]] != before)
+              && !queued[ss[kx]]
+              && reached[ss[kx]]) {
+            /* ring capacity nst+1 with at most nst entries queued: never full */
+            queue[qt++]      = ss[kx];
+            if (qt > nst) {
+              qt = 0U;
+            }
+            queued[ss[kx]]  = BOOLEAN_TRUE;
+          }
         }
       }
     }
-    chg  = 0;
-    for (u = 0U; u < nst; u++) {
-      if (in_nxt[u] != in_cur[u]) {
-        chg  = 1;
-        break;
-      }
-    }
-    for (u = 0U; u < nst; u++) {
-      in_cur[u]  = in_nxt[u];
-    }
+    FREE(queued);
+    FREE(queue);
   }
+  UNUSED(chg);
+  UNUSED(rnd);
+  UNUSED(u);
   for (t = 0U; t < n; t++) {
     uchar G;
 
@@ -516,7 +645,7 @@ static boolean_t pic_bsr_movlb_is_proc_entry(pfile_t *pf, pic_code_t code)
           return BOOLEAN_TRUE;
         }
       }
-      return BOOLEAN_FALSE;
+      return pic_bsr_label_is_call_target(pf, lbl);
     }
     switch (op) {
       case PIC_OPCODE_GOTO:
@@ -590,11 +719,13 @@ void pic_code_bsr_optimize(pfile_t *pf)
   unsigned tot_rem;
 
   pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_FIXING_BSR);
+  pic_bsr_call_targets_build(pf);
   pic_code_bsr_annotation_reset(pf);
   if (0U != pfile_errct_get(pf)) {
     pfile_log(pf, PFILE_LOG_DEBUG, "...bsr: skip (pfile errors)");
     pfile_log(pf, PFILE_LOG_DEBUG, "...post analyze");
     (void) pic_code_bsr_post_analyze(pf);
+    pic_bsr_call_targets_free();
     return;
   }
   tot_rem = 0U;
@@ -614,4 +745,5 @@ void pic_code_bsr_optimize(pfile_t *pf)
     pfile_log(
       pf, PFILE_LOG_DEBUG, "...bsr: removed %u redundant MOVLB total", tot_rem);
   }
+  pic_bsr_call_targets_free();
 }

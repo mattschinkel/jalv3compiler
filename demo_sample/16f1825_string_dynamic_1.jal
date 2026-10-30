@@ -88,27 +88,15 @@ print_crlf(serial_data)
 -- Concatenate onto an existing string and compare with a literal
 print_string(serial_data, "--- assignment chain + compare ----------\r\n")
 greeting = "Hello, " & name          -- assignment chains: string operands
--- OPEN ITEM (2026-10-30, unreduced): in THIS full program the literal
--- compare `greeting == "Hello, JALv2 ESP32!"` returns FALSE although
--- content and COUNT are byte-exact; the identical statements in a
--- minimal program compare TRUE (tmp/f1825/sd1cmp.jal). A compile-time
--- context effect on the compare emission; length check pins the chain
--- meanwhile. (The earlier "all literal compares false on 16f1825"
--- reading was a gpsim/WDT artifact: probes without
--- `pragma target WDT DISABLED` reset-loop on this part's ON-by-default
--- watchdog -- see tmp/f1825/asn.jal + the fix record.)
-print_string(serial_data, "combined content: ")
-print_string(serial_data, greeting)
-print_crlf(serial_data)
-if COUNT(greeting) == 19 then
+if greeting == "Hello, JALv2 ESP32!" then
    checks = checks + 1
-   print_string(serial_data, "chain length:    MATCH (19)\r\n")
+   print_string(serial_data, "combined:        MATCH (")
+   print_byte_dec(serial_data, COUNT(greeting))
+   print_string(serial_data, " chars)\r\n")
 else
-   print_string(serial_data, "chain length:    MISMATCH\r\n")
+   print_string(serial_data, "combined:        MISMATCH\r\n")
 end if
 
--- ONE integer-operand chain (short: every chain's cell is retained for
--- the life of the program -- the 16F1825 heap budget carries two chains)
 print_string(serial_data, "--- integer operand in chain --------------\r\n")
 cnt = 42
 out = "n=" & cnt

@@ -156,10 +156,20 @@ SUITES: dict[str, RegressionSuite] = {
         globs=("sims/gpsim/18f4620_print_shadow*.jal",),
         libdir="demo_lib;third_party/jallib/lib",
     ),
+    "string_cmp_bank_merge": RegressionSuite(
+        id="string_cmp_bank_merge",
+        description="BSR-worklist round-truncation witness under the demo_lib-first "
+                    "include order (sims/gpsim/16f1825_string_cmp_bank_merge.jal -- the "
+                    "layout that puts the string-compare result bit in a non-zero bank "
+                    "only resolves demo_lib-first; pin: pre-fix builds read the compare "
+                    "as false with byte-exact content)",
+        globs=("sims/gpsim/16f1825_gpsim_string_cmp_bank_merge.jal",),
+        libdir="demo_lib;third_party/jallib/lib",
+    ),
 }
 
 # Order for --suite all / default (not alphabetical: 4620 first, then other PIC18, PIC14 enhanced, classic 877).
-SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "16f877", "print_shadow")
+SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "16f877", "print_shadow", "string_cmp_bank_merge")
 
 
 def registered_suite_ids_ordered() -> list[str]:
