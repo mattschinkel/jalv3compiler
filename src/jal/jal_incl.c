@@ -525,6 +525,15 @@ static void jal_parse_pragma_target_osc(pfile_t *pf)
   } else {
     pfile_log(pf, PFILE_LOG_ERR,
       "unknown oscillator mode: %s (%s)", tok, vocab);
+    /* Consume the bad token: pragma handlers leave the stream positioned for
+     * the main parser, and a keyword left here is re-parsed as a STATEMENT
+     * (`pragma target OSC case hs` became a phantom `case` statement whose
+     * half-built expression reached the p-code builder with a NULL operand).
+     * Recovery: drop it and let the rest of the line produce its own
+     * diagnostics. */
+    if (!pf_token_is_eof(pf)) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
   }
 }
 

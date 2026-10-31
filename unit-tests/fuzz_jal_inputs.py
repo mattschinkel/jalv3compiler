@@ -43,6 +43,15 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, os.pardir))
 
+# The compiler's -s list (same order the gate ladder uses: fork overlay first,
+# then pristine jallib). This default used to be <repo>/lib, a path that has
+# not existed since the tests/ -> sims/ move; every seed then failed its
+# device include and the recovery path looked like a compiler crash.
+DEFAULT_LIB = ";".join([
+    os.path.join(ROOT, "demo_lib"),
+    os.path.join(ROOT, "third_party/jallib/lib"),
+])
+
 # tokens whose presence/absence changes parse shape the most
 JAL_KEYWORDS = [
     "is", "=", ":=", "then", "end", "loop", "if", "else", "elsif",
@@ -153,17 +162,30 @@ def main() -> int:
     ap.add_argument("--seeds", type=int, default=40,
                     help="number of seed .jal files (small ones)")
     ap.add_argument("--minutes", type=float, default=10.0)
+    ap.add_argument("--inputs", type=int, default=0,
+                    help="stop after this many inputs (0 = time-bounded only); "
+                         "with a fixed --seed this makes a run reproducible, "
+                         "which is what the L1 gate uses")
     ap.add_argument("--timeout", type=float, default=20.0,
                     help="per-input compile timeout (s)")
     ap.add_argument("--seed", type=int, default=None,
                     help="PRNG seed (default: time-based, recorded in state)")
     ap.add_argument("--seed-dir", default=os.path.join(ROOT, "third_party/jallib/samples"))
-    ap.add_argument("--lib", default=os.path.join(ROOT, "lib"))
+    ap.add_argument("--lib", default=DEFAULT_LIB,
+                    help="compiler -s include path (';'-separated); must exist")
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args()
 
     if not os.path.isfile(args.compiler):
         print(f"error: compiler not found: {args.compiler}", file=sys.stderr)
+        return 2
+    # A bogus include path makes every seed fail its device include, which
+    # reads as "the compiler crashes on mangled input" when it is really the
+    # harness running its own typo. Fail loudly instead of fuzzing nothing.
+    missing = [p for p in args.lib.split(";") if p and not os.path.isdir(p)]
+    if missing:
+        print(f"error: include path not found: {', '.join(missing)}",
+              file=sys.stderr)
         return 2
     rng = random.Random(args.seed if args.seed is not None else time.time())
 
@@ -191,9 +213,10 @@ def main() -> int:
     n = 0
     counts = {}
     findings = []
-    print(f"fuzz: {len(seed_blobs)} seeds, {args.minutes:g} min, "
-          f"per-input timeout {args.timeout:g}s -> {out_dir}")
-    while time.time() < deadline:
+    print(f"fuzz: {len(seed_blobs)} seeds, {args.minutes:g} min"
+          + (f"/{args.inputs} inputs" if args.inputs else "")
+          + f", per-input timeout {args.timeout:g}s -> {out_dir}")
+    while time.time() < deadline and (not args.inputs or n < args.inputs):
         name, blob = seed_blobs[rng.randrange(len(seed_blobs))]
         data = mutate(blob, rng)
         if rng.randrange(10) == 0 and len(seed_blobs) > 1:  # occasional splice

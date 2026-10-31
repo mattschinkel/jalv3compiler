@@ -94,6 +94,17 @@ run_py proc_entry_bsr              unit-tests/test_proc_entry_bsr.py --compiler 
 run_sh include_runtime_error       unit-tests/test_include_runtime_error.sh "$CC"
 run_sh print_shadow_negative      unit-tests/test_print_shadow_negative.sh "$CC"
 run_sh openarray_chunked_pins    unit-tests/test_openarray_chunked_pins.sh "$CC"
+run_sh label_leak_clean            unit-tests/test_label_leak_clean.sh "$CC"
+run_py helper_entry_bsr            unit-tests/test_helper_entry_bsr.py --compiler "$CC"
+
+# Malformed input must fail with DIAGNOSTICS, never a signal (SIGABRT/SIGSEGV).
+# The fixture pin covers the two known entries into the p-code builder's
+# missing-operand path; the fuzz run is the broad sweep. Both are DETERMINISTIC
+# (fixed seed + fixed input count) and the fuzz job fails on any crash or hang.
+# fixes/fix_malformed_input_clean.md.
+run_sh malformed_input_clean       unit-tests/test_malformed_input_clean.sh "$CC"
+run_py malformed_input_fuzz        unit-tests/fuzz_jal_inputs.py --compiler "$CC" \
+  --inputs 4000 --seed 20261030 --minutes 30 --out-dir tmp/fuzz_gate
 
 # Storage / allocation / target rules
 run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$CC"

@@ -13,6 +13,7 @@
 #include <string.h>
 #include "pfiled.h"
 #include "pf_cmd.h"
+#include "pf_msg.h"
 #include "pf_op.h"
 #include "pf_expr.h"
 
@@ -987,19 +988,48 @@ void pfile_cmd_op_add(pfile_t *pf,
     }
   }
   if (RESULT_OK == rc) {
-    /* 1st, make sure val1 and/or val2 exit */
+    /* 1st, make sure val1 and/or val2 exit.
+     *
+     * Malformed input can reach this point with an operand missing: the
+     * front end logs its own diagnostic and then keeps parsing for error
+     * recovery, so a half-built expression can be submitted here. That used
+     * to be an assertion, which turned a recoverable syntax error into
+     * SIGABRT (fuzzer: `pragma target OSC case hs` aborts the process).
+     * Report the missing operand and substitute a well-formed result; the
+     * compile still fails, it just fails with diagnostics, not a core dump.
+     */
+    boolean_t operands_ok;
+
+    operands_ok = BOOLEAN_TRUE;
     if (operator_is_binary(op)) {
-      assert(val1 != VALUE_NONE);
-      assert((val2 != VALUE_NONE) || (dst != VALUE_NONE));
-      if (!val2) {
+      if ((VALUE_NONE == val1)
+        || ((VALUE_NONE == val2) && (VALUE_NONE == dst))) {
+        operands_ok = BOOLEAN_FALSE;
+      } else if (VALUE_NONE == val2) {
         val2 = val1;
         val1 = dst;
       }
     } else if (operator_is_unary(op)) {
-      assert(val1 || dst);
-      if (!val1) {
+      if ((VALUE_NONE == val1) && (VALUE_NONE == dst)) {
+        operands_ok = BOOLEAN_FALSE;
+      } else if (VALUE_NONE == val1) {
         val1 = dst;
       }
+    }
+    if (!operands_ok) {
+      /* Nothing can be emitted without an operand. Report it and leave a
+       * well-formed result behind: callers build branches/assigns on *pdst
+       * and a NULL result is dereferenced further down (that path is how a
+       * syntax error became SIGABRT-then-SIGSEGV instead of a diagnostic).
+       * val1/val2 are not locked yet here, so they must not be released. */
+      pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_CONSTANT_EXPECTED);
+      if (pdst) {
+        if (*pdst) {
+          value_release(*pdst);
+        }
+        *pdst = pfile_constant_get(pf, 0, 0);
+      }
+      return;
     }
     value_lock(val1);
     value_lock(val2);

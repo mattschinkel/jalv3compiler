@@ -352,10 +352,19 @@ def decode_word(w: int, words: dict, table: list, a: int) -> str:
 # ---------------------------------------------------------------- build
 
 def do_build(ref: str, asan: bool) -> Path:
-    key = ref.replace("/", "_") + ("-asan" if asan else "")
+    # Key the cache by the RESOLVED sha, never by the ref name: `HEAD`,
+    # `HEAD~1` and branch names move, and a cached `HEAD` binary from an
+    # older session was silently reused as the "old" side of a cost/pin
+    # comparison (a 2026-10-31 pre-flight measured a 10x compile-time
+    # "regression" against a tree from the day before).
+    sha = subprocess.run(["git", "rev-parse", "--short", ref],
+                         cwd=str(REPO), capture_output=True, text=True)
+    if sha.returncode != 0 or not sha.stdout.strip():
+        raise SystemExit(f"jaldbg: cannot resolve ref '{ref}':\n{sha.stderr}")
+    key = sha.stdout.strip() + ("-asan" if asan else "")
     binp = BUILD_CACHE / key / "jalv3-x86-64"
     if binp.is_file():
-        print(f"cached: {binp}")
+        print(f"cached: {binp}  ({ref} = {key})")
         return binp
     BUILD_CACHE.mkdir(parents=True, exist_ok=True)
     wt = Path(tempfile.mkdtemp(prefix=f"jaldbg_wt_{key}_"))
@@ -368,7 +377,10 @@ def do_build(ref: str, asan: bool) -> Path:
         if asan:
             cmd.append("SAN=1")
         r2 = subprocess.run(cmd, capture_output=True, text=True)
-        built = wt / "bin/jalv3-x86-64"
+        # SAN=1 links bin/jalv3-x86-64-san, NOT the plain name -- copying the
+        # plain name here silently produced an UNINSTRUMENTED "asan" build,
+        # so `jaldbg cost --asan` had never actually run a sanitizer.
+        built = wt / ("bin/jalv3-x86-64-san" if asan else "bin/jalv3-x86-64")
         if r2.returncode != 0 or not built.is_file():
             # parallel races hit this Makefile before; retry serial
             r2 = subprocess.run(["make", "-C", str(wt / "src")], capture_output=True, text=True)
@@ -378,7 +390,7 @@ def do_build(ref: str, asan: bool) -> Path:
         dest = BUILD_CACHE / key
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(built, binp)
-        print(f"built {ref}: {binp}")
+        print(f"built {ref} ({key}): {binp}")
         return binp
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
