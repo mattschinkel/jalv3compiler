@@ -556,6 +556,11 @@ void pic_instr_append_daop(pfile_t *pf, value_t f, pic_opcode_t opcode,
              * compares pic_code_ofs to the skip insn (see append_f_b). */
             pic_code_ofs_set(mclb, file_ofs);
             pic_instr_bank_op_linear_try_record(pf, mclb);
+            /* pic_code_value_set() takes its OWN reference (it locks); the
+             * clone's reference is ours to drop. Nothing did, so every
+             * emitted MOVLB leaked one value_t -- 6256 of the 6649 that
+             * the B1 teardown diagnostic reports on a corpus giant. */
+            value_release(vop);
           } else {
             pfile_log_syserr(pf, ENOMEM);
           }
