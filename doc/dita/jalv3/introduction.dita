@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="d0e18" xml:lang="en-US">
+  <title>Introduction</title>
+
+  <body>
+    <p>JAL is a high level language designed to hide the general nuisance of
+    programming a MicroChip PIC processor. It is derived from the original JAL
+    by Wouter van Ooijen, see: <xref href="http://www.voti.nl/jal/index.html"
+    scope="external">Voti</xref></p>
+
+    <p>JAL is loosely based on Pascal and is not case sensitive.</p>
+
+    <p>This document describes the JAL syntax supported by the JALv3
+    compiler.</p>
+
+    <p>JALv3 is a fork of the JALv2 compiler. In addition to the classic
+    PIC10/12/14/18 targets it supports PIC32 (MIPS32) and ESP32 (Xtensa LX6)
+    devices. It extends the language with pointers, dynamic strings,
+    fixed-capacity strings, native bit arrays, multi-dimensional arrays, wide
+    integers up to 128 bits, optional parameters with defaults, text
+    conversion casts, COUNT, and a cooperative task scheduler. These features
+    are described in the chapters that follow.</p>
+
+    <p>This manual is maintained for JALv3 by Matthew Schinkel. The original
+    JALv2 documentation was written by Kyle York and Rob Jansen.</p>
+  </body>
+</topic>

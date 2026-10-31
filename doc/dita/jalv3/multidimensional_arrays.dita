@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="multidimensional_arrays" xml:lang="en-US">
+  <title>Multi-dimensional arrays</title>
+
+  <body>
+    <p>JALv3 supports native arrays with more than one dimension. Any number
+    of dimensions may be declared; the elements are stored in row-major order
+    in one contiguous block.</p>
+
+    <codeblock>VAR BYTE matrix[ROWS][COLS]
+VAR BYTE cube[X][Y][Z]</codeblock>
+
+    <p>Access uses one subscript per dimension, and each dimension is
+    numbered from zero. Constant and runtime subscripts may be mixed
+    freely.</p>
+
+    <codeblock>VAR BYTE matrix[4][8]
+VAR BYTE cube[2][3][4]
+
+matrix[1][2] = 42
+VAR BYTE value = cube[1][0][1]
+VAR BYTE row = 3
+matrix[row][2] = value</codeblock>
+
+    <p>An initializer may be written as nested lists; the inner list
+    corresponds to the last dimension:</p>
+
+    <codeblock>VAR BYTE matrix[2][3] = {{1, 2, 3}, {4, 5, 6}}</codeblock>
+
+    <p>COUNT returns the extent of the first dimension. Applying a subscript
+    first asks for the extent of the next dimension:</p>
+
+    <codeblock>COUNT(matrix)       -- 2
+COUNT(matrix[0])    -- 3</codeblock>
+
+    <p>Multi-dimensional arrays can have any element type, including BIT and
+    the wide integer types. See <xref href="bit_arrays.dita"/> for the packed
+    bit-array form.</p>
+
+    <p>As with one-dimensional arrays, there is no runtime bounds checking
+    when a variable is used as a subscript. A constant subscript outside the
+    declared range is a compile error.</p>
+  </body>
+</topic>

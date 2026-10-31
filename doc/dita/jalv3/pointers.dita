@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="pointers" xml:lang="en-US">
+  <title>Pointers</title>
+
+  <body>
+    <p>A pointer is a variable that holds the address of another object: a
+    variable, an array, an array element, a constant, or a pseudo-variable.
+    Pointers are new in JALv3 and are supported on every target. Every pointer
+    declaration names the type of the object it may point at, the <i>pointee
+    contract</i>.</p>
+
+    <section>
+      <title>Declaring a pointer</title>
+
+      <p>The preferred form puts the pointee contract after AS:</p>
+
+      <codeblock>VAR POINTER p AS VAR BYTE          -- points at a writable byte
+VAR POINTER cp AS CONST BYTE       -- points at a read-only byte
+VAR POINTER ap AS VAR BYTE[5]      -- points at one five-byte array
+VAR POINTER slots[3] AS VAR BYTE   -- three pointer slots</codeblock>
+
+      <p>The older spellings are also accepted:</p>
+
+      <codeblock>VAR POINTER VAR BYTE p
+VAR POINTER CONST BYTE cp
+VAR POINTER p(AS VAR BYTE)</codeblock>
+
+      <p>A pointer occupies 2 bytes on the classic PIC cores, 3 bytes on
+      PIC18, and 4 bytes on PIC32 and ESP32.</p>
+    </section>
+
+    <section>
+      <title>Binding a pointer</title>
+
+      <p>The IS statement makes a pointer refer to an object. It does not copy
+      a value; it binds the address:</p>
+
+      <codeblock>VAR BYTE value = 10
+VAR POINTER p AS VAR BYTE
+
+p IS value          -- p now points at value</codeblock>
+
+      <p>The target may be a variable, an array, an array element, a constant
+      array, a compatible pseudo-variable, or another pointer:</p>
+
+      <codeblock>VAR BYTE arr[4]
+VAR POINTER whole AS VAR BYTE[4]
+VAR POINTER element AS VAR BYTE
+VAR POINTER other AS VAR BYTE
+
+whole IS arr        -- the array
+element IS arr[2]   -- one element
+other IS whole      -- copy the pointer value (not the pointee)</codeblock>
+
+      <p>Binding a pointer array element works with a constant or a runtime
+      index: slots[k] IS value.</p>
+    </section>
+
+    <section>
+      <title>Reading and writing through a pointer</title>
+
+      <p>Using a pointer as a value reads the pointee; assigning to it writes
+      the pointee. Both require the pointer to have been bound.</p>
+
+      <codeblock>VAR BYTE value = 10
+VAR BYTE copy
+VAR POINTER p AS VAR BYTE
+
+p IS value
+copy = p            -- copy = 10
+p = 25              -- value = 25</codeblock>
+
+      <p>With an array pointee, a subscript selects the element. Constant and
+      runtime indices are both allowed:</p>
+
+      <codeblock>VAR BYTE arr[4]
+VAR POINTER ap AS VAR BYTE[4]
+
+ap IS arr
+ap[0] = 50          -- arr[0] = 50
+copy = ap[i]        -- read element i</codeblock>
+
+      <note>Plain assignment between two pointers is a store-through, not a
+      pointer copy: q = p reads the value p points at and writes it through q.
+      Use q IS p to copy the pointer itself.</note>
+    </section>
+
+    <section>
+      <title>Read-only pointees</title>
+
+      <p>A pointee declared CONST may be read through the pointer but not
+      written. Binding it to a constant array is the usual way to walk a ROM
+      lookup table:</p>
+
+      <codeblock>CONST BYTE table[3] = {10, 20, 30}
+VAR POINTER cp AS CONST BYTE[3]
+
+cp IS table
+copy = cp[1]        -- 20</codeblock>
+    </section>
+
+    <section>
+      <title>Pseudo-variables</title>
+
+      <p>A pointer may be bound to a pseudo-variable, in which case reads and
+      writes go through its accessors: a read uses the 'get routine and a
+      write uses the 'put routine. An indexed read of an array-shaped
+      pseudo-variable (p[i]) uses its indexed accessor.</p>
+
+      <codeblock>FUNCTION sensor'GET() RETURN BYTE IS ... END FUNCTION
+PROCEDURE sensor'PUT(BYTE IN value) IS ... END PROCEDURE
+
+VAR POINTER p AS VAR BYTE
+p IS sensor
+copy = p            -- calls sensor'GET
+p = 5               -- calls sensor'PUT</codeblock>
+
+      <p>Pseudo-variable bindings live on scalar pointer variables. They
+      cannot be stored in pointer-slot array elements or record members, and
+      a pointer bound to a pseudo-variable cannot be copied with q = p (the
+      store-through form drops the accessor link); read the value into an
+      ordinary variable first. A pseudo-variable binding is also not carried
+      through procedure parameters: a pointer formal receives the address
+      only.</p>
+    </section>
+
+    <section>
+      <title>Pointers to dynamic strings</title>
+
+      <p>A pointer whose pointee contract is VAR STRING points at a dynamic
+      string. Assignment and concatenation through the pointer act on the
+      string it refers to:</p>
+
+      <codeblock>CONST WORD _string_heap_size = 128
+INCLUDE strings_dynamic
+VAR STRING text
+VAR POINTER p AS VAR STRING
+
+p IS text
+p = "abc"
+p = p &amp; "XY"</codeblock>
+    </section>
+
+    <section>
+      <title>Pointer slots and WHEREIS</title>
+
+      <p>An array of pointers holds several bindings. Elements are bound with
+      the same IS statement, including at runtime indices, and read and
+      written through the element:</p>
+
+      <codeblock>VAR BYTE a = 0
+VAR BYTE b = 0
+VAR BYTE value
+VAR POINTER slots[2] AS VAR BYTE
+
+slots[0] IS a
+slots[1] IS b
+value = slots[1]    -- 0
+slots[k] IS b       -- rebind slot k at run time</codeblock>
+
+      <p>WHEREIS returns the address a pointer targets, or zero when the
+      pointer is unbound. It accepts a pointer variable or an indexed
+      slot:</p>
+
+      <codeblock>VAR DWORD addr
+addr = WHEREIS(slots[0])
+addr = WHEREIS(a)</codeblock>
+    </section>
+
+    <section>
+      <title>Checks</title>
+
+      <p>The compiler tracks whether each pointer has been bound and rejects
+      reads, writes, subscripts, and self-binds of an unbound pointer. A
+      pointer slot that has never been bound contains zero; indirect access
+      through such a slot is refused at run time instead of reading address
+      zero.</p>
+    </section>
+  </body>
+</topic>

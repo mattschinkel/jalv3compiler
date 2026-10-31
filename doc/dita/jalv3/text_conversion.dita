@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="text_conversion" xml:lang="en-US">
+  <title>Text conversion and COUNT</title>
+
+  <body>
+    <p>JALv3 provides three text conversion casts and the COUNT operator.
+    Both are ordinary operators of the language: they may be used wherever a
+    value is expected, including comparisons, concatenations, and procedure
+    arguments.</p>
+
+    <section>
+      <title>Text conversion casts</title>
+
+      <p>STRING(x) renders an integer in decimal, or copies the bytes of a
+      byte array as characters. HEX(x) renders a value in lowercase
+      hexadecimal without a prefix, and BIN(x) does the same in binary. For
+      both, an optional second argument sets a minimum number of digits, so
+      HEX(26, 4) is "001a" and BIN(5, 8) is "00000101"; a value that needs
+      more digits renders at its full width. For arrays, each element is
+      rendered at its natural width, and HEX zero-pads each byte element to
+      two digits.</p>
+
+      <codeblock>CONST STRING S1 = string(26)       -- "26"
+CONST STRING S2 = hex(26)          -- "1a"
+CONST STRING S3 = hex(26, 4)       -- "001a"
+CONST STRING S4 = bin(5)           -- "101"
+CONST STRING S5 = bin(5, 8)        -- "00000101"
+CONST BYTE TBL[3] = {1, 2, 3}
+CONST STRING S6 = string(TBL)      -- the three bytes as characters
+CONST STRING S7 = hex(TBL)         -- "010203"</codeblock>
+
+      <p>Constant operands are folded into read-only memory at compile time,
+      so the examples above need no heap. Runtime operands are rendered when
+      the program runs, through the string machinery described in
+      <xref href="strings_dynamic.dita"/>, and therefore need the string
+      heap:</p>
+
+      <codeblock>CONST WORD _string_heap_size = 64
+VAR STRING out
+VAR BYTE cnt = 26
+
+out = "hex=" &amp; hex(cnt, 4)       -- "hex=001a"
+IF string(cnt) == "26" THEN ... END IF</codeblock>
+
+      <p>The result is an ordinary string value: it can be compared with
+      literals and composed in concatenation chains. The names STRING, HEX,
+      and BIN followed by an opening parenthesis always denote the cast, even
+      if a symbol of the same name exists.</p>
+    </section>
+
+    <section>
+      <title>COUNT</title>
+
+      <p>COUNT reports the size of its operand. What is counted depends on
+      the kind of operand:</p>
+
+      <table>
+        <title>COUNT results</title>
+
+        <tgroup cols="2" colsep="1" rowsep="1">
+          <tbody>
+            <row>
+              <entry><b>Operand</b></entry>
+
+              <entry><b>COUNT returns</b></entry>
+            </row>
+
+            <row>
+              <entry>array variable, or fixed-size array formal</entry>
+
+              <entry>the number of elements</entry>
+            </row>
+
+            <row>
+              <entry>open-array formal</entry>
+
+              <entry>the number of elements passed by the caller</entry>
+            </row>
+
+            <row>
+              <entry>dynamic string</entry>
+
+              <entry>the current number of characters</entry>
+            </row>
+
+            <row>
+              <entry>fixed-capacity string[N]</entry>
+
+              <entry>the capacity N</entry>
+            </row>
+
+            <row>
+              <entry>scalar variable or constant</entry>
+
+              <entry>the storage width in bytes</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+      <codeblock>VAR BYTE arr[10]
+VAR QWORD wide
+VAR STRING msg = "hello"
+
+COUNT(arr)       -- 10
+COUNT(wide)      -- 8
+COUNT(msg)       -- 5 (current length)
+COUNT(arr[0])    -- 1 (a byte)</codeblock>
+
+      <p>COUNT is computed at compile time whenever the operand is static, and
+      at run time for dynamic strings and open-array formals. The older
+      _length(expr) operator is still accepted; with -warn-misc the compiler
+      suggests COUNT instead.</p>
+    </section>
+  </body>
+</topic>

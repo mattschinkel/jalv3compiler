@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="pragma_string" xml:lang="en-US">
+  <title>STRING</title>
+
+  <body>
+    <p>Format:</p>
+
+    <codeblock>          PRAGMA STRING INDEX { AUTO | BYTE | WORD }
+          PRAGMA STRING ALLOC { FIRST_FIT | BEST_FIT }
+          PRAGMA STRING RETRY { ON | OFF }
+          PRAGMA STRING HEAP <i>cexpr</i></codeblock>
+
+    <p>These pragmas configure the dynamic string heap. They must appear
+    before the first dynamic string declaration and before the
+    strings_dynamic library is included.</p>
+
+    <p>INDEX sets the width of the per-handle offset, length, and capacity
+    fields and of the heap block headers. AUTO selects a width from the
+    declared heap size, BYTE and WORD force one byte or two byte fields.</p>
+
+    <p>ALLOC selects the free-block search used by the allocator:
+    FIRST_FIT takes the first block that is large enough, BEST_FIT takes the
+    smallest block that fits.</p>
+
+    <p>RETRY controls the behavior after a failed allocation. With ON the
+    allocator compacts the heap once and retries the search; with OFF the
+    allocation fails immediately and the error is recorded in
+    _string_error.</p>
+
+    <p>The heap size itself is not set by this pragma. Declare it with a WORD
+    constant before the first dynamic string:</p>
+
+    <codeblock>CONST WORD _string_heap_size = 255
+PRAGMA STRING INDEX BYTE
+INCLUDE strings_dynamic</codeblock>
+
+    <note>The older PRAGMA STRING HEAP form is accepted but ignored: it
+    neither sets the heap size nor produces a diagnostic. Use the
+    _string_heap_size constant instead.</note>
+  </body>
+</topic>

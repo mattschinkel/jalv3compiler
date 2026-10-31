@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="d0e2352" xml:lang="en-US">
+  <title>Tasks</title>
+
+  <body>
+    <p>Syntax:</p>
+
+    <codeblock>          TASK <i>identifier</i> '()' IS
+             <i>statement_block</i>
+          END TASK</codeblock>
+
+    <p>JALv3 introduces the concept of TASKs, which are a form of co-operative
+    multi-tasking. Unlike preemptive multi-tasking, where control passes from
+    one task to another automatically, control passes only when a task
+    explicitly yields. Tasks take no parameters.</p>
+
+    <p>The number of task slots is set with the TASK pragma, or with the
+    compiler option -task:</p>
+
+    <codeblock>          PRAGMA TASK <i>cexpr</i></codeblock>
+
+    <p>The count includes the main program itself. To run the main program
+    plus three worker tasks, use PRAGMA TASK 4. It is generally better to set
+    this in the program than with the compiler option, because the number is
+    unlikely to change.</p>
+
+    <p>A task is started with the _task_start statement. It may be started
+    from the main program or from another task:</p>
+
+    <codeblock>          _task_start worker_a()</codeblock>
+
+    <p>A task yields the processor with _task_yield. The scheduler is a
+    deterministic round robin: each yield hands control to the next live task,
+    and a task that returns, or falls off the end of its body, removes itself
+    from the schedule:</p>
+
+    <codeblock>          TASK worker_a() IS
+             ...
+             _task_yield
+             ...
+          END TASK</codeblock>
+
+    <p>The older SUSPEND keyword still works but is deprecated and produces a
+    warning; use _task_yield instead.</p>
+
+    <p>Running tasks can be manipulated from the main program or from a task
+    with these statements. Each names a TASK and accepts an optional empty
+    parameter list:</p>
+
+    <codeblock>          _task_suspend <i>identifier</i>[()]
+          _task_resume  <i>identifier</i>[()]
+          _task_kill    <i>identifier</i>[()]
+          _task_restart <i>identifier</i>[()]</codeblock>
+
+    <p>Only one copy of a task body may run at a time. Do not start a task
+    that is already live.</p>
+
+    <p>Task local variables are allowed only on the 32-bit targets, where
+    every automatic local receives a unique static address. On the PIC back ends
+    all procedures share one software frame area, so a suspended task's
+    locals could collide with another task's; declaring a variable inside a
+    TASK on those targets is an error. Keep task state in globals there. On
+    every target, a task body runs on its starter's stack, so keep the frames
+    shallow.</p>
+
+    <p>Example:</p>
+
+    <codeblock>          PRAGMA TASK 3
+
+          VAR BYTE a_count = 0
+          VAR BYTE b_count = 0
+
+          TASK task_a() IS
+             a_count = a_count + 1
+             _task_yield
+             a_count = a_count + 1
+          END TASK
+
+          TASK task_b() IS
+             b_count = b_count + 1
+             _task_yield
+             b_count = b_count + 1
+          END TASK
+
+          _task_start task_a()
+          _task_start task_b()
+          _task_yield
+          _task_kill task_b()</codeblock>
+  </body>
+</topic>

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="pointer_calls" xml:lang="en-US">
+  <title>Procedure and function pointers</title>
+
+  <body>
+    <p>A pointer may also hold the address of a procedure or a function. Such
+    a pointer declares the complete signature of the routine it can point at,
+    and calls through it look like ordinary calls.</p>
+
+    <section>
+      <title>Declaring a callable pointer</title>
+
+      <codeblock>VAR POINTER handler AS PROCEDURE (BYTE IN)
+VAR POINTER setter  AS PROCEDURE (BYTE OUT)
+VAR POINTER bumper  AS PROCEDURE (BYTE IN OUT)
+VAR POINTER calc    AS FUNCTION (BYTE IN) RETURN WORD
+
+VAR POINTER handlers[4] AS PROCEDURE (BYTE IN)
+VAR POINTER calcs[4] AS FUNCTION (BYTE IN, BYTE IN) RETURN BYTE</codeblock>
+
+      <p>The signature must match the routine exactly: the same number of
+      parameters, the same parameter directions, and the same return type. A
+      mismatch is a compile error.</p>
+    </section>
+
+    <section>
+      <title>Binding and calling</title>
+
+      <codeblock>PROCEDURE log(BYTE IN value) IS ... END PROCEDURE
+FUNCTION double(BYTE IN value) RETURN WORD IS ... END FUNCTION
+
+VAR POINTER handler AS PROCEDURE (BYTE IN)
+VAR POINTER calc AS FUNCTION (BYTE IN) RETURN WORD
+VAR WORD result
+
+handler IS log
+calc IS double
+
+handler(42)          -- calls log
+result = calc(21)    -- calls double, result = 42</codeblock>
+
+      <p>Every parameter direction works through a pointer call. An OUT or
+      IN OUT actual is marshalled back into the caller's variable after the
+      call returns, so the call site cannot tell a pointer call from a direct
+      call:</p>
+
+      <codeblock>PROCEDURE set(BYTE OUT value) IS value = 21 END PROCEDURE
+PROCEDURE bump(BYTE IN OUT value) IS value = value + 1 END PROCEDURE
+
+VAR POINTER sp AS PROCEDURE (BYTE OUT)
+VAR POINTER bp AS PROCEDURE (BYTE IN OUT)
+VAR BYTE victim
+VAR BYTE counter = 25
+
+sp IS set
+sp(victim)           -- victim = 21
+
+bp IS bump
+bp(counter)          -- counter = 26</codeblock>
+    </section>
+
+    <section>
+      <title>Pointer slots</title>
+
+      <p>An array of callable pointers holds several routines that share one
+      signature. Slots are bound with IS and called with a constant or a
+      runtime index:</p>
+
+      <codeblock>PROCEDURE proc_c(BYTE IN test) IS ... END PROCEDURE
+PROCEDURE proc_d(BYTE IN test) IS ... END PROCEDURE
+
+VAR POINTER proc_slots[2] AS PROCEDURE (BYTE IN)
+VAR BYTE step = 0
+
+proc_slots[0] IS proc_c
+proc_slots[1] IS proc_d
+
+WHILE step &lt; 2 LOOP
+   proc_slots[step](0)      -- dispatch by runtime index
+   step = step + 1
+END LOOP</codeblock>
+
+      <p>WHEREIS works on an indexed slot and reports the address of the
+      routine it is bound to, or zero when the slot is unbound.</p>
+    </section>
+
+    <section>
+      <title>Return values</title>
+
+      <p>A scalar procedure pointer is called exactly like the procedure it
+      points at. A function pointer is called wherever a value is expected.
+      The return value of a function call may also be ignored: calling a
+      function as a statement is legal and discards the result without an
+      error or a warning. This applies to direct calls, pointer calls, and
+      pseudo-variable 'get calls.</p>
+    </section>
+  </body>
+</topic>

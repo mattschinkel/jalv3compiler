@@ -13,9 +13,12 @@ the XML Editor XML Mind and all documentation was reformatted by Rob Jansen.
 
 Creating pdf and html documentation using Dita
 ==============================================
-Dita version 3.7.2 was used for this.
+Dita version 4.4.1 was used for this (the sources also build with the 4.0.x
+line). No customization has been done on Dita.
 
-No customization has been done on Dita.
+The Makefile expects DITA-OT under $HOME/Tools/dita-ot-4.0.2 by default;
+point it at your install when it lives elsewhere, e.g.
+`make pdf DITA_DIR=$HOME/Tools/dita-ot-4.4.1`.
 
 A Makefile is available for creating a pdf and html version:
 - Make pdf creates the pdf versions and stores them in directory called pdf
@@ -32,3 +35,8 @@ The MS Word version are still available.
 
 2022-05-27
 Rob Jansen
+
+2026-10-31
+JALv3 fork: the book sources, maps, project files and output names were
+renamed from jalv2 to jalv3 and the three PDFs rebuilt as jalv3.pdf,
+jalv3opt.pdf and jalv3pragma.pdf.

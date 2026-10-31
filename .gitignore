@@ -15,6 +15,10 @@
 !/src/
 !/unit-tests/
 
+# documentation build intermediates (shipped PDFs live in doc/external)
+doc/pdf/
+doc/html/
+
 # build artifacts (compile outputs land here from src/)
 src/*/.obj-*/
 src/*/.dep/

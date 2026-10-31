@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="wide_integers" xml:lang="en-US">
+  <title>Wide integers (64-bit and 128-bit)</title>
+
+  <body>
+    <p>JALv3 extends the integer types beyond the 32-bit DWORD of JALv2 with
+    64-bit and 128-bit types. They are ordinary integer types: they can be
+    used in expressions, arrays, records, procedure parameters, and as
+    pointer pointee contracts.</p>
+
+    <table>
+      <title>Wide integer types</title>
+
+      <tgroup cols="4" colsep="1" rowsep="1">
+        <tbody>
+          <row>
+            <entry><b>Type</b></entry>
+
+            <entry><b>Width</b></entry>
+
+            <entry><b>Range</b></entry>
+
+            <entry><b>Notes</b></entry>
+          </row>
+
+          <row>
+            <entry>QWORD</entry>
+
+            <entry>8 bytes</entry>
+
+            <entry>0 .. 2^64-1</entry>
+
+            <entry>unsigned 64-bit</entry>
+          </row>
+
+          <row>
+            <entry>SQWORD</entry>
+
+            <entry>8 bytes</entry>
+
+            <entry>-2^63 .. 2^63-1</entry>
+
+            <entry>signed 64-bit</entry>
+          </row>
+
+          <row>
+            <entry>OWORD</entry>
+
+            <entry>16 bytes</entry>
+
+            <entry>0 .. 2^128-1</entry>
+
+            <entry>unsigned 128-bit</entry>
+          </row>
+
+          <row>
+            <entry>SOWORD</entry>
+
+            <entry>16 bytes</entry>
+
+            <entry>-2^127 .. 2^127-1</entry>
+
+            <entry>signed 128-bit</entry>
+          </row>
+        </tbody>
+      </tgroup>
+    </table>
+
+    <p>The derivation rule of the smaller types still applies: QWORD is
+    equivalent to BYTE*8, OWORD to BYTE*16, and the signed types add the
+    SIGNED attribute to the same widths.</p>
+
+    <p>Literals may be written as decimal numbers (underscores are allowed as
+    digit separators) or in hexadecimal with a 0x prefix. A leading minus
+    sign makes a signed value.</p>
+
+    <codeblock>CONST QWORD GOLDEN = 0x9E3779B97F4A7C15
+VAR QWORD total = 0
+VAR SQWORD delta = -1
+VAR OWORD counter = 0
+VAR SOWORD floor = -1</codeblock>
+
+    <p>Arithmetic, shifts, bitwise operators, and comparisons operate on the
+    full width of the value. When operands of different widths meet, the
+    narrower value is promoted to the wider type, as with the smaller integer
+    types.</p>
+
+    <codeblock>total = total + 0x1111111111111111
+IF total &gt; GOLDEN THEN
+   total = total &lt;&lt; 1
+END IF</codeblock>
+
+    <p>A wide value occupies contiguous bytes in data memory, least
+    significant byte first. Byte overlays can be used to inspect or fill the
+    individual bytes:</p>
+
+    <codeblock>VAR QWORD value
+VAR BYTE view[8] AT value
+VAR QWORD high AT big_value + 8</codeblock>
+
+    <p>COUNT returns the storage width in bytes, so COUNT(total) is 8 and
+    COUNT(counter) is 16. See <xref href="text_conversion.dita"/> for
+    COUNT and the text conversion casts.</p>
+  </body>
+</topic>

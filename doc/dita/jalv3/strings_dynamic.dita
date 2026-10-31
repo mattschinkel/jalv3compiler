@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="strings_dynamic" xml:lang="en-US">
+  <title>Dynamic strings and the string heap</title>
+
+  <body>
+    <p>A dynamic string, declared with VAR STRING and no capacity, is a handle
+    to storage in a compiler-managed heap. Its contents may grow, shrink, and
+    be concatenated at run time. Dynamic strings are supported on every
+    target, but they need a heap whose size is fixed at compile time.</p>
+
+    <p>The heap size is declared with a WORD constant named
+    _string_heap_size. It must appear before the first dynamic string and
+    before the strings_dynamic library is included, because that library
+    declares wrappers with STRING formals:</p>
+
+    <codeblock>CONST WORD _string_heap_size = 255
+INCLUDE strings_dynamic
+
+VAR STRING name = "JALv3"
+VAR STRING out</codeblock>
+
+    <p>Each handle holds three index-sized fields (offset, length, and
+    capacity) plus the payload bytes, which live in the heap. The width of
+    the index fields is selected with a pragma (see below).</p>
+
+    <section>
+      <title>Heap configuration</title>
+
+      <codeblock>PRAGMA STRING INDEX AUTO | BYTE | WORD
+PRAGMA STRING ALLOC FIRST_FIT | BEST_FIT
+PRAGMA STRING RETRY ON | OFF</codeblock>
+
+      <p>INDEX selects the width of the per-handle offset, length, and
+      capacity fields and of the heap block headers. AUTO chooses a width
+      from the declared heap size; BYTE and WORD force the width.</p>
+
+      <p>ALLOC selects the free-block search: FIRST_FIT takes the first block
+      that is large enough, BEST_FIT the smallest such block.</p>
+
+      <p>RETRY controls what happens when an allocation fails. With ON, the
+      allocator compacts the heap once and retries the search; with OFF it
+      fails immediately and sets the error byte.</p>
+
+      <p>The older PRAGMA STRING HEAP &lt;bytes&gt; line is still accepted, but
+      it is ignored: it neither sets the heap size nor produces a warning. Use
+      the _string_heap_size constant instead.</p>
+    </section>
+
+    <section>
+      <title>Assignment, copying, and concatenation</title>
+
+      <p>Assigning a literal allocates or resizes the payload. Assigning one
+      dynamic string to another copies its contents. The &amp; operator
+      concatenates string values on the right-hand side of an assignment:</p>
+
+      <codeblock>VAR STRING msg
+VAR STRING dst
+VAR STRING src = "world"
+
+msg = "hello"
+dst = src
+msg = "Hello, " &amp; src &amp; "!"
+msg = msg &amp; ""                    -- empty by concatenation; frees the payload</codeblock>
+
+      <p>Concatenation also works in expression position: as either operand of
+      == or !=, and as a procedure argument. The chain is evaluated into a
+      compiler-generated heap cell and then behaves like any other dynamic
+      string.</p>
+
+      <codeblock>IF msg == "Hello, " &amp; src &amp; "!" THEN ... END IF
+IF "Hi, " &amp; src == msg THEN ... END IF
+print_string(serial_data, "t=" &amp; src)</codeblock>
+
+      <p>The &amp; operator remains the bitwise AND when the left operand is
+      not a string, so conditions such as (c1 == 1) &amp; (c2 == 2) keep their
+      meaning. Once a string operand has been seen, a non-string operand after
+      &amp; is a compile error.</p>
+    </section>
+
+    <section>
+      <title>Numbers in concatenations</title>
+
+      <p>Integer operands, constants and variables alike, render as ASCII
+      decimal inside a &amp; chain. All integer widths are supported, signed
+      and unsigned, with a leading minus for negative values. Hexadecimal
+      literals render in decimal too: 0x10 becomes "16".</p>
+
+      <codeblock>VAR BYTE cnt = 42
+VAR DWORD addr = 4294967295
+VAR SQWORD big = -1234567890
+
+out = "cnt=" &amp; cnt &amp; " addr=" &amp; addr
+out = "neg: " &amp; -42 &amp; " sqw: " &amp; big</codeblock>
+
+      <p>Floating point constants render as shortest round-trip decimal, so
+      1.5 becomes "1.5", 100.0 becomes "100", and 1e-8 becomes "0.00000001".
+      Runtime floating point variables and BIT values are not converted and
+      produce a clean compile error.</p>
+    </section>
+
+    <section>
+      <title>Length and errors</title>
+
+      <p>COUNT returns the current character count of a dynamic string, which
+      is not the same as the capacity of a fixed-capacity string. The
+      _length(expr) spelling is still accepted; with -warn-misc the compiler
+      suggests COUNT instead.</p>
+
+      <p>The shared byte _string_error records the result of the most recent
+      string operation. Reading it returns the stored code and resets the byte
+      to none, so read it once per operation when the exact code matters. The
+      symbolic constants are string_error_none, string_error_heap_full,
+      string_error_overflow, and string_error_invalid.</p>
+
+      <codeblock>VAR BYTE err = _string_error
+IF err == string_error_heap_full THEN ... END IF</codeblock>
+
+      <p>An assignment that fails for lack of heap space leaves the
+      destination string unchanged and records string_error_heap_full.</p>
+    </section>
+
+    <section>
+      <title>Library helpers</title>
+
+      <p>After INCLUDE strings_dynamic the following functions are available.
+      They return a BIT: TRUE on success, FALSE on failure or truncation.</p>
+
+      <codeblock>string_append(string IN OUT dst, STRING IN src)
+string_append_truncate(string IN OUT dst, STRING IN src, WORD IN max_len)
+string_truncate(STRING IN OUT dst, WORD IN max_len)
+string_from_array(STRING IN OUT dst, BYTE IN src_array[])
+string_from_array_truncate(STRING IN OUT dst, BYTE IN src_array[], WORD IN max_len)
+string_to_array(BYTE OUT dst_array[], STRING IN src)
+string_to_array_truncate(BYTE OUT dst_array[], STRING IN src, WORD IN max_len)
+string_heap_compact()</codeblock>
+
+      <p>The truncating helpers return FALSE when bytes were dropped. The
+      same built-ins may also be spelled with a leading underscore, for
+      example _string_append and _string_heap_compact.</p>
+
+      <p>string_heap_compact() packs the live heap blocks and patches every
+      dynamic handle's offset. It returns FALSE when the work table cannot be
+      emitted or heap support is missing.</p>
+    </section>
+
+    <section>
+      <title>Pointers to dynamic strings</title>
+
+      <p>A pointer whose pointee contract is VAR STRING can be bound to a
+      dynamic string, and assignments and concatenations through the pointer
+      operate on the string it refers to. See <xref href="pointers.dita"/>.</p>
+
+      <codeblock>VAR POINTER p AS VAR STRING
+p IS name
+p = "hello"
+p = p &amp; " tail"</codeblock>
+    </section>
+  </body>
+</topic>

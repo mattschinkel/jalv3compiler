@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="optional_parameters" xml:lang="en-US">
+  <title>Optional parameters and defaults</title>
+
+  <body>
+    <p>JALv3 procedures and functions may declare trailing parameters as
+    optional and give them a default value. A call may then omit any trailing
+    run of those arguments.</p>
+
+    <codeblock>PROCEDURE blink(BYTE IN pin, OPTIONAL WORD IN delay_ms DEFAULT 500) IS
+   ...
+END PROCEDURE
+
+blink(3)             -- delay_ms = 500
+blink(3, 1000)       -- delay_ms = 1000</codeblock>
+
+    <p>The rules are:</p>
+
+    <ul>
+      <li>OPTIONAL parameters must come after all required parameters. A
+      required parameter after an optional one is an error.</li>
+
+      <li>Only IN parameters may be optional. A default on an OUT or IN OUT
+      parameter is an error.</li>
+
+      <li>DEFAULT is mandatory and must be a constant expression: a literal,
+      a constant, or constant arithmetic. The value is typed by the
+      parameter.</li>
+
+      <li>Optional parameters work with BIT, every integer width, VOLATILE
+      formals, and open arrays whose default is a string literal.</li>
+
+      <li>Direct calls only. Function-pointer calls keep the full-arity rule,
+      and pseudo-variable routines ('get and 'put) do not support optional
+      parameters at all.</li>
+    </ul>
+
+    <p>An open array may declare a literal default. The literal is
+    materialized once, and COUNT inside the callee sees its length:</p>
+
+    <codeblock>PROCEDURE tag(OPTIONAL BYTE IN txt[] DEFAULT "n/a") IS
+   print_byte_dec(serial_data, BYTE(COUNT(txt)))
+END PROCEDURE
+
+tag()                -- prints 3
+tag("custom")        -- prints 6</codeblock>
+
+    <p>A string literal passed to a STRING or STRING[N] formal is staged into
+    a compiler string cell, so any length up to the capacity compiles. An
+    optional string parameter may also use a string literal as its
+    default.</p>
+
+    <section>
+      <title>The empty-string sentinel</title>
+
+      <p>When a call needs to supply a later optional argument while leaving
+      an earlier one at its default, an empty string literal can stand in for
+      the omitted value. Passing "" to a non-string optional parameter means
+      omitted, and the declared default is used. The sentinel works in the
+      middle of an argument list and for open-array defaults.</p>
+
+      <codeblock>PROCEDURE draw(BYTE IN x, OPTIONAL BYTE IN colour DEFAULT 1,
+    OPTIONAL BIT IN bold DEFAULT FALSE) IS ... END PROCEDURE
+
+draw(10, "", TRUE)   -- colour defaults to 1, bold is TRUE</codeblock>
+
+      <p>Only the empty literal is the sentinel. A string of two or more
+      characters remains a type error, and a one-character literal keeps its
+      long-standing char-code meaning, so "x" passes 120 to a byte parameter.
+      Required parameters never accept the sentinel, and STRING-typed formals
+      receive "" as a real empty string.</p>
+    </section>
+
+    <p>Optional arguments are filled in by the caller: the compiler emits an
+    ordinary full-arity call, so the mechanism is identical on every
+    target.</p>
+  </body>
+</topic>

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="strings_fixed" xml:lang="en-US">
+  <title>Fixed-capacity strings</title>
+
+  <body>
+    <p>A fixed-capacity string stores up to N characters in N bytes of data
+    memory. It needs no heap and can be used on every target.</p>
+
+    <codeblock>VAR STRING[16] name = "text"
+VAR STRING[8] tag</codeblock>
+
+    <p>The bracketed value is the capacity in bytes and must be a constant
+    expression. A shorter initializer or assignment is zero-filled up to the
+    full capacity, so the first example's name holds "text" followed by
+    twelve zero bytes; the characters can be inspected with the ordinary
+    subscript syntax.</p>
+
+    <codeblock>VAR STRING[16] name = "abc"
+VAR BYTE first = name[0]          -- 'a'
+VAR BYTE after = name[3]          -- 0</codeblock>
+
+    <p>COUNT on a fixed-capacity string is the declared capacity, not the
+    current text length: COUNT(name) is 16 above, whatever the contents. Use
+    the length returned by the library, or the dynamic string type described
+    in <xref href="strings_dynamic.dita"/>, when the length must vary at run
+    time.</p>
+
+    <p>A value that is too long behaves differently for the two write forms.
+    Assigning a string that does not fit copies as much as fits and sets
+    _string_error to string_error_overflow. A concatenation whose result does
+    not fit leaves the destination unchanged and sets _string_error to
+    string_error_overflow. The error byte is described in
+    <xref href="strings_dynamic.dita"/>.</p>
+
+    <p>Fixed-capacity strings may be passed to procedures and functions with
+    matching capacity, and string literals are accepted as actuals for such
+    formals: the literal is staged into a compiler string cell, zero-padded
+    to the capacity, and any length up to the capacity compiles. A longer
+    literal is a compile-time error that names the two lengths.</p>
+
+    <codeblock>PROCEDURE send(STRING[16] IN s) IS ... END PROCEDURE
+
+send("hello")                       -- staged, zero-padded
+send("0123456789ABCDEF")            -- exactly 16 characters</codeblock>
+
+    <note>Fixed-capacity strings are not heap objects, so they never allocate
+    or fail for lack of heap space. A too-long value is reported through
+    _string_error as described above.</note>
+  </body>
+</topic>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="strings" xml:lang="en-US">
+  <title>Strings</title>
+
+  <body>
+    <p>JAL has two string types. A fixed-capacity string reserves a known
+    number of bytes in data memory and needs no run-time support. A dynamic
+    string is a handle into a compiler-managed heap and may grow and shrink at
+    run time. Both are described in this chapter.</p>
+
+    <p>String literals are described with the constants in
+    <xref href="constants.dita"/>, and the text conversion casts
+    (STRING, HEX, BIN) and COUNT are described in
+    <xref href="text_conversion.dita"/>.</p>
+  </body>
+</topic>

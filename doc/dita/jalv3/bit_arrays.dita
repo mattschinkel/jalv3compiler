@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="bit_arrays" xml:lang="en-US">
+  <title>Native bit arrays</title>
+
+  <body>
+    <p>JALv3 stores arrays of BIT natively: one bit per element, packed
+    without padding. A BIT array of N elements occupies (N+7)/8 bytes of data
+    memory.</p>
+
+    <codeblock>VAR BIT flags[16]
+VAR BIT init_flags[4] = {TRUE, FALSE, TRUE, TRUE}
+CONST BIT const_flags[4] = {FALSE, TRUE, TRUE, FALSE}</codeblock>
+
+    <p>Elements are accessed with the ordinary subscript syntax, using either
+    a constant or a runtime index. A BIT value can be tested directly or
+    converted to a byte value:</p>
+
+    <codeblock>flags[0] = TRUE
+flags[idx] = FALSE
+VAR BYTE as_byte = BYTE(flags[0])
+IF !flags[idx] THEN
+   flags[1] = FALSE
+END IF
+IF flags[0] &amp; flags[2] THEN
+   flags[3] = TRUE
+END IF</codeblock>
+
+    <p>Bit arrays may be passed to procedures as fixed-size or open-array
+    formals. An IN OUT formal writes changes back to the caller's array:</p>
+
+    <codeblock>PROCEDURE read_fixed(BIT IN bits[4]) IS ... END PROCEDURE
+PROCEDURE read_open(BIT IN bits[]) IS ... END PROCEDURE
+PROCEDURE update(BIT IN OUT bits[17]) IS ... END PROCEDURE</codeblock>
+
+    <p>Multi-dimensional bit arrays are also supported, for example an 8 by 8
+    bit grid:</p>
+
+    <codeblock>VAR BIT grid[8][8]
+grid[row][col] = TRUE</codeblock>
+
+    <section>
+      <title>Multi-bit fields</title>
+
+      <p>The packed field type BIT*N declares an N-bit integer (1 to 8 bits)
+      that can be used on its own, as an array element type, or as an overlay
+      on a byte variable. The overlay form places the field at a bit offset
+      inside the target variable, which is the natural way to model hardware
+      register fields.</p>
+
+      <codeblock>VAR BYTE config_shadow = 0
+VAR BIT*3 speed_field AT config_shadow : 0    -- bits 2:0
+VAR BIT*2 mode_field  AT config_shadow : 3    -- bits 4:3
+VAR BIT*1 enable      AT config_shadow : 5    -- bit 5
+
+speed_field = 5
+mode_field = 2
+enable = TRUE
+VAR BYTE raw = config_shadow                  -- 0x35</codeblock>
+
+      <p>BIT*N fields may also be arrayed, for example VAR BIT*3 fields[80]
+      for 80 three-bit values. Widths greater than 8 bits are refused with a
+      diagnostic.</p>
+    </section>
+
+    <section>
+      <title>Bounds and checking</title>
+
+      <p>A constant subscript outside 0 .. N-1 is a compile error (subscript
+      out of range). A runtime index is not range checked, exactly like the
+      other array types, and an open bit-array formal has no compile-time
+      bound inside the callee.</p>
+    </section>
+  </body>
+</topic>

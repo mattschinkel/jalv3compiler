@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="d0e339" xml:lang="en-US">
+  <title>INTERRUPT</title>
+
+  <body>
+    <p>Format:</p>
+
+    <codeblock>          PRAGMA INTERRUPT { FAST | RAW | NORMAL | MVEC | [ <i>cexpr</i> ] }</codeblock>
+
+    <p>This must be used within a procedure that takes no parameters. It
+    defines the procedure as an interrupt entry point. Such a procedure is
+    added to a chain of procedures executed whenever an interrupt hits. Once a
+    procedure has been marked interrupt, it cannot be called directly by the
+    program.</p>
+
+    <p>NORMAL, FAST, and RAW select how the register state is protected. The
+    plain form (no word) is the same as NORMAL on the classic PIC targets and
+    on PIC32 application-flash images. On PIC32MZ loader images a plain
+    interrupt defaults to the fast shadow-register-set path, where the
+    processor saves the registers instead of the generated code; FAST selects
+    that path explicitly and RAW selects the software save and restore
+    explicitly. RAW is required under PRAGMA ISA MICROMIPS, which has no
+    encoding for the shadow-set instructions. On PIC32MX1/2 parts the
+    shadow-register-set path does not exist, so a plain interrupt uses the
+    software save and FAST is rejected with a diagnostic.</p>
+
+    <p>A number binds the procedure to a particular interrupt vector on
+    targets that support multi-vector interrupts, for example PRAGMA
+    INTERRUPT 12. The vector number must be in the range 0 to 255; the
+    PIC32MX hardware table provides 64 entries, numbered 0 to 63.</p>
+
+    <p>MVEC enables the PIC32MX multi-vector interrupt table. It takes no
+    argument and is used together with numbered PRAGMA INTERRUPT N
+    statements.</p>
+  </body>
+</topic>
