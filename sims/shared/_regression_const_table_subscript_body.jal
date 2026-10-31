@@ -1,0 +1,105 @@
+-- ----------------------------------------------------------------------------
+-- Title: const ROM table at a RUNTIME index used as another array's subscript
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the classic-core defect where a const ROM table element in a
+--    runtime subscript (`arr[T[k]]`) was never materialized as an rvalue:
+--    the element-size-1 path attached the lookup value straight as the
+--    destination array's runtime baseofs, so the back end treated the table
+--    variable itself as a file operand and every classic core failed with
+--       error: banked data op (MOVLB) for operand with unknown file address
+--       (T); 0xFFFF/256 is not a valid bank select
+--    (found by the jallib-generator large-array bodies, 2026-10-29; PIC32
+--    was unaffected). The front end now reads the table element through the
+--    lookup machinery into a RAM temp before it becomes an address
+--    dependency. Table values deliberately DIFFER from their indices (and
+--    from the byte offsets), so "used the index/offset instead of the loaded
+--    value" fails a checkpoint instead of passing by coincidence. Wide
+--    elements (word table, stride-2 read) and the nested table-to-table
+--    index shape ride neighbouring paths and are pinned too.
+--
+--    Checkpoints:
+--      1. store through a byte table at a runtime index (the defect shape)
+--      2. read through the table at a runtime index
+--      3. word-element table as the index (stride-2 scaling)
+--      4. nested table-to-table index (T[T[k]])
+--      5. no collateral corruption: whole-array pattern checksum
+-- ----------------------------------------------------------------------------
+
+regression_begin_run()
+
+var byte ctb_arr[8]
+var volatile byte ctb_k
+var volatile byte ctb_v
+var word ctb_sum
+
+const byte CTB_T[8] = { 3, 0, 5, 7, 2, 6, 1, 4 }
+const word CTB_W[4] = { 6, 2, 5, 1 }
+
+ctb_arr[0] = 1
+ctb_arr[1] = 11
+ctb_arr[2] = 21
+ctb_arr[3] = 31
+ctb_arr[4] = 41
+ctb_arr[5] = 51
+ctb_arr[6] = 61
+ctb_arr[7] = 71
+
+-- checkpoint 1: CTB_T[2] = 5 -> arr[5]; the index itself (2) and the byte
+-- offset (2) both differ from 5, so only the loaded table value can pass.
+ctb_k = 2
+ctb_arr[CTB_T[ctb_k]] = 99
+if (ctb_arr[5] == 99) & (ctb_arr[2] == 21) & (ctb_arr[0] == 1) then
+   regression_checkpoint()
+else
+   _check_failed = true
+end if
+
+-- checkpoint 2: read side -- CTB_T[3] = 7 -> arr[7]
+ctb_k = 3
+ctb_v = ctb_arr[CTB_T[ctb_k]]
+if ctb_v == 71 then
+   regression_checkpoint()
+else
+   _check_failed = true
+end if
+
+-- checkpoint 3: word-element table -- CTB_W[1] = 2 -> arr[2]; the word
+-- element strides by 2, so an offset-vs-value confusion reads 2 here too
+ctb_k = 1
+ctb_arr[CTB_W[ctb_k]] = 42
+if (ctb_arr[2] == 42) & (ctb_arr[1] == 11) then
+   regression_checkpoint()
+else
+   _check_failed = true
+end if
+
+-- checkpoint 4: nested lookup -- CTB_T[CTB_T[2]] = CTB_T[5] = 6 -> arr[6]
+ctb_k = 2
+ctb_arr[CTB_T[CTB_T[ctb_k]]] = 12
+if ctb_arr[6] == 12 then
+   regression_checkpoint()
+else
+   _check_failed = true
+end if
+
+-- checkpoint 5: everything else untouched
+-- 1 + 11 + 42 + 31 + 41 + 99 + 12 + 71 = 308
+ctb_sum = 0
+ctb_sum = ctb_sum + ctb_arr[0]
+ctb_sum = ctb_sum + ctb_arr[1]
+ctb_sum = ctb_sum + ctb_arr[2]
+ctb_sum = ctb_sum + ctb_arr[3]
+ctb_sum = ctb_sum + ctb_arr[4]
+ctb_sum = ctb_sum + ctb_arr[5]
+ctb_sum = ctb_sum + ctb_arr[6]
+ctb_sum = ctb_sum + ctb_arr[7]
+if ctb_sum == 308 then
+   regression_checkpoint()
+else
+   _check_failed = true
+end if
+
+regression_pass_led_if_clean()

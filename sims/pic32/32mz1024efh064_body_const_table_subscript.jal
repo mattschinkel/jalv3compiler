@@ -1,0 +1,22 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ @sim_validate — const ROM table at a runtime subscript
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Front-end parity twin of the classic-core const-table-subscript fix:
+--    the 32-bit back ends handled `arr[T[k]]` already (const arrays carry a
+--    real address there), so this pins that the rvalue materialization the
+--    front end now emits (a lookup read into a RAM temp before the value
+--    becomes an address dependency) is correct on MIPS too.
+--
+-- @sim_validate begin
+-- duration_s: 2.0
+-- machine: pic32mz-explorer16
+-- expect byte v__check_step 5
+-- @sim_validate end
+--
+include regression_32mz1024efh064_device
+include regression_pic32
+pragma target image pfm
+include _regression_const_table_subscript_body

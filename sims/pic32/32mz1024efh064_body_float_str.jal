@@ -9,17 +9,20 @@
 --    list).  Pins the rendered CHARACTER BYTES, not just COUNT --
 --    untestable on MIPS before the float_alg cuts (truncating float)
 --    and the ofs-scratch collision (digit chars emitted as raw
---    values).  _fb_res is a post-run copy of the bad-case flag, so
---    expecting 0 proves every case ran AND compared clean.
+--    values).  _fb_res is a COMPLETION marker: it starts at 170, and
+--    the last statement sets it to 90 + _fb_bad.  Expecting 90 proves
+--    every case ran AND compared clean.  QEMU zeroes SRAM, so a marker
+--    that merely started at 0 would pass a truncated run vacuously --
+--    hence a POSITIVE value, not 0.
 --
 -- Notes:
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mz1024efh064_body_float_str.jal
 --
 -- @sim_validate begin
--- duration_s: 120.0
+-- duration_s: 2.0
 -- machine: pic32mz-explorer16
 -- expect byte v__fb_bad 0
--- expect byte v__fb_res 0
+-- expect byte v__fb_res 90
 -- @sim_validate end
 --
 include regression_32mz1024efh064_device
@@ -32,6 +35,7 @@ var byte _fb_buf[48]
 var byte _fb_n = 0
 var byte _fb_bad = 0
 var byte _fb_i = 0
+var volatile byte _fb_res = 170   -- completion sentinel (170 until the last case runs)
 
 --------------------------------------------------------------------------------
 -- Description: run one battery case; _e0.._eg are the expected ASCII bytes
@@ -173,6 +177,6 @@ _fb_case(_fb_v43, 44, 9, 48, 46, 57, 57, 57, 57, 57, 57, 57, 48, 48, 48, 48, 48,
 var float _fb_v44 = 9.999999e+38
 _fb_case(_fb_v44, 45, 3, 105, 110, 102, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
 
-var volatile byte _fb_res = _fb_bad
+_fb_res = 90 + _fb_bad
 forever loop
 end loop

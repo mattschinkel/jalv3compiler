@@ -1,0 +1,25 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim witness — const ROM table at a runtime subscript
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC18 twin of the runtime-indexed const-ROM-table subscript defect
+--    (`arr[T[k]]`): the 16-bit core's banked MOVLB walker tripped on the
+--    table variable's unknown file address. Shared body pins the store,
+--    read, word-table stride, nested lookup and a whole-array checksum.
+--
+-- @gpsim_validate begin
+-- steps: 500000
+-- frequency_hz: auto
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_ctb_sum 52
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+include _regression_const_table_subscript_body

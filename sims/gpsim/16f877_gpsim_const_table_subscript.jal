@@ -1,0 +1,25 @@
+-- ------------------------------------------------------
+-- Title: 16f877 gpsim witness — const ROM table at a runtime subscript
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved
+-- Compiler: JALv2
+--
+-- Description:
+--    Classic 14-bit twin of the runtime-indexed const-ROM-table subscript
+--    defect (`arr[T[k]]`): the lookup value reached the FSR address staging
+--    through the 14-bit dynamic-index loader. Shared body pins the store,
+--    read, word-table stride, nested lookup and a whole-array checksum.
+--
+-- @gpsim_validate begin
+-- steps: 500000
+-- frequency_hz: auto
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_ctb_sum 52
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f877_device
+include regression
+include _regression_const_table_subscript_body

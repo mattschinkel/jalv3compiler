@@ -1,0 +1,44 @@
+-- ------------------------------------------------------
+-- Title: <device> gpsim witness — <one-line what this pins>
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    <What program shape this exercises, what the expected values are,
+--     and which defect/behavior it pins. If it reproduces a layout-
+--     sensitive defect, say WHICH program it was promoted verbatim from
+--     -- do not trim it (see Known Pitfalls #4).>
+--
+-- @gpsim_validate begin
+-- steps: 5000000
+-- checkpoint_verify: off
+-- expect byte v_flags 3
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+-- Known Pitfalls (sims/gpsim_validate_contract.txt) are pre-applied here:
+--   #1 WDT: 16F1-class default fuses leave the watchdog ON -- gpsim
+--      models it and bare probes reset-loop. Keep this pragma.
+--   #2 steps: >= 5M if the program runs any real delay at 32 MHz
+--      (a _usec_delay(100_000) alone is ~800k instructions).
+include 16f1825
+pragma target WDT DISABLED
+
+-- result bits: publish checks as packed bits in ONE volatile byte so the
+-- expect lines stay stable when locals move around
+var volatile byte flags = 0
+var bit b0 at flags : 0 = false
+var bit b1 at flags : 1 = false
+var bit b2 at flags : 2 = false
+
+-- <the code under test>
+-- b0 = true
+-- b1 = ...
+
+-- power-on RAM is NOT zero on silicon; when the shape depends on fresh
+-- RAM, prove it against garbage with poke byte (contract, poke section):
+-- -- poke byte v_flags 0xff
+
+-- Runtime-verify the serial text in one command when needed:
+--   python3 sims/txreg_check.py sims/gpsim/<this file> --needle "..."
