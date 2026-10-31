@@ -1140,6 +1140,9 @@ static value_t jal_volatile_function_create(pfile_t *pf,
     } else {
       pfile_proc_t  *pfproc_active;   /* current active proc */
       pfile_block_t *pfblock_active; /* current active block within proc */
+      pfile_proc_t  *pfproc_owner;   /* proc owning the variable's block */
+      pfile_block_t *pfblock_owner;  /* owner proc's active block */
+      boolean_t      entered;
 
       /*
        * this function needs to be created in the same
@@ -1155,34 +1158,58 @@ static value_t jal_volatile_function_create(pfile_t *pf,
        */
       pfproc_active  = pfile_proc_active_get(pf);
       pfblock_active = pfile_proc_block_active_get(pfproc_active);
-      pfile_proc_active_set(pf, pfile_block_owner_get(blk));
-      pfile_proc_block_active_set(pfile_block_owner_get(blk), blk);
+      pfproc_owner   = pfile_block_owner_get(blk);
+      pfblock_owner  = pfile_proc_block_active_get(pfproc_owner);
+
+      /* The whole synthesis must run under the VARIABLE's owner proc, not
+       * the caller's: pfile_proc_enter() searches only pf->proc_active's
+       * children, and pfile_proc_leave() pops whatever proc_active is.
+       * Restoring the caller before enter/leave made the first accessor
+       * synthesis for a file-scope pseudo variable (e.g. `serial_data`
+       * used inside a procedure) fail the enter and then pop the CALLER
+       * proc -- the rest of the file parsed at the wrong scope, with a
+       * cascade of bogus "not defined" errors and orphaned label refs
+       * (the 2026-10-29 `label leak: ... _l567` 16f1825 report). */
+      pfile_proc_active_set(pf, pfproc_owner);
+      pfile_proc_block_active_set(pfproc_owner, blk);
       proc = pfile_proc_create(pf, fn_name, proc_def);
-      pfile_proc_block_active_set(pfile_block_owner_get(blk), pfblock_active);
-      pfile_proc_active_set(pf, pfproc_active);
 
       pfile_cmd_cursor_set(pf, pfile_block_cmd_get(blk));
       pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
           CMD_BRANCHCOND_NONE, pfile_proc_skip_label_get(proc),
           VALUE_NONE, VALUE_NONE, 0);
-      pfile_proc_enter(pf, pfile_proc_tag_get(proc));
-      pfile_block_enter(pf);
-      pfile_proc_define(proc, proc_def, pf);
-      switch (type) {
-        case JAL_VOLATILE_FN_GET:
-          tmp = pfile_proc_param_get(proc, 0);
-          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &tmp, val, VALUE_NONE);
-          break;
-        case JAL_VOLATILE_FN_PUT:
-          tmp = pfile_proc_param_get(proc, 1);
-          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &val, tmp, VALUE_NONE);
-          break;
+      entered = (boolean_t) (RESULT_OK
+          == pfile_proc_enter(pf, pfile_proc_tag_get(proc)));
+      if (entered) {
+        pfile_block_enter(pf);
+        pfile_proc_define(proc, proc_def, pf);
+        switch (type) {
+          case JAL_VOLATILE_FN_GET:
+            tmp = pfile_proc_param_get(proc, 0);
+            pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &tmp, val, VALUE_NONE);
+            break;
+          case JAL_VOLATILE_FN_PUT:
+            tmp = pfile_proc_param_get(proc, 1);
+            pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &val, tmp, VALUE_NONE);
+            break;
+        }
+        pfile_block_leave(pf);
+        pfile_proc_leave(pf);
+      } else {
+        /* the accessor proc exists but could not be entered: report and
+         * degrade to "no accessor" rather than corrupting the scope */
+        pfile_log(pf, PFILE_LOG_ERR,
+            "cannot enter the %s accessor procedure", fn_name);
+        tmp = VALUE_NONE;
       }
-      pfile_block_leave(pf);
-      pfile_proc_leave(pf);
       pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
       pfile_cmd_cursor_set(pf, CMD_NONE);
-      tmp = pfile_value_find(pf, PFILE_LOG_ERR, fn_name);
+      pfile_proc_block_active_set(pfproc_owner, pfblock_owner);
+      pfile_proc_active_set(pf, pfproc_active);
+      pfile_proc_block_active_set(pfproc_active, pfblock_active);
+      if (entered) {
+        tmp = pfile_value_find(pf, PFILE_LOG_ERR, fn_name);
+      }
       value_release(val);
     }
   }

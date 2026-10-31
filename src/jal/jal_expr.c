@@ -142,15 +142,37 @@ static void jal_parse_subscript_abort_illegal_pointer_subscript(
 void jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs)
 {
   value_t baseofs;
+  value_t rval;
+
+  /* A runtime-indexed element of a const ROM table (`T[k]`) is an rvalue:
+   * read it through the lookup machinery into a RAM temp before it becomes
+   * an address dependency.  Attached raw, the classic back ends treat the
+   * table variable itself as a file operand -- the element-size-1 path
+   * (byte arrays) skips the scaling MUL that otherwise materializes the
+   * lookup, so `arr[T[k]]` died with "banked data op (MOVLB) for operand
+   * with unknown file address (T); 0xFFFF/256 is not a valid bank select"
+   * on every classic core (see fixes/fix_const_table_runtime_subscript.md).
+   * value_is_lookup is exactly "declared-const variable whose baseofs is
+   * not constant", i.e. the runtime-indexed table read. */
+  rval = ofs;
+  if (ofs && value_is_lookup(ofs)) {
+    value_t tmp;
+
+    tmp = pfile_value_temp_get_from_def(pf, value_def_get(ofs));
+    if (tmp) {
+      pfile_cmd_op_add_assign(pf, OPERATOR_ASSIGN, &tmp, ofs);
+      rval = tmp;
+    }
+  }
 
   baseofs = value_baseofs_get(val);
   if (VALUE_NONE == baseofs) {
-    value_baseofs_set(val, ofs);
-  } else if (value_is_const(baseofs) && value_is_const(ofs)) {
+    value_baseofs_set(val, rval);
+  } else if (value_is_const(baseofs) && value_is_const(rval)) {
     value_t cval;
 
     cval = pfile_constant_get(pf,
-        value_const_get(baseofs) + value_const_get(ofs),
+        value_const_get(baseofs) + value_const_get(rval),
         VARIABLE_DEF_NONE);
     value_baseofs_set(val, cval);
     value_release(cval);
@@ -158,9 +180,12 @@ void jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs)
     value_t tmp;
 
     tmp = VALUE_NONE;
-    pfile_cmd_op_add(pf, OPERATOR_ADD, &tmp, baseofs, ofs);
+    pfile_cmd_op_add(pf, OPERATOR_ADD, &tmp, baseofs, rval);
     value_baseofs_set(val, tmp);
     value_release(tmp);
+  }
+  if (rval != ofs) {
+    value_release(rval);
   }
 }
 
@@ -1176,8 +1201,7 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
   return val;
 }
 
-static value_t value_get_length_common(pfile_t *pf, boolean_t allow_scalar,
-    boolean_t warn_length_operator_deprecated)
+static value_t value_get_length_common(pfile_t *pf, boolean_t allow_scalar)
 {
   value_t val;
 
@@ -1240,24 +1264,19 @@ static value_t value_get_length_common(pfile_t *pf, boolean_t allow_scalar,
       pf_token_get(pf, PF_TOKEN_NEXT);
     }
   }
-  if (val && warn_length_operator_deprecated
-      && pfile_flag_test(pf, PFILE_FLAG_WARN_MISC)) {
-    pfile_log(pf, PFILE_LOG_WARN,
-        "_LENGTH() is deprecated; use COUNT() instead");
-  }
   return val;
 }
 
-/* COUNT(...) — canonical length / element-count operator (same rules as former _LENGTH). */
+/* COUNT(...) — canonical length / element-count operator (same rules as _LENGTH). */
 static value_t value_get_count(pfile_t *pf)
 {
-  return value_get_length_common(pf, BOOLEAN_TRUE, BOOLEAN_FALSE);
+  return value_get_length_common(pf, BOOLEAN_TRUE);
 }
 
-/* _LENGTH(...) — legacy spelling; warn when -warn-misc */
+/* _LENGTH(...) — legacy spelling of COUNT() */
 static value_t value_get_length(pfile_t *pf)
 {
-  return value_get_length_common(pf, BOOLEAN_TRUE, BOOLEAN_TRUE);
+  return value_get_length_common(pf, BOOLEAN_TRUE);
 }
 
 static value_t value_get_whereis(pfile_t *pf)
