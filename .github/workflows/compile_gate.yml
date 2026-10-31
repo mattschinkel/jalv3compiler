@@ -33,6 +33,11 @@ jobs:
       - name: Build (strict C89, -Werror)
         run: make -C src ARCH=x86-64
 
+      - name: Static analysis (-fanalyzer, gated on a baseline)
+        # 75 s here vs ~90 s for the whole L1 ladder, so it lives in CI
+        # rather than in the local pin gate. Fails only on NEW findings.
+        run: unit-tests/run_analyzer.sh
+
       - name: Fetch the pinned jallib corpus
         run: unit-tests/fetch_jallib.sh
 

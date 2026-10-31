@@ -1,0 +1,14 @@
+src/jal/jal_proc.c -Wanalyzer-malloc-leak
+src/jal/jal_tokn.c -Wanalyzer-use-of-uninitialized-value
+src/libcore/cmd_brch.c -Wanalyzer-null-dereference
+src/libcore/label.c -Wanalyzer-null-argument
+src/libcore/pf_block.c -Wanalyzer-deref-before-check
+src/libcore/pf_cmd.c -Wanalyzer-null-dereference
+src/libcore/pf_expr.c -Wanalyzer-null-dereference
+src/libcore/pf_proc.c -Wanalyzer-deref-before-check
+src/libpic32/mips_alloc.c -Wanalyzer-use-of-uninitialized-value
+src/libpic32/mips_op.c -Wanalyzer-malloc-leak
+src/libutils/cod_file.c -Wanalyzer-null-dereference
+src/libutils/cod_file.c -Wanalyzer-possible-null-argument
+src/libutils/cod_file.c -Wanalyzer-possible-null-dereference
+src/libutils/mem.c -Wanalyzer-null-argument
