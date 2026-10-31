@@ -16,10 +16,17 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Nightly: the expensive checks that are still runner-feasible. Sized
+    # locally end to end at ~11 min (see the job comments).
+    - cron: '17 4 * * *'
 
 jobs:
   compile-gate:
     name: build + corpus + pins
+    # push / PR / manual: the fast gate. The nightly job below covers the
+    # expensive work; a schedule run must not duplicate this one.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -60,4 +67,61 @@ jobs:
         with:
           name: jalv3-x86-64-debug
           path: bin/jalv3-x86-64
+          if-no-files-found: ignore
+
+  nightly:
+    name: nightly (20k fuzz + ASan corpus)
+    # Schedule only, or manual (workflow_dispatch then runs BOTH jobs as a
+    # full rehearsal). Timings measured locally 2026-10-31: build 30 s,
+    # corpus 45 s, ASan corpus 78 s, 20 000 fuzz inputs 363 s, analyzer
+    # 76 s -- about 11 minutes, well inside the 60-minute cap.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: cc --version | head -1
+
+      - name: Build (strict C89, -Werror)
+        run: make -C src ARCH=x86-64
+
+      - name: Fetch the pinned jallib corpus
+        run: unit-tests/fetch_jallib.sh
+
+      # 20 000 mutated inputs through the in-process seam. The per-PR gate
+      # runs 4 000 fixed-seed inputs in ~20 s; this is 5x the corpus, which
+      # is what a nightly is for. Measured 363 s.
+      - name: Fuzz (20 000 inputs, in-process)
+        run: |
+          python3 unit-tests/fuzz_jal_inputs.py --in-process \
+            --inputs 20000 --seed 20261031 --batch 200 --timeout 120 \
+            --out-dir tmp/fuzz_nightly
+
+      # The sanitizer corpus is where the value-lifetime family shows up:
+      # the three refcount fixes of 2026-10-31 were all found this way.
+      # Compile-only (no simulator), so it belongs in CI.
+      - name: Build with ASan
+        run: make -C src ARCH=x86-64 SAN=1
+
+      - name: ASan corpus (2937 samples under AddressSanitizer)
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          python3 unit-tests/unittests.py --current \
+            --compiler ./bin/jalv3-x86-64-san --parallel 4 \
+            --output-dir tmp/asan_corpus
+
+      - name: Static analysis (-fanalyzer, gated on a baseline)
+        run: unit-tests/run_analyzer.sh
+
+      - name: Upload fuzz artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-failure-artifacts
+          path: |
+            tmp/fuzz_nightly
+            tmp/asan_corpus
           if-no-files-found: ignore
