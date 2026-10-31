@@ -1,0 +1,124 @@
+-- Title: helper-entry BSR probe (fixture for test_helper_entry_bsr.py)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Compiles the float-render + print_sdword_dec sequence on 18F4620 with the
+-- `_fill_*` allocation pressure that puts the pseudo-device handle temps in
+-- bank 1 (so the indirect-call sites enter the synthesized helpers with
+-- BSR=1).  The pin script scans the listing: every `l__pic_*` helper entry
+-- must select its own bank before its first banked data access.
+--
+-- Regression evidence for this shape (the j50 float "reset"):
+--   pre-fix  (HEAD): gpsim prints "area (pi*r*r) = " then restarts the image
+--   post-fix       : full transcript, scaled == 3141.
+
+include 18f4620                      -- target PICmicro
+--
+-- This program uses the internal oscillator with PLL active.
+pragma target clock 20_000_000      -- oscillator frequency
+--
+pragma target OSC      INTOSC_NOCLKOUT       -- internal oscillator
+pragma target WDT      CONTROL                   -- watchdog
+pragma target XINST    DISABLED                  -- extended instruction set
+pragma target DEBUG    DISABLED                  -- debugging
+pragma target FCMEN    DISABLED                  -- clock monitoring
+pragma target IESO     DISABLED                  -- int/ext osc. switch
+--
+-- The configuration bit settings above are only a selection, sufficient
+-- for this program. Other programs may need more or different settings.
+--
+WDTCON_SWDTEN = OFF                 -- disable WDT
+OSCCON_SCS = 0                      -- select primary oscillator
+--
+enable_digital_io()                 -- make all pins digital I/O
+_usec_delay (100_000) -- wait for power to stablilize
+
+-- 18f67j50 port of the float_math demo (classic PIC18, 48 MHz INTOSC+PLL;
+--   LED on RG2, serial on UART1 @115200 via the bench FTDI)
+
+-- setup uart for communication (FTDI on UART1: TX=RC6, RX=RC7, fixed pins)
+const serial_hw_baudrate  = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+
+include print
+include format
+include print_float_exact
+var byte _fill_a[8]
+var byte _fill_b[4]
+var float pi      = 3.14159265
+var float radius  = 2.5
+var float area
+var float mean
+var float ratio
+var sdword scaled
+var volatile byte checks = 0
+var volatile byte bsr_probe_done = 0
+var volatile byte bsr_value_ok = 0
+_fill_a[0] = 1
+_fill_b[0] = 1
+
+procedure print_flt(float in v) is
+   print_float_exact(serial_data, v)
+end procedure
+
+print_string(serial_data, "========================================\r\n")
+print_string(serial_data, "  JALv2 PIC18F67J50 demo: float math\r\n")
+print_string(serial_data, "  IEEE-754 single precision, soft-float\r\n")
+print_string(serial_data, "  routines (no FPU)\r\n")
+print_string(serial_data, "========================================\r\n")
+
+-- multiply, mixed with an integer constant
+print_string(serial_data, "--- multiply: pi * r * r -----------------\r\n")
+area = pi * radius * radius
+print_string(serial_data, "area (pi*r*r)       = ")
+print_flt(area)
+if area > 19.6 then
+   if area < 19.7 then
+      checks = checks + 1
+      print_string(serial_data, "  OK (~19.63)\r\n")
+   else
+      print_string(serial_data, "  WRONG (want ~19.63)\r\n")
+   end if
+else
+   print_string(serial_data, "  WRONG (want ~19.63)\r\n")
+end if
+
+-- divide
+print_string(serial_data, "--- float to int truncation ---------------\r\n")
+scaled = sdword(pi * 1000.0)
+print_string(serial_data, "pi * 1000 truncated = ")
+print_sdword_dec(serial_data, scaled)
+if scaled == 3141 then
+ bsr_value_ok = 1
+end if
+bsr_probe_done = 1
+if scaled == 3141 then
+   checks = checks + 1
+   print_string(serial_data, "  OK\r\n")
+else
+   print_string(serial_data, "  WRONG (want 3141)\r\n")
+end if
+
+-- integer to float in an expression
+print_string(serial_data, "--- result --------------------------------\r\n")
+print_string(serial_data, "checks passed: ")
+print_byte_dec(serial_data, checks)
+print_string(serial_data, " of 8\r\n")
+if checks == 8 then
+   print_string(serial_data, "ALL FLOAT CHECKS PASSED\r\n")
+else
+   print_string(serial_data, "SOME CHECKS FAILED - see sections above\r\n")
+end if
+print_string(serial_data, "Sample complete.\r\n")
+print_string(serial_data, "##DONE##")
+print_crlf(serial_data)
+
+forever loop
+   _usec_delay(1_000_000)
+end loop
+

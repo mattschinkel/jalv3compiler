@@ -101,6 +101,12 @@ struct pic_emu_state_ {
   const SFR_region_t *SFR_regions;
 
   unsigned            status;
+
+  /* PIC18 program-memory image for TBLRD (const tables/strings).  Built
+   * once from the laid-out code list at pic_emu() entry; byte-addressed
+   * exactly like TBLPTR sees it. */
+  uchar              *rom;
+  ulong               rom_sz;
 };
 
 #define PIC_EMU_DATA_MEM_READ_FLAG_NONE 0x0000
@@ -346,6 +352,10 @@ static boolean_t pic_decode14(pfile_t *pf, const pic_emu_state_t state,
 #define PIC16_SFR_FSR2L    0x0fd9
 #define PIC16_SFR_PRODL    0x0ff3
 #define PIC16_SFR_PRODH    0x0ff4
+#define PIC16_SFR_TABLAT   0x0ff5
+#define PIC16_SFR_TBLPTRL  0x0ff6
+#define PIC16_SFR_TBLPTRH  0x0ff7
+#define PIC16_SFR_TBLPTRU  0x0ff8
 #if 0
 static const SFR_region_t SFR_regions16[] = {
   { 0x0f80, 0x0fff }
@@ -363,8 +373,12 @@ static ushort pic_decode16_f_xlate(pfile_t *pf, const pic_emu_state_t state,
     /* use BSR as the top 4 bits */
     f = (f & 0xff) | (state->mem[PIC16_SFR_BSR] << 8U);
   } else {
-    /* either the first or last half of memory */
-    if (f >= 0x80) {
+    /* access bank (a=0): 0x00-0x5F -> 0x000-0x05F, 0x60-0xFF -> 0xF60-0xFFF.
+     * The old 0x80 threshold left the 0x60-0x7F window pointing at plain
+     * bank-0 GPRs, so every access-bank SFR in 0xF60-0xF7F (e.g. BAUDCON1
+     * on the 18F67J50) decoded to the wrong address and the emulator's
+     * operand self-check aborted (j50 float hunt, 2026-10-30). */
+    if (f >= 0x60) {
       f |= 0x0f00;
     }
   }
@@ -716,6 +730,8 @@ pic_emu_state_t pic_emu_state_alloc(pfile_t *pf, pic_target_cpu_t cpu)
   state->mem     = calloc(PIC_DATA_MEM_SIZE, sizeof(*state->mem));
   state->imem    = calloc(PIC_DATA_MEM_SIZE, sizeof(*state->imem));
   state->call_stack_ptr = 0;
+  state->rom     = 0;
+  state->rom_sz  = 0;
   state->target = cpu;
   pic_target_cpu_set(pf, cpu);
   switch (cpu) {
@@ -763,6 +779,7 @@ void pic_emu_state_free(pic_emu_state_t state)
   /*label_release(state->lbl_entry);*/
   free(state->imem);
   free(state->mem);
+  free(state->rom);
   free(state);
 }
 
@@ -953,6 +970,9 @@ pic_code_t pic_emu_instr(pfile_t *pf,
 
         if ((VALUE_NONE != val) 
             && (PIC_OPCODE_MOVLW      != dst.op)
+            /* MOVLB's tagged value is the variable whose bank it selects,
+             * not a file operand (dst.f is the literal bank byte). */
+            && (PIC_OPCODE_MOVLB      != dst.op)
             && (PIC_OPCODE_DATALO_SET != pic_code_op_get(code))
             && (PIC_OPCODE_DATALO_CLR != pic_code_op_get(code))
             && (PIC_OPCODE_DATAHI_SET != pic_code_op_get(code))
@@ -1387,14 +1407,46 @@ pic_code_t pic_emu_instr(pfile_t *pf,
                   n & 0xff);
             }
             break;
+          case PIC_OPCODE_TBLRD:
+            /* read the byte TBLPTR points at from the laid-out program
+             * image; `*+`/`*-` adjust after, `+*` before */
+            if (state->rom) {
+              ulong addr;
+              uchar byte;
+
+              addr = (ulong) state->mem[PIC16_SFR_TBLPTRL]
+                   | ((ulong) state->mem[PIC16_SFR_TBLPTRH] << 8U)
+                   | ((ulong) state->mem[PIC16_SFR_TBLPTRU] << 16U);
+              if (PIC_DECODE_TBL_ACTION_PRE_INC == dst.tbl_action) {
+                addr++;
+              }
+              byte = (addr < state->rom_sz) ? state->rom[addr] : 0;
+              pic_emu_data_mem_write(state, &fpos, PIC16_SFR_TABLAT,
+                  byte);
+              if (PIC_DECODE_TBL_ACTION_POST_INC == dst.tbl_action) {
+                addr++;
+              } else if (PIC_DECODE_TBL_ACTION_POST_DEC
+                  == dst.tbl_action) {
+                addr--;
+              }
+              pic_emu_data_mem_write(state, &fpos, PIC16_SFR_TBLPTRL,
+                  addr & 0xff);
+              pic_emu_data_mem_write(state, &fpos, PIC16_SFR_TBLPTRH,
+                  (addr >> 8) & 0xff);
+              pic_emu_data_mem_write(state, &fpos, PIC16_SFR_TBLPTRU,
+                  (addr >> 16) & 0xff);
+            }
+            break;
+          case PIC_OPCODE_TBLWT:
+            /* device-programming writes are out of scope for a data-flow
+             * emulator; TABLAT/TBLPTR semantics stay consistent */
+            break;
           case PIC_OPCODE_MULLW:
           case PIC_OPCODE_DAW:
           case PIC_OPCODE_PUSH:
           case PIC_OPCODE_POP:
           case PIC_OPCODE_RESET:
           case PIC_OPCODE_MOVFF:
-          case PIC_OPCODE_TBLRD:
-          case PIC_OPCODE_TBLWT:
           case PIC_OPCODE_MOVLP:
           case PIC_OPCODE_MOVLP_NOP:
             fprintf(stderr, "unsupported opcode: %s (pc=%u)\n",
@@ -1420,7 +1472,44 @@ void pic_emu(pfile_t *pf, pic_emu_state_t state)
     state->mem[PIC14_SFR_PCLATH] = 0;
   }
   if (PIC_TARGET_CPU_16BIT == state->target) {
+    pic_code_t c;
+    ulong      sz;
+
     state->mem[PIC16_SFR_BSR] = 0;
+    /* byte-addressable program image for TBLRD (const strings/tables) */
+    sz = 4;
+    for (c = pic_code_list_head_get(pf); PIC_CODE_NONE != c;
+         c = pic_code_next_get(c)) {
+      ulong pc;
+
+      pc = (ulong) pic_code_pc_get(c) * 2UL;
+      if (pc + 4 > sz) {
+        sz = pc + 4;
+      }
+    }
+    if (sz) {
+      state->rom = calloc((size_t) sz, 1);
+      if (state->rom) {
+        state->rom_sz = sz;
+        for (c = pic_code_list_head_get(pf); PIC_CODE_NONE != c;
+             c = pic_code_next_get(c)) {
+          pic_code_to_pcode_t pcode;
+          ulong               pc;
+
+          if (!pic_code_to_pcode(pf, c, &pcode)) {
+            continue;
+          }
+          pc = (ulong) pic_code_pc_get(c) * 2UL;
+          if (pc + 4 > state->rom_sz) {
+            continue;
+          }
+          state->rom[pc]     = (uchar) (pcode.code[0] & 0xff);
+          state->rom[pc + 1] = (uchar) ((pcode.code[0] >> 8) & 0xff);
+          state->rom[pc + 2] = (uchar) (pcode.code[1] & 0xff);
+          state->rom[pc + 3] = (uchar) ((pcode.code[1] >> 8) & 0xff);
+        }
+      }
+    }
   }
 
   /* find the first executable instruction */
@@ -1439,6 +1528,14 @@ void pic_emu(pfile_t *pf, pic_emu_state_t state)
     ? strtoul(cap_env, 0, 0) : 10000000UL;
   while (PIC_CODE_NONE != code) {
     if (step_cap && ((unsigned long) pic_emu_instr_ct >= step_cap)) {
+      /* report WHERE the run stopped, so a stuck run is attributable
+       * without the per-instruction listing (j50 float hunt) */
+      cmd_t stop_cmd = pic_code_cmd_get(code);
+      if (PIC_CODE_NONE != code && stop_cmd) {
+        pfile_pos_t stop_pos;
+        cmd_pos_get(stop_cmd, &stop_pos);
+        pfile_statement_start_set(pf, &stop_pos);
+      }
       pfile_log(pf, PFILE_LOG_WARN,
           "emulator step cap %lu reached -- endless main loop? "
           "(JALV2_EMU_STEP_CAP=N to raise, =0 to disable)",
