@@ -23,6 +23,12 @@
 #include "../libpic12/pic_cmdo.h"
 #include "../libpic12/pic.h"
 #include "../libpic32/pic32.h"
+#include "../libpic12/pic_stk.h"
+#include "../libpic12/pic_var.h"
+#include "../libpic32/mips.h"
+#include "../libpic32/mips_alloc.h"
+#include "../libesp32/esp.h"
+#include "jal_string.h"
 #include "../libesp32/esp32.h"
 #include "../libcore/pfile.h"
 #include "jal_blck.h"
@@ -718,6 +724,28 @@ typedef struct cli_expanded_ {
   size_t used;
 } cli_expanded_t;
 
+/*
+ * A4: return every compiler module to its just-loaded state, so the next
+ * compile in this process starts clean. Modules whose state is PROCESS
+ * level are deliberately absent: the back-end registry (wiring installed
+ * by main), and the value/variable/cmd caches with their monotonic id
+ * counters (arenas and identifiers that must survive a compile).
+ *
+ * Only reached with JAL_REPEAT > 1 today; it is the seam the
+ * two-compiles-in-one-process test drives.
+ */
+static void jal_reset_between_compiles(void)
+{
+  jal_string_state_reset();
+  pic_stk_reset();
+  pic_var_reset();
+  pic_state_reset();
+  mips_op_state_reset();
+  mips_const_state_reset();
+  mips_alloc_state_reset();
+  esp_op_state_reset();
+}
+
 int main(int argc, char **argv)
 {
   FILE       *f_asm;
@@ -749,6 +777,8 @@ int main(int argc, char **argv)
   boolean_t   hex_atomic_pending;
   boolean_t   hex_atomic_output;
   boolean_t   cli_info_only;
+  unsigned    repeat_ct;   /* JAL_REPEAT: compile N times in one process */
+  unsigned    repeat_ix;
 
   err            = BOOLEAN_FALSE;
   inc_path       = 0;
@@ -758,6 +788,14 @@ int main(int argc, char **argv)
   loader_offset  = 0;
   files_disabled = 0;
   hex_atomic_pending = BOOLEAN_FALSE;
+  {
+    const char *rep_env = getenv("JAL_REPEAT");
+
+    repeat_ct = rep_env ? (unsigned) atoi(rep_env) : 1U;
+    if (0U == repeat_ct) {
+      repeat_ct = 1U;
+    }
+  }
   hex_atomic_output = BOOLEAN_FALSE;
   cli_info_only     = BOOLEAN_FALSE;
 
@@ -1186,8 +1224,14 @@ int main(int argc, char **argv)
         /* turning off dead code elimination implies PCODE */
         pfile_flags |= PFILE_FLAG_DEBUG_PCODE;
       }
-      rc = pfile_open(&pf, f_asm, f_asm, f_hex, f_log,
-        cod_name, pfile_flags, &vectors, 0, task_ct, "JAL "JAL_VERSION_STR);
+      for (repeat_ix = 0U; repeat_ix < repeat_ct; repeat_ix++) {
+      boolean_t  rep_emit;
+
+      rep_emit = (boolean_t) (repeat_ix + 1U == repeat_ct);
+      rc = pfile_open(&pf,
+          rep_emit ? f_asm : (FILE *) 0, rep_emit ? f_asm : (FILE *) 0,
+          rep_emit ? f_hex : (FILE *) 0, f_log,
+          cod_name, pfile_flags, &vectors, 0, task_ct, "JAL "JAL_VERSION_STR);
       if (RESULT_OK == rc) {
         pfile_mips_sim_hex_set(pf, sim_hex);
         pfile_debug_sub_set(pf, debug_sub);
@@ -1264,6 +1308,8 @@ int main(int argc, char **argv)
             pfile_errct_get(pf), pfile_warnct_get(pf));
         err = pfile_errct_get(pf);
         pfile_close(pf);
+      }
+      jal_reset_between_compiles();
       }
     }
     if (f_hex) {

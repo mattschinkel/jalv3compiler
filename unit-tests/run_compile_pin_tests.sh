@@ -110,6 +110,7 @@ run_py malformed_input_fuzz        unit-tests/fuzz_jal_inputs.py --compiler "$CC
 run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$CC"
 run_sh pointer_pseudo_binds        unit-tests/test_pointer_pseudo_binds.sh "$CC"
 run_sh multibank_array_errors      unit-tests/test_multibank_array_errors.sh "$CC"
+run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
 run_sh task_locals                 unit-tests/test_task_locals.sh "$CC"
 run_movlb
 run_py pic18_v6_access_bank        unit-tests/test_pic18_v6_access_bank.py --compiler "$CC"
