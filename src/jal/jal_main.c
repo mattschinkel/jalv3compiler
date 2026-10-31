@@ -25,6 +25,13 @@
 #include "../libpic32/pic32.h"
 #include "../libpic12/pic_stk.h"
 #include "../libpic12/pic_var.h"
+#include "../libpic12/pic_inst.h"
+#include "../libpic12/picbsrop.h"
+#include "../libpic12/piccolst.h"
+#include "../libpic12/pic_stvar.h"
+#include "../libcore/cmd_optm.h"
+#include "../libpic32/mips_reg.h"
+#include "../libcore/indirect_alg.h"
 #include "../libpic32/mips.h"
 #include "../libpic32/mips_alloc.h"
 #include "../libesp32/esp.h"
@@ -744,6 +751,19 @@ static void jal_reset_between_compiles(void)
   mips_const_state_reset();
   mips_alloc_state_reset();
   esp_op_state_reset();
+  mips_clock_reset();
+  mips_var_state_reset();
+  mips_opfn_state_reset();
+  esp_var_state_reset();
+  ialg_state_reset();
+  pic_inst_state_reset();
+  pic_bsr_state_reset();
+  piccolst_state_reset();
+  pic_stvar_state_reset();
+  cmd_optm_state_reset();
+  mips_reg_cache_reset();
+  esp_float_reset();
+  esp_const_pool_reset();
 }
 
 int main(int argc, char **argv)

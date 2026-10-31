@@ -22,6 +22,13 @@ static unsigned long ialg_inbox_base;
 static unsigned      ialg_inbox_lim;
 
 /* the one align rule: every offset in the protocol derives from it */
+/* A4 teardown: drop the inbox window; the next compile computes its own. */
+void ialg_state_reset(void)
+{
+  ialg_inbox_base = 0;
+  ialg_inbox_lim  = 0;
+}
+
 static unsigned ialg_align(unsigned ofs, unsigned sz)
 {
   unsigned align;

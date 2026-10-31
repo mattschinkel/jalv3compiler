@@ -378,7 +378,14 @@ static void mfalg_mul_hi(pfile_t *pf, int rd, int rs, int rt)
 
 /* cut 4 (DIV) shift-count preload: no count register on MIPS --
  * remember which register ssr_set named, shift by it each time */
+
 static unsigned mfalg_sar_phys;
+
+/* A4 teardown: forget the cached SAR register index. */
+void mips_opfn_state_reset(void)
+{
+  mfalg_sar_phys = 0;
+}
 
 static void mfalg_ssr_set(pfile_t *pf, int sar)
 {

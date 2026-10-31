@@ -21,5 +21,9 @@ void       pic_code_list_reset(pfile_t *pf);
 void       pic_code_list_init(pfile_t *pf);
 pic_pc_t   pic_code_list_pc_next_get(pfile_t *pf);
 
-#endif /* pic_colist_h__ */
+#endif
+
+/* A4 teardown between compiles. */
+void piccolst_state_reset(void);
+ /* pic_colist_h__ */
 

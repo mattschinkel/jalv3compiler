@@ -72,4 +72,8 @@ void ialg_marshal_out(pfile_t *pf, const ialg_ops_t *ops, value_t proc_val,
 void ialg_param_in(pfile_t *pf, const ialg_ops_t *ops, pfile_proc_t *proc);
 void ialg_param_out(pfile_t *pf, const ialg_ops_t *ops, pfile_proc_t *proc);
 
-#endif /* indirect_alg_h__ */
+#endif
+
+/* A4 teardown between compiles. */
+void ialg_state_reset(void);
+ /* indirect_alg_h__ */

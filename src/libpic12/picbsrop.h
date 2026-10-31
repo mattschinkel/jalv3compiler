@@ -14,6 +14,10 @@
 void pic_code_bsr_optimize(pfile_t *pf);
 void pic_code_bsr_remove(pfile_t *pf);
 
-#endif /* picbsrop_h__ */
+#endif
+
+/* A4 teardown between compiles. */
+void pic_bsr_state_reset(void);
+ /* picbsrop_h__ */
 
 

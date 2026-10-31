@@ -260,6 +260,12 @@ void       mips_op_reset(void);
 /* TEARDOWN between compiles (A4): frees the fixup table and zeroes the
  * module state. mips_op_reset() above is the LOGICAL mid-compile reset. */
 void       mips_op_state_reset(void);
+
+void       mips_clock_reset(void);
+
+void       mips_var_state_reset(void);
+
+void       mips_opfn_state_reset(void);
 void       mips_op_consume_branch(pfile_t *pf, cmd_t cmd);
 /* Reset stub + EIC vector + Status.IE when a pragma interrupt exists. */
 void       mips_isr_vector_emit(pfile_t *pf);

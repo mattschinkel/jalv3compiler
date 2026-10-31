@@ -828,7 +828,13 @@ cmd_analyze_link_inline_procs_for_alloc(pfile_t *pf)
  *   so pfile_proc_root has call edges to every `pragma inline` JAL forwarder
  *   for pic_variable_alloc_proc (Phase B / builtins may not list them).
  */
+
 static size_t depth_max;
+/* A4 teardown between compiles (debug statistic). */
+void cmd_optm_state_reset(void)
+{
+  depth_max = 0;
+}
 
 /* Compare logical procedures (value_proc_get may not match cmd_proc_get ptr). */
 static boolean_t cmd_proc_matches(const pfile_proc_t *a,

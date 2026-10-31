@@ -70,7 +70,13 @@
 #define PIC_STVAR_FLAG_FLOAT    0x1000
 #define PIC_STVAR_FLAG_PROD     0x2000 /* PIC18: ISR uses MUL; save PRODL/H on entry */
 
-static unsigned stvar_flags; /* make sure two routines don't both
+
+static unsigned stvar_flags;
+/* A4 teardown between compiles. */
+void pic_stvar_state_reset(void)
+{
+  stvar_flags = 0;
+} /* make sure two routines don't both
                                 grab the same variable! */
 static struct {
   unsigned      var_flags;    /* flags used by the ISR     */

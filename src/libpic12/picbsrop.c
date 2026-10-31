@@ -280,6 +280,16 @@ static int pic_bsr_lbl_cmp(const void *A, const void *B)
 static label_t *pic_bsr_call_lbl;
 static size_t   pic_bsr_call_lbl_ct;
 
+/* A4 teardown between compiles: release the CALL-target label table.
+ * pic_bsr_call_targets_build() rebuilds it per pass but nothing freed it
+ * at the end of a compile. */
+void pic_bsr_state_reset(void)
+{
+  FREE(pic_bsr_call_lbl);
+  pic_bsr_call_lbl    = 0;
+  pic_bsr_call_lbl_ct = 0;
+}
+
 static void pic_bsr_call_targets_build(pfile_t *pf)
 {
   pic_code_t code;

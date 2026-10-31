@@ -47,6 +47,12 @@ static unsigned long mips_ram_next;
  * any nested indirect call the proc makes (the ESP32 back end hit
  * exactly that defect). */
 
+/* A4 teardown: the next compile allocates RAM from the bottom again. */
+void mips_var_state_reset(void)
+{
+  mips_ram_next = 0;
+}
+
 static unsigned mips_ialg_def_bytes(pfile_t *pf, variable_def_t def)
 {
   return (unsigned) mips_def_storage_sz(pf, def);

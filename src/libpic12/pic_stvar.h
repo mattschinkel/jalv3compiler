@@ -99,5 +99,9 @@ void    pic_stvar_fixup(pfile_t *pf);
 void    pic_stvar_tblptr_mark(pfile_t *pf);
 void    pic_stvar_fsr_mark(pfile_t *pf);
 
-#endif /* pic_stvar_h__ */
+#endif
+
+/* A4 teardown between compiles. */
+void pic_stvar_state_reset(void);
+ /* pic_stvar_h__ */
 

@@ -25,5 +25,9 @@ boolean_t cmd_opt_branch3(cmd_t *cmd_head);
 boolean_t cmd_opt_branch4(pfile_t *pf, cmd_t *cmd_head);
 boolean_t cmd_opt_tail_return(cmd_t *cmd_head);
 
-#endif /* cmd_optm_h__ */
+#endif
+
+/* A4 teardown between compiles. */
+void cmd_optm_state_reset(void);
+ /* cmd_optm_h__ */
 

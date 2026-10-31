@@ -6,6 +6,7 @@
  ** All rights reserved
  **
  ************************************************************/
+#include <string.h>
 #include <assert.h>
 #include "piccolst.h"
 
@@ -15,7 +16,14 @@ typedef struct pic_code_list_ {
   unsigned   ct;
 } pic_code_list_t;
 
+
 static pic_code_list_t pic_code_lst;
+/* A4 teardown between compiles: the pfile frees the code itself; this just
+ * forgets the list head/tail so the next compile starts empty. */
+void piccolst_state_reset(void)
+{
+  memset(&pic_code_lst, 0, sizeof(pic_code_lst));
+}
 
 #if 0
 static void pic_code_list_check(pfile_t *pf)

@@ -32,6 +32,15 @@ static flag_t pic_instr_default_flags;
 #define PIC_EMIT_BSR_UNK (0x200U)
 static unsigned pic_emit_movl_bsr = PIC_EMIT_BSR_UNK;
 
+/* A4 teardown between compiles: forget the default flags and the linear
+ * emit-path bank cache. pic_instr_emit_bsr_cache_reset() below is the
+ * mid-compile invalidation and stays as it is. */
+void pic_inst_state_reset(void)
+{
+  pic_instr_default_flags = 0;
+  pic_emit_movl_bsr        = PIC_EMIT_BSR_UNK;
+}
+
 void pic_instr_emit_bsr_cache_reset(void)
 {
   pic_emit_movl_bsr = PIC_EMIT_BSR_UNK;

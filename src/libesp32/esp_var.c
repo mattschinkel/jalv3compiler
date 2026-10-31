@@ -138,6 +138,12 @@ void esp_value_ensure(pfile_t *pf, value_t val)
  * variable (the function return value has no tag and so no block
  * variable; `_name_count` on an open array) -- mirrors
  * mips_var_alloc_param_value. */
+/* A4 teardown: the next compile allocates RAM from the bottom again. */
+void esp_var_state_reset(void)
+{
+  esp_ram_next = 0;
+}
+
 static void esp_var_alloc_param_value(pfile_t *pf, pfile_proc_t *proc)
 {
   size_t ii;

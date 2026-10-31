@@ -86,5 +86,9 @@ pic_code_t pic_instr_append_lfsr(pfile_t *pf, unsigned which,
  * full file address (same as pic_code_to_pcode's pre-mask sum for that case). */
 boolean_t pic_code_bsr_verify_data_addr(pfile_t *pf, const pic_code_t code,
     unsigned long *paddr);
-#endif /* pic_inst_h__ */
+#endif
+
+/* A4 teardown between compiles. */
+void pic_inst_state_reset(void);
+ /* pic_inst_h__ */
 

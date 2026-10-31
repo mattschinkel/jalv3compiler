@@ -224,6 +224,8 @@ void       esp_op_reset(void);
  * second compile in the same process starts clean and leak-free (A4).
  * Call while the back end is idle. */
 void       esp_op_state_reset(void);
+
+void       esp_var_state_reset(void);
 void       esp_startup_emit(pfile_t *pf);   /* sp/WOE/WDT */
 void       esp_delay_create(pfile_t *pf, variable_const_t usec);
 

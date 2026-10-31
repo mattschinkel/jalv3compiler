@@ -65,6 +65,14 @@ __extension__ typedef unsigned __int128 mips_clock_u128_t;
 static unsigned long clock_dcfg[4];
 static int           clock_dcfg_valid;
 
+/* A4 teardown: forget the cached config words so the next compile (in this
+ * process) recomputes them. */
+void mips_clock_reset(void)
+{
+  memset(clock_dcfg, 0, sizeof(clock_dcfg));
+  clock_dcfg_valid = 0;
+}
+
 static unsigned long osc_input_hz(unsigned long mode, unsigned long posc_hz)
 {
   if ((OSC_MODE_POSC == mode) || (OSC_MODE_POSC_SPLL == mode)
