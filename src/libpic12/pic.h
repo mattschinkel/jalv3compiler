@@ -153,6 +153,11 @@ void pic_data_bank_list_remove_range(pfile_t *pf, size_t lo, size_t hi);
 void pic_shared_bank_list_add(pfile_t *pf, size_t lo, size_t hi);
 boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr);
 /* PIC18 MOVLB-churn metadata + layout trials (see pic_var.c) */
+/* A4: TEARDOWN between compiles -- releases the per-compile tables and
+ * zeroes the module state. The per-PASS resets above run mid-compile and
+ * are unrelated. Call while the back end is idle. */
+void pic_state_reset(void);
+
 void pic_var_banked_access_reset(void);
 void pic_var_banked_access_bump(variable_t var);
 void pic_var_trials_free(void);

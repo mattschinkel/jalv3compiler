@@ -51,12 +51,61 @@
 #define STRINGIZE2(x) #x
 #define STRINGIZE(x) STRINGIZE2(x)
 
-static pic_target_cpu_t       pic_target_cpu;       /* target CPU type */
-static unsigned               pic_target_page_size; /* code page size  */
-static unsigned               pic_target_bank_size; /* data bank size  */
-static boolean_t              pic_in_isr_flag;      /* TRUE when generating ISR */
-static unsigned               pic_code_gen_pass;
-static pic_target_instr_set_t pic_target_instr_set; /* target instruction set type */
+
+/*
+ * Per-compile state, in ONE object (Tier-A A4; see fix_pic_state_reset.md).
+ *
+ * NOT here: pic_backend_registry[] further down. That is PROCESS-level
+ * wiring installed once by jal_main (which backend serves which core), not
+ * something a new compile resets -- zeroing it would unregister every
+ * back end and every lookup would miss.
+ */
+typedef struct {
+  variable_t v;
+  ctr_t        u;
+  ctr_t        a;
+} pic_var_use_stash_t;
+
+typedef struct {
+  pfile_proc_t *proc;
+  variable_t    bucket;
+  boolean_t     used;
+} pic_reentrancy_scan_t;
+
+typedef struct pic_state_ {
+  pic_target_cpu_t       target_cpu;
+  unsigned               target_page_size;
+  unsigned               target_bank_size;
+  boolean_t              in_isr_flag;
+  unsigned               code_gen_pass;
+  pic_target_instr_set_t target_instr_set;
+  unsigned               bitarg_ct;
+  pic_code_t             code_out;
+  pic_var_use_stash_t   *var_use_stash;
+  size_t                 var_use_stash_n;
+  size_t                 var_use_stash_alloc;
+  pic_reentrancy_scan_t *reentrancy_scan;
+  size_t                 reentrancy_scan_n;
+  boolean_t              reentrancy_scan_valid;
+  unsigned               flag;
+} pic_state_t;
+
+static pic_state_t pic_state;
+
+/*
+ * Teardown: release the two per-compile tables and zero everything so a
+ * second compile in the same process starts clean (A4). The module's own
+ * per-pass resets (pic_var_use_stash_reset, pic_reentrancy_scan_reset)
+ * stay as they are -- they run mid-compile; this one runs between compiles.
+ */
+void pic_state_reset(void)
+{
+  if (pic_state.var_use_stash) {
+    FREE(pic_state.var_use_stash);
+  }
+  FREE(pic_state.reentrancy_scan);
+  memset(&pic_state, 0, sizeof(pic_state));
+}
 
 const char *pic_opcode_str(pic_opcode_t op)
 {
@@ -664,7 +713,6 @@ static boolean_t pic_formal_is_pointer_to_bit(value_t formal)
   return pointee && variable_def_flag_test(pointee, VARIABLE_DEF_FLAG_BIT);
 }
 
-static unsigned pic_bitarg_ct;
 
 static value_t pic_bit_array_actual_normalize(pfile_t *pf, value_t actual)
 {
@@ -693,7 +741,7 @@ static value_t pic_bit_array_actual_normalize(pfile_t *pf, value_t actual)
    * passes find the same variable by name (no multi-def).
    * fix_pic18_open_bit_formal_indirect.md
    */
-  sprintf(name, "_pic_bitarg_%u", pic_bitarg_ct);
+  sprintf(name, "_pic_bitarg_%u", pic_state.bitarg_ct);
   {
     variable_t var;
 
@@ -718,7 +766,7 @@ static value_t pic_bit_array_actual_normalize(pfile_t *pf, value_t actual)
               &var))) {
         variable_flag_set(var, VARIABLE_FLAG_AUTO);
         variable_flag_set(var, VARIABLE_FLAG_STICKY);
-        pic_bitarg_ct++;
+        pic_state.bitarg_ct++;
       } else {
         variable_def_free(def);
         pfile_log_syserr(pf, ENOMEM);
@@ -2157,7 +2205,7 @@ void pic_cmd_out(pfile_t *pf, cmd_t *cmd_ptr)
 
   code_first = pic_code_list_tail_get(pf);
   cmd = *cmd_ptr;
-  pic_in_isr_flag = cmd_flag_test(cmd, CMD_FLAG_INTERRUPT);
+  pic_state.in_isr_flag = cmd_flag_test(cmd, CMD_FLAG_INTERRUPT);
 
   pos.line = cmd_line_get(cmd);
   pos.src  = cmd_source_get(cmd);
@@ -3065,7 +3113,6 @@ static void pic_config_dump(pfile_t *pf, value_t config)
   }
 }
 
-static pic_code_t pic_code_out;
 
 void pic_cmd_dump(pfile_t *pf, const cmd_t cmd, boolean_t first)
 {
@@ -3078,15 +3125,15 @@ void pic_cmd_dump(pfile_t *pf, const cmd_t cmd, boolean_t first)
   /* if first is TRUE, we need to dump the preamble */
   if (first) {
     pic_stack_depth_get(pf);
-    for (pic_code_out = pic_code_list_head_get(pf);
-         pic_code_out && (pic_code_cmd_get(pic_code_out) != cmd);
-         pic_code_out = pic_code_next_get(pic_code_out)) {
-      pic_code_dump(pf, pic_code_out);
+    for (pic_state.code_out = pic_code_list_head_get(pf);
+         pic_state.code_out && (pic_code_cmd_get(pic_state.code_out) != cmd);
+         pic_state.code_out = pic_code_next_get(pic_state.code_out)) {
+      pic_code_dump(pf, pic_state.code_out);
     }
   }
-  while (pic_code_out && (pic_code_cmd_get(pic_code_out) == cmd)) {
-    pic_code_dump(pf, pic_code_out);
-    pic_code_out = pic_code_next_get(pic_code_out);
+  while (pic_state.code_out && (pic_code_cmd_get(pic_state.code_out) == cmd)) {
+    pic_code_dump(pf, pic_state.code_out);
+    pic_state.code_out = pic_code_next_get(pic_state.code_out);
   }
   if (CMD_NONE == cmd) {
     unsigned stack_depth = 0;
@@ -5552,24 +5599,16 @@ static void pic_opt_verify(pfile_t *pf)
  * stash + allocate, 2) final emit with real bases. PIC18/14h MOVLB from
  * pic_instr_append_daop is emitted as a literal op but also carries
  * pic_code_value for the data operand so pic_variable_counters_set counts it. */
-typedef struct {
-  variable_t v;
-  ctr_t        u;
-  ctr_t        a;
-} pic_var_use_stash_t;
 
-static pic_var_use_stash_t *pic_var_use_stash;
-static size_t               pic_var_use_stash_n;
-static size_t               pic_var_use_stash_alloc;
 
 static void pic_var_use_stash_reset(void)
 {
-  if (pic_var_use_stash) {
-    FREE(pic_var_use_stash);
+  if (pic_state.var_use_stash) {
+    FREE(pic_state.var_use_stash);
   }
-  pic_var_use_stash     = 0;
-  pic_var_use_stash_n   = 0;
-  pic_var_use_stash_alloc = 0;
+  pic_state.var_use_stash     = 0;
+  pic_state.var_use_stash_n   = 0;
+  pic_state.var_use_stash_alloc = 0;
 }
 
 static void pic_var_use_stash_from_pass0(pfile_t *pf)
@@ -5594,28 +5633,28 @@ static void pic_var_use_stash_from_pass0(pfile_t *pf)
         if (variable_is_const(v)) {
           continue;
         }
-        if (pic_var_use_stash_n == pic_var_use_stash_alloc) {
+        if (pic_state.var_use_stash_n == pic_state.var_use_stash_alloc) {
           size_t nalloc;
 
-          nalloc = (pic_var_use_stash_alloc) ? 2U * pic_var_use_stash_alloc
+          nalloc = (pic_state.var_use_stash_alloc) ? 2U * pic_state.var_use_stash_alloc
               : 1024U;
-          tmp = REALLOC(pic_var_use_stash,
-              nalloc * sizeof(*pic_var_use_stash));
+          tmp = REALLOC(pic_state.var_use_stash,
+              nalloc * sizeof(*pic_state.var_use_stash));
           if (!tmp) {
             pfile_log_syserr(pf, ENOMEM);
             return;
           }
-          pic_var_use_stash       = tmp;
-          pic_var_use_stash_alloc = nalloc;
+          pic_state.var_use_stash       = tmp;
+          pic_state.var_use_stash_alloc = nalloc;
         }
         {
           size_t n;
 
-          n   = pic_var_use_stash_n;
-          pic_var_use_stash[n].v = v;
-          pic_var_use_stash[n].u = variable_use_ct_get(v);
-          pic_var_use_stash[n].a = variable_assign_ct_get(v);
-          pic_var_use_stash_n    = n + 1U;
+          n   = pic_state.var_use_stash_n;
+          pic_state.var_use_stash[n].v = v;
+          pic_state.var_use_stash[n].u = variable_use_ct_get(v);
+          pic_state.var_use_stash[n].a = variable_assign_ct_get(v);
+          pic_state.var_use_stash_n    = n + 1U;
         }
       }
     }
@@ -5627,16 +5666,16 @@ static void pic_var_use_stash_merge_pass1(pfile_t *pf)
   size_t ii;
 
   (void) pf;
-  for (ii = 0; ii < pic_var_use_stash_n; ii++) {
+  for (ii = 0; ii < pic_state.var_use_stash_n; ii++) {
     variable_t v;
     ctr_t      u;
     ctr_t      a;
     ctr_t      u1;
     ctr_t      a1;
 
-    v  = pic_var_use_stash[ii].v;
-    u  = pic_var_use_stash[ii].u;
-    a  = pic_var_use_stash[ii].a;
+    v  = pic_state.var_use_stash[ii].v;
+    u  = pic_state.var_use_stash[ii].u;
+    a  = pic_state.var_use_stash[ii].a;
     u1 = variable_use_ct_get(v);
     a1 = variable_assign_ct_get(v);
     if (u > u1) {
@@ -5666,22 +5705,14 @@ static void pic_var_use_stash_merge_pass1(pfile_t *pf)
  * we scan the list once and record, per procedure, whether its bucket
  * variable is actually referenced (value or memval, master chain).
  * Passes 1-2 consult the table; until it exists, stay conservative. */
-typedef struct {
-  pfile_proc_t *proc;
-  variable_t    bucket;
-  boolean_t     used;
-} pic_reentrancy_scan_t;
 
-static pic_reentrancy_scan_t *pic_reentrancy_scan;
-static size_t                 pic_reentrancy_scan_n;
-static boolean_t              pic_reentrancy_scan_valid;
 
 static void pic_reentrancy_scan_reset(void)
 {
-  FREE(pic_reentrancy_scan);
-  pic_reentrancy_scan       = 0;
-  pic_reentrancy_scan_n     = 0;
-  pic_reentrancy_scan_valid = BOOLEAN_FALSE;
+  FREE(pic_state.reentrancy_scan);
+  pic_state.reentrancy_scan       = 0;
+  pic_state.reentrancy_scan_n     = 0;
+  pic_state.reentrancy_scan_valid = BOOLEAN_FALSE;
 }
 
 static variable_t pic_reentrancy_bucket_find(pfile_proc_t *proc)
@@ -5738,18 +5769,18 @@ static void pic_reentrancy_guard_scan(pfile_t *pf)
       if (bucket) {
         pic_reentrancy_scan_t *tmp;
 
-        tmp = REALLOC(pic_reentrancy_scan,
-            (pic_reentrancy_scan_n + 1) * sizeof(*pic_reentrancy_scan));
+        tmp = REALLOC(pic_state.reentrancy_scan,
+            (pic_state.reentrancy_scan_n + 1) * sizeof(*pic_state.reentrancy_scan));
         if (!tmp) {
           pfile_log_syserr(pf, ENOMEM);
           pic_reentrancy_scan_reset();
           return;
         }
-        pic_reentrancy_scan = tmp;
-        pic_reentrancy_scan[pic_reentrancy_scan_n].proc   = proc;
-        pic_reentrancy_scan[pic_reentrancy_scan_n].bucket = bucket;
-        pic_reentrancy_scan[pic_reentrancy_scan_n].used   = BOOLEAN_FALSE;
-        pic_reentrancy_scan_n++;
+        pic_state.reentrancy_scan = tmp;
+        pic_state.reentrancy_scan[pic_state.reentrancy_scan_n].proc   = proc;
+        pic_state.reentrancy_scan[pic_state.reentrancy_scan_n].bucket = bucket;
+        pic_state.reentrancy_scan[pic_state.reentrancy_scan_n].used   = BOOLEAN_FALSE;
+        pic_state.reentrancy_scan_n++;
       }
     }
   }
@@ -5773,15 +5804,15 @@ static void pic_reentrancy_guard_scan(pfile_t *pf)
     if ((VARIABLE_NONE == mv[0]) && (VARIABLE_NONE == mv[1])) {
       continue;
     }
-    for (ii = 0; ii < pic_reentrancy_scan_n; ii++) {
-      if (!pic_reentrancy_scan[ii].used
-          && ((mv[0] == pic_reentrancy_scan[ii].bucket)
-            || (mv[1] == pic_reentrancy_scan[ii].bucket))) {
-        pic_reentrancy_scan[ii].used = BOOLEAN_TRUE;
+    for (ii = 0; ii < pic_state.reentrancy_scan_n; ii++) {
+      if (!pic_state.reentrancy_scan[ii].used
+          && ((mv[0] == pic_state.reentrancy_scan[ii].bucket)
+            || (mv[1] == pic_state.reentrancy_scan[ii].bucket))) {
+        pic_state.reentrancy_scan[ii].used = BOOLEAN_TRUE;
       }
     }
   }
-  pic_reentrancy_scan_valid = BOOLEAN_TRUE;
+  pic_state.reentrancy_scan_valid = BOOLEAN_TRUE;
 }
 
 /* TRUE when the reentrancy guard must be emitted for this procedure:
@@ -5813,12 +5844,12 @@ static boolean_t pic_proc_reentrant_guard_needed(pfile_t *pf,
       /* the bucket: decided below by the pass-0 scan */
     }
   }
-  if (!pic_reentrancy_scan_valid) {
+  if (!pic_state.reentrancy_scan_valid) {
     return BOOLEAN_TRUE; /* no scan yet (pass 0): conservative */
   }
-  for (ii = 0; ii < pic_reentrancy_scan_n; ii++) {
-    if (pic_reentrancy_scan[ii].proc == proc) {
-      return pic_reentrancy_scan[ii].used;
+  for (ii = 0; ii < pic_state.reentrancy_scan_n; ii++) {
+    if (pic_state.reentrancy_scan[ii].proc == proc) {
+      return pic_state.reentrancy_scan[ii].used;
     }
   }
   return BOOLEAN_TRUE;
@@ -5923,7 +5954,7 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
      * layout reports the refusal after the final install) */
     return (unsigned long) -1;
   }
-  pic_bitarg_ct = 0;
+  pic_state.bitarg_ct = 0;
   pic_code_list_reset(pf);
   pic_instr_emit_bsr_cache_reset();
   pic_last_values_reset();
@@ -5992,13 +6023,13 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
     pic_target_cpu_set(pf, PIC_TARGET_CPU_14BIT);
   } else {
     pic_target_cpu_set(pf, value_const_get(chipdef));
-    if ((PIC_TARGET_CPU_12BIT != pic_target_cpu)
-        && (PIC_TARGET_CPU_14BIT != pic_target_cpu)
-        && (PIC_TARGET_CPU_16BIT != pic_target_cpu)
-        && (PIC_TARGET_CPU_14HBIT != pic_target_cpu)
-        && (PIC_TARGET_CPU_MIPS32 != pic_target_cpu)
-        && (PIC_TARGET_CPU_ESP32 != pic_target_cpu)) {
-      pfile_log(pf, PFILE_LOG_ERR, "Unsupported core: %u", pic_target_cpu);
+    if ((PIC_TARGET_CPU_12BIT != pic_state.target_cpu)
+        && (PIC_TARGET_CPU_14BIT != pic_state.target_cpu)
+        && (PIC_TARGET_CPU_16BIT != pic_state.target_cpu)
+        && (PIC_TARGET_CPU_14HBIT != pic_state.target_cpu)
+        && (PIC_TARGET_CPU_MIPS32 != pic_state.target_cpu)
+        && (PIC_TARGET_CPU_ESP32 != pic_state.target_cpu)) {
+      pfile_log(pf, PFILE_LOG_ERR, "Unsupported core: %u", pic_state.target_cpu);
     }
     value_release(chipdef);
   }
@@ -6019,9 +6050,9 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
   if (VALUE_NONE == chipdef) {
     pfile_log(pf, PFILE_LOG_WARN,
         "target bank size not defined, assuming 0x80");
-    pic_target_bank_size = 0x80;
+    pic_state.target_bank_size = 0x80;
   } else {
-    pic_target_bank_size = value_const_get(chipdef);
+    pic_state.target_bank_size = value_const_get(chipdef);
     value_release(chipdef);
   }
  
@@ -6030,20 +6061,20 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
       pic_target_instruction_set_set(pf, PIC_TARGET_INSTR_SET_NONE);
   } else {
     pic_target_instruction_set_set(pf, value_const_get(chipdef));
-    if ((PIC_TARGET_INSTR_SET_P16F1_V1 != pic_target_instr_set)
-        && (PIC_TARGET_INSTR_SET_PIC18F_V6 != pic_target_instr_set)) {
-        pfile_log(pf, PFILE_LOG_ERR, "Unsupported instruction set: %u", pic_target_instr_set);
+    if ((PIC_TARGET_INSTR_SET_P16F1_V1 != pic_state.target_instr_set)
+        && (PIC_TARGET_INSTR_SET_PIC18F_V6 != pic_state.target_instr_set)) {
+        pfile_log(pf, PFILE_LOG_ERR, "Unsupported instruction set: %u", pic_state.target_instr_set);
     }
     value_release(chipdef);
   }
 
   chipdef = pfile_value_find(pf, PFILE_LOG_NONE, "target_page_size");
-  if ((VALUE_NONE == chipdef) && (PIC_TARGET_CPU_16BIT != pic_target_cpu)) {
+  if ((VALUE_NONE == chipdef) && (PIC_TARGET_CPU_16BIT != pic_state.target_cpu)) {
     pfile_log(pf, PFILE_LOG_WARN,
         "target page size not defined, assuming 0x0800");
-    pic_target_page_size = 0x0800;
+    pic_state.target_page_size = 0x0800;
   } else {
-    pic_target_page_size = value_const_get(chipdef);
+    pic_state.target_page_size = value_const_get(chipdef);
     value_release(chipdef);
   }
 
@@ -6058,18 +6089,18 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
        proc = pfile_proc_next(proc)) {
     pfile_proc_frame_sz_calc(proc);
   }
-  for (pic_code_gen_pass = 0;
-       (pic_code_gen_pass < 3) && !pfile_errct_get(pf);
-       pic_code_gen_pass++) {
+  for (pic_state.code_gen_pass = 0;
+       (pic_state.code_gen_pass < 3) && !pfile_errct_get(pf);
+       pic_state.code_gen_pass++) {
     pfile_log(pf, PFILE_LOG_INFO, PIC_MSG_GENERATING_CODE,
-      1 + pic_code_gen_pass);
+      1 + pic_state.code_gen_pass);
 
     /* PIC18 / 14H layout trials: measure both candidate layouts with
      * real emission and keep the smaller one (ties keep the baseline).
      * Runs once, before the final-pass emission; every candidate is a
      * genuine allocation by the real allocator. On by default;
      * JALV2_NO_LAYOUT_TRIALS opts out. */
-    if ((2 == pic_code_gen_pass)
+    if ((2 == pic_state.code_gen_pass)
         && (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
         && !pfile_errct_get(pf) && pic_var_trials_available(pf)
         && !(getenv("JALV2_NO_LAYOUT_TRIALS")
@@ -6131,10 +6162,10 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
     }
 
     /* DEBUG: Track PIC code generation progress */
-    if (pic_code_gen_pass >= 1) {
+    if (pic_state.code_gen_pass >= 1) {
       /* per-site buffer names must be identical across emission passes:
        * reset the counter so pass N reuses the names pass N-1 created */
-      pic_bitarg_ct = 0;
+      pic_state.bitarg_ct = 0;
       pic_code_list_reset(pf);
       pic_instr_emit_bsr_cache_reset();
       pic_last_values_reset();
@@ -6157,14 +6188,14 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
         pic_cmd_out(pf, &cmd_ptr);
       }
     }
-    if (0 == pic_code_gen_pass) {
+    if (0 == pic_state.code_gen_pass) {
       /* we need to create the intrinsic functions here. that guarentees
        * any needed internal variables are also created */
       pic_code_preamble(pf);
       pic_variable_counters_set(pf);
       pic_var_use_stash_from_pass0(pf);
       pic_reentrancy_guard_scan(pf);
-    } else if (1 == pic_code_gen_pass) {
+    } else if (1 == pic_state.code_gen_pass) {
       pic_variable_counters_set(pf);
       pic_var_use_stash_merge_pass1(pf);
       /* Open-array actuals: a DIRECT, non-reentrant call records an
@@ -6571,21 +6602,21 @@ pic_target_cpu_t pic_target_cpu_get(pfile_t *pf)
 {
   UNUSED(pf);
 
-  return pic_target_cpu;
+  return pic_state.target_cpu;
 }
 
 void pic_target_cpu_set(pfile_t *pf, pic_target_cpu_t target)
 {
   UNUSED(pf);
 
-  pic_target_cpu = target;
+  pic_state.target_cpu = target;
 }
 
 unsigned pic_target_bank_size_get(pfile_t *pf)
 {
   UNUSED(pf);
 
-  return pic_target_bank_size;
+  return pic_state.target_bank_size;
 }
 
 void pic_target_bank_size_set(pfile_t *pf, unsigned sz)
@@ -6595,7 +6626,7 @@ void pic_target_bank_size_set(pfile_t *pf, unsigned sz)
   if (sz & (sz - 1)) {
     pfile_log(pf, PFILE_LOG_ERR, "Bank size must be a power of 2");
   }
-  pic_target_bank_size = sz;
+  pic_state.target_bank_size = sz;
 }
 
 
@@ -6603,7 +6634,7 @@ unsigned pic_target_page_size_get(pfile_t *pf)
 {
   UNUSED(pf);
 
-  return pic_target_page_size;
+  return pic_state.target_page_size;
 }
 
 void pic_target_page_size_set(pfile_t *pf, unsigned sz)
@@ -6613,21 +6644,21 @@ void pic_target_page_size_set(pfile_t *pf, unsigned sz)
   if (sz & (sz - 1)) {
     pfile_log(pf, PFILE_LOG_ERR, "Page size must be a power of 2");
   }
-  pic_target_page_size = sz;
+  pic_state.target_page_size = sz;
 }
 
 pic_target_instr_set_t pic_target_instruction_set_get(pfile_t* pf)
 {
     UNUSED(pf);
 
-    return pic_target_instr_set;
+    return pic_state.target_instr_set;
 }
 
 void pic_target_instruction_set_set(pfile_t* pf, pic_target_instr_set_t instruction_set)
 {
     UNUSED(pf);
 
-    pic_target_instr_set = instruction_set;
+    pic_state.target_instr_set = instruction_set;
 }
 
 boolean_t pic_is_12bit(pfile_t *pf)
@@ -6698,7 +6729,7 @@ static const pic_backend_t *pic_backend_find(pic_target_cpu_t target)
 
 void pic32_clock_solve_maybe(pfile_t *pf)
 {
-  /* pic_target_cpu is only latched at codegen (pic_code_generate); at
+  /* pic_state.target_cpu is only latched at codegen (pic_code_generate); at
    * pragma-parse time read the target_cpu const the device file set */
   value_t v = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
 
@@ -6791,14 +6822,14 @@ boolean_t pic_in_isr(pfile_t *pf)
 {
   UNUSED(pf);
 
-  return pic_in_isr_flag;
+  return pic_state.in_isr_flag;
 }
 
 unsigned pic_code_gen_pass_get(pfile_t *pf)
 {
   UNUSED(pf);
 
-  return pic_code_gen_pass;
+  return pic_state.code_gen_pass;
 }
 
 value_t pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which)
@@ -6828,16 +6859,16 @@ variable_sz_t pic_pointer_size_get(pfile_t *pf)
     if (VALUE_NONE == chipdef) {
       pfile_log(pf, PFILE_LOG_WARN,
           "target cpu not defined, assuming 14 bit core");
-      pic_target_cpu = PIC_TARGET_CPU_14BIT;
+      pic_state.target_cpu = PIC_TARGET_CPU_14BIT;
     } else {
-      pic_target_cpu = value_const_get(chipdef);
-      if ((PIC_TARGET_CPU_12BIT != pic_target_cpu)
-          && (PIC_TARGET_CPU_14BIT != pic_target_cpu)
-          && (PIC_TARGET_CPU_14HBIT != pic_target_cpu)
-          && (PIC_TARGET_CPU_16BIT != pic_target_cpu)
-          && (PIC_TARGET_CPU_MIPS32 != pic_target_cpu)
-          && (PIC_TARGET_CPU_ESP32 != pic_target_cpu)) {
-        pfile_log(pf, PFILE_LOG_ERR, "Unsupported core: %u", pic_target_cpu);
+      pic_state.target_cpu = value_const_get(chipdef);
+      if ((PIC_TARGET_CPU_12BIT != pic_state.target_cpu)
+          && (PIC_TARGET_CPU_14BIT != pic_state.target_cpu)
+          && (PIC_TARGET_CPU_14HBIT != pic_state.target_cpu)
+          && (PIC_TARGET_CPU_16BIT != pic_state.target_cpu)
+          && (PIC_TARGET_CPU_MIPS32 != pic_state.target_cpu)
+          && (PIC_TARGET_CPU_ESP32 != pic_state.target_cpu)) {
+        pfile_log(pf, PFILE_LOG_ERR, "Unsupported core: %u", pic_state.target_cpu);
       }
       value_release(chipdef);
     }
@@ -6857,17 +6888,16 @@ void pic_init(pfile_t *pf)
   UNUSED(pf);
 }
 
-static unsigned pic_flag;
 
 void pic_flag_set(pfile_t *pf, unsigned flag)
 {
   UNUSED(pf);
-  pic_flag |= flag;
+  pic_state.flag |= flag;
 }
 
 boolean_t pic_flag_test(pfile_t *pf, unsigned flag)
 {
   UNUSED(pf);
-  return (pic_flag & flag) == flag;
+  return (pic_state.flag & flag) == flag;
 }
 
