@@ -1,0 +1,58 @@
+name: 'Compile gate'
+
+# The local gate ladder (unit-tests/run_gates.sh) is the real quality bar, but
+# it needs gpsim + QEMU and only ever ran on one machine. This job runs the
+# part that needs nothing but a C compiler and python: build, the 2937-file
+# corpus, the negative table and the 23 compile-pin groups. That is L1 minus
+# the simulators, and it is what a pull request gets checked against.
+#
+# Deliberately NOT here: any runtime gate (gpsim / PIC32 / ESP32 QEMU). Those
+# stay local -- see unit-tests/run_gates.sh --level 1. A green run here says
+# the compiler builds and compiles the corpus; it does NOT say the emitted
+# code runs.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile-gate:
+    name: build + corpus + pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          cc --version | head -1
+          python3 --version
+
+      - name: Build (strict C89, -Werror)
+        run: make -C src ARCH=x86-64
+
+      - name: Fetch the pinned jallib corpus
+        run: unit-tests/fetch_jallib.sh
+
+      - name: Corpus compile (2937 samples, 0 errors / 0 warnings)
+        run: |
+          python3 unit-tests/unittests.py --current \
+            --compiler ./bin/jalv3-x86-64 --parallel 4
+
+      - name: Negative table (expected refusals)
+        run: |
+          python3 unit-tests/run_negative_tests.py \
+            --compiler ./bin/jalv3-x86-64 --jobs 4
+
+      - name: Compile pins (diagnostics + implementation-defined codegen shapes)
+        run: unit-tests/run_compile_pin_tests.sh ./bin/jalv3-x86-64
+
+      - name: Upload the compiler on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jalv3-x86-64-debug
+          path: bin/jalv3-x86-64
+          if-no-files-found: ignore
