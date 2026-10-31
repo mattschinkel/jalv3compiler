@@ -192,6 +192,82 @@ EOF3
 check "escaped pointer-bound WORD array refused via pointer path" \
   "$WORK/ptr_word_esc.jal" "is bound to a pointer"
 
+# --- alias-group element straddle (fix_frame_chunk_member_maps): two
+# --- frame-reused locals share one virtual slot; the chunked layout is
+# --- element-aligned for the HEAD's element size only, so a WORD-array
+# --- member over odd fragments would straddle chunk boundaries and its
+# --- linear/walk addressing cannot be emitted -- the clean no-space
+# --- refusal must fire (pre-fix this compiled 0 errors and corrupted).
+cat > "$WORK/straddle.jal" << 'EOF4'
+include 16f1825
+pragma target clock 4000000
+pragma target OSC HS
+pragma target WDT DISABLED
+var byte b0[75]
+var byte b1[75]
+var byte b2[75]
+var byte b3[75]
+var byte b4[75]
+var byte b5[75]
+var byte b6[75]
+var byte b7[75]
+var byte b8[75]
+var byte b9[75]
+var byte ba[75]
+var byte bb[75]
+var byte bc[48]
+var volatile byte r = 0
+var byte j
+b0[0] = 1
+b1[0] = 2
+b2[0] = 3
+b3[0] = 4
+b4[0] = 5
+b5[0] = 6
+b6[0] = 7
+b7[0] = 8
+b8[0] = 9
+b9[0] = 10
+ba[0] = 11
+bb[0] = 12
+bc[0] = 13
+bc[47] = 14
+procedure p1() is
+  var byte locb[40]
+  var byte k
+  for 40 using k loop
+    locb[k] = k + 1
+  end loop
+  r = locb[39]
+end procedure
+procedure p2() is
+  var word locw[20]
+  var byte k
+  for 20 using k loop
+    locw[k] = k + 1
+  end loop
+  r = byte(locw[19])
+end procedure
+p1()
+p2()
+r = r + b0[0] + b1[0] + b2[0] + b3[0] + b4[0] + b5[0] + b6[0] + b7[0] + b8[0] + b9[0] + ba[0] + bb[0] + bc[0] + bc[47]
+EOF4
+# 2026-10-30 frame-chunk group fix: the alias-group straddle now refuses
+# through the open-array-actual guard (the callee cannot walk a holed
+# placement) instead of the generic capacity message -- still a clean,
+# trial-safe refusal that names the member.
+check "straddling word member of an alias group refused" \
+  "$WORK/straddle.jal" "needs 40 contiguous bytes"
+check "straddle refusal names the word member" \
+  "$WORK/straddle.jal" "'locw'"
+
+# --- the healthy counterpart: a BYTE-array member (same element size
+# --- as the head) over the same fragments chunk-walks fine -- the
+# --- refusal above must be the straddle guard, not a capacity lie.
+sed 's/var word locw\[20\]/var byte locb2[40]/; s/locw\[k\] = k + 1/locb2[k] = k + 1/; s/byte(locw\[19\])/locb2[39]/' \
+  "$WORK/straddle.jal" > "$WORK/straddle_ok.jal"
+check_clean "byte member over the same fragments compiles" "$WORK/straddle_ok.jal"
+
 echo "----"
 if [ "$fails" -eq 0 ]; then
   echo "PASS: all multibank array error pins hold"
