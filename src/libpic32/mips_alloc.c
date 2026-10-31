@@ -50,10 +50,6 @@ typedef struct {
  * callee-write-set decisions for the file-level $s keep. Growable arrays
  * replaced dropped-pend registries on the ESP32 back end for the same
  * reason (fixes/fix_esp32_latebind_registry_cleanup.md). */
-static mips_alloc_ent_t *mips_alloc_tab;
-static unsigned          mips_alloc_ct;
-static unsigned          mips_alloc_cap;
-static pfile_t          *mips_alloc_pf;
 
 /* Caller-saved pool: $t0 last so address LEA prefers colder homes first. */
 static const unsigned mips_alloc_caller_pool[] = {
@@ -65,19 +61,8 @@ static const unsigned mips_alloc_caller_pool[] = {
   (sizeof(mips_alloc_caller_pool) / sizeof(mips_alloc_caller_pool[0]))
 
 /* Serials of LABEL / CALL / PROC_LEAVE — dirty flush / caller-saved cold. */
-static unsigned *mips_alloc_flush_serial;
-static unsigned  mips_alloc_flush_ct;
-static unsigned  mips_alloc_flush_cap;
 
 /* Direct CALL edges + OPERATOR write facts for file-level keep. */
-static pfile_proc_t **mips_alloc_edge_from;
-static pfile_proc_t **mips_alloc_edge_to;
-static unsigned       mips_alloc_edge_ct;
-static unsigned       mips_alloc_edge_cap;
-static pfile_proc_t **mips_alloc_write_proc;
-static variable_t    *mips_alloc_write_var;
-static unsigned       mips_alloc_write_ct;
-static unsigned       mips_alloc_write_cap;
 
 /* generic doubling append; returns 0 on OOM (caller reports) */
 static int mips_alloc_grow(void **arr, unsigned *cap, size_t elem_sz)
@@ -95,18 +80,70 @@ static int mips_alloc_grow(void **arr, unsigned *cap, size_t elem_sz)
   return 1;
 }
 
+/*
+ * All mutable file-scope state, in ONE object (Tier-A A4; see
+ * fix_mips_alloc_state_reset.md).
+ *
+ * These were 15 independent statics. The const caller pool above is NOT
+ * part of it: it is a shuffled constant table, not state.
+ *
+ * NOTE the two different resets, because the names are one letter apart:
+ *   mips_alloc_reset()        -- LOGICAL: zero the per-compile counters
+ *                                and forget the pfile; the buffers stay
+ *                                allocated for the next compile in this
+ *                                process.
+ *   mips_alloc_state_reset()  -- TEARDOWN: additionally free the six
+ *                                growable arrays and zero everything.
+ */
+typedef struct mips_alloc_state_ {
+  mips_alloc_ent_t *tab;
+  unsigned          ct;
+  unsigned          cap;
+  pfile_t          *pf;
+  unsigned         *flush_serial;
+  unsigned          flush_ct;
+  unsigned          flush_cap;
+  pfile_proc_t    **edge_from;
+  pfile_proc_t    **edge_to;
+  unsigned          edge_ct;
+  unsigned          edge_cap;
+  pfile_proc_t    **write_proc;
+  variable_t       *write_var;
+  unsigned          write_ct;
+  unsigned          write_cap;
+} mips_alloc_state_t;
+
+static mips_alloc_state_t mips_alloc_state;
+
+/*
+ * Full teardown: frees what mips_alloc_reset() only logically drops. The
+ * header comment above claims these arrays are "freed by
+ * mips_alloc_reset"; they were not -- nothing freed them, and they lived
+ * until process exit. This is the first code that does.
+ */
+void mips_alloc_state_reset(void)
+{
+  FREE(mips_alloc_state.tab);
+  FREE(mips_alloc_state.flush_serial);
+  FREE(mips_alloc_state.edge_from);
+  FREE(mips_alloc_state.edge_to);
+  FREE(mips_alloc_state.write_proc);
+  FREE(mips_alloc_state.write_var);
+  memset(&mips_alloc_state, 0, sizeof(mips_alloc_state));
+}
+
 void mips_alloc_reset(void)
 {
-  mips_alloc_ct = 0;
-  mips_alloc_pf = 0;
-  mips_alloc_flush_ct = 0;
-  mips_alloc_edge_ct = 0;
-  mips_alloc_write_ct = 0;
+  mips_alloc_state.ct = 0;
+  mips_alloc_state.pf = 0;
+  mips_alloc_state.flush_ct = 0;
+  mips_alloc_state.edge_ct = 0;
+  mips_alloc_state.write_ct = 0;
 }
 
 void mips_alloc_pf_set(pfile_t *pf)
 {
-  mips_alloc_pf = pf;
+  mips_alloc_state.pf = pf;
 }
 
 int mips_alloc_reg_is_callee_home(unsigned reg)
@@ -122,20 +159,20 @@ void mips_alloc_scratch_clobber(pfile_t *pf, unsigned reg)
     return;
   }
   if (!pf) {
-    pf = mips_alloc_pf;
+    pf = mips_alloc_state.pf;
   }
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (mips_alloc_tab[i].home != reg) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (mips_alloc_state.tab[i].home != reg) {
       continue;
     }
-    if (!mips_alloc_tab[i].live) {
+    if (!mips_alloc_state.tab[i].live) {
       continue;
     }
-    if (mips_alloc_tab[i].dirty && pf) {
-      mips_alloc_emit_home_spill(pf, mips_alloc_tab[i].v, reg);
+    if (mips_alloc_state.tab[i].dirty && pf) {
+      mips_alloc_emit_home_spill(pf, mips_alloc_state.tab[i].v, reg);
     }
-    mips_alloc_tab[i].live  = 0;
-    mips_alloc_tab[i].dirty = 0;
+    mips_alloc_state.tab[i].live  = 0;
+    mips_alloc_state.tab[i].dirty = 0;
   }
 }
 
@@ -149,24 +186,24 @@ void mips_alloc_spill_dirty_keep(pfile_t *pf)
   unsigned i;
 
   if (!pf) {
-    pf = mips_alloc_pf;
+    pf = mips_alloc_state.pf;
   }
   if (!pf) {
     return;
   }
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (!mips_alloc_tab[i].dirty) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (!mips_alloc_state.tab[i].dirty) {
       continue;
     }
-    if (mips_alloc_tab[i].home == (unsigned) -1) {
+    if (mips_alloc_state.tab[i].home == (unsigned) -1) {
       continue;
     }
-    mips_alloc_emit_home_spill(pf, mips_alloc_tab[i].v,
-        mips_alloc_tab[i].home);
-    if (!mips_alloc_reg_is_callee_home(mips_alloc_tab[i].home)) {
-      mips_alloc_tab[i].dirty = 0;
-      mips_alloc_tab[i].live  = 0;
-      mips_reg_cache_invalidate_var(mips_alloc_tab[i].v);
+    mips_alloc_emit_home_spill(pf, mips_alloc_state.tab[i].v,
+        mips_alloc_state.tab[i].home);
+    if (!mips_alloc_reg_is_callee_home(mips_alloc_state.tab[i].home)) {
+      mips_alloc_state.tab[i].dirty = 0;
+      mips_alloc_state.tab[i].live  = 0;
+      mips_reg_cache_invalidate_var(mips_alloc_state.tab[i].v);
     }
   }
 }
@@ -181,26 +218,26 @@ void mips_alloc_spill_dirty_caller(pfile_t *pf)
   unsigned i;
 
   if (!pf) {
-    pf = mips_alloc_pf;
+    pf = mips_alloc_state.pf;
   }
   if (!pf) {
     return;
   }
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (!mips_alloc_tab[i].dirty) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (!mips_alloc_state.tab[i].dirty) {
       continue;
     }
-    if (mips_alloc_tab[i].home == (unsigned) -1) {
+    if (mips_alloc_state.tab[i].home == (unsigned) -1) {
       continue;
     }
-    if (mips_alloc_reg_is_callee_home(mips_alloc_tab[i].home)) {
+    if (mips_alloc_reg_is_callee_home(mips_alloc_state.tab[i].home)) {
       continue;
     }
-    mips_alloc_emit_home_spill(pf, mips_alloc_tab[i].v,
-        mips_alloc_tab[i].home);
-    mips_alloc_tab[i].dirty = 0;
-    mips_alloc_tab[i].live  = 0;
-    mips_reg_cache_invalidate_var(mips_alloc_tab[i].v);
+    mips_alloc_emit_home_spill(pf, mips_alloc_state.tab[i].v,
+        mips_alloc_state.tab[i].home);
+    mips_alloc_state.tab[i].dirty = 0;
+    mips_alloc_state.tab[i].live  = 0;
+    mips_reg_cache_invalidate_var(mips_alloc_state.tab[i].v);
   }
 }
 
@@ -209,22 +246,22 @@ void mips_alloc_flush_dirty(pfile_t *pf)
   unsigned i;
 
   if (!pf) {
-    pf = mips_alloc_pf;
+    pf = mips_alloc_state.pf;
   }
   if (!pf) {
     return;
   }
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (!mips_alloc_tab[i].dirty) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (!mips_alloc_state.tab[i].dirty) {
       continue;
     }
-    if (mips_alloc_tab[i].home == (unsigned) -1) {
-      mips_alloc_tab[i].dirty = 0;
+    if (mips_alloc_state.tab[i].home == (unsigned) -1) {
+      mips_alloc_state.tab[i].dirty = 0;
       continue;
     }
-    mips_alloc_emit_home_spill(pf, mips_alloc_tab[i].v,
-        mips_alloc_tab[i].home);
-    mips_alloc_tab[i].dirty = 0;
+    mips_alloc_emit_home_spill(pf, mips_alloc_state.tab[i].v,
+        mips_alloc_state.tab[i].home);
+    mips_alloc_state.tab[i].dirty = 0;
   }
 }
 
@@ -232,10 +269,10 @@ void mips_alloc_region_reset(void)
 {
   unsigned i;
 
-  mips_alloc_flush_dirty(mips_alloc_pf);
-  for (i = 0; i < mips_alloc_ct; i++) {
-    mips_alloc_tab[i].live  = 0;
-    mips_alloc_tab[i].dirty = 0;
+  mips_alloc_flush_dirty(mips_alloc_state.pf);
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    mips_alloc_state.tab[i].live  = 0;
+    mips_alloc_state.tab[i].dirty = 0;
   }
 }
 
@@ -246,33 +283,33 @@ static void mips_alloc_note_write_fact(pfile_proc_t *proc, variable_t master)
   if (!proc || !master) {
     return;
   }
-  for (i = 0; i < mips_alloc_write_ct; i++) {
-    if ((mips_alloc_write_proc[i] == proc)
-        && (mips_alloc_write_var[i] == master)) {
+  for (i = 0; i < mips_alloc_state.write_ct; i++) {
+    if ((mips_alloc_state.write_proc[i] == proc)
+        && (mips_alloc_state.write_var[i] == master)) {
       return;
     }
   }
-  if (mips_alloc_write_ct >= mips_alloc_write_cap) {
+  if (mips_alloc_state.write_ct >= mips_alloc_state.write_cap) {
     unsigned ocap;
     int      ok;
 
-    ocap = mips_alloc_write_cap;
-    ok = mips_alloc_grow((void **) &mips_alloc_write_proc,
-        &mips_alloc_write_cap, sizeof(*mips_alloc_write_proc));
-    if (ok && (mips_alloc_write_cap != ocap)) {
+    ocap = mips_alloc_state.write_cap;
+    ok = mips_alloc_grow((void **) &mips_alloc_state.write_proc,
+        &mips_alloc_state.write_cap, sizeof(*mips_alloc_state.write_proc));
+    if (ok && (mips_alloc_state.write_cap != ocap)) {
       /* write_var rides the same cap; REALLOC moved alongside */
-      ok = (mips_alloc_write_var = REALLOC(mips_alloc_write_var,
-          (size_t) mips_alloc_write_cap * sizeof(*mips_alloc_write_var)))
+      ok = (mips_alloc_state.write_var = REALLOC(mips_alloc_state.write_var,
+          (size_t) mips_alloc_state.write_cap * sizeof(*mips_alloc_state.write_var)))
         != 0;
     }
     if (!ok) {
-      mips_alloc_write_ct = 0;   /* drop the fact table, keep the edges */
+      mips_alloc_state.write_ct = 0;   /* drop the fact table, keep the edges */
       return;
     }
   }
-  mips_alloc_write_proc[mips_alloc_write_ct] = proc;
-  mips_alloc_write_var[mips_alloc_write_ct]  = master;
-  mips_alloc_write_ct++;
+  mips_alloc_state.write_proc[mips_alloc_state.write_ct] = proc;
+  mips_alloc_state.write_var[mips_alloc_state.write_ct]  = master;
+  mips_alloc_state.write_ct++;
 }
 
 static void mips_alloc_note_call_edge(pfile_proc_t *from, pfile_proc_t *to)
@@ -282,30 +319,30 @@ static void mips_alloc_note_call_edge(pfile_proc_t *from, pfile_proc_t *to)
   if (!from || !to || (from == to)) {
     return;
   }
-  for (i = 0; i < mips_alloc_edge_ct; i++) {
-    if ((mips_alloc_edge_from[i] == from)
-        && (mips_alloc_edge_to[i] == to)) {
+  for (i = 0; i < mips_alloc_state.edge_ct; i++) {
+    if ((mips_alloc_state.edge_from[i] == from)
+        && (mips_alloc_state.edge_to[i] == to)) {
       return;
     }
   }
-  if (mips_alloc_edge_ct >= mips_alloc_edge_cap) {
+  if (mips_alloc_state.edge_ct >= mips_alloc_state.edge_cap) {
     unsigned ocap;
     int      ok;
 
-    ocap = mips_alloc_edge_cap;
-    ok = mips_alloc_grow((void **) &mips_alloc_edge_from,
-        &mips_alloc_edge_cap, sizeof(*mips_alloc_edge_from));
-    if (ok && (mips_alloc_edge_cap != ocap)) {
-      ok = (mips_alloc_edge_to = REALLOC(mips_alloc_edge_to,
-          (size_t) mips_alloc_edge_cap * sizeof(*mips_alloc_edge_to))) != 0;
+    ocap = mips_alloc_state.edge_cap;
+    ok = mips_alloc_grow((void **) &mips_alloc_state.edge_from,
+        &mips_alloc_state.edge_cap, sizeof(*mips_alloc_state.edge_from));
+    if (ok && (mips_alloc_state.edge_cap != ocap)) {
+      ok = (mips_alloc_state.edge_to = REALLOC(mips_alloc_state.edge_to,
+          (size_t) mips_alloc_state.edge_cap * sizeof(*mips_alloc_state.edge_to))) != 0;
     }
     if (!ok) {
       return;
     }
   }
-  mips_alloc_edge_from[mips_alloc_edge_ct] = from;
-  mips_alloc_edge_to[mips_alloc_edge_ct]   = to;
-  mips_alloc_edge_ct++;
+  mips_alloc_state.edge_from[mips_alloc_state.edge_ct] = from;
+  mips_alloc_state.edge_to[mips_alloc_state.edge_ct]   = to;
+  mips_alloc_state.edge_ct++;
 }
 
 /* Transitive: does `proc` or anyone it calls write `v`? */
@@ -325,7 +362,7 @@ static int mips_alloc_proc_may_write(pfile_proc_t *proc, variable_t v)
   if (!proc || !v) {
     return 1; /* unknown — assume writes */
   }
-  nmax = mips_alloc_ct + mips_alloc_edge_ct + 1U;
+  nmax = mips_alloc_state.ct + mips_alloc_state.edge_ct + 1U;
   stack = MALLOC(nmax * sizeof(*stack));
   seen = MALLOC(nmax * sizeof(*seen));
   if (!stack || !seen) {
@@ -351,16 +388,16 @@ static int mips_alloc_proc_may_write(pfile_proc_t *proc, variable_t v)
       continue;
     }
     seen[sn++] = p;
-    for (i = 0; i < mips_alloc_write_ct; i++) {
-      if ((mips_alloc_write_proc[i] == p)
-          && (mips_alloc_write_var[i] == v)) {
+    for (i = 0; i < mips_alloc_state.write_ct; i++) {
+      if ((mips_alloc_state.write_proc[i] == p)
+          && (mips_alloc_state.write_var[i] == v)) {
         rc = 1;
         goto done;
       }
     }
-    for (i = 0; i < mips_alloc_edge_ct; i++) {
-      if (mips_alloc_edge_from[i] == p) {
-        stack[sp++] = mips_alloc_edge_to[i];
+    for (i = 0; i < mips_alloc_state.edge_ct; i++) {
+      if (mips_alloc_state.edge_from[i] == p) {
+        stack[sp++] = mips_alloc_state.edge_to[i];
       }
     }
   }
@@ -372,26 +409,26 @@ done:
 
 static int mips_alloc_keep_across_call(unsigned i, pfile_proc_t *callee)
 {
-  if (mips_alloc_tab[i].home == (unsigned) -1) {
+  if (mips_alloc_state.tab[i].home == (unsigned) -1) {
     return 0;
   }
-  if (mips_alloc_tab[i].is_formal) {
+  if (mips_alloc_state.tab[i].is_formal) {
     return 0;
   }
-  if (!mips_alloc_reg_is_callee_home(mips_alloc_tab[i].home)) {
+  if (!mips_alloc_reg_is_callee_home(mips_alloc_state.tab[i].home)) {
     return 0;
   }
-  if (mips_alloc_tab[i].is_nested) {
+  if (mips_alloc_state.tab[i].is_nested) {
     return 1;
   }
   /* File-level $s: keep only with a known callee that does not write it. */
   if (!callee) {
     return 0;
   }
-  if (!mips_alloc_tab[i].single_writer) {
+  if (!mips_alloc_state.tab[i].single_writer) {
     return 0;
   }
-  if (mips_alloc_proc_may_write(callee, mips_alloc_tab[i].v)) {
+  if (mips_alloc_proc_may_write(callee, mips_alloc_state.tab[i].v)) {
     return 0;
   }
   return 1;
@@ -402,26 +439,26 @@ void mips_alloc_call_reset(pfile_proc_t *callee)
   unsigned i;
 
   /* Always spill dirty before CALL — RAM must match for getters. */
-  if (mips_alloc_pf) {
-    for (i = 0; i < mips_alloc_ct; i++) {
-      if (!mips_alloc_tab[i].dirty) {
+  if (mips_alloc_state.pf) {
+    for (i = 0; i < mips_alloc_state.ct; i++) {
+      if (!mips_alloc_state.tab[i].dirty) {
         continue;
       }
-      if (mips_alloc_tab[i].home == (unsigned) -1) {
-        mips_alloc_tab[i].dirty = 0;
+      if (mips_alloc_state.tab[i].home == (unsigned) -1) {
+        mips_alloc_state.tab[i].dirty = 0;
         continue;
       }
-      mips_alloc_emit_home_spill(mips_alloc_pf, mips_alloc_tab[i].v,
-          mips_alloc_tab[i].home);
-      mips_alloc_tab[i].dirty = 0;
+      mips_alloc_emit_home_spill(mips_alloc_state.pf, mips_alloc_state.tab[i].v,
+          mips_alloc_state.tab[i].home);
+      mips_alloc_state.tab[i].dirty = 0;
     }
   }
-  for (i = 0; i < mips_alloc_ct; i++) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
     if (mips_alloc_keep_across_call(i, callee)) {
       continue;
     }
-    mips_alloc_tab[i].live  = 0;
-    mips_alloc_tab[i].dirty = 0;
+    mips_alloc_state.tab[i].live  = 0;
+    mips_alloc_state.tab[i].dirty = 0;
   }
 }
 
@@ -429,15 +466,15 @@ void mips_alloc_proc_enter_cold(void)
 {
   unsigned i;
 
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (mips_alloc_tab[i].home == (unsigned) -1) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (mips_alloc_state.tab[i].home == (unsigned) -1) {
       continue;
     }
-    if (mips_alloc_reg_is_callee_home(mips_alloc_tab[i].home)) {
+    if (mips_alloc_reg_is_callee_home(mips_alloc_state.tab[i].home)) {
       continue;
     }
-    mips_alloc_tab[i].live  = 0;
-    mips_alloc_tab[i].dirty = 0;
+    mips_alloc_state.tab[i].live  = 0;
+    mips_alloc_state.tab[i].dirty = 0;
   }
 }
 
@@ -515,8 +552,8 @@ static int mips_alloc_find(variable_t master)
 {
   unsigned i;
 
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (mips_alloc_tab[i].v == master) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (mips_alloc_state.tab[i].v == master) {
       return (int) i;
     }
   }
@@ -531,9 +568,9 @@ static void mips_alloc_add(pfile_t *pf, variable_t v, pfile_proc_t *owner)
   if (!v) {
     return;
   }
-  if ((mips_alloc_ct >= mips_alloc_cap)
-      && !mips_alloc_grow((void **) &mips_alloc_tab, &mips_alloc_cap,
-          sizeof(*mips_alloc_tab))) {
+  if ((mips_alloc_state.ct >= mips_alloc_state.cap)
+      && !mips_alloc_grow((void **) &mips_alloc_state.tab, &mips_alloc_state.cap,
+          sizeof(*mips_alloc_state.tab))) {
     pfile_log_syserr(pf, ENOMEM);
     return;
   }
@@ -551,20 +588,20 @@ static void mips_alloc_add(pfile_t *pf, variable_t v, pfile_proc_t *owner)
   if (!vproc) {
     vproc = owner;
   }
-  mips_alloc_tab[mips_alloc_ct].v             = master;
-  mips_alloc_tab[mips_alloc_ct].owner         = vproc;
-  mips_alloc_tab[mips_alloc_ct].home          = (unsigned) -1;
-  mips_alloc_tab[mips_alloc_ct].uses          = 0;
-  mips_alloc_tab[mips_alloc_ct].first_use     = 0;
-  mips_alloc_tab[mips_alloc_ct].last_use      = 0;
-  mips_alloc_tab[mips_alloc_ct].writer        = 0;
-  mips_alloc_tab[mips_alloc_ct].is_formal     = mips_alloc_is_formal(pf, master);
-  mips_alloc_tab[mips_alloc_ct].is_nested     =
+  mips_alloc_state.tab[mips_alloc_state.ct].v             = master;
+  mips_alloc_state.tab[mips_alloc_state.ct].owner         = vproc;
+  mips_alloc_state.tab[mips_alloc_state.ct].home          = (unsigned) -1;
+  mips_alloc_state.tab[mips_alloc_state.ct].uses          = 0;
+  mips_alloc_state.tab[mips_alloc_state.ct].first_use     = 0;
+  mips_alloc_state.tab[mips_alloc_state.ct].last_use      = 0;
+  mips_alloc_state.tab[mips_alloc_state.ct].writer        = 0;
+  mips_alloc_state.tab[mips_alloc_state.ct].is_formal     = mips_alloc_is_formal(pf, master);
+  mips_alloc_state.tab[mips_alloc_state.ct].is_nested     =
       (vproc && pfile_proc_parent_get(vproc)) ? 1 : 0;
-  mips_alloc_tab[mips_alloc_ct].single_writer = 1;
-  mips_alloc_tab[mips_alloc_ct].live          = 0;
-  mips_alloc_tab[mips_alloc_ct].dirty         = 0;
-  mips_alloc_ct++;
+  mips_alloc_state.tab[mips_alloc_state.ct].single_writer = 1;
+  mips_alloc_state.tab[mips_alloc_state.ct].live          = 0;
+  mips_alloc_state.tab[mips_alloc_state.ct].dirty         = 0;
+  mips_alloc_state.ct++;
 }
 
 static void mips_alloc_note_use(variable_t master, unsigned serial)
@@ -575,13 +612,13 @@ static void mips_alloc_note_use(variable_t master, unsigned serial)
   if (ix < 0) {
     return;
   }
-  mips_alloc_tab[ix].uses++;
-  if ((0 == mips_alloc_tab[ix].first_use)
-      || (serial < mips_alloc_tab[ix].first_use)) {
-    mips_alloc_tab[ix].first_use = serial;
+  mips_alloc_state.tab[ix].uses++;
+  if ((0 == mips_alloc_state.tab[ix].first_use)
+      || (serial < mips_alloc_state.tab[ix].first_use)) {
+    mips_alloc_state.tab[ix].first_use = serial;
   }
-  if (serial > mips_alloc_tab[ix].last_use) {
-    mips_alloc_tab[ix].last_use = serial;
+  if (serial > mips_alloc_state.tab[ix].last_use) {
+    mips_alloc_state.tab[ix].last_use = serial;
   }
 }
 
@@ -596,10 +633,10 @@ static void mips_alloc_note_write(variable_t master, pfile_proc_t *proc,
   if (ix < 0) {
     return;
   }
-  if (!mips_alloc_tab[ix].writer) {
-    mips_alloc_tab[ix].writer = proc;
-  } else if (mips_alloc_tab[ix].writer != proc) {
-    mips_alloc_tab[ix].single_writer = 0;
+  if (!mips_alloc_state.tab[ix].writer) {
+    mips_alloc_state.tab[ix].writer = proc;
+  } else if (mips_alloc_state.tab[ix].writer != proc) {
+    mips_alloc_state.tab[ix].single_writer = 0;
   }
 }
 
@@ -627,12 +664,12 @@ static void mips_alloc_bump_val(value_t val, unsigned serial, int is_write,
 
 static void mips_alloc_note_flush(unsigned serial)
 {
-  if ((mips_alloc_flush_ct >= mips_alloc_flush_cap)
-      && !mips_alloc_grow((void **) &mips_alloc_flush_serial,
-          &mips_alloc_flush_cap, sizeof(*mips_alloc_flush_serial))) {
+  if ((mips_alloc_state.flush_ct >= mips_alloc_state.flush_cap)
+      && !mips_alloc_grow((void **) &mips_alloc_state.flush_serial,
+          &mips_alloc_state.flush_cap, sizeof(*mips_alloc_state.flush_serial))) {
     return;   /* flush-between becomes conservative -- see caller_reg_free */
   }
-  mips_alloc_flush_serial[mips_alloc_flush_ct++] = serial;
+  mips_alloc_state.flush_serial[mips_alloc_state.flush_ct++] = serial;
 }
 
 static void mips_alloc_count_uses(cmd_t head)
@@ -643,7 +680,7 @@ static void mips_alloc_count_uses(cmd_t head)
 
   serial = 0;
   proc   = 0;
-  mips_alloc_flush_ct = 0;
+  mips_alloc_state.flush_ct = 0;
   for (cmd = head; cmd; cmd = cmd_link_get(cmd)) {
     cmd_type_t type;
 
@@ -688,10 +725,10 @@ static int mips_alloc_flush_between(unsigned lo, unsigned hi)
   if ((0 == lo) || (0 == hi) || (hi <= lo)) {
     return 0;
   }
-  for (i = 0; i < mips_alloc_flush_ct; i++) {
+  for (i = 0; i < mips_alloc_state.flush_ct; i++) {
     unsigned s;
 
-    s = mips_alloc_flush_serial[i];
+    s = mips_alloc_state.flush_serial[i];
     if ((s > lo) && (s <= hi)) {
       return 1;
     }
@@ -718,15 +755,15 @@ static int mips_alloc_caller_reg_free(unsigned reg, unsigned first,
 {
   unsigned i;
 
-  for (i = 0; i < mips_alloc_ct; i++) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
     unsigned f;
     unsigned l;
 
-    if (mips_alloc_tab[i].home != reg) {
+    if (mips_alloc_state.tab[i].home != reg) {
       continue;
     }
-    f = mips_alloc_tab[i].first_use;
-    l = mips_alloc_tab[i].last_use;
+    f = mips_alloc_state.tab[i].first_use;
+    l = mips_alloc_state.tab[i].last_use;
     if (mips_alloc_intervals_overlap(first, last, f, l)) {
       return 0;
     }
@@ -767,24 +804,24 @@ static void mips_alloc_assign_homes(void)
 
     best = -1;
     best_uses = 1;
-    for (i = 0; i < mips_alloc_ct; i++) {
+    for (i = 0; i < mips_alloc_state.ct; i++) {
       const char *nm;
 
-      if (mips_alloc_tab[i].home != (unsigned) -1) {
+      if (mips_alloc_state.tab[i].home != (unsigned) -1) {
         continue;
       }
-      if (!mips_alloc_owner_ok(mips_alloc_tab[i].owner)) {
+      if (!mips_alloc_owner_ok(mips_alloc_state.tab[i].owner)) {
         continue;
       }
-      if (mips_alloc_tab[i].is_formal || !mips_alloc_tab[i].is_nested) {
+      if (mips_alloc_state.tab[i].is_formal || !mips_alloc_state.tab[i].is_nested) {
         continue;
       }
-      nm = variable_name_get(mips_alloc_tab[i].v);
+      nm = variable_name_get(mips_alloc_state.tab[i].v);
       if (mips_alloc_name_is_temp(nm)) {
         continue;
       }
-      if (mips_alloc_tab[i].uses > best_uses) {
-        best_uses = mips_alloc_tab[i].uses;
+      if (mips_alloc_state.tab[i].uses > best_uses) {
+        best_uses = mips_alloc_state.tab[i].uses;
         best = (int) i;
       }
     }
@@ -793,7 +830,7 @@ static void mips_alloc_assign_homes(void)
     }
     for (t = 0; t < MIPS_S_HOME_EMIT; t++) {
       if (!taken_s[t]) {
-        mips_alloc_tab[best].home = MIPS_S_HOME_REG(t);
+        mips_alloc_state.tab[best].home = MIPS_S_HOME_REG(t);
         taken_s[t] = 1;
         assigned++;
         break;
@@ -808,22 +845,22 @@ static void mips_alloc_assign_homes(void)
 
     best = -1;
     best_uses = 1;
-    for (i = 0; i < mips_alloc_ct; i++) {
+    for (i = 0; i < mips_alloc_state.ct; i++) {
       const char *nm;
 
-      if (mips_alloc_tab[i].home != (unsigned) -1) {
+      if (mips_alloc_state.tab[i].home != (unsigned) -1) {
         continue;
       }
-      if (!mips_alloc_owner_ok(mips_alloc_tab[i].owner)) {
+      if (!mips_alloc_owner_ok(mips_alloc_state.tab[i].owner)) {
         continue;
       }
-      if (mips_alloc_tab[i].is_formal || mips_alloc_tab[i].is_nested) {
+      if (mips_alloc_state.tab[i].is_formal || mips_alloc_state.tab[i].is_nested) {
         continue;
       }
-      if (!mips_alloc_tab[i].single_writer) {
+      if (!mips_alloc_state.tab[i].single_writer) {
         continue;
       }
-      nm = variable_name_get(mips_alloc_tab[i].v);
+      nm = variable_name_get(mips_alloc_state.tab[i].v);
       if (mips_alloc_name_is_temp(nm)) {
         continue;
       }
@@ -831,8 +868,8 @@ static void mips_alloc_assign_homes(void)
       if (!nm || (nm[0] == '_')) {
         continue;
       }
-      if (mips_alloc_tab[i].uses > best_uses) {
-        best_uses = mips_alloc_tab[i].uses;
+      if (mips_alloc_state.tab[i].uses > best_uses) {
+        best_uses = mips_alloc_state.tab[i].uses;
         best = (int) i;
       }
     }
@@ -841,7 +878,7 @@ static void mips_alloc_assign_homes(void)
     }
     for (t = 0; t < MIPS_S_HOME_EMIT; t++) {
       if (!taken_s[t]) {
-        mips_alloc_tab[best].home = MIPS_S_HOME_REG(t);
+        mips_alloc_state.tab[best].home = MIPS_S_HOME_REG(t);
         taken_s[t] = 1;
         assigned++;
         break;
@@ -864,31 +901,31 @@ static void mips_alloc_assign_homes(void)
 
       best = -1;
       best_uses = 1;
-      for (i = 0; i < mips_alloc_ct; i++) {
+      for (i = 0; i < mips_alloc_state.ct; i++) {
         const char *nm;
 
-        if (refuse[i] || (mips_alloc_tab[i].home != (unsigned) -1)) {
+        if (refuse[i] || (mips_alloc_state.tab[i].home != (unsigned) -1)) {
           continue;
         }
-        if (!mips_alloc_owner_ok(mips_alloc_tab[i].owner)) {
+        if (!mips_alloc_owner_ok(mips_alloc_state.tab[i].owner)) {
           continue;
         }
-        if (mips_alloc_tab[i].is_formal) {
+        if (mips_alloc_state.tab[i].is_formal) {
           continue;
         }
-        nm = variable_name_get(mips_alloc_tab[i].v);
+        nm = variable_name_get(mips_alloc_state.tab[i].v);
         if (mips_alloc_name_is_temp(nm)) {
           continue;
         }
         if (!nm || (nm[0] == '_')) {
           continue;
         }
-        if ((0 == mips_alloc_tab[i].first_use)
-            || (0 == mips_alloc_tab[i].last_use)) {
+        if ((0 == mips_alloc_state.tab[i].first_use)
+            || (0 == mips_alloc_state.tab[i].last_use)) {
           continue;
         }
-        if (mips_alloc_tab[i].uses > best_uses) {
-          best_uses = mips_alloc_tab[i].uses;
+        if (mips_alloc_state.tab[i].uses > best_uses) {
+          best_uses = mips_alloc_state.tab[i].uses;
           best = (int) i;
         }
       }
@@ -898,9 +935,9 @@ static void mips_alloc_assign_homes(void)
       found = 0;
       for (t = 0; t < MIPS_ALLOC_CALLER_CT; t++) {
         reg = mips_alloc_caller_pool[t];
-        if (mips_alloc_caller_reg_free(reg, mips_alloc_tab[best].first_use,
-            mips_alloc_tab[best].last_use)) {
-          mips_alloc_tab[best].home = reg;
+        if (mips_alloc_caller_reg_free(reg, mips_alloc_state.tab[best].first_use,
+            mips_alloc_state.tab[best].last_use)) {
+          mips_alloc_state.tab[best].home = reg;
           found = 1;
           break;
         }
@@ -928,7 +965,7 @@ unsigned mips_alloc_home_reg(variable_t v)
   if (ix < 0) {
     return (unsigned) -1;
   }
-  return mips_alloc_tab[ix].home;
+  return mips_alloc_state.tab[ix].home;
 }
 
 int mips_alloc_home_is_live(variable_t v)
@@ -947,10 +984,10 @@ int mips_alloc_home_is_live(variable_t v)
   if (ix < 0) {
     return 0;
   }
-  if (mips_alloc_tab[ix].home == (unsigned) -1) {
+  if (mips_alloc_state.tab[ix].home == (unsigned) -1) {
     return 0;
   }
-  return mips_alloc_tab[ix].live;
+  return mips_alloc_state.tab[ix].live;
 }
 
 void mips_alloc_home_set_live(variable_t v)
@@ -969,9 +1006,9 @@ void mips_alloc_home_set_live(variable_t v)
   if (ix < 0) {
     return;
   }
-  if (mips_alloc_tab[ix].home != (unsigned) -1) {
-    mips_alloc_tab[ix].live  = 1;
-    mips_alloc_tab[ix].dirty = 0;
+  if (mips_alloc_state.tab[ix].home != (unsigned) -1) {
+    mips_alloc_state.tab[ix].live  = 1;
+    mips_alloc_state.tab[ix].dirty = 0;
   }
 }
 
@@ -991,9 +1028,9 @@ void mips_alloc_home_set_dirty(variable_t v)
   if (ix < 0) {
     return;
   }
-  if (mips_alloc_tab[ix].home != (unsigned) -1) {
-    mips_alloc_tab[ix].live  = 1;
-    mips_alloc_tab[ix].dirty = 1;
+  if (mips_alloc_state.tab[ix].home != (unsigned) -1) {
+    mips_alloc_state.tab[ix].live  = 1;
+    mips_alloc_state.tab[ix].dirty = 1;
   }
 }
 
@@ -1013,8 +1050,8 @@ void mips_alloc_home_invalidate(variable_t v)
   if (ix < 0) {
     return;
   }
-  mips_alloc_tab[ix].live  = 0;
-  mips_alloc_tab[ix].dirty = 0;
+  mips_alloc_state.tab[ix].live  = 0;
+  mips_alloc_state.tab[ix].dirty = 0;
 }
 
 void mips_alloc_home_flush(pfile_t *pf, variable_t v)
@@ -1033,21 +1070,21 @@ void mips_alloc_home_flush(pfile_t *pf, variable_t v)
   if (ix < 0) {
     return;
   }
-  if (!mips_alloc_tab[ix].dirty) {
+  if (!mips_alloc_state.tab[ix].dirty) {
     return;
   }
-  if (mips_alloc_tab[ix].home == (unsigned) -1) {
-    mips_alloc_tab[ix].dirty = 0;
+  if (mips_alloc_state.tab[ix].home == (unsigned) -1) {
+    mips_alloc_state.tab[ix].dirty = 0;
     return;
   }
   if (!pf) {
-    pf = mips_alloc_pf;
+    pf = mips_alloc_state.pf;
   }
   if (pf) {
-    mips_alloc_emit_home_spill(pf, mips_alloc_tab[ix].v,
-        mips_alloc_tab[ix].home);
+    mips_alloc_emit_home_spill(pf, mips_alloc_state.tab[ix].v,
+        mips_alloc_state.tab[ix].home);
   }
-  mips_alloc_tab[ix].dirty = 0;
+  mips_alloc_state.tab[ix].dirty = 0;
 }
 
 static void mips_alloc_dump(pfile_t *pf)
@@ -1060,41 +1097,41 @@ static void mips_alloc_dump(pfile_t *pf)
 
   UNUSED(pf);
   n_home = n_s = n_dirty_cap = n_sw = 0;
-  for (i = 0; i < mips_alloc_ct; i++) {
-    if (mips_alloc_tab[i].single_writer && !mips_alloc_tab[i].is_formal) {
+  for (i = 0; i < mips_alloc_state.ct; i++) {
+    if (mips_alloc_state.tab[i].single_writer && !mips_alloc_state.tab[i].is_formal) {
       n_sw++;
     }
-    if (mips_alloc_tab[i].home != (unsigned) -1) {
+    if (mips_alloc_state.tab[i].home != (unsigned) -1) {
       n_home++;
       n_dirty_cap++;
-      if (mips_alloc_reg_is_callee_home(mips_alloc_tab[i].home)) {
+      if (mips_alloc_reg_is_callee_home(mips_alloc_state.tab[i].home)) {
         n_s++;
       }
     }
   }
   fprintf(stderr,
       "mips_alloc: eligible=%u homes=%u s_homes=%u single_writer=%u\n",
-      mips_alloc_ct, n_home, n_s, n_sw);
-  for (i = 0; i < mips_alloc_ct; i++) {
+      mips_alloc_state.ct, n_home, n_s, n_sw);
+  for (i = 0; i < mips_alloc_state.ct; i++) {
     const char *nm;
 
-    if (mips_alloc_tab[i].home == (unsigned) -1
-        && mips_alloc_tab[i].uses < 2) {
+    if (mips_alloc_state.tab[i].home == (unsigned) -1
+        && mips_alloc_state.tab[i].uses < 2) {
       continue;
     }
-    nm = variable_name_get(mips_alloc_tab[i].v);
-    if (mips_alloc_tab[i].home == (unsigned) -1) {
+    nm = variable_name_get(mips_alloc_state.tab[i].v);
+    if (mips_alloc_state.tab[i].home == (unsigned) -1) {
       fprintf(stderr,
           "  %s home=spill uses=%u sw=%d nested=%d [%u..%u]\n",
-          nm ? nm : "?", mips_alloc_tab[i].uses,
-          mips_alloc_tab[i].single_writer, mips_alloc_tab[i].is_nested,
-          mips_alloc_tab[i].first_use, mips_alloc_tab[i].last_use);
+          nm ? nm : "?", mips_alloc_state.tab[i].uses,
+          mips_alloc_state.tab[i].single_writer, mips_alloc_state.tab[i].is_nested,
+          mips_alloc_state.tab[i].first_use, mips_alloc_state.tab[i].last_use);
     } else {
       fprintf(stderr,
           "  %s home=$%u uses=%u sw=%d nested=%d [%u..%u]\n",
-          nm ? nm : "?", mips_alloc_tab[i].home, mips_alloc_tab[i].uses,
-          mips_alloc_tab[i].single_writer, mips_alloc_tab[i].is_nested,
-          mips_alloc_tab[i].first_use, mips_alloc_tab[i].last_use);
+          nm ? nm : "?", mips_alloc_state.tab[i].home, mips_alloc_state.tab[i].uses,
+          mips_alloc_state.tab[i].single_writer, mips_alloc_state.tab[i].is_nested,
+          mips_alloc_state.tab[i].first_use, mips_alloc_state.tab[i].last_use);
     }
   }
 }
@@ -1105,7 +1142,7 @@ void mips_alloc_run(pfile_t *pf, cmd_t cmd_head)
   const char   *dump;
 
   mips_alloc_reset();
-  mips_alloc_pf = pf;
+  mips_alloc_state.pf = pf;
   if (!pf) {
     return;
   }

@@ -19,6 +19,11 @@
 void mips_alloc_run(pfile_t *pf, cmd_t cmd_head);
 void mips_alloc_reset(void);
 
+/* Teardown reset: like mips_alloc_reset() but also frees the growable
+ * tables, so a second compile in the same process starts clean AND
+ * leak-free (A4). Call while the back end is idle. */
+void mips_alloc_state_reset(void);
+
 /* Remember pf for spill emission. */
 void mips_alloc_pf_set(pfile_t *pf);
 
