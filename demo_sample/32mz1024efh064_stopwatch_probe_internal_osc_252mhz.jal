@@ -24,7 +24,7 @@
 
 include 32mz1024efh064              -- target device (PIC32MZ EF, MIPS32r5)
 pragma target clock 252_000_000     -- oscillator frequency (part maximum)
-pragma target OSC   FRC_SPLL        -- internal FRC through the system PLL (x63 /2, VCO 504 MHz)
+pragma target OSC      FRC_SPLL        -- internal FRC through the system PLL (x63 /2, VCO 504 MHz)
 pragma target image pfm             -- PFM app + compiler boot block
 pragma target WDT   DISABLED        -- watchdog
 pragma target DMT   DISABLED        -- deadman timer

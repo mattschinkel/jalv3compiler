@@ -1,11 +1,23 @@
---------------------------------------------------------------------------------
+-- ------------------------------------------------------
 -- Title: Blink-a-led on RG2 of the PIC18F67J50
 --
--- Target: PIC18F67J50 (64-pin TQFP), internal oscillator, no crystal needed
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved
 --
--- This file is part of the jalv2 fork demo samples.
---------------------------------------------------------------------------------
+-- Compiler: 3.0a1
 --
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Blink the LED on RG2 of the PIC18F67J50 (64-pin TQFP) at ~1 s
+--    on/off, running from the internal oscillator at 8 MHz -- no
+--    crystal needed. Complete pragma configuration.
+--
+-- Notes:
+--    Bench-proven 2026-10-26 on the user-built j50 board (LED on RG2,
+--    TQFP-64 pin 64 wire; see jalv3/bench/boards.json j50_bench).
+--
+-- ------------------------------------------------------
 include 18f67j50
 
 -- Internal INTOSC at 8 MHz

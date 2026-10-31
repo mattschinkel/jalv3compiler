@@ -1,0 +1,224 @@
+-- ------------------------------------------------------
+-- Title: ESP32 SPI master (HSPI/SPI2, polled, GPIO-matrix routed)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of the jalv3compiler sample_lib overlay.
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Byte-wide full-duplex polled SPI master for jallib SD-card class
+--    drivers. The bus is HSPI (SPI2) routed through the GPIO matrix to
+--    the pads used by the microSD slot of the common "ESP32-2432S032"
+--    display boards:
+--       SCK  = GPIO18 (HSPICLK_OUT, signal 8)
+--       MISO = GPIO19 (HSPIQ_IN,    signal 9)
+--       MOSI = GPIO23 (HSPID_OUT,   signal 10)
+--       CS   = GPIO5  (plain GPIO output; the card driver toggles it)
+--
+-- Notes:
+--    - VSPI/SPI3 was tried first and its RX path never loaded W0 (the
+--      FSM runs, TX unverified, static-level input test reads 0xFF on
+--      SPI3 and 0x00 on SPI2 with identical sequences); HSPI works, so
+--      the driver lives on SPI2. The GPIO matrix makes the peripheral
+--      choice invisible to the wiring.
+--    - Call esp32_spi_init() once, then spi_master_hw_set_mode_11()
+--      for SD cards, and spi_master_hw_set_speed() before/after card
+--      init (ESP32_SPI_SPEED_INIT = 400 kHz, ESP32_SPI_SPEED_FAST
+--      = 10 MHz from the 80 MHz APB clock).
+--    - The pseudo variable spi_master_hw exchanges one byte:
+--        spi_master_hw = 0xFF   -- transmit one byte
+--        data = spi_master_hw   -- transmit 0xFF, return received byte
+--      (same convention as jallib spi_host_hw, so sd_card.jal works
+--      unchanged over `alias spi_master is spi_master_hw`).
+--    - Register facts from ESP-IDF v4.4.7 headers (the same source the
+--      device file was generated from): SPI3 at 0x3FF64000, GPIO matrix
+--      func_in_sel[256] at 0x3FF44130 / func_out_sel[40] at 0x3FF44530,
+--      IO_MUX pads at 0x3FF49000 (FUN_IE bit 9, FUNC field bits 14:12,
+--      GPIO function = 2).
+--------------------------------------------------------------------------------
+
+-- IO_MUX pad registers (not in the generated device file). Base 0x3FF49000
+-- per the pic2jal_esp32 TRM-pinned table (0x3FF48C00 is RTC_I2C!)
+var volatile dword _IO_MUX_GPIO5              at { 0x3FF4906C }
+var volatile dword _IO_MUX_GPIO18             at { 0x3FF49070 }
+var volatile dword _IO_MUX_GPIO19             at { 0x3FF49074 }
+var volatile dword _IO_MUX_GPIO23             at { 0x3FF4908C }
+
+const dword _IO_MUX_FUNC_MASK   = 0x00007000   -- FUNC field bits 14:12
+const dword _IO_MUX_FUNC_GPIO   = 0x00002000   -- function 2 = plain GPIO
+const dword _IO_MUX_FUN_IE      = 0x00000200   -- input enable, bit 9
+const dword _IO_MUX_PULLS       = 0x00000180   -- FUN_PD | FUN_PU (cleared)
+const dword _IO_MUX_KEEP        = 0xFFFF8E7F   -- ~(FUNC | pulls), for AND-mask clears
+
+-- bus speed selectors (APB is 80 MHz at every CPU clock)
+const byte ESP32_SPI_SPEED_INIT = 0            -- 400 kHz (card init)
+const byte ESP32_SPI_SPEED_FAST = 1            -- 20 MHz
+
+--------------------------------------------------------------------------------
+-- Description: Set SPI clock divider (APB 80 MHz)
+-- Parameters:
+-- - speed - ESP32_SPI_SPEED_INIT (400 kHz) or ESP32_SPI_SPEED_FAST (10 MHz)
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure spi_master_hw_set_speed(byte in speed) is
+   -- SPI2_CLOCK is WRITE-ONLY on ESP32 (reads return 0x3131.. garbage):
+   -- field-wise RMW writes bake garbage into the divider, so the whole
+   -- dword is computed here (equ_sysclk=0 | pre<<18 | n<<12 | h<<6 | l).
+   if speed == ESP32_SPI_SPEED_INIT then
+      SPI2_CLOCK = 0x001274E7               -- pre=4,n=39: (4+1)*(39+1) = 200 -> 400 kHz (bench-scan proven; the pre=3 encoding wedges the FSM)
+   else
+      SPI2_CLOCK = 0x0003043                -- (0+1)*(3+1) = 4 -> 20 MHz, bench-proven (500 KB/s, data phase verified; 10 MHz n=7 and 40 MHz n=1 encodings fail the data phase on this silicon)
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: SPI mode selection (clock polarity / phase)
+-- Parameters: (none; four fixed procedures per jallib spi convention)
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure spi_master_hw_set_mode_00() is
+   SPI2_CK_IDLE_EDGE = 0
+   SPI2_CK_I_EDGE = 1
+   SPI2_CK_OUT_EDGE = 0
+end procedure
+
+procedure spi_master_hw_set_mode_01() is
+   SPI2_CK_IDLE_EDGE = 0
+   SPI2_CK_I_EDGE = 0
+   SPI2_CK_OUT_EDGE = 1
+end procedure
+
+procedure spi_master_hw_set_mode_10() is
+   SPI2_CK_IDLE_EDGE = 1
+   SPI2_CK_I_EDGE = 1
+   SPI2_CK_OUT_EDGE = 1
+end procedure
+
+procedure spi_master_hw_set_mode_11() is
+   SPI2_CK_IDLE_EDGE = 1
+   SPI2_CK_I_EDGE = 0
+   SPI2_CK_OUT_EDGE = 0
+end procedure
+
+procedure spi_master_hw_set_mode(byte in mode) is
+   if mode == 0 then
+      spi_master_hw_set_mode_00()
+   elsif mode == 1 then
+      spi_master_hw_set_mode_01()
+   elsif mode == 2 then
+      spi_master_hw_set_mode_10()
+   else
+      spi_master_hw_set_mode_11()
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Bring up VSPI master on the SD-slot pins
+-- Parameters: (none)
+-- Returns: (none)
+-- Notes: enables the SPI3 clock (DPORT bit 16), releases it from reset,
+-- - puts pads 5/18/19/23 in GPIO function (MISO input-enabled), routes
+-- - SCK/MOSI outputs + MISO input through the GPIO matrix, and configures
+-- - SPI3 for single-byte full-duplex user-defined transactions (no
+-- - command/address/dummy phases, hardware CS outputs disabled -- the
+-- - card driver owns chip select).
+--------------------------------------------------------------------------------
+procedure esp32_spi_init() is
+      -- peripheral clock enable (DPORT_SPI2_CLK_EN, bit 6)
+   DPORT_PERIP_CLK_EN = DPORT_PERIP_CLK_EN | 0x00000040
+
+   -- pads: GPIO function, pulls off; MISO additionally input-enabled
+   _IO_MUX_GPIO5  = (_IO_MUX_GPIO5  & _IO_MUX_KEEP) | _IO_MUX_FUNC_GPIO
+   _IO_MUX_GPIO18 = (_IO_MUX_GPIO18 & _IO_MUX_KEEP) | _IO_MUX_FUNC_GPIO
+   _IO_MUX_GPIO19 = (_IO_MUX_GPIO19 & _IO_MUX_KEEP) | _IO_MUX_FUNC_GPIO | _IO_MUX_FUN_IE
+   _IO_MUX_GPIO23 = (_IO_MUX_GPIO23 & _IO_MUX_KEEP) | _IO_MUX_FUNC_GPIO
+
+   -- output enables: SCK 18, MOSI 23, CS 5 ; MISO 19 stays input
+   GPIO_ENABLE_W1TS = 0x00840020
+   GPIO_ENABLE_W1TC = 0x00080000
+
+   -- GPIO matrix: pad outputs driven by VSPI signals, MISO pad feeds VSPIQ_IN
+   GPIO_FUNC18_OUT_SEL_CFG = 8               -- HSPICLK_OUT
+   GPIO_FUNC23_OUT_SEL_CFG = 10              -- HSPID_OUT
+   GPIO_FUNC5_OUT_SEL_CFG  = 0x100           -- CS keeps its own GPIO_OUT value
+   GPIO_FUNC9_IN_SEL_CFG   = 0x80 | 19       -- HSPIQ_IN <- GPIO19 (bit7: input via GPIO matrix, not native pad)
+
+   -- SPI3 master, single-byte full-duplex transactions
+   SPI2_SLAVE = 0
+   SPI2_CTRL = 0
+   SPI2_USER1 = 0
+   SPI2_USER2 = 0
+   SPI2_USER = 0
+   SPI2_DOUTDIN = 1                           -- full duplex
+   SPI2_USR_MOSI = 1
+   SPI2_USR_MISO = 1
+   SPI2_MOSI_DLEN = 7                         -- 8 bits
+   SPI2_MISO_DLEN = 7
+   SPI2_CS0_DIS = 1                           -- no hardware CS outputs
+   SPI2_CS1_DIS = 1
+   SPI2_CS2_DIS = 1
+   SPI2_CS_KEEP_ACTIVE = 0
+   SPI2_CK_DIS = 0
+   spi_master_hw_set_mode_00()
+   spi_master_hw_set_speed(ESP32_SPI_SPEED_INIT)
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: SPI byte pseudo-variable anchor
+-- Notes: put/get accessors below; direct access is never compiled.
+--------------------------------------------------------------------------------
+var volatile byte spi_master_hw at { 0 }
+
+--------------------------------------------------------------------------------
+-- Description: Transmit one byte (receive side discarded)
+-- Parameters:
+-- - data - byte to send
+-- Returns: (none)
+--------------------------------------------------------------------------------
+procedure spi_master_hw'put(byte in data) is
+   SPI2_W0 = data
+   SPI2_USR = 1
+   -- dword-read+mask wait (the bit-alias poll cached stale in some layouts;
+   -- this is the exact shape esp32_serial_hw uses for UART0_STATUS)
+   while ((SPI2_CMD >> 18) & 0x00000001) == 1 loop
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Receive one byte (transmits 0xFF to clock the slave)
+-- Parameters: (none)
+-- Returns: byte received during the transaction
+--------------------------------------------------------------------------------
+function spi_master_hw'get() return byte is
+   SPI2_W0 = 0xFF
+   SPI2_USR = 1
+   -- dword-read+mask wait (the bit-alias poll cached stale in some layouts;
+   -- this is the exact shape esp32_serial_hw uses for UART0_STATUS)
+   while ((SPI2_CMD >> 18) & 0x00000001) == 1 loop
+   end loop
+   return byte(SPI2_W0 & 0xFF)
+end function
+
+--------------------------------------------------------------------------------
+-- Description: Full-duplex byte exchange
+-- Parameters:
+-- - data - byte to send
+-- Returns: byte received during the same transaction
+--------------------------------------------------------------------------------
+function spi_master_hw_exchange(byte in data) return byte is
+   SPI2_W0 = data
+   SPI2_USR = 1
+   -- dword-read+mask wait (the bit-alias poll cached stale in some layouts;
+   -- this is the exact shape esp32_serial_hw uses for UART0_STATUS)
+   while ((SPI2_CMD >> 18) & 0x00000001) == 1 loop
+   end loop
+   return byte(SPI2_W0 & 0xFF)
+end function
+
+-- bus pin aliases for card-detect probing in sd_card.jal (pin levels are
+-- owned by the matrix once routed; sd_card's pre-init low pulses on these
+-- are harmless no-ops through GPIO_OUT)
+alias pin_sdo is pin_23_out                   -- MOSI
+alias pin_sdi is pin_19_out                   -- MISO pad
+alias pin_sck is pin_18_out                   -- SCK

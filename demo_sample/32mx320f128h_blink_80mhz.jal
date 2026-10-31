@@ -1,13 +1,23 @@
 -- ------------------------------------------------------
 -- Title: Blink both on-board LEDs of the chipKIT Uno32 at 80 MHz
 --
--- Target: PIC32MX320F128H (Digilent chipKIT Uno32)
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved
 --
--- LD4 = chipKIT digital pin 13 = RG6
--- LD5 = chipKIT digital pin 43 = RF0
--- (mapping per chipKIT-core Uno32 Board_Data.c)
+-- Compiler: 3.0a1
 --
--- This file is part of the jalv2 fork demo samples.
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Alternating blink of both on-board LEDs of the Digilent chipKIT
+--    Uno32 (PIC32MX320F128H) at the chipKIT-documented full speed of
+--    80 MHz (8 MHz FRC /2 x20 /1).
+--
+-- Notes:
+--    LD4 = chipKIT digital pin 13 = RG6, LD5 = pin 43 = RF0
+--    (mapping per chipKIT-core Uno32 Board_Data.c).
+--    Silicon-proven 2026-10-26.
+--
 -- ------------------------------------------------------
 include 32mx320f128h                -- target device (PIC32MX3xx, MIPS32 M4K)
 
