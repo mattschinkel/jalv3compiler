@@ -256,6 +256,10 @@ void       mips_wide_reset(void);
 void       mips_op_generate(pfile_t *pf, const cmd_t cmd);
 void       mips_op_resolve_fixups(pfile_t *pf);
 void       mips_op_reset(void);
+
+/* TEARDOWN between compiles (A4): frees the fixup table and zeroes the
+ * module state. mips_op_reset() above is the LOGICAL mid-compile reset. */
+void       mips_op_state_reset(void);
 void       mips_op_consume_branch(pfile_t *pf, cmd_t cmd);
 /* Reset stub + EIC vector + Status.IE when a pragma interrupt exists. */
 void       mips_isr_vector_emit(pfile_t *pf);
@@ -355,6 +359,9 @@ void       mips_hex_write(pfile_t *pf);
 boolean_t  mips_var_is_flash_const(variable_t v);
 void       mips_const_pool_add(variable_t v);
 void       mips_const_pool_reset(void);
+
+/* TEARDOWN between compiles (A4): frees both growable tables. */
+void       mips_const_state_reset(void);
 void       mips_const_pool_resolve(pfile_t *pf);
 void       mips_const_pool_hex_write(pfile_t *pf);
 void       mips_emit_flash_addr(unsigned reg, variable_t v,

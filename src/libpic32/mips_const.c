@@ -11,6 +11,7 @@
  ** All rights reserved
  **
  ************************************************************/
+#include <string.h>
 #include "../libutils/mem.h"
 #include "../libcore/pfile.h"
 #include "../libcore/variable.h"
@@ -29,23 +30,41 @@ struct mips_const_fixup {
   unsigned long extra;
 };
 
-static struct mips_const_item  *mips_cpool;
-static size_t                   mips_cpool_ct;
-static size_t                   mips_cpool_cap;
-static unsigned long            mips_cpool_bytes;
-static unsigned long            mips_cpool_base;
 
-static struct mips_const_fixup *mips_cfix;
-static size_t                   mips_cfix_ct;
-static size_t                   mips_cfix_cap;
+
+/*
+ * Per-compile state, in ONE object (Tier-A A4; see
+ * fix_mips_const_state_reset.md). mips_const_pool_reset() stays the
+ * LOGICAL mid-compile reset; mips_const_state_reset() is the TEARDOWN.
+ */
+typedef struct mips_const_state_ {
+  struct mips_const_item  *cpool;
+  size_t                   cpool_ct;
+  size_t                   cpool_cap;
+  unsigned long            cpool_bytes;
+  unsigned long            cpool_base;
+  struct mips_const_fixup *cfix;
+  size_t                   cfix_ct;
+  size_t                   cfix_cap;
+} mips_const_state_t;
+
+static mips_const_state_t mips_const_state;
+
+/* TEARDOWN between compiles: frees both growable tables and zeroes. */
+void mips_const_state_reset(void)
+{
+  free(mips_const_state.cpool);
+  free(mips_const_state.cfix);
+  memset(&mips_const_state, 0, sizeof(mips_const_state));
+}
 
 static unsigned long mips_const_ofs_of(variable_t v)
 {
   size_t ii;
 
-  for (ii = 0; ii < mips_cpool_ct; ii++) {
-    if (mips_cpool[ii].var == v) {
-      return mips_cpool[ii].ofs;
+  for (ii = 0; ii < mips_const_state.cpool_ct; ii++) {
+    if (mips_const_state.cpool[ii].var == v) {
+      return mips_const_state.cpool[ii].ofs;
     }
   }
   return 0;
@@ -66,8 +85,8 @@ static boolean_t mips_const_referenced(variable_t v)
 {
   size_t ii;
 
-  for (ii = 0; ii < mips_cfix_ct; ii++) {
-    if (mips_cfix[ii].var == v) {
+  for (ii = 0; ii < mips_const_state.cfix_ct; ii++) {
+    if (mips_const_state.cfix[ii].var == v) {
       return BOOLEAN_TRUE;
     }
   }
@@ -86,19 +105,19 @@ void mips_const_pool_add(variable_t v)
   if (!sz) {
     return;
   }
-  for (ii = 0; ii < mips_cpool_ct; ii++) {
-    if (mips_cpool[ii].var == v) {
+  for (ii = 0; ii < mips_const_state.cpool_ct; ii++) {
+    if (mips_const_state.cpool[ii].var == v) {
       return;
     }
   }
-  if (mips_cpool_ct >= mips_cpool_cap) {
+  if (mips_const_state.cpool_ct >= mips_const_state.cpool_cap) {
     size_t ncap;
 
-    ncap = mips_cpool_cap ? mips_cpool_cap * 2 : 16;
-    mips_cpool = REALLOC(mips_cpool, ncap * sizeof(*mips_cpool));
-    mips_cpool_cap = ncap;
+    ncap = mips_const_state.cpool_cap ? mips_const_state.cpool_cap * 2 : 16;
+    mips_const_state.cpool = REALLOC(mips_const_state.cpool, ncap * sizeof(*mips_const_state.cpool));
+    mips_const_state.cpool_cap = ncap;
   }
-  if (!mips_cpool) {
+  if (!mips_const_state.cpool) {
     return;
   }
   /* 4-byte start so later LHU/LW of word/dword tables stay aligned
@@ -106,12 +125,12 @@ void mips_const_pool_add(variable_t v)
   {
     unsigned long ofs;
 
-    ofs = (mips_cpool_bytes + 3UL) & ~3UL;
-    mips_cpool[mips_cpool_ct].var = v;
-    mips_cpool[mips_cpool_ct].sz  = sz;
-    mips_cpool[mips_cpool_ct].ofs = ofs;
-    mips_cpool_ct++;
-    mips_cpool_bytes = ofs + sz;
+    ofs = (mips_const_state.cpool_bytes + 3UL) & ~3UL;
+    mips_const_state.cpool[mips_const_state.cpool_ct].var = v;
+    mips_const_state.cpool[mips_const_state.cpool_ct].sz  = sz;
+    mips_const_state.cpool[mips_const_state.cpool_ct].ofs = ofs;
+    mips_const_state.cpool_ct++;
+    mips_const_state.cpool_bytes = ofs + sz;
   }
 }
 
@@ -122,21 +141,21 @@ void mips_emit_flash_addr(unsigned reg, variable_t v, unsigned long extra)
 
   lui = mips_code_alloc(MIPS_OP_LUI, reg, 0, 0);
   ori = mips_code_alloc(MIPS_OP_ORI, reg, reg, 0);
-  if (mips_cfix_ct >= mips_cfix_cap) {
+  if (mips_const_state.cfix_ct >= mips_const_state.cfix_cap) {
     size_t ncap;
 
-    ncap = mips_cfix_cap ? mips_cfix_cap * 2 : 16;
-    mips_cfix = REALLOC(mips_cfix, ncap * sizeof(*mips_cfix));
-    mips_cfix_cap = ncap;
+    ncap = mips_const_state.cfix_cap ? mips_const_state.cfix_cap * 2 : 16;
+    mips_const_state.cfix = REALLOC(mips_const_state.cfix, ncap * sizeof(*mips_const_state.cfix));
+    mips_const_state.cfix_cap = ncap;
   }
-  if (!mips_cfix) {
+  if (!mips_const_state.cfix) {
     return;
   }
-  mips_cfix[mips_cfix_ct].lui   = lui;
-  mips_cfix[mips_cfix_ct].ori   = ori;
-  mips_cfix[mips_cfix_ct].var   = v;
-  mips_cfix[mips_cfix_ct].extra = extra;
-  mips_cfix_ct++;
+  mips_const_state.cfix[mips_const_state.cfix_ct].lui   = lui;
+  mips_const_state.cfix[mips_const_state.cfix_ct].ori   = ori;
+  mips_const_state.cfix[mips_const_state.cfix_ct].var   = v;
+  mips_const_state.cfix[mips_const_state.cfix_ct].extra = extra;
+  mips_const_state.cfix_ct++;
 }
 
 void mips_emit_var_addr(unsigned reg, variable_t v, unsigned long extra)
@@ -150,20 +169,20 @@ void mips_emit_var_addr(unsigned reg, variable_t v, unsigned long extra)
 
 void mips_const_pool_reset(void)
 {
-  if (mips_cpool) {
-    FREE(mips_cpool);
+  if (mips_const_state.cpool) {
+    FREE(mips_const_state.cpool);
   }
-  if (mips_cfix) {
-    FREE(mips_cfix);
+  if (mips_const_state.cfix) {
+    FREE(mips_const_state.cfix);
   }
-  mips_cpool       = 0;
-  mips_cpool_ct    = 0;
-  mips_cpool_cap   = 0;
-  mips_cpool_bytes = 0;
-  mips_cpool_base  = 0;
-  mips_cfix        = 0;
-  mips_cfix_ct     = 0;
-  mips_cfix_cap    = 0;
+  mips_const_state.cpool       = 0;
+  mips_const_state.cpool_ct    = 0;
+  mips_const_state.cpool_cap   = 0;
+  mips_const_state.cpool_bytes = 0;
+  mips_const_state.cpool_base  = 0;
+  mips_const_state.cfix        = 0;
+  mips_const_state.cfix_ct     = 0;
+  mips_const_state.cfix_cap    = 0;
 }
 
 void mips_const_pool_resolve(pfile_t *pf)
@@ -199,7 +218,7 @@ void mips_const_pool_resolve(pfile_t *pf)
     }
   }
   pool = (pool + 3UL) & ~3UL;
-  mips_cpool_base = pool;
+  mips_const_state.cpool_base = pool;
 
   /* The variable walk registers EVERY const variable, but a const only
    * needs pool storage when its address was materialized (fixup above);
@@ -213,19 +232,19 @@ void mips_const_pool_resolve(pfile_t *pf)
 
     rd  = 0;
     ofs = 0;
-    for (ii = 0; ii < mips_cpool_ct; ii++) {
-      if (!mips_const_referenced(mips_cpool[ii].var)) {
+    for (ii = 0; ii < mips_const_state.cpool_ct; ii++) {
+      if (!mips_const_referenced(mips_const_state.cpool[ii].var)) {
         continue;
       }
       ofs = (ofs + 3UL) & ~3UL;
-      mips_cpool[rd].var = mips_cpool[ii].var;
-      mips_cpool[rd].sz  = mips_cpool[ii].sz;
-      mips_cpool[rd].ofs = ofs;
+      mips_const_state.cpool[rd].var = mips_const_state.cpool[ii].var;
+      mips_const_state.cpool[rd].sz  = mips_const_state.cpool[ii].sz;
+      mips_const_state.cpool[rd].ofs = ofs;
       rd++;
-      ofs += mips_cpool[ii].sz;
+      ofs += mips_const_state.cpool[ii].sz;
     }
-    mips_cpool_ct    = rd;
-    mips_cpool_bytes = ofs;
+    mips_const_state.cpool_ct    = rd;
+    mips_const_state.cpool_bytes = ofs;
   }
 
   /* The pool itself must also stay inside the image: MX loader apps are
@@ -245,23 +264,23 @@ void mips_const_pool_resolve(pfile_t *pf)
        * in mips_cmd_generate before reaching here. */
       end = 0;
     }
-    if (end && ((pool + mips_cpool_bytes) > end)) {
+    if (end && ((pool + mips_const_state.cpool_bytes) > end)) {
       pfile_log(pf, PFILE_LOG_ERR,
         "PIC32 flash const pool ends at 0x%08lx, past the image limit "
-        "0x%08lx", pool + mips_cpool_bytes, end);
+        "0x%08lx", pool + mips_const_state.cpool_bytes, end);
     }
   }
 
-  for (ii = 0; ii < mips_cfix_ct; ii++) {
+  for (ii = 0; ii < mips_const_state.cfix_ct; ii++) {
     unsigned long addr;
 
-    addr = mips_cpool_base + mips_const_ofs_of(mips_cfix[ii].var)
-         + mips_cfix[ii].extra;
-    if (mips_cfix[ii].lui) {
-      mips_cfix[ii].lui->imm = (int) ((addr >> 16) & 0xFFFF);
+    addr = mips_const_state.cpool_base + mips_const_ofs_of(mips_const_state.cfix[ii].var)
+         + mips_const_state.cfix[ii].extra;
+    if (mips_const_state.cfix[ii].lui) {
+      mips_const_state.cfix[ii].lui->imm = (int) ((addr >> 16) & 0xFFFF);
     }
-    if (mips_cfix[ii].ori) {
-      mips_cfix[ii].ori->imm = (int) (addr & 0xFFFF);
+    if (mips_const_state.cfix[ii].ori) {
+      mips_const_state.cfix[ii].ori->imm = (int) (addr & 0xFFFF);
     }
   }
 }
@@ -270,17 +289,17 @@ void mips_const_pool_hex_write(pfile_t *pf)
 {
   size_t ii;
 
-  for (ii = 0; ii < mips_cpool_ct; ii++) {
+  for (ii = 0; ii < mips_const_state.cpool_ct; ii++) {
     const unsigned char *data;
     unsigned             jj;
     unsigned long        addr;
 
-    data = (const unsigned char *) variable_data_get(mips_cpool[ii].var);
+    data = (const unsigned char *) variable_data_get(mips_const_state.cpool[ii].var);
     if (!data) {
       continue;
     }
-    addr = mips_cpool_base + mips_cpool[ii].ofs;
-    for (jj = 0; jj < mips_cpool[ii].sz; jj++) {
+    addr = mips_const_state.cpool_base + mips_const_state.cpool[ii].ofs;
+    for (jj = 0; jj < mips_const_state.cpool[ii].sz; jj++) {
       pfile_write_hex(pf, (ulong) mips_hex_addr(pf, addr + jj), data[jj]);
     }
   }

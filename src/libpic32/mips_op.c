@@ -27,6 +27,7 @@
  ** All rights reserved
  **
  ************************************************************/
+#include <string.h>
 #include "../libutils/mem.h"
 #include "../libcore/pfile.h"
 #include "../libcore/cmd.h"
@@ -45,24 +46,45 @@
 #include "mips_alloc.h"
 
 static void mips_add_fixup(mips_code_t branch, label_t lbl);
-static unsigned mips_mvec_hold_ct;
 
 /* Nesting of frames that save $s3-$s5. Preserve-across-call only
  * writes those homes when a save is active (not tasks / ISR entry). */
-static unsigned mips_s_frame_depth;
 
 #define MIPS_PROC_STACK_CT 32
-static pfile_proc_t *mips_proc_stack[MIPS_PROC_STACK_CT];
-static unsigned      mips_proc_sp;
 
-static pfile_t *mips_proc_pf;
+/*
+ * Per-compile state, in ONE object (Tier-A A4; see
+ * fix_mips_op_state_reset.md). The module's own mips_op_reset() is the
+ * LOGICAL reset used mid-compile; mips_op_state_reset() is the TEARDOWN.
+ */
+typedef struct mips_op_state_ {
+  label_t            mvec_hold[67];
+  unsigned           mvec_hold_ct;
+  unsigned           s_frame_depth;
+  pfile_proc_t      *proc_stack[MIPS_PROC_STACK_CT];
+  unsigned           proc_sp;
+  pfile_t           *proc_pf;
+  struct mips_fixup *fixups;
+  size_t             fixup_ct;
+  size_t             fixup_cap;
+} mips_op_state_t;
+
+static mips_op_state_t mips_op_state;
+
+/* TEARDOWN between compiles: frees the fixup table and zeroes the rest. */
+void mips_op_state_reset(void)
+{
+  free(mips_op_state.fixups);
+  memset(&mips_op_state, 0, sizeof(mips_op_state));
+}
+
 
 static void mips_proc_push(pfile_proc_t *proc)
 {
-  if (mips_proc_sp < MIPS_PROC_STACK_CT) {
-    mips_proc_stack[mips_proc_sp++] = proc;
-  } else if (mips_proc_pf) {
-    pfile_log(mips_proc_pf, PFILE_LOG_ERR,
+  if (mips_op_state.proc_sp < MIPS_PROC_STACK_CT) {
+    mips_op_state.proc_stack[mips_op_state.proc_sp++] = proc;
+  } else if (mips_op_state.proc_pf) {
+    pfile_log(mips_op_state.proc_pf, PFILE_LOG_ERR,
         "PIC32 procedure nesting exceeds %u",
         (unsigned) MIPS_PROC_STACK_CT);
   }
@@ -70,20 +92,20 @@ static void mips_proc_push(pfile_proc_t *proc)
 
 static void mips_proc_pop(void)
 {
-  if (mips_proc_sp > 0) {
-    mips_proc_sp--;
+  if (mips_op_state.proc_sp > 0) {
+    mips_op_state.proc_sp--;
   }
 }
 
 static pfile_proc_t *mips_proc_current(void)
 {
-  return (mips_proc_sp > 0) ? mips_proc_stack[mips_proc_sp - 1]
+  return (mips_op_state.proc_sp > 0) ? mips_op_state.proc_stack[mips_op_state.proc_sp - 1]
       : (pfile_proc_t *) 0;
 }
 
 static void mips_reg_cache_at_call(pfile_proc_t *callee)
 {
-  if (mips_s_frame_depth > 0) {
+  if (mips_op_state.s_frame_depth > 0) {
     mips_reg_cache_preserve_across_call(mips_proc_current());
   } else {
     mips_reg_cache_reset();
@@ -1425,9 +1447,6 @@ struct mips_fixup {
   mips_code_t branch;
   label_t      lbl;
 };
-static struct mips_fixup *mips_fixups;
-static size_t             mips_fixup_ct;
-static size_t             mips_fixup_cap;
 static cmd_t              mips_skip_cmd;   /* branch consumed by a paired cmp */
 static unsigned           mips_bitarg_ct;  /* `_mips_bitarg_N` name counter */
 
@@ -1436,49 +1455,49 @@ static void mips_emit_frame_return(pfile_t *pf, pfile_proc_t *proc);
 
 void mips_op_reset(void)
 {
-  if (mips_fixups) { FREE(mips_fixups); }
-  mips_fixups    = 0;
-  mips_mvec_hold_ct = 0;
-  mips_fixup_ct  = 0;
-  mips_fixup_cap = 0;
+  if (mips_op_state.fixups) { FREE(mips_op_state.fixups); }
+  mips_op_state.fixups    = 0;
+  mips_op_state.mvec_hold_ct = 0;
+  mips_op_state.fixup_ct  = 0;
+  mips_op_state.fixup_cap = 0;
   mips_const_pool_reset();
   mips_wide_reset();
   mips_skip_cmd  = 0;
   mips_bitarg_ct = 0;
-  mips_s_frame_depth = 0;
-  mips_proc_sp = 0;
-  mips_proc_pf = 0;
+  mips_op_state.s_frame_depth = 0;
+  mips_op_state.proc_sp = 0;
+  mips_op_state.proc_pf = 0;
 }
 
 void mips_op_resolve_fixups(pfile_t *pf)
 {
   size_t ii;
-  for (ii = 0; ii < mips_fixup_ct; ii++) {
-    mips_code_t tgt = (mips_code_t) label_code_get(mips_fixups[ii].lbl);
+  for (ii = 0; ii < mips_op_state.fixup_ct; ii++) {
+    mips_code_t tgt = (mips_code_t) label_code_get(mips_op_state.fixups[ii].lbl);
     if (tgt) {
-      mips_fixups[ii].branch->target = tgt;
+      mips_op_state.fixups[ii].branch->target = tgt;
     } else if (pf) {
       const char *nm;
 
-      nm = mips_fixups[ii].lbl
-        ? label_name_get(mips_fixups[ii].lbl) : 0;
+      nm = mips_op_state.fixups[ii].lbl
+        ? label_name_get(mips_op_state.fixups[ii].lbl) : 0;
       pfile_log(pf, PFILE_LOG_ERR, "unresolved branch target '%s'",
           nm ? nm : "?");
     }
   }
-  mips_fixup_ct = 0;
+  mips_op_state.fixup_ct = 0;
 }
 
 static void mips_add_fixup(mips_code_t branch, label_t lbl)
 {
-  if (mips_fixup_ct >= mips_fixup_cap) {
-    size_t ncap = mips_fixup_cap ? mips_fixup_cap * 2 : 16;
-    mips_fixups = REALLOC(mips_fixups, ncap * sizeof(*mips_fixups));
-    mips_fixup_cap = ncap;
+  if (mips_op_state.fixup_ct >= mips_op_state.fixup_cap) {
+    size_t ncap = mips_op_state.fixup_cap ? mips_op_state.fixup_cap * 2 : 16;
+    mips_op_state.fixups = REALLOC(mips_op_state.fixups, ncap * sizeof(*mips_op_state.fixups));
+    mips_op_state.fixup_cap = ncap;
   }
-  mips_fixups[mips_fixup_ct].branch = branch;
-  mips_fixups[mips_fixup_ct].lbl    = lbl;
-  mips_fixup_ct++;
+  mips_op_state.fixups[mips_op_state.fixup_ct].branch = branch;
+  mips_op_state.fixups[mips_op_state.fixup_ct].lbl    = lbl;
+  mips_op_state.fixup_ct++;
 }
 
 /* Emit a conditional branch (BEQ/BNE) rs,rt -> lbl, with a NOP delay slot. */
@@ -1660,7 +1679,7 @@ static void mips_emit_proc_enter(pfile_t *pf, pfile_proc_t *proc)
     for (i = 0; i < MIPS_S_HOME_EMIT; i++) {
       mips_emit_push(MIPS_S_HOME_REG(i));
     }
-    mips_s_frame_depth++;
+    mips_op_state.s_frame_depth++;
   }
   /* INDIRECT procs: the inbox holds the marshalled args -- pull them
    * into the linear homes before the body runs (the body's own
@@ -1725,8 +1744,8 @@ static void mips_emit_frame_return(pfile_t *pf, pfile_proc_t *proc)
     for (i = MIPS_S_HOME_EMIT; i > 0; i--) {
       mips_emit_pop(MIPS_S_HOME_REG(i - 1));
     }
-    if (mips_s_frame_depth > 0) {
-      mips_s_frame_depth--;
+    if (mips_op_state.s_frame_depth > 0) {
+      mips_op_state.s_frame_depth--;
     }
   }
   mips_emit_pop(MIPS_REG_RA);
@@ -1847,21 +1866,20 @@ static label_t mips_offstub_label(pfile_t *pf, unsigned irq)
  * fixup pass, so those labels are held until mips_mvec_labels_release()
  * runs after mips_op_resolve_fixups().
  */
-static label_t mips_mvec_hold[67];
 
 static void mips_mvec_hold_add(label_t lbl)
 {
-  if (lbl && (mips_mvec_hold_ct < 67)) {
-    mips_mvec_hold[mips_mvec_hold_ct++] = lbl;
+  if (lbl && (mips_op_state.mvec_hold_ct < 67)) {
+    mips_op_state.mvec_hold[mips_op_state.mvec_hold_ct++] = lbl;
   }
 }
 
 void mips_mvec_labels_release(void)
 {
-  while (mips_mvec_hold_ct > 0) {
-    mips_mvec_hold_ct--;
-    label_release(mips_mvec_hold[mips_mvec_hold_ct]);
-    mips_mvec_hold[mips_mvec_hold_ct] = (label_t) 0;
+  while (mips_op_state.mvec_hold_ct > 0) {
+    mips_op_state.mvec_hold_ct--;
+    label_release(mips_op_state.mvec_hold[mips_op_state.mvec_hold_ct]);
+    mips_op_state.mvec_hold[mips_op_state.mvec_hold_ct] = (label_t) 0;
   }
 }
 
@@ -2973,7 +2991,7 @@ void mips_op_generate(pfile_t *pf, const cmd_t cmd)
   value_t     v1;
   value_t     v2;
 
-  mips_proc_pf = pf;
+  mips_op_state.proc_pf = pf;
   /* a branch already consumed by a paired comparison */
   if (cmd == mips_skip_cmd) {
     mips_skip_cmd = 0;
