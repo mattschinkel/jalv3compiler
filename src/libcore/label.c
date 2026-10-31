@@ -179,13 +179,19 @@ refct_t label_refct_get(const label_t lbl)
   return (ptr) ? ptr->ref_ct : 0;
 }
 
-void label_list_reset(lbllist_t *lst)
+void label_list_reset(lbllist_t *lst, boolean_t report_leaks)
 {
   while (lst->head) {
     label_t        lbl;
 
     lbl = lst->head;
-    if (label_refct_get(lbl) > 1) {
+    /* report_leaks is FALSE after a failed parse: error recovery
+     * legitimately abandons partially built cmd trees, so a surviving
+     * reference only means "the compile stopped early" -- printing it
+     * buried the real user diagnostics under an internal-looking
+     * "label leak" line (the 2026-10-29 16f1825 report).  Successful
+     * (or -debug=compiler) runs keep the invariant check. */
+    if (report_leaks && (label_refct_get(lbl) > 1)) {
       fprintf(stderr, "label leak: 0x%lx %s\n", 
       (ulong)(uintptr_t) lbl, label_name_get(lbl));
       }

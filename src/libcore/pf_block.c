@@ -136,7 +136,9 @@ void pfile_block_free(pfile_block_t *blk, pfile_t *pf)
     blk->child = child->sibbling;
     pfile_block_free(child, pf);
   }
-  label_list_reset(&blk->label_user);
+  label_list_reset(&blk->label_user,
+      (boolean_t) ((0 == pfile_errct_get(pf))
+        || pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)));
   variable_release(blk->bit_bucket);
   hash_free(blk->var_idx);
   variable_list_reset(&blk->var_active);

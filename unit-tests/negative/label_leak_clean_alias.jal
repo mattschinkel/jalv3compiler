@@ -1,0 +1,17 @@
+include 16f1825
+pragma target clock 32_000_000
+pragma target OSC      INTOSC_NOCLKOUT
+pragma target WDT      DISABLED
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      ENABLED
+pragma target MCLR     EXTERNAL
+alias serial_data is nosuch_pseudo
+include print
+procedure p() is
+   print_string(serial_data, "hi")
+end procedure
+p()
+nosuchname = 1

@@ -33,7 +33,7 @@ void label_lock(label_t lbl);
 void label_release(label_t lbl);
 
 void label_list_init(lbllist_t *lst);
-void label_list_reset(lbllist_t *lst);
+void label_list_reset(lbllist_t *lst, boolean_t report_leaks);
 unsigned label_list_ct_get(const lbllist_t *lst);
 
 typedef boolean_t (*lblfind_cb_t)(void *arg, const label_t lbl, 

@@ -328,7 +328,9 @@ void pfile_close(pfile_t *pf)
   label_release(pf->label_isr_preamble);
   pfile_proc_free(pf->proc_root, pf);
 
-  label_list_reset(&pf->label_temp);
+  label_list_reset(&pf->label_temp,
+      (boolean_t) ((0 == pfile_errct_get(pf))
+        || pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)));
 
   hash_free(pf->const_idx);
   variable_list_reset(&pf->var_const);
