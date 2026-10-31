@@ -491,18 +491,6 @@ void pfile_proc_bitchain_fixup(pfile_proc_t *proc, pfile_t *pf)
 void pfile_proc_label_fixup(pfile_proc_t *proc)
 {
   UNUSED(proc);
-#if 0
-  label_t lbl;
-
-  for (lbl = label_list_head(&proc->label_user); 
-       lbl;
-       lbl = label_next_get(lbl)) {
-    if (label_usage_get(lbl)) {
-      label_flag_set(lbl, LABEL_FLAG_USED);
-    }
-  }
-  proc = pfile_proc_next(proc);
-#endif
 }
 
 
@@ -559,17 +547,6 @@ pfile_proc_t *pfile_proc_calls_get(const pfile_proc_t *proc, size_t n)
   return (entry) ? *entry : PFILE_PROC_NONE;
 }
 
-#if 0
-value_t pfile_proc_vparam_get(const pfile_proc_t *proc, size_t n)
-{
-  return (proc && (n < proc->param_ct)) ? proc->params[n] : 0;
-}
-
-size_t pfile_proc_param_ct_get(const pfile_proc_t *proc)
-{
-  return proc ? proc->param_ct : 0;
-}
-#endif
 
 /* dump the entire pfile_proc heirarchy as follows:
  *   name
@@ -580,88 +557,7 @@ size_t pfile_proc_param_ct_get(const pfile_proc_t *proc)
  */
 /* RJ: This function was already disabled but has apparently an infinite loop. 
        It seems to be replaced by a dummy pfile_proc_block_dump later. */
-#if 0
-static void pfproc_variable_def_dump(pfile_t *pf, variable_def_t def, 
-    int indent)
-{
-  const char           *tstr;
-  variable_def_member_t mbr;
 
-  tstr = "???";
-  switch (variable_def_type_get(def)) {
-/* RJ: These are no longer valid
-    case variable_def_type_bit:      tstr = "bit";       break;
-    case variable_def_type_unsigned: tstr = "unsigned";  break;
-    case variable_def_type_signed:   tstr = "signed";    break;
-*/
-/* RJ: Added the following five missing types: */
-    case VARIABLE_DEF_TYPE_INTEGER:  tstr = "integer";   break;
-    case VARIABLE_DEF_TYPE_REFERENCE:tstr = "reference"; break;
-    case VARIABLE_DEF_TYPE_ARRAY:    tstr = "array";     break;
-	case VARIABLE_DEF_TYPE_LABEL:    tstr = "label";     break;
-	case VARIABLE_DEF_TYPE_VALUE:    tstr = "value";     break;
-/* RJ*/
-	case VARIABLE_DEF_TYPE_BOOLEAN:  tstr = "bool";      break;
-	case VARIABLE_DEF_TYPE_FLOAT:    tstr = "float";     break;
-    case VARIABLE_DEF_TYPE_POINTER:  tstr = "pointer";   break;
-    case VARIABLE_DEF_TYPE_FUNCTION: tstr = "function";  break;
-    case VARIABLE_DEF_TYPE_STRUCTURE:tstr = "struct";    break;
-    case VARIABLE_DEF_TYPE_UNION:    tstr = "union";     break;
-    case VARIABLE_DEF_TYPE_NONE:     tstr = "none";      break;
-  }
-  pfile_write(pf, pfile_write_lst, "%*s{%s %c%c%c%c}\n", indent, "", tstr,
-      variable_def_flag_test(def, VARIABLE_DEF_FLAG_CONST)    ? 'C' : '-',
-      variable_def_flag_test(def, VARIABLE_DEF_FLAG_VOLATILE) ? 'V' : '-',
-      variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)       ? 'I' : '-',
-      variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)      ? 'O' : '-'
-      );
-  for (mbr = variable_def_member_get(def);
-       mbr;
-       mbr = variable_def_member_link_get(mbr)) {
-    pfile_write(pf, pfile_write_lst, "%*s%u * %s{", "", indent + 2,
-        variable_def_member_ct_get(mbr),
-        variable_def_member_tag_get(mbr) 
-        ? variable_def_member_tag_get(mbr)
-        : "");
-    pfproc_variable_def_dump(pf, def, indent + 2);
-  }
-}
-#endif
-
-#if 0
-static void pfproc_var_reference_dump(pfile_t *pf, pfile_write_t where,
-  variable_t var, const char *title,
-  variable_t (*fn)(variable_t var, size_t ix)) 
-{
-  UNUSED(pf);
-  UNUSED(where);
-  UNUSED(var);
-  UNUSED(title);
-  UNUSED(fn);
-
-#if 1
-  if (VARIABLE_NONE != fn(var, 0)) {
-    variable_t vptr;
-    size_t     ii;
-
-    pfile_write(pf, where, ";   %s: ", title);
-    ii = -1;
-    do {
-      ii++;
-      vptr = fn(var, ii);
-      if (VARIABLE_NONE != vptr) {
-        const char *fmt;
-
-        fmt = (variable_tag_n_get(vptr)) ? "%s__%s_%u" : "%s%s";
-        pfile_write(pf, where, fmt, (ii) ? ", " : "",
-          variable_name_get(vptr), variable_tag_n_get(vptr));
-      }
-    } while (VARIABLE_NONE != vptr);
-    pfile_write(pf, where, "\n");
-  }
-#endif
-}
-#endif
 
 static void pfproc_variable_list_dump(pfile_block_t *blk, pfile_t *pf, 
   int indent)
@@ -758,29 +654,6 @@ static void pfproc_variable_list_dump(pfile_block_t *blk, pfile_t *pf,
       pfile_write(pf, pfile_write_lst, "\n");
     }
     /* dump the uses/used by fields */
-#if 0
-    pfproc_var_reference_dump(pf, pfile_write_lst, var,
-      "Uses", variable_uses_get);
-    pfproc_var_reference_dump(pf, pfile_write_lst, var,
-      "Used by", variable_used_by_get);
-    pfproc_var_reference_dump(pf, pfile_write_lst, var,
-      "Interfer", variable_interfer_get);
-    interfer = variable_interference_get(var);
-    if (interfer && variable_array_entry_ct(interfer)) {
-      size_t col;
-
-      col = pfile_write(pf, pfile_write_lst, ";interference: ");
-      for (ii = 0; ii < variable_array_entry_ct(interfer); ii++) {
-        if (col > 70) {
-          pfile_write(pf, pfile_write_lst, "\n;...");
-          col = 4;
-        }
-        col += pfile_write(pf, pfile_write_lst, "%s%s", (ii) ? ", " : "", 
-          variable_name_get(*variable_array_entry_get(interfer, ii)));
-      }
-      pfile_write(pf, pfile_write_lst, "\n");
-    }
-#endif
   }
 }
 

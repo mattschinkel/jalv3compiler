@@ -9,10 +9,6 @@
 #include "../libcore/pf_cmd.h"
 #include "../libcore/pf_expr.h"
 #include "jal_expr.h"
-#if 0
-#include "jal_blck.h"
-#include "jal_file.h"
-#endif
 #include "jal_prnt.h"
 
 /* format:

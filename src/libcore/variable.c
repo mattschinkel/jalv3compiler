@@ -249,18 +249,6 @@ static boolean_t variable_cache_is_init;
 
 static void variable_cache_cleanup(void)
 {
-#if 0
-  unsigned n;
-
-  for (n = 1; n < variable_cache.next; n++) {
-    struct variable_ *ptr;
-
-    ptr = cache_element_seek(&variable_cache, n, BOOLEAN_FALSE);
-    if (ptr->ref_ct != (refct_t) 0xefbe) {
-      printf("var leaked: %u (refct = %u)\n", n, ptr->ref_ct);
-    }
-  }
-#endif
   cache_cleanup(&variable_cache);
 }
 
@@ -1009,24 +997,6 @@ variable_t variable_list_find(varlist_t *lst, varfind_cb_t cb, void *cb_arg,
   return var;
 }
 
-#if 0
-/* nb : with the introduction of master variables (aka, aliases)
-        it's necessary to run through the list *twice* to find
-        if there's a leak */
-static void variable_leak_test(variable_t var, pfile_t *pf)
-{
-  if (variable_refct_get(var) > 1) {
-    if (variable_name_get(var)) {
-      pfile_log(pf, PFILE_LOG_DEBUG, PFILE_MSG_DBG_VAR_LEAK, 
-          var, variable_refct_get(var), variable_name_get(var));
-    } else {
-      pfile_log(pf, PFILE_LOG_DEBUG, PFILE_MSG_DBG_CONST_LEAK, 
-          var, variable_refct_get(var), 
-          variable_const_get(var, variable_def_get(var), 0));
-    }
-  }
-}
-#endif
 
 void variable_list_reset(varlist_t *lst)
 {
@@ -1791,13 +1761,6 @@ variable_t variable_map_find(const variable_map_t *map, variable_t var)
       ;
     ret = (ii < map->used) ? map->map[ii].new : VARIABLE_NONE;
   }
-#if 0
-  if (ret) {
-    printf("variable remap %s:%u --> %s:%u\n",
-        variable_name_get(var), variable_tag_n_get(var),
-        variable_name_get(ret), variable_tag_n_get(ret));
-  }
-#endif
   return ret;
 }
 

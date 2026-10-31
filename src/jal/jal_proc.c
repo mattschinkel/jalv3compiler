@@ -632,14 +632,6 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
           params_expected = (JAL_PARSE_PROCEDURE == type)
             ? 1 : 0;
         }
-#if 0
-        /* i've no idea why I used to do this! */
-        if (PROC_PUT == proc_type) {
-          variable_assign_ct_bump(var, CTR_BUMP_INCR);
-        } else {
-          variable_use_ct_bump(var, CTR_BUMP_INCR);
-        }
-#endif
         variable_release(var);
       } else {
         char *ptr;
@@ -1790,50 +1782,6 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
             continue;
           }
           def = variable_def_member_def_get(mbr);
-#if 0
-          vname = variable_def_member_tag_get(mbr);
-          if (vname
-            && ('_' == vname[0])
-            && (strlen(vname) > 7)
-            && (0 == strcmp(vname + strlen(vname) - 6, "_count"))) {
-            /* this is a COUNT. the next parameter must be either an array
-             * or an pointer. if the former, this parameter is set
-             * to the number of elements. If the later, there should
-             * be an associated _*_count variable
-             */
-            char   *ct_name;
-            value_t ct_val;
-
-            ct_name = MALLOC(strlen(ptr) + 8);
-            sprintf(ct_name, "_%s_count", ptr);
-            ct_val = pfile_value_find(pf, PFILE_LOG_NONE, ct_name);
-            FREE(ct_name);
-            if (VALUE_NONE == ct_val) {
-              /* get the actual value, check that it's an array, and go on */
-              ct_val = pfile_value_find(pf, PFILE_LOG_ERR, ptr);
-              if (VALUE_NONE != ct_val) {
-                if (!value_is_array(ct_val)) {
-                  pfile_log(pf, PFILE_LOG_ERR, "array type expected");
-                } else {
-                  value_t tmp;
-
-                  tmp = pfile_constant_get(pf, value_ct_get(ct_val), 
-                    VARIABLE_DEF_NONE);
-                  value_release(ct_val);
-                  ct_val = tmp;
-                }
-              }
-            }
-            if (parms && (ii < param_ct)) {
-              parms[ii] = ct_val;
-            } else {
-              value_release(ct_val);
-            }
-            mbr = variable_def_member_link_get(mbr);
-            def = variable_def_member_def_get(mbr);
-            ii++;
-          }
-#endif
           if ((ii + 1 < param_ct)
             && (VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(def))
             && VARIABLE_DEF_TYPE_POINTER

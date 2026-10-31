@@ -2133,10 +2133,6 @@ void jal_parse_var_common(pfile_t *pf,
         }
       } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "is")) {
         /* an alias */
-#if 0
-        pfile_log(pf, PFILE_LOG_WARN, 
-          "'IS' has been deprecated, please use `ALIAS' instead");
-#endif
         pf_token_get(pf, PF_TOKEN_NEXT);
         inf.master = jal_parse_var_alias(pf);
         if (inf.master) {
@@ -2297,12 +2293,6 @@ void jal_parse_var_common(pfile_t *pf,
           jal_string_handle_zero_emit(pf, dval);
           value_release(dval);
         }
-#if 0
-        if (variable_master_get(var)) {
-          variable_flag_set(variable_master_get(var),
-            VARIABLE_FLAG_UNREPLACEABLE);
-        }
-#endif
       }
       if (dst) {
         *dst = var;

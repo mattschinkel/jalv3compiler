@@ -136,10 +136,6 @@ typedef struct pic_bank_info_ {
   size_t                 hi;    /* last accessible location in a bank  */
 } pic_bank_info_t;
 
-#if 0
-extern pic_bank_info_t *pic_data_bank_list;
-extern pic_bank_info_t *pic_shared_bank_list;
-#endif
 extern size_t           pic_stk_sz;
 extern variable_base_t  pic_stk_base;
 

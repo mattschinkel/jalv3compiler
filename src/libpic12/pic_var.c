@@ -1294,10 +1294,6 @@ static void pic_variable_alloc_block(pfile_t *pf, pfile_proc_t *proc,
 
   auto_mem_reg_init = pic_var.auto_mem_reg;
 
-#if 0
-  printf("allocating space for: %s\n",
-      label_name_get(pfile_proc_label_get(proc)));
-#endif
 
   if (!blk) {
     blk = pfile_proc_block_root_get(proc);
@@ -1391,71 +1387,6 @@ static void pic_variable_alloc_proc(pfile_t *pf, pfile_proc_t *proc)
   pic_variable_alloc_block(pf, proc, 0);
 }
 
-#if 0
-static void pic_variable_interfer_proc(pfile_t *pf, pfile_proc_t *proc,
-  variable_array_t *live, variable_array_t *all_vars)
-{
-  variable_t     vptr;
-  pfile_block_t *blk;
-  size_t         ct;
-  pfile_proc_t  *cproc;
-
-  for (blk = pfile_proc_block_root_get(proc);
-       blk;
-       blk = pfile_block_next(blk)) {
-    /* first, allocate all variables for this procedure */
-    {
-      int var_count = 0;
-      for (vptr = pfile_block_variable_list_head(blk); 
-           vptr; 
-           vptr = variable_link_get(vptr)) {
-        var_count++;
-        if (var_count > 2000) {  /* Increased limit for complex targets with many library variables */
-          /* Exit gracefully without error messages for large programs */
-          break;
-        }
-      if (variable_is_auto(vptr) 
-          && !variable_is_sticky(vptr)) {
-        /* add this variable to all entries in live */
-        size_t live_ct;
-
-        variable_array_entry_add(all_vars, &vptr, ARRAY_ADD_FLAG_NONE,
-          variable_unique_cmp, 0);
-        variable_interference_add(vptr, vptr);
-        live_ct = variable_array_entry_ct(live);
-        while (live_ct--) {
-          variable_interference_add(*variable_array_entry_get(live, live_ct), 
-            vptr);
-          variable_interference_add(vptr, 
-            *variable_array_entry_get(live, live_ct));
-        }
-        variable_array_entry_add(live, &vptr, ARRAY_ADD_FLAG_NONE,
-          variable_unique_cmp, 0);
-      }
-    }
-  }
-  /* next, recurse into all procedures this one calls */
-  for (ct = 0; (cproc = pfile_proc_calls_get(proc, ct)) != 0; ct++) {
-    pic_variable_interfer_proc(pf, cproc, live, all_vars);
-  }
-  /* finally, this procedure's variables are no longer live, so
-   * remove them */
-  for (blk = pfile_proc_block_root_get(proc);
-       blk;
-       blk = pfile_block_next(blk)) {
-    /* first, allocate all variables for this procedure */
-    for (vptr = pfile_block_variable_list_head(blk); 
-         vptr; 
-         vptr = variable_link_get(vptr)) {
-      if (variable_is_auto(vptr) 
-          && !variable_is_sticky(vptr)) {
-        /* remove this variable to all entries in live */
-        variable_array_entry_delete(live, &vptr, variable_unique_cmp, 0);
-      }
-    }
-  }
-}
-#endif
 
 /* allocate all variables out of a single block. base holds the block */
 static void pic_block_data_alloc(pfile_t *pf, pfile_block_t *blk, 
@@ -1495,10 +1426,6 @@ static void pic_variable_alloc_indirect_proc(pfile_t *pf, pfile_proc_t *proc)
   size_t          ct;
   pfile_proc_t   *cproc;
 
-#if 0
-  printf("allocating non-reusable space for: %s\n",
-      label_name_get(pfile_proc_label_get(proc)));
-#endif
   if (pfile_proc_frame_sz_get(proc)) {
     base = pic_data_alloc(pf, &pic_var.data_bank_list, 
       pfile_proc_frame_sz_get(proc), 0);
@@ -3418,20 +3345,6 @@ void pic_blist_info_log(pfile_t *pf)
 {
   UNUSED(pf);
 
-#if 0
-  pic_bank_info_t *bank;
-  unsigned         total_avail;
-  unsigned         total_used;
-  unsigned         ct;
-
-  for (ct = 0, total_used = 0, total_avail = 0, bank = pic_blist;
-       bank;
-       ct++, total_used += bank->next - bank->lo, 
-         total_avail += bank->hi + 1 - bank->lo, bank = bank->link)
-    ;
-  pfile_log(pf, PFILE_LOG_INFO, PIC_MSG_DATA_USED,
-      total_used, total_avail);
-#endif
 }
 
 void pic_blist_free(pfile_t *pf)

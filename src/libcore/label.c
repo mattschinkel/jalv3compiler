@@ -369,13 +369,6 @@ label_t label_map_find(const label_map_t *map, label_t lbl)
       ;
     ret = (ii < map->used) ? map->map[ii].new : LABEL_NONE;
   }
-#if 0
-  if (ret) {
-    printf("label remap %s:%u --> %s:%u\n",
-        label_name_get(lbl), label_tag_n_get(lbl),
-        label_name_get(ret), label_tag_n_get(lbl));
-  }
-#endif
   return ret;
 }
 

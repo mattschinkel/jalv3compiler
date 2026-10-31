@@ -40,18 +40,6 @@ static void ushort_write(FILE *dst, ushort n)
   uchar_write(dst, (uchar) (n >> 8));
 }
 
-#if 0
-static ulong ulong_read(FILE *src)
-{
-  ulong n;
-
-  n  = uchar_read(src);
-  n |= uchar_read(src) << 8UL;
-  n |= uchar_read(src) << 16UL;
-  n |= uchar_read(src) << 24UL;
-  return n;
-}
-#endif
 
 static void ulong_write(FILE *dst, ulong n)
 {
@@ -594,20 +582,6 @@ static const struct {
     (table_entry_append_t) COD_code_map_table_entry_append,
     COD_code_map_entry_read,
     COD_code_map_entry_write},
-#if 0
-  { offsetof(COD_directory_t, local_vars_table),
-    offsetof(COD_directory_t, local_vars_start),
-    offsetof(COD_directory_t, local_vars_end),
-    COD_LOCAL_VARS_ENTRY_SIZE,
-    COD_local_vars_entry_read,
-    COD_local_vars_entry_write},
-  { offsetof(COD_directory_t, long_symbol_table_start),
-    offsetof(COD_directory_t, long_symbol_table_end),
-    COD_long_symbol_table_write}
-  { offsetof(COD_directory_t, mesage_table_start),
-    offsetof(COD_directory_t, message_table_end),
-    COD_message_table_need_calc }
-#endif
 };
 
 COD_directory_t *COD_directory_read(const char *fname)
@@ -681,9 +655,6 @@ COD_directory_t *COD_directory_read(const char *fname)
   }
   COD_local_vars_table_read(dir);
   COD_long_symbol_table_read(dir);
-#if 0
-  COD_message_table_read(dir);
-#endif
   fclose(src);
   return dir;
 }
@@ -972,14 +943,6 @@ void COD_directory_write(COD_directory_t *dir, const char *fname)
       dir->long_symbol_end   = block + need - 1;
       block += need;
     }
-#if 0
-    need = COD_message_table_need_calc(dir);
-    if (need) {
-      dir->message_start = block;
-      dir->message_end   = block + need - 1;
-      block += need;
-    }
-#endif
     /* write the index block     */
     for (ii = 0; ii < 128; ii++) {
       ushort_write(dir->io, dir->index[ii]);
@@ -1035,9 +998,6 @@ void COD_directory_write(COD_directory_t *dir, const char *fname)
     }
     COD_local_vars_table_write(dir);
     COD_long_symbol_table_write(dir);
-#if 0
-    COD_message_table_write(dir);
-#endif
     fclose(dir->io);
   }
 }

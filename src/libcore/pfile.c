@@ -412,24 +412,6 @@ void pfile_close(pfile_t *pf)
  *      3. reset the temp label ptr
  *      4. rewind the source file
  */
-#if 0
-static void pfile_proc_calls_dump(pfile_t *pf, pfile_proc_t *proc, int lvl)
-{
-  size_t        ii;
-  pfile_proc_t *calls;
-
-  ii = 0;
-  do {
-    calls = pfile_proc_calls_get(proc, ii);
-    if (calls) {
-      pfile_write(pf, pfile_write_lst, "; %*s-->%s\n", lvl, "",
-          pfile_proc_tag_get(calls));
-      pfile_proc_calls_dump(pf, calls, lvl + 2);
-      ii++;
-    }
-  } while (calls);
-}
-#endif
 
 /*
  * NAME
@@ -1027,31 +1009,6 @@ label_t pfile_label_find(pfile_t *pf, pfile_log_t plog, const char *name)
  *
  * NOTES
  */
-#if 0
-static void pfile_label_remove_unused(pfile_t *pf, lbllist_t *lst, 
-    const char *name)
-{
-  label_t  lbl;
-  unsigned ct;
-
-  UNUSED(pf);
-  UNUSED(name);
-
-  lbl = label_list_head(lst);
-  ct  = 0;
-  while (lbl) {
-    label_t lbl_next;
-
-    lbl_next = label_next_get(lbl);
-    if (!label_usage_get(lbl)) {
-      label_remove(lst, lbl);
-      label_release(lbl);
-      ct++;
-    }
-    lbl = lbl_next;
-  }
-}
-#endif
 
 /*
  * NAME
@@ -1105,28 +1062,6 @@ boolean_t value_is_temp(const value_t val)
          ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
-#if 0
-static void pfile_temp_op_fixup(cmd_t cmd, value_t val, unsigned *tmppos)
-{
-  assert(value_flag_test(val, VARIABLE_FLAG_TEMPSET));
-  for (cmd = cmd_link_get(cmd);
-       cmd && (CMD_TYPE_STATEMENT_END != cmd_type_get(cmd));
-       cmd = cmd_link_get(cmd)) {
-    if ((CMD_TYPE_OPERATOR == cmd_type_get(cmd))
-      && ((cmd_opval1_get(cmd) == val)
-          || (cmd_opval2_get(cmd) == val))) {
-      break;
-    }
-  }
-  if (!cmd || (CMD_TYPE_STATEMENT_END == cmd_type_get(cmd))) {
-    /* this temp is no longer used so go ahead & get rid of it */
-    if (value_const_get(value_baseofs_get(val)) == *tmppos) {
-      printf("reducing tmppos\n");
-      *tmppos -= value_sz_get(val);
-    }
-  }
-}
-#endif
 
 /*
  * Interval-based `_temp` offset allocation (replaces the per-statement
@@ -2441,9 +2376,6 @@ static void pfile_expr_replace(pfile_t *pf,
     cmd_t tmp;
 
     tmp = cmd_link_get(cmd_prev);
-#if 0
-    cmd_dump(tmp, stdout);
-#endif
     cmd_link_set(cmd_prev, cmd_link_get(tmp));
     if (!cmd) {
       cmd = tmp;
@@ -2806,17 +2738,6 @@ static void pfile_expr_simplify(pfile_t *pf)
       pfile_expr_replace(pf, cmd_prev, cmd, nodes);
       pfile_expr_node_array_dump(pf, nodes);
       pfile_expr_node_array_reset(pf, nodes);
-#if 0
-      {
-        cmd_t tcmd;
-
-        for (tcmd = cmd_link_get(cmd_prev);
-             tcmd != cmd;
-             tcmd = cmd_link_get(tcmd)) {
-          cmd_dump(tcmd, stdout);
-        }
-      }
-#endif
       printf("-----\n");
       /*
        * we can safely continue *past* cmd as we know cmd
@@ -2854,16 +2775,6 @@ static void pfile_expr_simplify(pfile_t *pf)
        _t0 = _t0 << 7
        y   = y | _t0
 */
-#if 0
-static boolean_t cmd_is_eos(cmd_t cmd)
-{
-  return !cmd
-   || (CMD_TYPE_STATEMENT_END == cmd_type_get(cmd))
-   || (CMD_TYPE_BLOCK_END == cmd_type_get(cmd))
-   || (CMD_TYPE_PROC_LEAVE == cmd_type_get(cmd))
-   || (CMD_TYPE_END == cmd_type_get(cmd));
-}
-#endif
 
 static void pfile_temp_reduction(pfile_t *pf)
 {
@@ -2946,13 +2857,6 @@ static void pfile_temp_reduction(pfile_t *pf)
             }
           }
           if (map.used) {
-#if 0
-            printf("Remapping...");
-            value_dump(map_data.old, stdout);
-            printf("--->");
-            value_dump(map_data.new, stdout);
-            printf("\n");
-#endif
             while (cptr && (CMD_TYPE_STATEMENT_END != cmd_type_get(cptr))) {
               cmd_value_remap(cptr, &map);
               cptr = cmd_link_get(cptr);
@@ -3227,13 +3131,6 @@ boolean_t pfile_opt_single_constant_assign_val(pfile_t *pf, cmd_t cmd,
 
           variable_def_set(var, def);
           variable_data_set(var, data);
-#if 0
-          pfile_log(pf, PFILE_LOG_DEBUG, 
-            "variable %s%u has been reduced to %lu in pass %u!",
-            variable_name_get(var), variable_tag_n_get(var), 
-            variable_const_get(var, VARIABLE_DEF_NONE, 0),
-            pass);
-#endif
         }
       }
     }
@@ -3343,17 +3240,6 @@ static void pfile_opt_temp_replace(pfile_t *pf, cmd_t cmd_pv, cmd_t cmd,
   }
 }
 
-#if 0
-static unsigned cmd_list_check_ct;
-
-void cmd_list_check(cmd_t head)
-{
-  cmd_list_check_ct++;
-  while (head) {
-    head = cmd_link_get(head);
-  }
-}
-#endif
 
 boolean_t pfile_opt_single_constant_assign(pfile_t *pf, unsigned pass)
 {
@@ -4252,10 +4138,6 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
    * once before pic_cmd_alloc() or the variable allocator will not
    * see variables in unused space & issue a bunch of errors! */
   (void) pfile_cmd_remove_unreachable(pf);
-#if 0
-  pfile_variable_fixup(pf);
-  pfile_cexpr_reduction(pf);
-#endif
 
   if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_DEADCODE)) {
     boolean_t changed;
@@ -4628,45 +4510,6 @@ unsigned pfile_warnct_get(const pfile_t *pf)
 void pfile_isr_preamble(pfile_t *pf)
 {
   UNUSED(pf);
-#if 0
-  cmd_t      cmd;
-  cmd_t      cmdlist; /* command list  */
-  label_t    lbl;
-  int        rc;
-
-  /* first, scan all commands looking for those that
-     execute in the interrupt context */
-  pfile_cmd_label_add(pf, pf->label_isr_preamble);
-  /* create the isr_preamble -- any temporaries used by routines common
-     to both user and interrupt level need to be saved during the context
-     switch */
-  cmdlist = pf->cmd_head; /* save the command list */
-  pf->cmd_head = 0;
-  pf->cmd_tail = 0;
-
-  /* jump to the first ISR */
-  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
-    CMD_BRANCHCOND_NONE, pf->label_isr, VALUE_NONE, VALUE_NONE, 0);
-
-  /* the last isr will jump to _isr_cleanup, so we'd best create it */
-  lbl = pfile_label_find(pf, PFILE_LOG_ERR, "_isr_cleanup");
-  if (0 == rc) {
-    pfile_cmd_label_add(pf, lbl);
-    label_release(lbl);
-  }
-  /* pfile_cmd_op_add(pf, 0, OPERATOR_NULL, 0, 0, 0); */
-  pfile_cmd_special_add(pf, CMD_TYPE_ISR_CLEANUP, PFILE_PROC_NONE);
-  /* prepend the new commands to the existing command list, but
-     note that each of the new commands executes at interrupt context */
-  for (cmd = pfile_cmdlist_get(pf); cmd; cmd = cmd_link_get(cmd)) {
-    cmd_flag_set(cmd, CMD_FLAG_REACHABLE);
-    cmd_flag_set(cmd, CMD_FLAG_INTERRUPT);
-    if (!cmd_link_get(cmd)) {
-      cmd_link_set(cmd, cmdlist);
-      break;
-    }
-  } 
-#endif
 }
 
 cmd_t pfile_cmdlist_get(pfile_t *pf)
@@ -4718,20 +4561,6 @@ label_t pfile_user_entry_get(pfile_t *pf)
   return lbl;
 }
 
-#if 0
-void pfile_isr_entry_set(pfile_t *pf, label_t lbl)
-{
-  if (lbl) {
-    label_lock(lbl);
-    label_usage_bump(lbl, CTR_BUMP_INCR);
-  }
-  if (pf->label_isr) {
-    label_usage_bump(pf->label_isr, CTR_BUMP_DECR);
-    label_release(pf->label_isr);
-  }
-  pf->label_isr = lbl;
-}
-#endif
 
 label_t pfile_isr_entry_get(pfile_t *pf) 
 {
@@ -4827,54 +4656,12 @@ void pfile_write_hex(pfile_t *pf, ulong pc, unsigned char data)
 value_t pfile_string_find(pfile_t *pf, size_t sz, const char *ptr)
 {
   value_t    val;
-#if 0
-  variable_t var;
-  size_t     ii;
-#endif
 
   UNUSED(pf);
   UNUSED(sz);
   UNUSED(ptr);
 
   val = 0;
-#if 0
-  ii  = 0;
-  for (var = variable_list_head(&pf->var_active); 
-       var; 
-       var = variable_link_get(var)) {
-    size_t jj;
-
-    jj = 0;
-    if (variable_flag_test(var, VARIABLE_FLAG_CONST)
-        && (variable_ct_get(var) >= sz)) {
-
-      for (ii = 0; ii <= variable_ct_get(var) - sz; ii++) {
-
-        for (jj = 0; 
-             (jj < sz) && (ptr[sz - jj - 1] == variable_const_get(var, jj + ii)); 
-             jj++)
-          ; /* null body */
-        if (jj == sz) {
-          break;
-        }
-      }
-    }
-    if (jj == sz) {
-      break;
-    }
-  }
-  if (var) {
-    result_t rc;
-
-    rc = value_alloc(&val, var, 0, 0, variable_sz_get(var));
-    if (RESULT_OK != rc) {
-      pfile_log_syserr(pf, rc);
-    } else {
-      value_ct_ofs_set(val, ii);
-      value_ct_set(val, sz);
-    }
-  }
-#endif
   return val;
 
 }

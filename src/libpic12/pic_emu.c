@@ -356,11 +356,6 @@ static boolean_t pic_decode14(pfile_t *pf, const pic_emu_state_t state,
 #define PIC16_SFR_TBLPTRL  0x0ff6
 #define PIC16_SFR_TBLPTRH  0x0ff7
 #define PIC16_SFR_TBLPTRU  0x0ff8
-#if 0
-static const SFR_region_t SFR_regions16[] = {
-  { 0x0f80, 0x0fff }
-};
-#endif
 
 static ushort pic_decode16_f_xlate(pfile_t *pf, const pic_emu_state_t state,
     ushort f)

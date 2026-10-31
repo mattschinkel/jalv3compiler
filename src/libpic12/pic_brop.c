@@ -1007,18 +1007,6 @@ void pic_code_branch_optimize(pfile_t* pf)
 						pfile_log(pf, PFILE_LOG_DEBUG, "loop detected: %s",
 							label_name_get(brlbl));
 					}
-#if 0
-					do {
-						brlbl = pic_code_brdst_get(brdst);
-						brdst = pic_code_label_find(pf, brlbl);
-						/* let's figure out what the destination *really* is */
-						while (brdst
-							&& (pic_opcode_is_branch_bit(pic_code_op_get(brdst))
-								|| (PIC_OPCODE_NONE == pic_code_op_get(brdst)))) {
-							brdst = pic_code_next_get(brdst);
-						}
-					} while (brdst && (PIC_OPCODE_GOTO == pic_code_op_get(brdst)));
-#endif
 					/* brlbl is the last label we've found and brdst is the first
 					 * instruction past the last label */
 					if (brlbl != pic_code_brdst_get(code)) {

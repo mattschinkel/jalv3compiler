@@ -432,11 +432,6 @@ void pfile_block_variable_fixup(pfile_block_t *blk,
         variable_def_t def;
 
         def = variable_def_get(vptr);
-#if 0
-        if (variable_is_array(vptr)) {
-          def = variable_def_member_def_get(variable_def_member_get(def));
-        }
-#endif
         def = variable_def_alloc(0, variable_def_type_get(def),
           variable_def_flags_get_all(def) | VARIABLE_DEF_FLAG_CONST,
           variable_def_sz_get(def));

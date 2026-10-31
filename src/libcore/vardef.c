@@ -382,20 +382,6 @@ variable_ct_t variable_def_member_sz_get(const variable_def_member_t mbr)
   return (mbr) ? variable_def_sz_get(mbr->def) : 0;
 }
 
-#if 0
-static void variable_def_member_dump(const variable_def_member_t mbr,
-    pfile_t *pf, int indent)
-{
-  pfile_write(pf, pfile_write_lst,
-      ";%*s(ct=%u)*%s: %s\n", indent, "",
-      mbr->ct,
-      variable_def_tag_get(mbr->def)
-      ? variable_def_tag_get(mbr->def)
-      : "",
-      (mbr->tag) ? mbr->tag : "");
-  variable_def_dump(mbr->def, pf, indent + 2);
-}
-#endif
 
 const char *variable_def_type_to_str(variable_def_type_t type)
 {
@@ -420,33 +406,6 @@ const char *variable_def_type_to_str(variable_def_type_t type)
 }
 
 
-#if 0
-void variable_def_dump(const variable_def_t def, pfile_t *pf, int indent)
-{
-  if (def) {
-    variable_def_member_t mbr;
-
-    pfile_write(pf, pfile_write_lst,
-        ";%*s%s (type=%s sz=%u flags=%c%c%c%c%s", indent, "", 
-        (def->tag) ? def->tag : "", 
-        variable_def_type_to_str(def->type),
-        def->sz, 
-        (def->flags & VARIABLE_DEF_FLAG_CONST)    ? 'C' : '-',
-        (def->flags & VARIABLE_DEF_FLAG_VOLATILE) ? 'V' : '-',
-        (def->flags & VARIABLE_DEF_FLAG_IN)       ? 'I' : '-',
-        (def->flags & VARIABLE_DEF_FLAG_OUT)      ? 'O' : '-',
-        def->members ? "" : ")");
-    
-    pfile_write(pf, pfile_write_lst, "\n");
-    for (mbr = def->members; mbr; mbr = mbr->link) {
-      variable_def_member_dump(mbr, pf, indent + 2);
-    }
-    if (def->members) {
-      pfile_write(pf, pfile_write_lst, ";%*s )\n", indent, "");
-    }
-  }
-}
-#endif
 variable_def_t variable_def_member_def_get(
   const variable_def_member_t mbr)
 {

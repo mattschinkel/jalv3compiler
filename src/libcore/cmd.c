@@ -262,26 +262,6 @@ void cmd_source_set(cmd_t cmd, pfile_source_t *src)
   }
 }
 
-#if 0
-static void cmd_varray_dump(variable_array_t *ary, const char *title,
-  FILE *dst)
-{
-  size_t ii;
-
-  fprintf(dst, ";      -->%s: ", title);
-  for (ii = 0; ii < variable_array_entry_ct(ary); ii++) {
-    variable_t  var;
-    const char *fmt;
-    unsigned    tag_n;
-
-    var = *variable_array_entry_get(ary, ii);
-    tag_n = variable_tag_n_get(var);
-    fmt = tag_n ? "%s%s:%u" : "%s%s";
-    fprintf(dst, fmt, (ii) ? ", " : "", variable_name_get(var), tag_n);
-  }
-  fputc('\n', dst);
-}
-#endif
 
 void cmd_dump(cmd_t cmd, FILE *dst)
 {
@@ -321,12 +301,6 @@ void cmd_dump(cmd_t cmd, FILE *dst)
     }
   }
   fputc('\n', dst);
-#if 0
-  cmd_varray_dump(cmd_gen_get(cmd), "gen", dst);
-  cmd_varray_dump(cmd_kill_get(cmd), "kill", dst);
-  cmd_varray_dump(cmd_live_in_get(cmd), "live-in", dst);
-  cmd_varray_dump(cmd_live_out_get(cmd), "live-out", dst);
-#endif
 }
 
 void cmd_flag_set_all(cmd_t cmd, flag_t flags)

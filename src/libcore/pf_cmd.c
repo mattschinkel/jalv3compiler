@@ -284,10 +284,6 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
     /* this is the entry into the procedure. go ahead & make the
      * necessary assignments */
     size_t ii;
-#if 0
-	printf("number of assigned variables: %u\n",
-		pfile_proc_param_ct_get(proc));
-#endif
 
     for (ii = 0; ii < pfile_proc_param_ct_get(proc); ii++) {
       if (proc_params[ii]) {
@@ -351,12 +347,6 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
         }
       }
 
-#if 0
-      cmd_dump(cmd, stdout);
-      printf("-->");
-      cmd_dump(dup, stdout);
-      printf("\n");
-#endif
       if (failed) {
         cmd_free(dup);
       } else if (dup) {
@@ -516,10 +506,6 @@ static void pfile_cmd_proc_inline_param_replacements_get(
         }
         baseofs_set = baseofs_set && (value_baseofs_get(pval) != VALUE_NONE);
       }
-#if 0
-      printf("%s read(%u) written(%u)\n",
-        variable_name_get(pvar), read_ct, write_ct);
-#endif
       /* determine if this variable is replaceable */
       if (read_ct && !value_dflag_test(pval, VARIABLE_DEF_FLAG_IN)) {
         /* cannot read from a non-IN parameter */
@@ -604,9 +590,6 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
   map.var_map.used  = 0;
   map.var_map.map   = 0;
   failed = BOOLEAN_FALSE;
-#if 0
-  printf("parameter count: %u\n", param_ct);
-#endif
 
   /* i need to dup these so I can release them later; the
    * param replacements function zeros out the original
@@ -696,10 +679,6 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
     value_t  proc_pre;
     value_t  proc_post;
     
-#if 0
-    printf("pre-->(0x%0x)", (unsigned) cmd_start);
-    cmd_dump(cmd_start, stdout);
-#endif
     rparams = cmd_brproc_params_get(cmd_start);
     if (rparams) {
       dst = rparams[0];
@@ -755,10 +734,6 @@ static void pfile_cmd_branch_add_inline(pfile_t *pf,
         cmd_value_remap(cmd_ptr, &value_map);
       }
     }
-#if 0
-    printf("post-->");
-    cmd_dump(cmd_start, stdout);
-#endif
     cmd_start = cmd_link_get(cmd_start);
   }
   /*printf("====================\n");*/
@@ -1100,24 +1075,5 @@ boolean_t pfile_cmd_remove_empty_blocks(pfile_t *pf)
 void pfile_cmdlist_check(cmd_t cmd)
 {
   UNUSED(cmd);
-#if 0
-  while (cmd) {
-    pfile_proc_t *proc;
-
-    assert(1368 != cmd_brval_get(cmd));
-    assert(1368 != cmd_opdst_get(cmd));
-    assert(1368 != cmd_opval1_get(cmd));
-    assert(1368 != cmd_opval2_get(cmd));
-    proc = cmd_brproc_get(cmd);
-    if (proc) {
-      unsigned ii;
-
-      for (ii = 0; ii < pfile_proc_param_ct_get(proc); ii++) {
-        assert(1368 != cmd_brproc_params_get(cmd)[ii]);
-      }
-    }
-    cmd = cmd_link_get(cmd);
-  }
-#endif
 }
 

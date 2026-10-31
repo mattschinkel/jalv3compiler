@@ -527,24 +527,6 @@ boolean_t cmd_opt_branch(cmd_t *cmd_head)
                cmd_ptr2 = cmd_link_get(cmd_ptr2))
             ; /* null body */
           if (cmd_label_get(cmd_ptr2) == cmd_brdst_get(cmd)) {
-#if 0
-            /* 
-             * change the condition on cmd
-             * remove cmd_ptr
-             */
-            cmd_brcond_set(cmd,
-                (CMD_BRANCHCOND_TRUE == cmd_brcond_get(cmd))
-                ? CMD_BRANCHCOND_FALSE
-                : CMD_BRANCHCOND_TRUE);
-            cmd_brdst_set(cmd, cmd_brdst_get(cmd_ptr));
-            if (cmd_next == cmd_ptr) {
-              cmd_next = cmd_link_get(cmd_ptr);
-            }
-            cmd_remove(cmd_head, cmd_ptr);
-            rem_ct++;
-            /* we need to re-evaluate cmd! */
-            cmd_next = cmd;
-#endif
           }
         }
       }

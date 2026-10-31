@@ -1782,11 +1782,6 @@ void pic_proc_enter(pfile_t *pf, pfile_proc_t *proc)
       label_t         lbl_skip;
       label_t         lbl_exec;
       value_t         frame;
-#if 0
-      value_t         memcpy_params[2];
-      label_t         lbl_stkpush;
-      variable_base_t base;
-#endif
 
       rval = pic_proc_rval_get(pf, proc);
       frame = value_alloc(pfile_proc_frame_get(proc));
@@ -1914,11 +1909,6 @@ void pic_proc_enter(pfile_t *pf, pfile_proc_t *proc)
       variable_t var;
 
       var = value_variable_get(val);
-#if 0
-      while (var && !variable_is_auto(var) && !variable_is_volatile(var)) {
-        var = variable_master_get(var);
-      }
-#endif
       if (var) {
         /* do the assignment */
         value_t tmp;
@@ -1997,11 +1987,6 @@ void pic_proc_leave(pfile_t *pf, pfile_proc_t *proc)
       value_t         frame;
       label_t         lbl_exec;
       label_t         lbl_skip;
-#if 0
-      value_t         memcpy_params[2];
-      label_t         lbl_stkpop;
-      variable_base_t vbase_hi;
-#endif
 
       rval = pic_proc_rval_get(pf, proc);
       lbl_skip = pfile_label_alloc(pf, 0);
@@ -2724,19 +2709,6 @@ void pic_code_dump(pfile_t *pf, const pic_code_t code)
     }
   }
 
-#if 0
-  {
-    pfile_source_t *src;
-    cmd_t           cmd;
-
-    cmd = pic_code_cmd_get(code);
-    src = cmd_source_get(cmd);
-
-    pfile_write(pf, pfile_write_lst, "; code=0x%x at %s:%u (next=%x, (flags=%u)\n", code,
-      pfile_source_name_get(src), pfile_source_line_get(src),
-      (unsigned) pic_code_next_get(code), pic_code_flag_get_all(code));
-  }
-#endif
 
   lbl = pic_code_label_get(code);
   if (label_usage_get(lbl)) {
@@ -3252,31 +3224,6 @@ void pic_cmd_dump(pfile_t *pf, const cmd_t cmd, boolean_t first)
       }
       value_release(stack_sz);
     }
-#if 0
-    /* Original code (disabled). */
-    stack_sz = pfile_value_find(pf, PFILE_LOG_NONE, "_stack_size");
-    if (stack_depth >= 15) {
-        pfile_log(pf, PFILE_LOG_INFO, "Hardware stack depth INFINITE");
-    }
-    else {
-        pfile_log(pf, PFILE_LOG_INFO, "Hardware stack depth %u of %u",
-            stack_depth, (unsigned)value_const_get(stack_sz));
-    }
-    if (!stack_sz) {
-        if (pfile_flag_test(pf, PFILE_FLAG_WARN_BACKEND)) {
-            pfile_log(pf, PFILE_LOG_WARN, "stack size not set");
-        }
-    }
-    else if (stack_depth > value_const_get(stack_sz)) {
-        pfile_log(pf,
-            pfile_flag_test(pf, PFILE_FLAG_WARN_STACK_OVERFLOW)
-            ? PFILE_LOG_WARN
-            : PFILE_LOG_ERR,
-            "Hardware stack overflow!");
-    }
-    value_release(stack_sz);
-  }
-#endif
   }
 }
 
