@@ -20,11 +20,37 @@
 
 #define PIC_STACK_DEPTH_INFINITE 15
 
-/* Lines remaining for pic_stack_depth debug (reset each pic_stack_depth_get). */
-static unsigned jal_pic_stk_dbg_budget;
+/*
+ * File-scope state, gathered into ONE object so it can be reset.
+ *
+ * It used to be six independent statics scattered through this file with
+ * no reset anywhere -- fine for a one-shot compiler, but it is exactly what
+ * makes a second compile in the same process (unit tests, a faster fuzzer,
+ * an exit-time leak check) impossible. Part of the Tier-A A4 conversion;
+ * pic_var.c (27 statics) is the next module.
+ */
+static struct pic_stk_state_ {
+  /* Lines remaining for pic_stack_depth debug, reset per depth walk. */
+  unsigned     dbg_budget;
+  unsigned     depth_before_isr;
+  unsigned     depth_total;
+  pic_code_t  *path_stack;
+  size_t       path_top;
+  size_t       path_cap;
+} pic_stk;
 
-static unsigned jal_pic_stk_depth_before_isr;
-static unsigned jal_pic_stk_depth_total;
+/* Drop everything this module remembers; the next compile starts clean. */
+void pic_stk_reset(void)
+{
+  free(pic_stk.path_stack);
+  pic_stk.path_stack  = 0;
+  pic_stk.path_top    = 0;
+  pic_stk.path_cap    = 0;
+  pic_stk.dbg_budget  = 0;
+  pic_stk.depth_before_isr = 0;
+  pic_stk.depth_total = 0;
+}
+
 
 /*
  * DFS path bookkeeping for cycle cutting. The depth walk computes the longest
@@ -37,38 +63,35 @@ static unsigned jal_pic_stk_depth_total;
  * (16f1825_vl53l0x_single: baseline 6 of 16, diverging walker 16 of 16).
  * See fix_pic_stack_depth_dfs_cycle_cut.md.
  */
-static pic_code_t *jal_stk_path_stack;
-static size_t      jal_stk_path_top;
-static size_t      jal_stk_path_cap;
 
 static void jal_stk_path_push(pfile_t *pf, pic_code_t code)
 {
   UNUSED(pf);
-  if (jal_stk_path_top == jal_stk_path_cap) {
+  if (pic_stk.path_top == pic_stk.path_cap) {
     size_t          cap;
     pic_code_t     *stack;
 
-    cap   = jal_stk_path_cap ? (2 * jal_stk_path_cap) : 256;
-    stack = (pic_code_t *) realloc(jal_stk_path_stack,
+    cap   = pic_stk.path_cap ? (2 * pic_stk.path_cap) : 256;
+    stack = (pic_code_t *) realloc(pic_stk.path_stack,
       cap * sizeof(*stack));
     if (stack) {
-      jal_stk_path_stack = stack;
-      jal_stk_path_cap   = cap;
+      pic_stk.path_stack = stack;
+      pic_stk.path_cap   = cap;
     } else {
       /* allocation failure: leave the node unmarked; worst case the walk
        * falls back to cap-bounded behaviour, never wrong results */
       return;
     }
   }
-  jal_stk_path_stack[jal_stk_path_top++] = code;
+  pic_stk.path_stack[pic_stk.path_top++] = code;
   pic_code_flag_set(code, PIC_CODE_FLAG_STK_PATH);
 }
 
 static void jal_stk_path_pop(size_t mark)
 {
-  while (jal_stk_path_top > mark) {
-    jal_stk_path_top--;
-    pic_code_flag_clr(jal_stk_path_stack[jal_stk_path_top],
+  while (pic_stk.path_top > mark) {
+    pic_stk.path_top--;
+    pic_code_flag_clr(pic_stk.path_stack[pic_stk.path_top],
       PIC_CODE_FLAG_STK_PATH);
   }
 }
@@ -93,7 +116,7 @@ static unsigned pic_stack_depth_get_user(pfile_t *pf,
     return depth_max;
   }
 
-  path_mark = jal_stk_path_top;
+  path_mark = pic_stk.path_top;
 
   /*
    * logically, we could stop when depth_max reaches DEPTH_INFINITE, but I
@@ -134,7 +157,7 @@ static unsigned pic_stack_depth_get_user(pfile_t *pf,
     next         = pic_code_next_get(code);
     next_is_cond = BOOLEAN_FALSE;
 
-    if (jal_pic_stk_dbg_budget
+    if (pic_stk.dbg_budget
         && depth >= 8
         && (pfile_debug_sub_test(pf, PFILE_DBGSUB_STACK)
           || pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER))) {
@@ -154,7 +177,7 @@ static unsigned pic_stack_depth_get_user(pfile_t *pf,
           brname = label_name_get(brl);
         }
       }
-      jal_pic_stk_dbg_budget--;
+      pic_stk.dbg_budget--;
       pfile_log(pf, PFILE_LOG_DEBUG,
           "pic_stack_depth: depth=%u pc=0x%lx op=%u cond=%d susp=%d brdst=%s",
           depth, (unsigned long) pic_code_pc_get(code), (unsigned) op,
@@ -350,10 +373,10 @@ static unsigned pic_stack_depth_get_user(pfile_t *pf,
 void pic_stack_depth_diag_get(unsigned *before_isr, unsigned *total)
 {
   if (before_isr) {
-    *before_isr = jal_pic_stk_depth_before_isr;
+    *before_isr = pic_stk.depth_before_isr;
   }
   if (total) {
-    *total = jal_pic_stk_depth_total;
+    *total = pic_stk.depth_total;
   }
 }
 
@@ -372,9 +395,9 @@ unsigned pic_stack_depth_get(pfile_t *pf)
     pic_code_depth_set(c, (unsigned) -1);
     pic_code_flag_clr(c, PIC_CODE_FLAG_STK_PATH);
   }
-  jal_stk_path_top = 0;
+  pic_stk.path_top = 0;
 
-  jal_pic_stk_dbg_budget = 48;
+  pic_stk.dbg_budget = 48;
 
   pcl = pfile_value_find(pf, PFILE_LOG_ERR, "_pcl");
 
@@ -420,7 +443,7 @@ unsigned pic_stack_depth_get(pfile_t *pf)
       }
     }
   }
-  jal_pic_stk_depth_before_isr = depth;
+  pic_stk.depth_before_isr = depth;
   if (depth != PIC_STACK_DEPTH_INFINITE) {
     lbl = pfile_isr_entry_get(pf);
     if (lbl) {
@@ -441,7 +464,7 @@ unsigned pic_stack_depth_get(pfile_t *pf)
       label_release(lbl);
     }
   }
-  jal_pic_stk_depth_total = depth;
+  pic_stk.depth_total = depth;
   value_release(pcl);
   return depth;
 }

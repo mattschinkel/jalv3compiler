@@ -16,6 +16,10 @@
 
 unsigned pic_stack_depth_get(pfile_t *pf);
 
+/* Zero this module's file-scope state (A4: a second compile in the same
+ * process must start clean). */
+void pic_stk_reset(void);
+
 /* Last values from the most recent pic_stack_depth_get() (for diagnostics). */
 void pic_stack_depth_diag_get(unsigned *before_isr, unsigned *total);
 
