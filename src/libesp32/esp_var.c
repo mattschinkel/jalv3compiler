@@ -82,11 +82,11 @@ void esp_var_ensure(pfile_t *pf, variable_t v)
        * unhook the master and place a 4-byte aligned one. */
       variable_master_set(v, VARIABLE_NONE);
       variable_bit_offset_set(v, 0);
-      esp_var_place(pf, v, pfile_pointer_size_get(pf));
+      esp_var_place(pf, v, pfile_pointer_width_get(pf));
       return;
     }
     if (VARIABLE_BASE_UNKNOWN == variable_base_get(v, 0)) {
-      esp_var_place(pf, v, pfile_pointer_size_get(pf));
+      esp_var_place(pf, v, pfile_pointer_width_get(pf));
     }
     return;
   }

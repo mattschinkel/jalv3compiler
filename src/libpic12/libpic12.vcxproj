@@ -217,6 +217,17 @@
     <ClCompile Include="pic_gop.c" />
     <ClCompile Include="pic_inst.c" />
     <ClCompile Include="pic_op.c" />
+    <ClCompile Include="pic_op_arith.c" />
+    <ClCompile Include="pic_op_assign.c" />
+    <ClCompile Include="pic_op_bank.c" />
+    <ClCompile Include="pic_op_bit.c" />
+    <ClCompile Include="pic_op_compare.c" />
+    <ClCompile Include="pic_op_dispatch.c" />
+    <ClCompile Include="pic_op_fsr.c" />
+    <ClCompile Include="pic_op_indirect.c" />
+    <ClCompile Include="pic_op_ptr.c" />
+    <ClCompile Include="pic_op_shift.c" />
+    <ClCompile Include="pic_op_unary.c" />
     <ClCompile Include="pic_opfn.c" />
     <ClCompile Include="pic_stk.c" />
     <ClCompile Include="pic_stvar.c" />

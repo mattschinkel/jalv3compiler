@@ -221,7 +221,7 @@ static variable_def_t jal_variable_fn_def_alloc(pfile_t *pf,
   variable_def_t def;
 
   base = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
-      VARIABLE_DEF_FLAG_IN, pfile_pointer_size_get(pf));
+      VARIABLE_DEF_FLAG_IN, pfile_pointer_width_get(pf));
   def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_FUNCTION, fn_flags, 0);
   variable_def_member_add(base, 0, def, 1);
   if (ret) {
@@ -503,7 +503,7 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
           }
           vdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
               variable_def_flags_get_all(variable_def_get(var)), 
-              pfile_pointer_size_get(pf));
+              pfile_pointer_width_get(pf));
           if (variable_is_array(var)) {
             variable_def_member_add(vdef,
                 0, /* no tag */

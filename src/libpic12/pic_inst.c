@@ -515,13 +515,20 @@ void pic_instr_append_daop(pfile_t *pf, value_t f, pic_opcode_t opcode,
       full_file += (unsigned long) (value_bit_offset_get(f) / 8);
       full_file += (unsigned long) file_ofs;
     }
-    if (pic_is_16bit(pf)) {
+    if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+      /* PIC18 MOVLB and the 14H bank select share ONE opcode and ONE rule:
+       * bank = full file address / the device's bank size. Until now this
+       * was two byte-identical blocks differing only in a hardcoded 256UL
+       * vs 128UL -- the same window rule pic_val_movl_bank_equal applies,
+       * and the same "written twice" shape that produced the 2026-10-28
+       * scaling defect. */
       pic_code_t         mclb;
       value_t            vop;
       variable_const_t   bank_lit;
       unsigned           bank_u;
 
-      bank_lit = (variable_const_t) (full_file / 256UL);
+      bank_lit = (variable_const_t) (full_file
+          / (unsigned long) pic_target_bank_size_get(pf));
       bank_u   = (unsigned) bank_lit & 0xffU;
       mclb     = PIC_CODE_NONE;
       if (!force
@@ -538,32 +545,6 @@ void pic_instr_append_daop(pfile_t *pf, value_t f, pic_opcode_t opcode,
             pic_code_value_set(mclb, vop);
             /* Same file byte as the following data op; pic_opt_verify_skip
              * compares pic_code_ofs to the skip insn (see append_f_b). */
-            pic_code_ofs_set(mclb, file_ofs);
-            pic_instr_bank_op_linear_try_record(pf, mclb);
-          } else {
-            pfile_log_syserr(pf, ENOMEM);
-          }
-        }
-      }
-    } else if (pic_is_14bit_hybrid(pf)) {
-      pic_code_t         mclb;
-      value_t            vop;
-      variable_const_t   bank_lit;
-      unsigned           bank_u;
-
-      bank_lit = (variable_const_t) (full_file / 128UL);
-      bank_u   = (unsigned) bank_lit & 0xffU;
-      mclb     = PIC_CODE_NONE;
-      if (!force
-          && (PIC_EMIT_BSR_UNK != pic_emit_movl_bsr)
-          && (pic_emit_movl_bsr == bank_u)) {
-        value_use_ct_bump(f, CTR_BUMP_INCR);
-      } else {
-        mclb = pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLB, bank_lit);
-        if (mclb) {
-          vop = value_clone(f);
-          if (vop) {
-            pic_code_value_set(mclb, vop);
             pic_code_ofs_set(mclb, file_ofs);
             pic_instr_bank_op_linear_try_record(pf, mclb);
           } else {
@@ -749,6 +730,43 @@ pic_code_t pic_instr_append_reg(pfile_t *pf, pic_opcode_t op, const char *reg)
   }
   return code;
 }
+
+/*
+ * Load FSR0 with an ABSOLUTE file address on the wide cores.
+ *
+ * PIC18 and the 14H both address through FSR0L/FSR0H, and this exact
+ * four-instruction sequence was hand-written at five sites in the
+ * indirect path. They must never disagree: every indirect read/write
+ * goes through whatever was loaded here last, so a drifted copy is a
+ * silent wrong-address access (the shape of the 2026-10-28 defects).
+ * The classic 14-bit core uses FSR + IRP instead and does NOT come
+ * through this helper.
+ */
+void pic_fsr0_load_addr(pfile_t *pf, variable_base_t base)
+{
+  unsigned lsb;
+  unsigned msb;
+
+  lsb = (unsigned) base & 0xff;
+  msb = ((unsigned) base >> 8) & 0xff;
+  /* CLRF for a zero byte (one word instead of MOVLW+ MOVWF). Flags are
+   * unchanged by this: MOVLW 0 sets Z, CLRF of a zero byte also sets Z,
+   * and every intermediate MOVWF leaves the flags alone -- so the final
+   * Z/W state matches the unrolled form byte for byte in behaviour. */
+  if (lsb) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, lsb);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+  } else {
+    pic_instr_append_reg(pf, PIC_OPCODE_CLRF, "_fsr0l");
+  }
+  if (msb) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, msb);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  } else {
+    pic_instr_append_reg(pf, PIC_OPCODE_CLRF, "_fsr0h");
+  }
+}
+
 
 pic_code_t pic_instr_append(pfile_t *pf, pic_opcode_t op)
 {

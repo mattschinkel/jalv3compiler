@@ -5627,7 +5627,7 @@ void pfile_cmd_cursor_set(pfile_t *pf, cmd_t cmd)
 /* Real storage size of a def under a FLAT 32-bit address space (ESP32 /
  * PIC32 linear allocators): the built-in "pointer" def carries a nominal
  * size of 2 (the PIC FSR width) which under-allocates 4-byte pointers, so
- * pfile_pointer_size_get() overrides it; recurses through arrays,
+ * pfile_pointer_width_get() overrides it; recurses through arrays,
  * structures and unions so pointer members are sized correctly.  Shared
  * from esp_var.c / mips_var.c (was duplicated as esp_/mips_def_storage_sz
  * -- sizing policy must not diverge between the 32-bit back ends). */
@@ -5641,7 +5641,7 @@ variable_sz_t pfile_flat_def_storage_sz(pfile_t *pf, variable_def_t def)
   }
   switch (variable_def_type_get(def)) {
     case VARIABLE_DEF_TYPE_POINTER:
-      return pfile_pointer_size_get(pf);
+      return pfile_pointer_width_get(pf);
 
     case VARIABLE_DEF_TYPE_ARRAY:
       mbr = variable_def_member_get(def);
@@ -5653,7 +5653,7 @@ variable_sz_t pfile_flat_def_storage_sz(pfile_t *pf, variable_def_t def)
         return (variable_sz_t) (ct * need);
       }
       /* Open `name[]` formals are pointers at the call boundary. */
-      return pfile_pointer_size_get(pf);
+      return pfile_pointer_width_get(pf);
 
     case VARIABLE_DEF_TYPE_STRUCTURE:
       need = 0;
@@ -5765,7 +5765,8 @@ COD_directory_t *pfile_COD_dir_get(pfile_t *pf)
   return pf->COD_dir;
 }
 
-variable_sz_t pfile_pointer_size_get(pfile_t *pf)
+/* See pfile.h: pointer SLOT width, not a def's storage unit. */
+variable_sz_t pfile_pointer_width_get(pfile_t *pf)
 {
   return pf->vectors->pf_pointer_size_get(pf);
 }

@@ -3405,10 +3405,7 @@ static void pic_data_area_map_create(pfile_t *pf)
             } else {
               pic_stvar_fsr_mark(pf);
               if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
-                pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, current_base & 0xff);
-                pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
-                pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, current_base >> 8);
-                pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+                pic_fsr0_load_addr(pf, current_base);
               } else {
                 pic_instr_append_reg_flag(pf,
                     (current_base & 0x0100) ? PIC_OPCODE_BSF : PIC_OPCODE_BCF,

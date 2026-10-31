@@ -653,7 +653,7 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
             value_bit_offset_delta_set(val, ofs);
           } else {
             nc = nc * ((pointer_callable_slot || array_pointer_slot)
-              ? pfile_pointer_size_get(pf)
+              ? pfile_pointer_width_get(pf)
               : value_sz_get(val));
             value_release(n);
             n = pfile_constant_get(pf, nc, VARIABLE_DEF_NONE);
@@ -722,7 +722,7 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
               esz = (bit_array_slot)
                 ? value_sz_get(val)
                 : ((pointer_callable_slot || array_pointer_slot)
-                  ? (variable_sz_t) pfile_pointer_size_get(pf)
+                  ? (variable_sz_t) pfile_pointer_width_get(pf)
                   : value_sz_get(val));
               if (1 == esz) {
                 tmp = n;

@@ -25,7 +25,7 @@
  * (32-bit pointers).  variable_def_sz_get() returns that nominal size, so
  * using it directly would under-allocate pointer storage.  This mirrors
  * libpic12's pic_variable_def_storage_need_get() but uses the
- * architecture-aware pfile_pointer_size_get() (4 for PIC32) and omits the
+ * architecture-aware pfile_pointer_width_get() (4 for PIC32) and omits the
  * PIC16-only pointer-slot padding (irrelevant to MIPS's flat address space).
  * Recurses through arrays/structures/unions so pointer members are sized
  * correctly everywhere. */
@@ -125,11 +125,11 @@ void mips_var_ensure(pfile_t *pf, variable_t v)
        * pointer def from the pointee.  Own base is not a real slot. */
       variable_master_set(v, VARIABLE_NONE);
       variable_bit_offset_set(v, 0);
-      mips_var_place(pf, v, pfile_pointer_size_get(pf));
+      mips_var_place(pf, v, pfile_pointer_width_get(pf));
       return;
     }
     if (VARIABLE_BASE_UNKNOWN == variable_base_get(v, 0)) {
-      mips_var_place(pf, v, pfile_pointer_size_get(pf));
+      mips_var_place(pf, v, pfile_pointer_width_get(pf));
     }
     return;
   }

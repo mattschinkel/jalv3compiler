@@ -1132,7 +1132,7 @@ void pfile_proc_ret_ptr_alloc(pfile_proc_t *proc, pfile_t *pf)
     tag_t          tag;
 
     def = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
-      VARIABLE_DEF_FLAG_NONE, pfile_pointer_size_get(pf));
+      VARIABLE_DEF_FLAG_NONE, pfile_pointer_width_get(pf));
     tag = pfile_tag_alloc(pf, "_return");
     (void) pfile_proc_variable_alloc(proc, PFILE_VARIABLE_ALLOC_GLOBAL,
       tag, def, VARIABLE_NONE, pf, &proc->ret_ptr);

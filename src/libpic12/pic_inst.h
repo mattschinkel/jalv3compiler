@@ -36,6 +36,13 @@ pic_code_t pic_instr_append_reg_d(pfile_t *pf, pic_opcode_t op, const char *reg,
 pic_code_t pic_instr_append_f(pfile_t *pf, pic_opcode_t op, value_t f, 
     size_t ofs);
 pic_code_t pic_instr_append_reg(pfile_t *pf, pic_opcode_t op, const char *reg);
+/* Load FSR0 (_fsr0l/_fsr0h) with an absolute file address on the wide
+ * cores (PIC18 + 14H). ONE primitive: every indirect access goes through
+ * whatever was loaded here last, so a hand-rolled copy that drifts is a
+ * silent wrong-address access. The CLRF form is used for a zero byte
+ * (same flags as MOVLW 0 + MOVWF, one word shorter). The classic 14-bit
+ * core uses FSR + IRP and does NOT call this. */
+void pic_fsr0_load_addr(pfile_t *pf, variable_base_t base);
 pic_code_t pic_instr_append_f_b(pfile_t *pf, pic_opcode_t op, value_t f, 
     size_t ofs, value_t bit);
 pic_code_t pic_instr_append_reg_bn(pfile_t *pf, pic_opcode_t op, 

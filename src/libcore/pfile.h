@@ -357,7 +357,16 @@ variable_sz_t pfile_flat_def_storage_sz(pfile_t *pf, variable_def_t def);
 
 COD_directory_t *pfile_COD_dir_get(pfile_t *pf);
 
-variable_sz_t pfile_pointer_size_get(pfile_t *pf);
+/* Width of a pointer SLOT on this back end (2 on the classic 14-bit core,
+ * 3 on PIC18, 4 on MIPS32/Xtensa). This is the size of the pointer itself,
+ * NOT the storage unit of whatever it points at: for any def that can be an
+ * array, record or pointer, size it with
+ *   pfile_flat_def_storage_sz(pf, def)
+ * which is what every runtime index/link walk must scale by. Using this
+ * width there is exactly the 2026-10-28 stage-2 dispatch defect (four call
+ * sites scaled a runtime index by 2 while the real unit was 3 or 4), and
+ * the name said "size" in a way that made the mistake look right. */
+variable_sz_t pfile_pointer_width_get(pfile_t *pf);
 
 label_t pfile_exit_label_get(const pfile_t *pf);
 label_t pfile_exit_label_set(pfile_t *pf, label_t lbl);
