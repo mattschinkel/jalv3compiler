@@ -105,6 +105,12 @@ run_py helper_entry_bsr            unit-tests/test_helper_entry_bsr.py --compile
 run_sh malformed_input_clean       unit-tests/test_malformed_input_clean.sh "$CC"
 run_py malformed_input_fuzz        unit-tests/fuzz_jal_inputs.py --compiler "$CC" \
   --inputs 4000 --seed 20261030 --minutes 30 --out-dir tmp/fuzz_gate
+# A4: the SAME sweep through the in-process seam (JAL_MULTI), which compiles a
+# whole batch in one process. It is also this gate's only coverage of the
+# multi-file path and of jal_reset_between_compiles() under load.
+run_py malformed_input_fuzz_multi  unit-tests/fuzz_jal_inputs.py --compiler "$CC" \
+  --inputs 2000 --seed 20261030 --minutes 30 --in-process --batch 100 \
+  --out-dir tmp/fuzz_gate_multi
 
 # Storage / allocation / target rules
 run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$CC"

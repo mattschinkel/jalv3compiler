@@ -11,6 +11,7 @@
  ************************************************************/
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
@@ -799,6 +800,9 @@ int main(int argc, char **argv)
   boolean_t   cli_info_only;
   unsigned    repeat_ct;   /* JAL_REPEAT: compile N times in one process */
   unsigned    repeat_ix;
+  char      **multi_names; /* JAL_MULTI: compile a list of files in one process */
+  size_t      multi_ct;
+  size_t      multi_ix;
 
   err            = BOOLEAN_FALSE;
   inc_path       = 0;
@@ -814,6 +818,53 @@ int main(int argc, char **argv)
     repeat_ct = rep_env ? (unsigned) atoi(rep_env) : 1U;
     if (0U == repeat_ct) {
       repeat_ct = 1U;
+    }
+  }
+  multi_names = 0;
+  multi_ct    = 1U;
+  {
+    const char *multi_env = getenv("JAL_MULTI");
+
+    if (multi_env && *multi_env) {
+      FILE *fm;
+      char  line[4096];
+      size_t cap;
+
+      fm = fopen(multi_env, "r");
+      if (!fm) {
+        fprintf(stderr, "cannot open JAL_MULTI list %s\n", multi_env);
+        return EXIT_FAILURE;
+      }
+      cap = 64U;
+      multi_names = malloc(cap * sizeof(*multi_names));
+      multi_ct    = 0U;
+      while (fgets(line, (int) sizeof(line), fm)) {
+        size_t len = strlen(line);
+
+        while (len && ('\n' == line[len-1] || '\r' == line[len-1])) {
+          line[--len] = '\0';
+        }
+        if (!len) {
+          continue;
+        }
+        if (multi_ct == cap) {
+          cap *= 2U;
+          multi_names = realloc(multi_names, cap * sizeof(*multi_names));
+        }
+        assert(multi_names);
+        multi_names[multi_ct] = malloc(len + 1U);
+        assert(multi_names[multi_ct]);
+        strcpy(multi_names[multi_ct], line);
+        multi_ct++;
+      }
+      fclose(fm);
+      assert(multi_names);
+      if (0U == multi_ct) {
+        multi_names[0] = (char *) 0;
+        multi_ct = 1U;      /* nothing listed: fall back to argv's file */
+        free(multi_names);
+        multi_names = 0;
+      }
     }
   }
   hex_atomic_output = BOOLEAN_FALSE;
@@ -1244,10 +1295,18 @@ int main(int argc, char **argv)
         /* turning off dead code elimination implies PCODE */
         pfile_flags |= PFILE_FLAG_DEBUG_PCODE;
       }
+      for (multi_ix = 0U; multi_ix < multi_ct; multi_ix++) {
+      if (multi_names && multi_names[multi_ix]) {
+        jal_name = multi_names[multi_ix];
+        fprintf(stderr, "=== FILE %s\n", jal_name);
+        fflush(stderr);
+      }
       for (repeat_ix = 0U; repeat_ix < repeat_ct; repeat_ix++) {
       boolean_t  rep_emit;
 
-      rep_emit = (boolean_t) (repeat_ix + 1U == repeat_ct);
+      /* JAL_MULTI never emits: the output names were derived from argv's
+       * file, so writing them for a list would overwrite one path N times. */
+      rep_emit = (boolean_t) ((repeat_ix + 1U == repeat_ct) && !multi_names);
       rc = pfile_open(&pf,
           rep_emit ? f_asm : (FILE *) 0, rep_emit ? f_asm : (FILE *) 0,
           rep_emit ? f_hex : (FILE *) 0, f_log,
@@ -1330,6 +1389,7 @@ int main(int argc, char **argv)
         pfile_close(pf);
       }
       jal_reset_between_compiles();
+      }
       }
     }
     if (f_hex) {

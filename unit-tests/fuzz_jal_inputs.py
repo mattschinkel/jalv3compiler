@@ -138,6 +138,149 @@ def run_one(compiler: str, lib: str, path: str, timeout: float):
         return -9, out.decode(errors="replace")
 
 
+def run_batch(compiler: str, lib: str, paths, list_path: str, timeout: float):
+    """Compile every path in ONE process (JAL_MULTI) and return
+    (returncode, [(path, text), ...]) where text is that file's output.
+
+    The compiler prints "=== FILE <path>" to stderr before each compile, so a
+    crash can be attributed to the file whose block has no summary line --
+    which is the whole point of the in-process mode: no process spawn per
+    input, and a crash still tells you WHICH input died.
+    """
+    with open(list_path, "w") as f:
+        f.write("\n".join(paths) + "\n")
+    env = dict(os.environ)
+    env["JAL_MULTI"] = list_path
+    try:
+        # stderr=STDOUT: the "=== FILE" markers and the compiler's own
+        # diagnostics must stay INTERLEAVED. Capturing them separately and
+        # concatenating puts every marker after every diagnostic, which makes
+        # every input look like it never finished.
+        r = subprocess.run(
+            [compiler, "-s", lib, "-no-codfile", paths[0]],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=timeout, env=env)
+        rc = r.returncode
+        raw = r.stdout or b""
+    except subprocess.TimeoutExpired as e:
+        rc = -9
+        raw = (e.stdout or b"") + (e.stderr or b"")
+        if isinstance(raw, str):
+            raw = raw.encode(errors="replace")
+    text = raw.decode(errors="replace")
+
+    blocks = []
+    cur = None
+    buf = []
+    for line in text.splitlines():
+        if line.startswith("=== FILE "):
+            if cur is not None:
+                blocks.append((cur, "\n".join(buf)))
+            cur = line[len("=== FILE "):].strip()
+            buf = []
+        else:
+            buf.append(line)
+    if cur is not None:
+        blocks.append((cur, "\n".join(buf)))
+    return rc, blocks
+
+
+def batch_status(rc: int, blocks, expected):
+    """Per-file classification for one batch.
+
+    A file whose block carries "N errors, M warnings" completed. Anything
+    after the last completed file did not run, or ran and died: the first
+    such file is the crash/hang candidate.
+    """
+    done = []
+    bad = None
+    for path, text in blocks:
+        if "errors," in text and "warnings" in text:
+            done.append((path, "ok", ""))
+        else:
+            if bad is None:
+                if rc == -9:
+                    bad = (path, "hang", "batch timeout")
+                elif rc in (-11, -6):
+                    bad = (path, "crash-segv" if rc == -11 else "crash-abort",
+                           "SIGSEGV" if rc == -11 else "SIGABRT (assertion?)")
+                else:
+                    bad = (path, "suspicious", "exit %d without summary" % rc)
+    # files never reached (no block at all)
+    seen = {p for p, _ in blocks}
+    missing = [p for p in expected if p not in seen]
+    if bad is None and missing and rc != 0:
+        bad = (missing[0], "crash-other", "exit %d" % rc)
+    return done, bad
+
+
+def gen_mutant(seed_blobs, rng):
+    name, blob = seed_blobs[rng.randrange(len(seed_blobs))]
+    data = mutate(blob, rng)
+    if rng.randrange(10) == 0 and len(seed_blobs) > 1:  # occasional splice
+        _, other = seed_blobs[rng.randrange(len(seed_blobs))]
+        cut = rng.randrange(len(other) + 1)
+        data = data + b"\n" + other[cut:cut + 512]
+    return name, data
+
+
+def drive_batch(args, paths, datas, names, counts, findings, crashes_dir, list_path):
+    """Compile `paths` in one process; on a crash, record it and continue with
+    whatever was left in the batch so one bad input does not mask the rest."""
+    while paths:
+        rc, blocks = run_batch(args.compiler, args.lib, paths, list_path,
+                               args.timeout)
+        done, bad = batch_status(rc, blocks, paths)
+        counts["ok"] = counts.get("ok", 0) + len(done)
+        if not bad:
+            return
+        idx = paths.index(bad[0])
+        status, detail = bad[1], bad[2]
+        counts[status] = counts.get(status, 0) + 1
+        tag = "%.6d_%s.jal" % (idx, status)
+        keep = os.path.join(crashes_dir, os.path.basename(tag))
+        with open(keep, "wb") as f:
+            f.write(datas[idx])
+        with open(keep + ".txt", "w") as f:
+            f.write("seed: %s\nrc: %d\ndetail: %s\n" % (names[idx], rc, detail))
+        findings.append({"n": idx, "seed": names[idx], "status": status,
+                         "detail": detail, "file": os.path.basename(keep)})
+        print("  %s: %s (seed %s) -> crashes/%s"
+              % (status, detail, names[idx], os.path.basename(keep)))
+        paths, datas, names = paths[idx + 1:], datas[idx + 1:], names[idx + 1:]
+
+
+def run_in_process(args, seed_blobs, rng, deadline, out_dir, crashes_dir):
+    input_dir = os.path.join(out_dir, "inputs")
+    os.makedirs(input_dir, exist_ok=True)
+    list_path = os.path.join(out_dir, "batch.txt")
+    counts = {}
+    findings = []
+    n = 0
+    while time.time() < deadline and (not args.inputs or n < args.inputs):
+        take = args.batch
+        if args.inputs:
+            take = min(take, args.inputs - n)
+        paths, datas, names = [], [], []
+        for _ in range(take):
+            name, data = gen_mutant(seed_blobs, rng)
+            n += 1
+            p = os.path.join(input_dir, "in_%06d.jal" % n)
+            with open(p, "wb") as f:
+                f.write(data)
+            paths.append(p)
+            datas.append(data)
+            names.append(name)
+        before = sum(counts.values())
+        drive_batch(args, paths, datas, names, counts, findings, crashes_dir,
+                    list_path)
+        if n % (args.batch * 5) == 0:
+            print("  ... %d inputs, " % n +
+                  ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items())))
+        del before
+    return counts, findings, n
+
+
 def classify(rc: int, out: str):
     """(status, detail). ok = compiled or clean diagnostics."""
     if rc == 0 or rc == 1:
@@ -174,6 +317,11 @@ def main() -> int:
     ap.add_argument("--lib", default=DEFAULT_LIB,
                     help="compiler -s include path (';'-separated); must exist")
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--in-process", action="store_true",
+                    help="compile a whole batch in ONE process (JAL_MULTI); "
+                         "no spawn per input")
+    ap.add_argument("--batch", type=int, default=200,
+                    help="files per in-process batch (default 200)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.compiler):
@@ -210,6 +358,26 @@ def main() -> int:
     os.makedirs(crashes_dir, exist_ok=True)
 
     deadline = time.time() + args.minutes * 60
+
+    if args.in_process:
+        deadline = time.time() + args.minutes * 60
+        print(f"fuzz (in-process): {len(seed_blobs)} seeds, {args.batch}/batch, "
+              + (f"{args.inputs} inputs" if args.inputs
+                 else f"{args.minutes:g} min")
+              + f" -> {out_dir}")
+        counts, findings, n = run_in_process(args, seed_blobs, rng, deadline,
+                                             out_dir, crashes_dir)
+        state = {"started": ts, "mode": "in-process", "inputs": n,
+                 "counts": counts, "findings": findings,
+                 "compiler": os.path.abspath(args.compiler),
+                 "seed_names": [s for s, _ in seed_blobs]}
+        with open(os.path.join(out_dir, "state.json"), "w") as f:
+            json.dump(state, f, indent=1)
+        bad = sum(v for k, v in counts.items() if k != "ok")
+        print(f"fuzz done: {n} inputs -> " +
+              ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items())))
+        print(f"artifacts: {out_dir}")
+        return 1 if bad else 0
     n = 0
     counts = {}
     findings = []
