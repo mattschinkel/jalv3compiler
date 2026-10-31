@@ -26,7 +26,6 @@
 #include "mips_alloc.h"
 #include "mips_reg.h"
 
-#define MIPS_ALLOC_MAX 512
 
 typedef struct {
   variable_t   v;
@@ -886,11 +885,20 @@ static void mips_alloc_assign_homes(void)
     }
   }
 
-  /* Caller-saved: greedy by uses, allowing interval reuse. */
+  /* Caller-saved: greedy by uses, allowing interval reuse.
+   *
+   * `refuse` is indexed by table entry, and the table is GROWABLE, so a
+   * fixed 512-byte array was a stack overflow waiting for a big enough
+   * program (`-fanalyzer` flagged the symptom as "use of uninitialised
+   * value refuse[i]"; the cause is the bound). Size it to the table. */
   {
-    unsigned char refuse[MIPS_ALLOC_MAX];
+    size_t         refuse_ct = mips_alloc_state.ct ? mips_alloc_state.ct : 1U;
+    unsigned char *refuse    = (unsigned char *) malloc(refuse_ct);
 
-    for (i = 0; i < MIPS_ALLOC_MAX; i++) {
+    if (!refuse) {
+      return;
+    }
+    for (i = 0; i < refuse_ct; i++) {
       refuse[i] = 0;
     }
     for (;;) {
@@ -946,6 +954,7 @@ static void mips_alloc_assign_homes(void)
         refuse[best] = 1;
       }
     }
+    free(refuse);
   }
 }
 

@@ -355,7 +355,9 @@ static void COD_local_vars_table_read(COD_directory_t *dir)
             dir->local_vars_table, 0);
         local_ety->symbols = COD_symbol_table_alloc(16);
         COD_local_vars_entry_parse(buffer, local_ety);
-      } else if (buffer[0]) {
+      } else if (buffer[0] && local_ety) {
+        /* A symbol entry only makes sense after a __LOCAL header; a
+         * truncated/foreign COD file used to dereference NULL here. */
         COD_symbol_entry_t     *symbol_ety;
 
         symbol_ety = COD_symbol_table_entry_append(local_ety->symbols, 0);

@@ -979,7 +979,7 @@ void pfile_cmd_op_add(pfile_t *pf,
 
      *except* assignment!
    */
-  if ((OPERATOR_ASSIGN != op)
+  if ((OPERATOR_ASSIGN != op) || (!pdst)
     || !value_def_is_same(*pdst, val1)) {
     if (!pfile_expr_string_fix(pf, val1)) {
       rc = RESULT_INVALID;
