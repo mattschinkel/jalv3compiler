@@ -33,6 +33,11 @@ struct value_
 static cache_t   value_cache;
 static boolean_t value_cache_is_init;
 
+unsigned long value_live_ct(void)
+{
+  return value_cache_is_init ? cache_live_ct(&value_cache) : 0;
+}
+
 static void value_cache_cleanup(void)
 {
   cache_cleanup(&value_cache);

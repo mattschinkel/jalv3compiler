@@ -148,5 +148,8 @@ value_t value_variable_remap(value_t val, const variable_map_t *map);
 
 value_t value_remap(value_t val, const value_map_t *map);
 
+/* value_t's handed out and not yet released (0 after a clean compile). */
+unsigned long value_live_ct(void);
+
 #endif /* value_h__ */
 

@@ -377,3 +377,9 @@ void cache_element_free(cache_t *cache, cache_element_t el)
 
 #endif /* CACHE_LOMEM */
 
+unsigned long cache_live_ct(const cache_t *cache)
+{
+  return (cache->stats.allocs >= cache->stats.frees)
+    ? (cache->stats.allocs - cache->stats.frees)
+    : 0;
+}

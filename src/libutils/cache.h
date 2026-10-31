@@ -57,6 +57,9 @@ result_t        cache_init(cache_t *cache, size_t element_sz, const char *name);
 void            cache_cleanup(cache_t *cache);
 cache_element_t cache_element_alloc(cache_t *cache);
 void            cache_element_free(cache_t *cache, cache_element_t el);
+/* Elements handed out and not yet freed. Zero after a clean teardown; a
+ * non-zero count is a leak in whatever owns them (see value_live_ct). */
+unsigned long   cache_live_ct(const cache_t *cache);
 void           *cache_element_seek(cache_t *cache, cache_element_t el, 
                     boolean_t mod);
 #endif /* cache_h__ */
