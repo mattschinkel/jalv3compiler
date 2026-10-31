@@ -1521,6 +1521,34 @@ if __name__ == "__main__":
         eq_pct = (equal_sizes / total_compared * 100.0) if total_compared else 0.0
         diff_pct = (different_sizes / total_compared * 100.0) if total_compared else 0.0
 
+        # A --compare run without a baseline tree is NOT a comparison: it used
+        # to report every sample as `missing-baseline` and still exit 0, so the
+        # L2 gate passed while measuring nothing (2026-10-30: the fresh jalv3
+        # checkout has no unit-tests/Output_Baseline; the archived baseline
+        # tree lives in jalv3_old/compilertest/Output_Baseline/hex).  Fail
+        # loudly instead.
+        baseline_hex_files = (
+            [n for n in os.listdir(base_hex) if n.lower().endswith(".hex")]
+            if os.path.isdir(base_hex) else []
+        )
+        baseline_missing = not baseline_hex_files
+        baseline_msg = ""
+        if baseline_missing:
+            baseline_msg = (
+                "error: baseline HEX tree missing or empty: "
+                f"{base_hex}\n"
+                "       --compare needs a baseline run first: "
+                "`python3 unittests.py --baseline` (the archived tree lives in "
+                "jalv3_old/compilertest/Output_Baseline/hex)"
+            )
+        elif total_compared and missing_in_baseline == total_compared:
+            baseline_missing = True
+            baseline_msg = (
+                "error: baseline HEX tree present but no sample pairs compare: "
+                f"{base_hex} has {len(baseline_hex_files)} HEX file(s), none "
+                "matching the current tree"
+            )
+
         # Write hex comparison summary
         hex_summary_path = os.path.join(compare_dir, "hex_size_summary.txt")
         with open(hex_summary_path, "w", encoding="utf-8") as hs:
@@ -1534,6 +1562,8 @@ if __name__ == "__main__":
             hs.write(f"Totals compared: {total_compared}\n")
             hs.write(f"Equal %: {eq_pct:.1f}%\n")
             hs.write(f"Different %: {diff_pct:.1f}%\n")
+            if baseline_missing:
+                hs.write(f"\nFAILED: {baseline_msg}\n")
 
         # Data (RAM) usage comparison: "Data area: N of M used" from the
         # saved full compiler outputs of both runs
@@ -1865,6 +1895,11 @@ if __name__ == "__main__":
             web_snapshot=_cmp_web,
             quiet=False,
         )
+        if baseline_missing:
+            print("")
+            print(baseline_msg)
+            print("compare reports written, but the comparison itself FAILED")
+            sys.exit(2)
         sys.exit(0)
 
     # Handle --clean option
