@@ -1,0 +1,8 @@
+-- @expect errors >0
+-- @expect not-contains: Assertion
+-- @expect contains: unknown pragma target
+-- the original 2026-10-31 crash: this pragma error path used to leave the
+-- bad token in the stream, re-parse the line as a phantom `case`, and abort
+-- in pfile_cmd_op_add. It must stay a diagnostic.
+include 16f877
+pragma target OSC case hs

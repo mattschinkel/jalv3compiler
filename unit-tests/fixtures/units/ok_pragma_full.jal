@@ -1,0 +1,10 @@
+-- @expect errors 0
+-- @expect contains: 0 errors, 0 warnings
+include 16f877
+pragma target clock 20_000_000
+pragma target OSC      HS
+pragma target WDT      DISABLED
+pragma target DEBUG    DISABLED
+pragma target LVP      ENABLED
+var byte n
+n = 1

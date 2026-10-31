@@ -1,0 +1,8 @@
+-- @expect errors >0
+-- @expect contains: doesn't fit the loop variable
+include 16f877
+pragma target clock 20_000_000
+var byte k
+for 300 using k loop
+  k = k
+end loop

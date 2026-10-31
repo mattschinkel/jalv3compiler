@@ -1,0 +1,9 @@
+-- @expect errors 0
+-- @expect contains: 0 errors, 0 warnings
+include 16f877
+pragma target clock 20_000_000
+var byte b
+b = 0
+while b < 3 loop
+  b = b + 1
+end loop

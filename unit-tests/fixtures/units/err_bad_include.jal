@@ -1,0 +1,3 @@
+-- @expect errors >0
+-- @expect contains: cannot open
+include this_device_does_not_exist

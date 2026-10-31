@@ -1,0 +1,6 @@
+-- @expect errors >0
+-- @expect contains: not defined
+include 16f877
+pragma target clock 20_000_000
+var byte b
+b = nosuchvar
