@@ -602,8 +602,15 @@ value_t value_subscript_set(value_t val, variable_ct_t subscript)
           variable_def_member_get(
             value_def_get(
               rval)));
-      value_baseofs_set(rval, value_constant_get(
-            subscript * variable_def_sz_get(def), VARIABLE_DEF_NONE));
+      {
+        /* same shape as pic_opfn: value_baseofs_set() locks its argument,
+         * so the reference value_constant_get() handed us must be dropped */
+        value_t kofs = value_constant_get(
+            subscript * variable_def_sz_get(def), VARIABLE_DEF_NONE);
+
+        value_baseofs_set(rval, kofs);
+        value_release(kofs);
+      }
       value_dereference(rval);
     }
   } else {

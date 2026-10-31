@@ -102,12 +102,19 @@ static void pic_multiply_create_fn16(pfile_t *pf,
         } else {
           if (!prod_clear) {
             value_t          tmp;
+            value_t          kofs;
             variable_const_t baseofs;
 
             tmp     = pic_cast(tmp_result, value_sz_get(mresult) - (ii + jj));
             baseofs = value_const_get(value_baseofs_get(tmp_result));
-            value_baseofs_set(tmp, pfile_constant_get(pf, baseofs + ii + jj, 
-                VARIABLE_DEF_NONE));
+            /* value_baseofs_set() takes its OWN reference (it locks), so the
+             * reference pfile_constant_get() handed us has to be dropped.
+             * Every multiply helper leaked one constant per partial product
+             * -- 45 per compile of the 18f4620 corpus giant. */
+            kofs    = pfile_constant_get(pf, baseofs + ii + jj,
+                VARIABLE_DEF_NONE);
+            value_baseofs_set(tmp, kofs);
+            value_release(kofs);
             pic_op(pf, OPERATOR_ADD, tmp, prod, VALUE_NONE);
             value_release(tmp);
           }
