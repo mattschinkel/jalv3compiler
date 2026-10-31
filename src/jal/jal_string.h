@@ -60,4 +60,8 @@ void jal_string_error_rvalue_consumed(pfile_t *pf, int is_rvalue,
  * when any runtime-length assign exists; see jal_string.c). */
 void jal_string_heap_sizing_report(pfile_t *pf);
 
+/* TEARDOWN between compiles (A4): frees the string-heap-use table and
+ * zeroes the module state. */
+void jal_string_state_reset(void);
+
 #endif /* jal_string_h__ */

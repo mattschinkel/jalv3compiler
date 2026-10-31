@@ -24,6 +24,36 @@
 #include "jal_string.h"
 #include "jal_tokn.h"
 
+typedef struct jal_str_heap_use_ {
+  variable_t       var;
+  variable_const_t max_len;
+} jal_str_heap_use_t;
+
+/*
+ * Per-compile state, in ONE object (Tier-A A4; see
+ * fix_jal_string_state_reset.md). The heap-use table was grown by the
+ * string heap planner and never freed by anything.
+ */
+typedef struct jal_string_state_ {
+  unsigned            silent_truncate_nest;
+  boolean_t           silent_had_truncate;
+  jal_str_heap_use_t *heap_use;
+  size_t              heap_use_used;
+  size_t              heap_use_alloc;
+  boolean_t           heap_use_runtime;
+  unsigned            dec_no_shared;
+} jal_string_state_t;
+
+static jal_string_state_t jal_string_state;
+
+/* TEARDOWN between compiles: frees the heap-use table and zeroes. */
+void jal_string_state_reset(void)
+{
+  free(jal_string_state.heap_use);
+  memset(&jal_string_state, 0, sizeof(jal_string_state));
+}
+
+
 #define JAL_STRING_HEAP_NAME      "_string_heap"
 #define JAL_STRING_FREE_HEAD_NAME "_string_free_head"
 #define JAL_STRING_ERROR_NAME     "_string_error"
@@ -42,27 +72,25 @@
  * byte handle/heap fields; those truncations are intentional. Suppress
  * "assignment to smaller type" only while emitting string-heap p-code.
  */
-static unsigned  jal_string_silent_truncate_nest;
-static boolean_t jal_string_silent_had_truncate;
 
 static void jal_string_silent_truncate_begin(pfile_t *pf)
 {
-  if (0U == jal_string_silent_truncate_nest) {
-    jal_string_silent_had_truncate
+  if (0U == jal_string_state.silent_truncate_nest) {
+    jal_string_state.silent_had_truncate
         = pfile_flag_test(pf, PFILE_FLAG_WARN_TRUNCATE);
     pfile_flag_clr(pf, PFILE_FLAG_WARN_TRUNCATE);
   }
-  jal_string_silent_truncate_nest++;
+  jal_string_state.silent_truncate_nest++;
 }
 
 static void jal_string_silent_truncate_end(pfile_t *pf)
 {
-  if (0U == jal_string_silent_truncate_nest) {
+  if (0U == jal_string_state.silent_truncate_nest) {
     return;
   }
-  jal_string_silent_truncate_nest--;
-  if (0U == jal_string_silent_truncate_nest
-      && jal_string_silent_had_truncate) {
+  jal_string_state.silent_truncate_nest--;
+  if (0U == jal_string_state.silent_truncate_nest
+      && jal_string_state.silent_had_truncate) {
     pfile_flag_set(pf, PFILE_FLAG_WARN_TRUNCATE);
   }
 }
@@ -117,15 +145,7 @@ static variable_sz_t jal_string_index_size_get(pfile_t *pf,
     variable_const_t heap_sz);
 static value_t jal_string_const_get(pfile_t *pf, variable_const_t n);
 
-typedef struct jal_str_heap_use_ {
-  variable_t       var;
-  variable_const_t max_len;
-} jal_str_heap_use_t;
 
-static jal_str_heap_use_t *jal_str_heap_use;
-static size_t             jal_str_heap_use_used;
-static size_t             jal_str_heap_use_alloc;
-static boolean_t          jal_str_heap_use_runtime;
 
 static void jal_string_heap_use_note(value_t dst, value_t len)
 {
@@ -137,32 +157,32 @@ static void jal_string_heap_use_note(value_t dst, value_t len)
     return;
   }
   if (!value_is_const(len)) {
-    jal_str_heap_use_runtime = BOOLEAN_TRUE;
+    jal_string_state.heap_use_runtime = BOOLEAN_TRUE;
     return;
   }
-  for (ii = 0; ii < jal_str_heap_use_used; ii++) {
-    if (jal_str_heap_use[ii].var == var) {
-      if (value_const_get(len) > jal_str_heap_use[ii].max_len) {
-        jal_str_heap_use[ii].max_len = value_const_get(len);
+  for (ii = 0; ii < jal_string_state.heap_use_used; ii++) {
+    if (jal_string_state.heap_use[ii].var == var) {
+      if (value_const_get(len) > jal_string_state.heap_use[ii].max_len) {
+        jal_string_state.heap_use[ii].max_len = value_const_get(len);
       }
       return;
     }
   }
-  if (jal_str_heap_use_used == jal_str_heap_use_alloc) {
+  if (jal_string_state.heap_use_used == jal_string_state.heap_use_alloc) {
     size_t              resize;
     jal_str_heap_use_t *tmp;
 
-    resize = jal_str_heap_use_alloc ? 2 * jal_str_heap_use_alloc : 16;
-    tmp    = REALLOC(jal_str_heap_use, resize * sizeof(*tmp));
+    resize = jal_string_state.heap_use_alloc ? 2 * jal_string_state.heap_use_alloc : 16;
+    tmp    = REALLOC(jal_string_state.heap_use, resize * sizeof(*tmp));
     if (!tmp) {
       return; /* diagnostic only: skip silently on OOM */
     }
-    jal_str_heap_use       = tmp;
-    jal_str_heap_use_alloc = resize;
+    jal_string_state.heap_use       = tmp;
+    jal_string_state.heap_use_alloc = resize;
   }
-  jal_str_heap_use[jal_str_heap_use_used].var     = var;
-  jal_str_heap_use[jal_str_heap_use_used].max_len = value_const_get(len);
-  jal_str_heap_use_used++;
+  jal_string_state.heap_use[jal_string_state.heap_use_used].var     = var;
+  jal_string_state.heap_use[jal_string_state.heap_use_used].max_len = value_const_get(len);
+  jal_string_state.heap_use_used++;
 }
 
 /* `dst = <dynamic src>` with a RUNTIME length: when src's own static
@@ -181,17 +201,17 @@ static void jal_string_heap_use_copy_note(pfile_t *pf, value_t dst,
   if (!dvar || !svar || (dvar == svar)) {
     return;
   }
-  for (ii = 0; ii < jal_str_heap_use_used; ii++) {
-    if (jal_str_heap_use[ii].var == svar) {
+  for (ii = 0; ii < jal_string_state.heap_use_used; ii++) {
+    if (jal_string_state.heap_use[ii].var == svar) {
       value_t cv;
 
-      cv = jal_string_const_get(pf, jal_str_heap_use[ii].max_len);
+      cv = jal_string_const_get(pf, jal_string_state.heap_use[ii].max_len);
       jal_string_heap_use_note(dst, cv);
       value_release(cv);
       return;
     }
   }
-  jal_str_heap_use_runtime = BOOLEAN_TRUE;
+  jal_string_state.heap_use_runtime = BOOLEAN_TRUE;
 }
 
 void jal_string_heap_sizing_report(pfile_t *pf)
@@ -205,7 +225,7 @@ void jal_string_heap_sizing_report(pfile_t *pf)
   variable_sz_t    index_sz;
   size_t           ii;
 
-  if (!jal_str_heap_use_used || jal_str_heap_use_runtime) {
+  if (!jal_string_state.heap_use_used || jal_string_state.heap_use_runtime) {
     return;
   }
   if (pfile_errct_get(pf)) {
@@ -222,8 +242,8 @@ void jal_string_heap_sizing_report(pfile_t *pf)
   }
 
   payload = 0;
-  for (ii = 0; ii < jal_str_heap_use_used; ii++) {
-    payload += jal_str_heap_use[ii].max_len;
+  for (ii = 0; ii < jal_string_state.heap_use_used; ii++) {
+    payload += jal_string_state.heap_use[ii].max_len;
   }
 
   /* header from the chosen heap's index width; a recommendation that
@@ -235,7 +255,7 @@ void jal_string_heap_sizing_report(pfile_t *pf)
   }
   header = 3UL * (unsigned long) index_sz;
   total  = (unsigned long) payload
-      + header * (unsigned long) jal_str_heap_use_used;
+      + header * (unsigned long) jal_string_state.heap_use_used;
   recommended = (total * 5UL + 3UL) / 4UL;
   {
     variable_sz_t wide;
@@ -244,7 +264,7 @@ void jal_string_heap_sizing_report(pfile_t *pf)
     if (wide && (wide > index_sz)) {
       header = 3UL * (unsigned long) wide;
       total  = (unsigned long) payload
-          + header * (unsigned long) jal_str_heap_use_used;
+          + header * (unsigned long) jal_string_state.heap_use_used;
       recommended = (total * 5UL + 3UL) / 4UL;
     }
   }
@@ -259,8 +279,8 @@ void jal_string_heap_sizing_report(pfile_t *pf)
         recommended,
         (unsigned long) payload,
         header,
-        (unsigned long) jal_str_heap_use_used,
-        (1 == jal_str_heap_use_used) ? "" : "s");
+        (unsigned long) jal_string_state.heap_use_used,
+        (1 == jal_string_state.heap_use_used) ? "" : "s");
   }
 }
 
@@ -2351,13 +2371,13 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
         size_t     jj;
 
         ivar = value_variable_get(items[ii]);
-        for (jj = 0; ivar && (jj < jal_str_heap_use_used); jj++) {
-          if (jal_str_heap_use[jj].var == ivar) {
-            static_total += jal_str_heap_use[jj].max_len;
+        for (jj = 0; ivar && (jj < jal_string_state.heap_use_used); jj++) {
+          if (jal_string_state.heap_use[jj].var == ivar) {
+            static_total += jal_string_state.heap_use[jj].max_len;
             break;
           }
         }
-        if (jj == jal_str_heap_use_used) {
+        if (jj == jal_string_state.heap_use_used) {
           all_const = BOOLEAN_FALSE;
           break;
         }
@@ -2770,7 +2790,6 @@ static unsigned jal_string_num_dig_max(variable_sz_t sz)
 
 /* Render a UNIVERSAL constant as decimal text (compile time); `neg`
  * prepends '-' for negative signed constants. */
-static unsigned dec_no_shared;
 
 static value_t jal_string_number_const_source_emit(pfile_t *pf,
     variable_const_t cn, unsigned neg)
@@ -2798,8 +2817,8 @@ static value_t jal_string_number_const_source_emit(pfile_t *pf,
     digits[ii] = digits[ndig - 1U - ii];
     digits[ndig - 1U - ii] = tmpc;
   }
-  sprintf(name, "_string_dec%u", dec_no_shared);
-  dec_no_shared++;
+  sprintf(name, "_string_dec%u", jal_string_state.dec_no_shared);
+  jal_string_state.dec_no_shared++;
   byte_def = jal_string_byte_def_alloc(VARIABLE_DEF_FLAG_CONST);
   arr_def = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
       VARIABLE_DEF_FLAG_CONST | VARIABLE_DEF_FLAG_STRING, 0);
@@ -2912,7 +2931,7 @@ static value_t jal_string_float_const_source_emit(pfile_t *pf, float f)
     digits[ii] = txt[ii];
   }
 
-  sprintf(buf, "_string_dec%u", dec_no_shared++);
+  sprintf(buf, "_string_dec%u", jal_string_state.dec_no_shared++);
   byte_def = jal_string_byte_def_alloc(VARIABLE_DEF_FLAG_CONST);
   arr_def = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
       VARIABLE_DEF_FLAG_CONST | VARIABLE_DEF_FLAG_STRING, 0);
