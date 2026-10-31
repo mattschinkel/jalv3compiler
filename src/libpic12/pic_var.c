@@ -23,16 +23,12 @@
 
 #undef BLIST_DEBUG
 
-static unsigned  auto_mem_reg = 1;
 
 unsigned         pic_blist_max; /* max amount used     */
 unsigned         pic_blist_total;
 unsigned         pic_blist_placed; /* bytes the `at`-placement pass reserved */
-static pic_bank_info_t *pic_data_bank_list;
 /* Free list for GPR allocation from pragma shared regions (mutated). */
-static pic_bank_info_t *pic_shared_bank_list;
 /* Immutable copy of pragma shared ranges for VARIABLE_FLAG_SHARED and verify. */
-static pic_bank_info_t *pic_shared_pragma_list;
 
 size_t           pic_stk_sz;
 variable_base_t  pic_stk_base;
@@ -49,7 +45,71 @@ typedef struct pic_variable_chunk_map_ {
   struct pic_variable_chunk_map_ *link;
 } pic_variable_chunk_map_t;
 
-static pic_variable_chunk_map_t *pic_variable_chunk_maps;
+/*
+ * All file-scope state, in ONE object (Tier-A A4, see
+ * fix_pic_var_state_reset.md).
+ *
+ * These were 30 independent statics scattered through 3400 lines: the bank
+ * lists, the chunk maps, the per-compile registries (pointer targets,
+ * binds, indirect-call actuals, open-array pairs), the refusal flags and
+ * the layout snapshot. Nothing reset any of them, so a second compile in
+ * the same process would start with the first one's leftovers.
+ */
+/* keep the original tag: the allocator sizes it by name */
+typedef struct pic_banked_edge_ {
+  variable_t a;
+  variable_t b;
+  unsigned   ct;
+} pic_var_banked_edge_t;
+
+typedef struct pic_var_ptr_bind_ {
+  variable_t pvar;
+  variable_t tvar;
+  boolean_t  escaped;
+} pic_var_ptr_bind_t;
+
+typedef struct pic_var_openarray_pair_ {
+  variable_t actual;
+  variable_t formal;
+} pic_var_openarray_pair_t;
+
+struct pic_var_layout_snap_;
+
+typedef struct pic_var_state_ {
+  unsigned                     auto_mem_reg;
+  pic_bank_info_t             *data_bank_list;
+  pic_bank_info_t             *shared_bank_list;
+  pic_bank_info_t             *shared_pragma_list;
+  pic_variable_chunk_map_t    *chunk_maps;
+  pic_var_banked_edge_t       *banked_edges;
+  size_t                       banked_edges_used;
+  size_t                       banked_edges_alloc;
+  variable_t                   banked_last;
+  variable_t                  *ptr_targets;
+  size_t                       ptr_targets_used;
+  size_t                       ptr_targets_alloc;
+  pic_var_ptr_bind_t          *ptr_binds;
+  size_t                       ptr_binds_used;
+  size_t                       ptr_binds_alloc;
+  variable_t                  *call_actuals;
+  size_t                       call_actuals_used;
+  size_t                       call_actuals_alloc;
+  pic_var_openarray_pair_t    *openarray_pairs;
+  size_t                       openarray_pairs_used;
+  size_t                       openarray_pairs_alloc;
+  boolean_t                    refused;
+  boolean_t                    refused_ptr;
+  boolean_t                    refused_call;
+  variable_t                   refused_var;
+  variable_sz_t                refused_sz;
+  variable_sz_t                refused_best;
+  unsigned                     dbg_round;
+  struct pic_var_layout_snap_ *snap;
+  boolean_t                    placement_done;
+} pic_var_state_t;
+
+static pic_var_state_t pic_var;
+
 
 /*
  * PIC18 MOVLB-churn metadata (D3 increment 2, trial-selection form).
@@ -60,55 +120,69 @@ static pic_variable_chunk_map_t *pic_variable_chunk_maps;
  * by their incident edge totals. The winning layout is chosen by real
  * trial emission in pic_cmd_generate, never by these counts alone.
  */
-static struct pic_banked_edge_ {
-  variable_t a;
-  variable_t b;
-  unsigned   ct;
-} *pic_banked_edges;
-static size_t     pic_banked_edges_used;
-static size_t     pic_banked_edges_alloc;
-static variable_t pic_banked_last;
+
+/*
+ * Return this module to its just-loaded state.
+ *
+ * Call it while the module is IDLE -- i.e. after the pfile teardown. The
+ * bank lists, the shared pragma list and the chunk maps belong to the
+ * pfile lifecycle and are released there, so they are only zeroed. The
+ * five per-compile registries below are this module's own heap and are
+ * never freed anywhere else (they were leaked until process exit), so
+ * freeing them here is what makes the reset both correct and leak-free.
+ */
+void pic_var_reset(void)
+{
+  pic_var_trials_free();                 /* layout snapshot, if one is held */
+  FREE(pic_var.banked_edges);
+  FREE(pic_var.ptr_targets);
+  FREE(pic_var.ptr_binds);
+  FREE(pic_var.call_actuals);
+  FREE(pic_var.openarray_pairs);
+  memset(&pic_var, 0, sizeof(pic_var));
+  pic_var.auto_mem_reg = 1;              /* the only non-zero initial value */
+}
 
 void pic_var_banked_access_reset(void)
 {
-  pic_banked_edges_used = 0;
-  pic_banked_last       = 0;
+  pic_var.banked_edges_used = 0;
+  pic_var.banked_last       = 0;
 }
 
 void pic_var_banked_access_bump(variable_t var)
 {
-  if (var != pic_banked_last) {
-    if (pic_banked_last) {
+  if (var != pic_var.banked_last) {
+    if (pic_var.banked_last) {
       size_t ii;
 
-      for (ii = 0; ii < pic_banked_edges_used; ii++) {
-        if ((pic_banked_edges[ii].a == pic_banked_last)
-            && (pic_banked_edges[ii].b == var)) {
-          pic_banked_edges[ii].ct++;
+      for (ii = 0; ii < pic_var.banked_edges_used; ii++) {
+        if ((pic_var.banked_edges[ii].a == pic_var.banked_last)
+            && (pic_var.banked_edges[ii].b == var)) {
+          pic_var.banked_edges[ii].ct++;
           break;
         }
       }
-      if (ii == pic_banked_edges_used) {
-        if (pic_banked_edges_used == pic_banked_edges_alloc) {
+      if (ii == pic_var.banked_edges_used) {
+        if (pic_var.banked_edges_used == pic_var.banked_edges_alloc) {
           size_t                   resize;
           struct pic_banked_edge_ *tmp;
 
-          resize = pic_banked_edges_alloc ? 2 * pic_banked_edges_alloc : 256;
-          tmp    = REALLOC(pic_banked_edges, resize * sizeof(*tmp));
+          resize = pic_var.banked_edges_alloc ? 2 * pic_var.banked_edges_alloc : 256;
+          tmp    = REALLOC(pic_var.banked_edges, resize * sizeof(*tmp));
           if (tmp) {
-            pic_banked_edges_alloc = resize;
-            pic_banked_edges       = tmp;
+            pic_var.banked_edges_alloc = resize;
+            pic_var.banked_edges       = tmp;
           }
         }
-        if (pic_banked_edges_used < pic_banked_edges_alloc) {
-          pic_banked_edges[pic_banked_edges_used].a  = pic_banked_last;
-          pic_banked_edges[pic_banked_edges_used].b  = var;
-          pic_banked_edges[pic_banked_edges_used].ct = 1;
-          pic_banked_edges_used++;
+        if (pic_var.banked_edges_used < pic_var.banked_edges_alloc) {
+          pic_var.banked_edges[pic_var.banked_edges_used].a  = pic_var.banked_last;
+          pic_var.banked_edges[pic_var.banked_edges_used].b  = var;
+          pic_var.banked_edges[pic_var.banked_edges_used].ct = 1;
+          pic_var.banked_edges_used++;
         }
       }
     }
-    pic_banked_last = var;
+    pic_var.banked_last = var;
   }
 }
 
@@ -120,7 +194,7 @@ static void pic_variable_chunk_map_set(pfile_t *pf, variable_t var,
 
   /* placement may be re-run (PIC18 access-window trials): replace,
    * don't duplicate, any earlier registration for this variable */
-  for (pprev = &pic_variable_chunk_maps; *pprev; ) {
+  for (pprev = &pic_var.chunk_maps; *pprev; ) {
     if ((*pprev)->var == var) {
       pic_variable_chunk_map_t *dead;
 
@@ -151,8 +225,8 @@ static void pic_variable_chunk_map_set(pfile_t *pf, variable_t var,
   memcpy(map->sz, sz, ct * sizeof(*map->sz));
   map->var  = var;
   map->ct   = ct;
-  map->link = pic_variable_chunk_maps;
-  pic_variable_chunk_maps = map;
+  map->link = pic_var.chunk_maps;
+  pic_var.chunk_maps = map;
 }
 
 static pic_variable_chunk_map_t *pic_variable_chunk_map_find(variable_t var)
@@ -162,7 +236,7 @@ static pic_variable_chunk_map_t *pic_variable_chunk_map_find(variable_t var)
   while (variable_master_get(var)) {
     var = variable_master_get(var);
   }
-  for (map = pic_variable_chunk_maps; map; map = map->link) {
+  for (map = pic_var.chunk_maps; map; map = map->link) {
     if (map->var == var) {
       return map;
     }
@@ -234,13 +308,10 @@ variable_base_t pic_var_chunk_addr_resolve(variable_t var,
  * cannot walk a chunk map, so a holed placement is unsound for these;
  * the registry is bumped at emit time (pass 0) and consulted by the
  * pass-1 placement trials, mirroring the access-window counters. */
-static variable_t *pic_ptr_targets;
-static size_t      pic_ptr_targets_used;
-static size_t      pic_ptr_targets_alloc;
 
 void pic_var_pointer_target_reset(void)
 {
-  pic_ptr_targets_used = 0;
+  pic_var.ptr_targets_used = 0;
 }
 
 void pic_var_pointer_target_bump(variable_t var)
@@ -250,32 +321,32 @@ void pic_var_pointer_target_bump(variable_t var)
   if (!var || (VARIABLE_NONE == var)) {
     return;
   }
-  for (ii = 0; ii < pic_ptr_targets_used; ii++) {
-    if (pic_ptr_targets[ii] == var) {
+  for (ii = 0; ii < pic_var.ptr_targets_used; ii++) {
+    if (pic_var.ptr_targets[ii] == var) {
       return;
     }
   }
-  if (pic_ptr_targets_used == pic_ptr_targets_alloc) {
+  if (pic_var.ptr_targets_used == pic_var.ptr_targets_alloc) {
     size_t       resize;
     variable_t  *tmp;
 
-    resize = pic_ptr_targets_alloc ? 2 * pic_ptr_targets_alloc : 64;
-    tmp    = REALLOC(pic_ptr_targets, resize * sizeof(*tmp));
+    resize = pic_var.ptr_targets_alloc ? 2 * pic_var.ptr_targets_alloc : 64;
+    tmp    = REALLOC(pic_var.ptr_targets, resize * sizeof(*tmp));
     if (!tmp) {
       return;
     }
-    pic_ptr_targets_alloc = resize;
-    pic_ptr_targets       = tmp;
+    pic_var.ptr_targets_alloc = resize;
+    pic_var.ptr_targets       = tmp;
   }
-  pic_ptr_targets[pic_ptr_targets_used++] = var;
+  pic_var.ptr_targets[pic_var.ptr_targets_used++] = var;
 }
 
 boolean_t pic_var_pointer_target_test(variable_t var)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_ptr_targets_used; ii++) {
-    if (pic_ptr_targets[ii] == var) {
+  for (ii = 0; ii < pic_var.ptr_targets_used; ii++) {
+    if (pic_var.ptr_targets[ii] == var) {
       return BOOLEAN_TRUE;
     }
   }
@@ -289,13 +360,6 @@ boolean_t pic_var_pointer_target_test(variable_t var)
  * the target's addressing linear: every deref can walk the target's
  * chunk map. The pass-1-end scan marks escaping pointers; a holed
  * placement refuses only when some ESCAPED pointer binds the array. */
-static struct {
-  variable_t pvar;
-  variable_t tvar;
-  boolean_t  escaped;
-} *pic_ptr_binds;
-static size_t pic_ptr_binds_used;
-static size_t pic_ptr_binds_alloc;
 
 void pic_var_pointer_bind_record(variable_t pvar, variable_t tvar)
 {
@@ -305,28 +369,28 @@ void pic_var_pointer_bind_record(variable_t pvar, variable_t tvar)
       || (VARIABLE_NONE == pvar) || (VARIABLE_NONE == tvar)) {
     return;
   }
-  for (ii = 0; ii < pic_ptr_binds_used; ii++) {
-    if ((pic_ptr_binds[ii].pvar == pvar)
-        && (pic_ptr_binds[ii].tvar == tvar)) {
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if ((pic_var.ptr_binds[ii].pvar == pvar)
+        && (pic_var.ptr_binds[ii].tvar == tvar)) {
       return;
     }
   }
-  if (pic_ptr_binds_used == pic_ptr_binds_alloc) {
+  if (pic_var.ptr_binds_used == pic_var.ptr_binds_alloc) {
     size_t resize;
     void  *tmp;
 
-    resize = pic_ptr_binds_alloc ? 2 * pic_ptr_binds_alloc : 32;
-    tmp = REALLOC(pic_ptr_binds, resize * sizeof(*pic_ptr_binds));
+    resize = pic_var.ptr_binds_alloc ? 2 * pic_var.ptr_binds_alloc : 32;
+    tmp = REALLOC(pic_var.ptr_binds, resize * sizeof(*pic_var.ptr_binds));
     if (!tmp) {
       return;
     }
-    pic_ptr_binds       = tmp;
-    pic_ptr_binds_alloc = resize;
+    pic_var.ptr_binds       = tmp;
+    pic_var.ptr_binds_alloc = resize;
   }
-  pic_ptr_binds[pic_ptr_binds_used].pvar     = pvar;
-  pic_ptr_binds[pic_ptr_binds_used].tvar     = tvar;
-  pic_ptr_binds[pic_ptr_binds_used].escaped  = BOOLEAN_FALSE;
-  pic_ptr_binds_used++;
+  pic_var.ptr_binds[pic_var.ptr_binds_used].pvar     = pvar;
+  pic_var.ptr_binds[pic_var.ptr_binds_used].tvar     = tvar;
+  pic_var.ptr_binds[pic_var.ptr_binds_used].escaped  = BOOLEAN_FALSE;
+  pic_var.ptr_binds_used++;
 }
 
 /* is this variable the pointer side of any recorded bind? */
@@ -334,8 +398,8 @@ boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_ptr_binds_used; ii++) {
-    if (pic_ptr_binds[ii].pvar == pvar) {
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if (pic_var.ptr_binds[ii].pvar == pvar) {
       return BOOLEAN_TRUE;
     }
   }
@@ -346,9 +410,9 @@ void pic_var_pointer_bind_escape(variable_t pvar)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_ptr_binds_used; ii++) {
-    if (pic_ptr_binds[ii].pvar == pvar) {
-      pic_ptr_binds[ii].escaped = BOOLEAN_TRUE;
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if (pic_var.ptr_binds[ii].pvar == pvar) {
+      pic_var.ptr_binds[ii].escaped = BOOLEAN_TRUE;
     }
   }
 }
@@ -359,9 +423,9 @@ boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_ptr_binds_used; ii++) {
-    if ((pic_ptr_binds[ii].tvar == tvar)
-        && pic_ptr_binds[ii].escaped) {
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if ((pic_var.ptr_binds[ii].tvar == tvar)
+        && pic_var.ptr_binds[ii].escaped) {
       return BOOLEAN_TRUE;
     }
   }
@@ -375,17 +439,17 @@ void pic_var_pointer_bind_check_escaped(pfile_t *pf)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_ptr_binds_used; ii++) {
-    if (pic_ptr_binds[ii].escaped
-        && pic_variable_chunk_map_find(pic_ptr_binds[ii].tvar)) {
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if (pic_var.ptr_binds[ii].escaped
+        && pic_variable_chunk_map_find(pic_var.ptr_binds[ii].tvar)) {
       pfile_log(pf, PFILE_LOG_ERR,
           "'%s' is bound to a banked (chunked) target and escapes this "
           "program's dereferences (stored, passed, compared, or "
           "re-bound): pointer arithmetic is linear and cannot walk the "
           "holes. Dereference it only through subscripts, keep the "
           "array within one bank, or use the large_array library.",
-          variable_name_get(pic_ptr_binds[ii].pvar)
-            ? variable_name_get(pic_ptr_binds[ii].pvar) : "?");
+          variable_name_get(pic_var.ptr_binds[ii].pvar)
+            ? variable_name_get(pic_var.ptr_binds[ii].pvar) : "?");
     }
   }
 }
@@ -396,11 +460,11 @@ variable_t pic_var_pointer_bind_walk_target(variable_t pvar)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_ptr_binds_used; ii++) {
-    if ((pic_ptr_binds[ii].pvar == pvar)
-        && !pic_ptr_binds[ii].escaped
-        && pic_variable_chunk_map_find(pic_ptr_binds[ii].tvar)) {
-      return pic_ptr_binds[ii].tvar;
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if ((pic_var.ptr_binds[ii].pvar == pvar)
+        && !pic_var.ptr_binds[ii].escaped
+        && pic_variable_chunk_map_find(pic_var.ptr_binds[ii].tvar)) {
+      return pic_var.ptr_binds[ii].tvar;
     }
   }
   return VARIABLE_NONE;
@@ -410,11 +474,11 @@ variable_t pic_var_pointer_bind_walk_target(variable_t pvar)
  * array survives the fixup set (see pic_variable_counters_set) */
 boolean_t pic_var_pointer_target_get(size_t ix, variable_t *var)
 {
-  if (ix >= pic_ptr_targets_used) {
+  if (ix >= pic_var.ptr_targets_used) {
     return BOOLEAN_FALSE;
   }
   if (var) {
-    *var = pic_ptr_targets[ix];
+    *var = pic_var.ptr_targets[ix];
   }
   return BOOLEAN_TRUE;
 }
@@ -425,9 +489,6 @@ boolean_t pic_var_pointer_target_get(size_t ix, variable_t *var)
  * bind (found via a 300-byte chunked array passed to an open-array
  * formal: compiled clean, returned garbage under gpsim). pic.c marks
  * every call-actual variable here right before placement runs. */
-static variable_t *pic_call_actuals;
-static size_t      pic_call_actuals_used;
-static size_t      pic_call_actuals_alloc;
 
 void pic_var_call_actual_bump(variable_t var)
 {
@@ -436,32 +497,32 @@ void pic_var_call_actual_bump(variable_t var)
   if (!var || (VARIABLE_NONE == var)) {
     return;
   }
-  for (ii = 0; ii < pic_call_actuals_used; ii++) {
-    if (pic_call_actuals[ii] == var) {
+  for (ii = 0; ii < pic_var.call_actuals_used; ii++) {
+    if (pic_var.call_actuals[ii] == var) {
       return;
     }
   }
-  if (pic_call_actuals_used == pic_call_actuals_alloc) {
+  if (pic_var.call_actuals_used == pic_var.call_actuals_alloc) {
     size_t       resize;
     variable_t  *tmp;
 
-    resize = pic_call_actuals_alloc ? 2 * pic_call_actuals_alloc : 64;
-    tmp    = REALLOC(pic_call_actuals, resize * sizeof(*tmp));
+    resize = pic_var.call_actuals_alloc ? 2 * pic_var.call_actuals_alloc : 64;
+    tmp    = REALLOC(pic_var.call_actuals, resize * sizeof(*tmp));
     if (!tmp) {
       return;
     }
-    pic_call_actuals      = tmp;
-    pic_call_actuals_alloc = resize;
+    pic_var.call_actuals      = tmp;
+    pic_var.call_actuals_alloc = resize;
   }
-  pic_call_actuals[pic_call_actuals_used++] = var;
+  pic_var.call_actuals[pic_var.call_actuals_used++] = var;
 }
 
 boolean_t pic_var_escapes_to_call(variable_t var)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_call_actuals_used; ii++) {
-    if (pic_call_actuals[ii] == var) {
+  for (ii = 0; ii < pic_var.call_actuals_used; ii++) {
+    if (pic_var.call_actuals[ii] == var) {
       return BOOLEAN_TRUE;
     }
   }
@@ -475,12 +536,6 @@ boolean_t pic_var_escapes_to_call(variable_t var)
  * (the existing chunk-walk emitters key off the formal's variable).
  * Indirect/reentrant calls cannot be specialized and keep the
  * placement refusal (pic_var_escapes_to_call). */
-static struct {
-  variable_t actual;
-  variable_t formal;
-} *pic_openarray_pairs;
-static size_t pic_openarray_pairs_used;
-static size_t pic_openarray_pairs_alloc;
 
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal)
 {
@@ -490,29 +545,29 @@ void pic_var_openarray_pair_record(variable_t actual, variable_t formal)
       || (VARIABLE_NONE == actual) || (VARIABLE_NONE == formal)) {
     return;
   }
-  for (ii = 0; ii < pic_openarray_pairs_used; ii++) {
-    if ((pic_openarray_pairs[ii].actual == actual)
-        && (pic_openarray_pairs[ii].formal == formal)) {
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if ((pic_var.openarray_pairs[ii].actual == actual)
+        && (pic_var.openarray_pairs[ii].formal == formal)) {
       return;
     }
   }
-  if (pic_openarray_pairs_used == pic_openarray_pairs_alloc) {
+  if (pic_var.openarray_pairs_used == pic_var.openarray_pairs_alloc) {
     size_t resize;
     void  *tmp;
 
-    resize = pic_openarray_pairs_alloc
-      ? 2 * pic_openarray_pairs_alloc : 32;
-    tmp = REALLOC(pic_openarray_pairs,
-        resize * sizeof(*pic_openarray_pairs));
+    resize = pic_var.openarray_pairs_alloc
+      ? 2 * pic_var.openarray_pairs_alloc : 32;
+    tmp = REALLOC(pic_var.openarray_pairs,
+        resize * sizeof(*pic_var.openarray_pairs));
     if (!tmp) {
       return;
     }
-    pic_openarray_pairs       = tmp;
-    pic_openarray_pairs_alloc = resize;
+    pic_var.openarray_pairs       = tmp;
+    pic_var.openarray_pairs_alloc = resize;
   }
-  pic_openarray_pairs[pic_openarray_pairs_used].actual = actual;
-  pic_openarray_pairs[pic_openarray_pairs_used].formal = formal;
-  pic_openarray_pairs_used++;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].actual = actual;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].formal = formal;
+  pic_var.openarray_pairs_used++;
 }
 
 /* copy src's chunk map onto dst (replace semantics; dst usually an
@@ -525,7 +580,7 @@ static void pic_variable_chunk_map_copy(pfile_t *pf, variable_t src,
   if (src == dst) {
     return;
   }
-  for (map = pic_variable_chunk_maps; map; map = map->link) {
+  for (map = pic_var.chunk_maps; map; map = map->link) {
     if (map->var == src) {
       pic_variable_chunk_map_set(pf, dst, map->ct, map->base, map->sz);
       return;
@@ -547,12 +602,12 @@ static void pic_var_chunk_map_propagate(pfile_t *pf, variable_t var)
   }
   do {
     changed = BOOLEAN_FALSE;
-    for (ii = 0; ii < pic_openarray_pairs_used; ii++) {
+    for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
       variable_t src;
       variable_t dst;
 
-      src = pic_openarray_pairs[ii].actual;
-      dst = pic_openarray_pairs[ii].formal;
+      src = pic_var.openarray_pairs[ii].actual;
+      dst = pic_var.openarray_pairs[ii].formal;
       if ((src != dst)
           && pic_variable_chunk_map_find(src)
           && !pic_variable_chunk_map_find(dst)) {
@@ -814,13 +869,13 @@ void pic_blist_add(pfile_t *pf, pic_bank_info_t **pblist,
 
 void pic_data_bank_list_add(pfile_t *pf, size_t lo, size_t hi)
 {
-  pic_blist_add(pf, &pic_data_bank_list, lo, hi);
+  pic_blist_add(pf, &pic_var.data_bank_list, lo, hi);
 }
 
 void pic_shared_bank_list_add(pfile_t *pf, size_t lo, size_t hi)
 {
-  pic_blist_add(pf, &pic_shared_bank_list, lo, hi);
-  pic_blist_add(pf, &pic_shared_pragma_list, lo, hi);
+  pic_blist_add(pf, &pic_var.shared_bank_list, lo, hi);
+  pic_blist_add(pf, &pic_var.shared_pragma_list, lo, hi);
 }
 
 boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr)
@@ -828,7 +883,7 @@ boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr)
   pic_bank_info_t *bank;
 
   UNUSED(pf);
-  for (bank = pic_shared_pragma_list; bank; bank = bank->link) {
+  for (bank = pic_var.shared_pragma_list; bank; bank = bank->link) {
     if (file_addr >= (unsigned long) bank->lo
         && file_addr <= (unsigned long) bank->hi) {
       return BOOLEAN_TRUE;
@@ -903,7 +958,7 @@ void pic_data_bank_list_remove_range(pfile_t *pf, size_t lo, size_t hi)
 
   assert(lo <= hi);
   sz = hi - lo + 1;
-  pic_blist_remove(pf, &pic_data_bank_list, lo, sz);
+  pic_blist_remove(pf, &pic_var.data_bank_list, lo, sz);
 }
 
 /* Silent cross-bank optimization */
@@ -1131,7 +1186,7 @@ static void pic_analyze_memory_fragmentation(pfile_t *pf)
   
   pfile_log(pf, PFILE_LOG_DEBUG, "Silent cross-bank optimization analysis:");
   
-  for (bank = pic_data_bank_list; bank; bank = bank->link) {
+  for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
     unsigned bank_free = bank->hi - bank->lo + 1;
     unsigned bank_used = bank_size - bank_free;
     
@@ -1209,7 +1264,7 @@ static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
 boolean_t pic_variable_alloc_one(pfile_t *pf, pfile_proc_t *proc,
     variable_t var)
 {
-  return pic_variable_base_set(pf, proc, &pic_data_bank_list, var);
+  return pic_variable_base_set(pf, proc, &pic_var.data_bank_list, var);
 }
 
 /* find all variables that the user has placed & make sure these
@@ -1218,7 +1273,7 @@ static void blist_total(void)
 {
   const pic_bank_info_t *binfo;
 
-  for (pic_blist_total = 0, binfo = pic_data_bank_list; 
+  for (pic_blist_total = 0, binfo = pic_var.data_bank_list; 
        binfo; 
        pic_blist_total += binfo->hi - binfo->lo + 1, binfo = binfo->link)
     ;
@@ -1237,7 +1292,7 @@ static void pic_variable_alloc_block(pfile_t *pf, pfile_proc_t *proc,
   unsigned       change_ct;
   unsigned       var_ct;
 
-  auto_mem_reg_init = auto_mem_reg;
+  auto_mem_reg_init = pic_var.auto_mem_reg;
 
 #if 0
   printf("allocating space for: %s\n",
@@ -1264,10 +1319,10 @@ static void pic_variable_alloc_block(pfile_t *pf, pfile_proc_t *proc,
       assert(sz);
       old_base = variable_base_get(vptr, 0);
       if ((old_base == VARIABLE_BASE_UNKNOWN)
-        || (old_base < auto_mem_reg)) {
+        || (old_base < pic_var.auto_mem_reg)) {
         change_ct++;
-        variable_base_set(vptr, auto_mem_reg, 0);
-        auto_mem_reg += sz;
+        variable_base_set(vptr, pic_var.auto_mem_reg, 0);
+        pic_var.auto_mem_reg += sz;
         if (old_base != VARIABLE_BASE_UNKNOWN) {
           pfile_log(pf, PFILE_LOG_DEBUG, 
               "Resetting...%s%u (was %u, now %u)",
@@ -1297,7 +1352,7 @@ static void pic_variable_alloc_block(pfile_t *pf, pfile_proc_t *proc,
   }
   if (pfile_flag_test(pf, PFILE_FLAG_OPT_VARIABLE_REUSE)) {
     /* Late _bitbucket (sz>=1, still UNKNOWN): main loop can skip it; do not run
-     * after pic_variable_alloc_proc returns — auto_mem_reg is restored per
+     * after pic_variable_alloc_proc returns — pic_var.auto_mem_reg is restored per
      * block and would reuse low virtual addresses (RAM overlap / bad gpsim). */
     for (vptr = pfile_block_variable_list_head(blk);
          vptr;
@@ -1320,10 +1375,10 @@ static void pic_variable_alloc_block(pfile_t *pf, pfile_proc_t *proc,
       if (VARIABLE_BASE_UNKNOWN != variable_base_get(vptr, 0)) {
         continue;
       }
-      variable_base_set(vptr, (variable_base_t) auto_mem_reg, 0);
-      auto_mem_reg += (unsigned) need;
+      variable_base_set(vptr, (variable_base_t) pic_var.auto_mem_reg, 0);
+      pic_var.auto_mem_reg += (unsigned) need;
     }
-    auto_mem_reg = auto_mem_reg_init;
+    pic_var.auto_mem_reg = auto_mem_reg_init;
   }
 }
 
@@ -1445,7 +1500,7 @@ static void pic_variable_alloc_indirect_proc(pfile_t *pf, pfile_proc_t *proc)
       label_name_get(pfile_proc_label_get(proc)));
 #endif
   if (pfile_proc_frame_sz_get(proc)) {
-    base = pic_data_alloc(pf, &pic_data_bank_list, 
+    base = pic_data_alloc(pf, &pic_var.data_bank_list, 
       pfile_proc_frame_sz_get(proc), 0);
     pic_block_data_alloc(pf, pfile_proc_block_root_get(proc), base);
     pfile_proc_frame_set(proc, base, pf);
@@ -1501,7 +1556,7 @@ static void pic_variable_alloc_isr(pfile_t *pf)
   }
 
   isr_block = (sz)
-    ? pic_data_alloc(pf, &pic_data_bank_list, sz, 0)
+    ? pic_data_alloc(pf, &pic_var.data_bank_list, sz, 0)
     : VARIABLE_BASE_UNKNOWN;
 
   for (proc = pfile_proc_root_get(pf);
@@ -1656,49 +1711,43 @@ static void pic_fixup_varalloc_log(pfile_t *pf, variable_t *vlist, size_t ii,
  * walk chunks), and a variable NO candidate layout can hold
  * (multibank/shared tails -- same trial-safety applies, the winning
  * layout is the one that must report it). */
-static boolean_t      pic_var_refused;
-static boolean_t      pic_var_refused_ptr;
-static boolean_t      pic_var_refused_call;
-static variable_t     pic_var_refused_var;
-static variable_sz_t  pic_var_refused_sz;
-static variable_sz_t  pic_var_refused_best;
 
 void pic_var_refusal_reset(void)
 {
-  pic_var_refused      = BOOLEAN_FALSE;
-  pic_var_refused_ptr  = BOOLEAN_FALSE;
-  pic_var_refused_call = BOOLEAN_FALSE;
-  pic_var_refused_var  = VARIABLE_NONE;
-  pic_var_refused_sz   = 0;
-  pic_var_refused_best = 0;
+  pic_var.refused      = BOOLEAN_FALSE;
+  pic_var.refused_ptr  = BOOLEAN_FALSE;
+  pic_var.refused_call = BOOLEAN_FALSE;
+  pic_var.refused_var  = VARIABLE_NONE;
+  pic_var.refused_sz   = 0;
+  pic_var.refused_best = 0;
 }
 
 boolean_t pic_var_refusal_get(variable_t *var, variable_sz_t *sz,
     variable_sz_t *best)
 {
   if (var) {
-    *var = pic_var_refused_var;
+    *var = pic_var.refused_var;
   }
   if (sz) {
-    *sz = pic_var_refused_sz;
+    *sz = pic_var.refused_sz;
   }
   if (best) {
-    *best = pic_var_refused_best;
+    *best = pic_var.refused_best;
   }
-  return pic_var_refused;
+  return pic_var.refused;
 }
 
 void pic_var_refusal_report(pfile_t *pf)
 {
-  if (pic_var_refused) {
+  if (pic_var.refused) {
     const char *name;
 
-    name = pic_var_refused_var
-      ? variable_name_get(pic_var_refused_var) : 0;
+    name = pic_var.refused_var
+      ? variable_name_get(pic_var.refused_var) : 0;
     if (!name) {
       name = "?";
     }
-    if (pic_var_refused_ptr) {
+    if (pic_var.refused_ptr) {
       pfile_log(pf, PFILE_LOG_ERR,
           "'%s' is bound to a pointer and needs %u contiguous bytes, but the "
           "largest contiguous run is %u. Pointer arithmetic addresses the "
@@ -1706,9 +1755,9 @@ void pic_var_refusal_report(pfile_t *pf)
           "walked. Keep the array within one bank, or use the large_array "
           "library for bank-spanning arrays.",
           name,
-          (unsigned) pic_var_refused_sz,
-          (unsigned) pic_var_refused_best);
-    } else if (pic_var_refused_call) {
+          (unsigned) pic_var.refused_sz,
+          (unsigned) pic_var.refused_best);
+    } else if (pic_var.refused_call) {
       pfile_log(pf, PFILE_LOG_ERR,
           "'%s' is passed to a procedure as an open-array actual and needs "
           "%u contiguous bytes, but the largest contiguous run is %u. The "
@@ -1717,22 +1766,22 @@ void pic_var_refusal_report(pfile_t *pf)
           "array within one bank, use the large_array library, or access it "
           "only through direct subscripts.",
           name,
-          (unsigned) pic_var_refused_sz,
-          (unsigned) pic_var_refused_best);
-    } else if (pic_var_refused_best > 0) {
+          (unsigned) pic_var.refused_sz,
+          (unsigned) pic_var.refused_best);
+    } else if (pic_var.refused_best > 0) {
       pfile_log(pf, PFILE_LOG_ERR,
           "Array of '%s' (%u bytes) exceeds total available memory space "
           "(largest contiguous run is %u bytes). Consider reducing array "
           "size or using external storage.",
           name,
-          (unsigned) pic_var_refused_sz,
-          (unsigned) pic_var_refused_best);
+          (unsigned) pic_var.refused_sz,
+          (unsigned) pic_var.refused_best);
     } else {
       pfile_log(pf, PFILE_LOG_ERR,
           "Array of '%s' (%u bytes) exceeds total available memory space. "
           "Consider reducing array size or using external storage.",
           name,
-          (unsigned) pic_var_refused_sz);
+          (unsigned) pic_var.refused_sz);
     }
   }
 }
@@ -1779,7 +1828,7 @@ static boolean_t pic_variable_group_place_shared(pfile_t *pf,
 {
   variable_base_t base;
 
-  base = pic_data_alloc(pf, &pic_shared_bank_list, sz_reqd,
+  base = pic_data_alloc(pf, &pic_var.shared_bank_list, sz_reqd,
       pointer_slots_reqd);
   if (VARIABLE_BASE_UNKNOWN == base) {
     return BOOLEAN_FALSE;
@@ -1821,7 +1870,7 @@ static variable_ct_t pic_node_chunk_segments_get(pfile_t *pf,
   if (pic_is_16bit(pf)) {
     reserved = 0;
   } else {
-    reserved = pic_shared_pragma_list;
+    reserved = pic_var.shared_pragma_list;
   }
   for (;;) {
     variable_base_t          s_hi;
@@ -1872,7 +1921,7 @@ static void pic_software_stack_calc(pfile_t *pf)
   const pic_bank_info_t *bank;
 
   UNUSED(pf);
-  for (bank = pic_data_bank_list; bank; bank = bank->link) {
+  for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
     size_t sz;
 
     sz = (bank->hi - bank->lo + 1);
@@ -1883,7 +1932,6 @@ static void pic_software_stack_calc(pfile_t *pf)
   }
 }
 
-static unsigned pic_dbg_round;
 
 /* element size (bytes) of an array member, for chunk-boundary
  * alignment checks; 1 when not an array / not derivable */
@@ -1945,13 +1993,13 @@ static boolean_t pic_var_group_member_chunk_maps(pfile_t *pf,
       for (cix = 0; (cix < chunk_ct) && (cov < msz); cix++) {
         if (cov && (cov % esz)) {
           /* element straddles this chunk boundary */
-          if (!pic_var_refused) {
-            pic_var_refused      = BOOLEAN_TRUE;
-            pic_var_refused_ptr  = pic_var_pointer_target_test(memb);
-            pic_var_refused_call = !pic_var_refused_ptr;
-            pic_var_refused_var  = memb;
-            pic_var_refused_sz   = msz;
-            pic_var_refused_best = 0;
+          if (!pic_var.refused) {
+            pic_var.refused      = BOOLEAN_TRUE;
+            pic_var.refused_ptr  = pic_var_pointer_target_test(memb);
+            pic_var.refused_call = !pic_var.refused_ptr;
+            pic_var.refused_var  = memb;
+            pic_var.refused_sz   = msz;
+            pic_var.refused_best = 0;
           }
           return BOOLEAN_FALSE;
         }
@@ -1960,13 +2008,13 @@ static boolean_t pic_var_group_member_chunk_maps(pfile_t *pf,
       if (cov < msz) {
         /* layout shorter than the member (cannot happen: the group
          * size is the largest member) -- refuse rather than corrupt */
-        if (!pic_var_refused) {
-          pic_var_refused      = BOOLEAN_TRUE;
-          pic_var_refused_ptr  = pic_var_pointer_target_test(memb);
-          pic_var_refused_call = !pic_var_refused_ptr;
-          pic_var_refused_var  = memb;
-          pic_var_refused_sz   = msz;
-          pic_var_refused_best = 0;
+        if (!pic_var.refused) {
+          pic_var.refused      = BOOLEAN_TRUE;
+          pic_var.refused_ptr  = pic_var_pointer_target_test(memb);
+          pic_var.refused_call = !pic_var.refused_ptr;
+          pic_var.refused_var  = memb;
+          pic_var.refused_sz   = msz;
+          pic_var.refused_best = 0;
         }
         return BOOLEAN_FALSE;
       }
@@ -1999,7 +2047,7 @@ static boolean_t pic_var_group_member_chunk_maps(pfile_t *pf,
 
         for (dbg_ci = 0; dbg_ci < pct; dbg_ci++) {
           fprintf(stderr, "jal CHUNKMAP r%u %s[%u] = 0x%04X..0x%04X\n",
-              (unsigned) pic_dbg_round, variable_name_get(memb), dbg_ci,
+              (unsigned) pic_var.dbg_round, variable_name_get(memb), dbg_ci,
               (unsigned) pbase[dbg_ci],
               (unsigned) (pbase[dbg_ci] + psz[dbg_ci] - 1));
         }
@@ -2021,7 +2069,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
 {
   size_t ii;
 
-  pic_dbg_round++;
+  pic_var.dbg_round++;
   pic_var_refusal_reset();
   /* finally, put the variables in their correct positions. find the
    * largest variable at each position, allocate that much space, then
@@ -2067,7 +2115,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
       size_t dbg_ix;
 
       fprintf(stderr, "jal GROUP r%u virt=0x%04X sz=%u members:",
-          (unsigned) pic_dbg_round, (unsigned) virt_base,
+          (unsigned) pic_var.dbg_round, (unsigned) virt_base,
           (unsigned) sz_reqd);
       for (dbg_ix = ii; dbg_ix < jj; dbg_ix++) {
         fprintf(stderr, " %s(%uB,arr=%d,bitarr=%d)",
@@ -2078,7 +2126,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
       }
       fprintf(stderr, "\n");
     }
-    base = pic_data_alloc(pf, &pic_data_bank_list, sz_reqd,
+    base = pic_data_alloc(pf, &pic_var.data_bank_list, sz_reqd,
         pointer_slots_reqd);
     if (VARIABLE_BASE_UNKNOWN == base) {
       unsigned bank_size = pic_target_bank_size_get(pf);
@@ -2126,7 +2174,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
         chunk_alloc = 0;
         chunk_base = 0;
         chunk_sz = 0;
-        for (current_bank = pic_data_bank_list; current_bank;
+        for (current_bank = pic_var.data_bank_list; current_bank;
             current_bank = current_bank->link) {
           chunk_alloc++;
         }
@@ -2210,7 +2258,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
                 }
               }
             }
-            for (current_bank = pic_data_bank_list; current_bank && remaining > 0; current_bank = current_bank->link) {
+            for (current_bank = pic_var.data_bank_list; current_bank && remaining > 0; current_bank = current_bank->link) {
               /* walk the node in NON-reserved segments: the shared /
                * access-window bytes inside the node are reserved for
                * access-window residents and must become holes for the
@@ -2292,14 +2340,14 @@ static void pic_variable_fixup_place(pfile_t *pf,
                   }
                 }
                 if (holed) {
-                  if (!pic_var_refused) {
-                    pic_var_refused      = BOOLEAN_TRUE;
-                    pic_var_refused_ptr  = pic_var_pointer_target_test(
+                  if (!pic_var.refused) {
+                    pic_var.refused      = BOOLEAN_TRUE;
+                    pic_var.refused_ptr  = pic_var_pointer_target_test(
                                               data[ii]);
-                    pic_var_refused_call = !pic_var_refused_ptr;
-                    pic_var_refused_var  = data[ii];
-                    pic_var_refused_sz   = sz_reqd;
-                    pic_var_refused_best = best_run;
+                    pic_var.refused_call = !pic_var.refused_ptr;
+                    pic_var.refused_var  = data[ii];
+                    pic_var.refused_sz   = sz_reqd;
+                    pic_var.refused_best = best_run;
                   }
                   FREE(chunk_base);
                   FREE(chunk_sz);
@@ -2311,7 +2359,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
           }
         }
 
-        if (pic_var_refused && (VARIABLE_BASE_UNKNOWN == base)) {
+        if (pic_var.refused && (VARIABLE_BASE_UNKNOWN == base)) {
           /* refused above; stop placing (the driver reports it) */
           break;
         } else if (remaining == 0
@@ -2325,7 +2373,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
             variable_ct_t ci;
 
             for (ci = 0; ci < chunk_ct; ci++) {
-              pic_blist_remove(pf, &pic_data_bank_list, chunk_base[ci],
+              pic_blist_remove(pf, &pic_var.data_bank_list, chunk_base[ci],
                 chunk_sz[ci]);
             }
           }
@@ -2341,7 +2389,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
             for (dbg_ci = 0; dbg_ci < chunk_ct; dbg_ci++) {
               fprintf(stderr,
                 "jal CHUNKMAP r%u %s[%u] = 0x%04X..0x%04X\n",
-                (unsigned) pic_dbg_round, variable_name_get(data[ii]), dbg_ci,
+                (unsigned) pic_var.dbg_round, variable_name_get(data[ii]), dbg_ci,
                 (unsigned) chunk_base[dbg_ci],
                 (unsigned) (chunk_base[dbg_ci] + chunk_sz[dbg_ci] - 1));
             }
@@ -2363,12 +2411,12 @@ static void pic_variable_fixup_place(pfile_t *pf,
           /* TRIAL-SAFE no-room refusal: a losing layout candidate must
            * not poison errct with a hard error -- the driver reports the
            * refusal when the FINAL install fails the same way. */
-          if (!pic_var_refused) {
-            pic_var_refused      = BOOLEAN_TRUE;
-            pic_var_refused_ptr  = BOOLEAN_FALSE;
-            pic_var_refused_var  = data[ii];
-            pic_var_refused_sz   = sz_reqd;
-            pic_var_refused_best = best_run;
+          if (!pic_var.refused) {
+            pic_var.refused      = BOOLEAN_TRUE;
+            pic_var.refused_ptr  = BOOLEAN_FALSE;
+            pic_var.refused_var  = data[ii];
+            pic_var.refused_sz   = sz_reqd;
+            pic_var.refused_best = best_run;
           }
           FREE(chunk_base);
           FREE(chunk_sz);
@@ -2380,12 +2428,12 @@ static void pic_variable_fixup_place(pfile_t *pf,
               pointer_slots_reqd, rm_reqd, virt_base)) {
           /* TRIAL-SAFE no-room refusal, as above (no contiguous-run
            * figure here: the first-fit search does not compute one) */
-          if (!pic_var_refused) {
-            pic_var_refused      = BOOLEAN_TRUE;
-            pic_var_refused_ptr  = BOOLEAN_FALSE;
-            pic_var_refused_var  = data[ii];
-            pic_var_refused_sz   = sz_reqd;
-            pic_var_refused_best = 0;
+          if (!pic_var.refused) {
+            pic_var.refused      = BOOLEAN_TRUE;
+            pic_var.refused_ptr  = BOOLEAN_FALSE;
+            pic_var.refused_var  = data[ii];
+            pic_var.refused_sz   = sz_reqd;
+            pic_var.refused_best = 0;
           }
           break;
         }
@@ -2426,7 +2474,6 @@ struct pic_var_layout_snap_ {
                                       * user's `var shared` (never cleared) */
   size_t                  shct;
 };
-static struct pic_var_layout_snap_ *pic_var_snap;
 
 static void pic_accesswin_list_free(pic_bank_info_t *list)
 {
@@ -2467,14 +2514,14 @@ static pic_bank_info_t *pic_accesswin_list_clone(const pic_bank_info_t *l)
  * candidate array/virt/shflags arrays are owned by the snapshot */
 void pic_var_trials_free(void)
 {
-  if (pic_var_snap) {
-    pic_accesswin_list_free(pic_var_snap->data_list);
-    pic_accesswin_list_free(pic_var_snap->shared_list);
-    FREE(pic_var_snap->virt);
-    FREE(pic_var_snap->data);
-    FREE(pic_var_snap->shflags);
-    FREE(pic_var_snap);
-    pic_var_snap = 0;
+  if (pic_var.snap) {
+    pic_accesswin_list_free(pic_var.snap->data_list);
+    pic_accesswin_list_free(pic_var.snap->shared_list);
+    FREE(pic_var.snap->virt);
+    FREE(pic_var.snap->data);
+    FREE(pic_var.snap->shflags);
+    FREE(pic_var.snap);
+    pic_var.snap = 0;
   }
 }
 
@@ -2502,8 +2549,8 @@ static void pic_var_shared_flags_refresh(pfile_t *pf)
           boolean_t keep;
 
           keep = BOOLEAN_FALSE;
-          for (ii = 0; ii < pic_var_snap->shct; ii++) {
-            if (pic_var_snap->shflags[ii] == var) {
+          for (ii = 0; ii < pic_var.snap->shct; ii++) {
+            if (pic_var.snap->shflags[ii] == var) {
               keep = BOOLEAN_TRUE;
               break;
             }
@@ -2598,8 +2645,8 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
   if (pic_is_14bit_hybrid(pf)) {
     const pic_bank_info_t *shared;
 
-    for (shared = pic_shared_pragma_list; shared; shared = shared->link) {
-      for (bank = pic_data_bank_list; bank; bank = bank->link) {
+    for (shared = pic_var.shared_pragma_list; shared; shared = shared->link) {
+      for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
         size_t lo;
         size_t hi;
 
@@ -2611,7 +2658,7 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
       }
     }
   } else {
-    for (bank = pic_data_bank_list; bank; bank = bank->link) {
+    for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
       size_t lo;
       size_t hi;
 
@@ -2677,25 +2724,25 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
       gct++;
       ii = jj;
     }
-    for (e = 0; e < pic_banked_edges_used; e++) {
+    for (e = 0; e < pic_var.banked_edges_used; e++) {
       size_t ga;
       size_t gb;
 
-      ga = pic_accesswin_grp_of(pic_banked_edges[e].a, data, grp_ix, used);
-      gb = pic_accesswin_grp_of(pic_banked_edges[e].b, data, grp_ix, used);
+      ga = pic_accesswin_grp_of(pic_var.banked_edges[e].a, data, grp_ix, used);
+      gb = pic_accesswin_grp_of(pic_var.banked_edges[e].b, data, grp_ix, used);
       if ((size_t) -1 == ga && (size_t) -1 == gb) {
         continue;
       }
       if (ga == gb) {
         if ((size_t) -1 != ga) {
-          grp[ga].incident += pic_banked_edges[e].ct;
+          grp[ga].incident += pic_var.banked_edges[e].ct;
         }
       } else {
         if ((size_t) -1 != ga) {
-          grp[ga].incident += pic_banked_edges[e].ct;
+          grp[ga].incident += pic_var.banked_edges[e].ct;
         }
         if ((size_t) -1 != gb) {
-          grp[gb].incident += pic_banked_edges[e].ct;
+          grp[gb].incident += pic_var.banked_edges[e].ct;
         }
       }
     }
@@ -2711,7 +2758,7 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
         size_t k;
 
         /* the general free list must not hand the same bytes out */
-        pic_blist_remove(pf, &pic_data_bank_list, base, grp[g].rm);
+        pic_blist_remove(pf, &pic_var.data_bank_list, base, grp[g].rm);
         pic_fixup_varalloc_log(pf, data, grp[g].start, grp[g].sz,
             grp[g].slots, grp[g].rm, grp[g].virt, base, "accesswin");
         for (k = grp[g].start; k < grp[g].start + grp[g].ct; k++) {
@@ -2738,7 +2785,7 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
 boolean_t pic_var_trials_available(pfile_t *pf)
 {
   UNUSED(pf);
-  return pic_var_snap && (0U != pic_banked_edges_used)
+  return pic_var.snap && (0U != pic_var.banked_edges_used)
       ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
@@ -2748,30 +2795,30 @@ void pic_var_trial_install(pfile_t *pf, int window)
   size_t             n2;
   size_t             kk;
 
-  if (!pic_var_snap) {
+  if (!pic_var.snap) {
     return;
   }
   /* restore the pre-placement state */
-  pic_accesswin_list_free(pic_data_bank_list);
-  pic_data_bank_list = pic_accesswin_list_clone(pic_var_snap->data_list);
-  pic_accesswin_list_free(pic_shared_bank_list);
-  pic_shared_bank_list = pic_accesswin_list_clone(pic_var_snap->shared_list);
-  if (!pic_data_bank_list || !pic_shared_bank_list) {
+  pic_accesswin_list_free(pic_var.data_bank_list);
+  pic_var.data_bank_list = pic_accesswin_list_clone(pic_var.snap->data_list);
+  pic_accesswin_list_free(pic_var.shared_bank_list);
+  pic_var.shared_bank_list = pic_accesswin_list_clone(pic_var.snap->shared_list);
+  if (!pic_var.data_bank_list || !pic_var.shared_bank_list) {
     pfile_log_syserr(pf, ENOMEM);
     return;
   }
-  for (kk = 0; kk < pic_var_snap->used; kk++) {
-    variable_base_set(pic_var_snap->data[kk], pic_var_snap->virt[kk], 0);
+  for (kk = 0; kk < pic_var.snap->used; kk++) {
+    variable_base_set(pic_var.snap->data[kk], pic_var.snap->virt[kk], 0);
   }
-  pic_blist_max = pic_var_snap->max;
+  pic_blist_max = pic_var.snap->max;
   /* build the requested layout on a private copy of the candidates */
-  data2 = MALLOC(pic_var_snap->used * sizeof(*data2));
+  data2 = MALLOC(pic_var.snap->used * sizeof(*data2));
   if (!data2) {
     pfile_log_syserr(pf, ENOMEM);
     return;
   }
-  memcpy(data2, pic_var_snap->data, pic_var_snap->used * sizeof(*data2));
-  n2 = pic_var_snap->used;
+  memcpy(data2, pic_var.snap->data, pic_var.snap->used * sizeof(*data2));
+  n2 = pic_var.snap->used;
   if (window) {
     pic_variable_access_window_prepass(pf, data2, &n2);
   }
@@ -2840,7 +2887,7 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
   /* PIC18 / 14H: capture the pre-placement state so trial layouts can
    * be built later by re-running the placement from here */
   if ((pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
-      && (0U != vinfo.used) && pic_banked_edges_used) {
+      && (0U != vinfo.used) && pic_var.banked_edges_used) {
     struct pic_var_layout_snap_ *snap;
     pfile_proc_t                 *sproc;
     size_t                        kk;
@@ -2849,8 +2896,8 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
     pic_var_trials_free();
     snap = MALLOC(sizeof(*snap));
     if (snap) {
-      snap->data_list   = pic_accesswin_list_clone(pic_data_bank_list);
-      snap->shared_list = pic_accesswin_list_clone(pic_shared_bank_list);
+      snap->data_list   = pic_accesswin_list_clone(pic_var.data_bank_list);
+      snap->shared_list = pic_accesswin_list_clone(pic_var.shared_bank_list);
       snap->virt        = MALLOC(vinfo.used * sizeof(*snap->virt));
       snap->data        = vinfo.data;
       snap->used        = vinfo.used;
@@ -2905,7 +2952,7 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
         for (kk = 0; kk < snap->used; kk++) {
           snap->virt[kk] = variable_base_get(snap->data[kk], 0);
         }
-        pic_var_snap = snap;
+        pic_var.snap = snap;
       } else {
         pic_accesswin_list_free(snap->data_list);
         pic_accesswin_list_free(snap->shared_list);
@@ -2917,8 +2964,8 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
   }
   if (!vinfo.data) {
     /* candidates owned by the snapshot: place from the snapshot copy */
-    if (pic_var_snap) {
-      pic_variable_fixup_place(pf, pic_var_snap->data, pic_var_snap->used);
+    if (pic_var.snap) {
+      pic_variable_fixup_place(pf, pic_var.snap->data, pic_var.snap->used);
       pic_var_refusal_report(pf);
     }
     return;
@@ -2959,7 +3006,7 @@ static void pic_variable_alloc_no_reuse(pfile_t *pf)
             continue;
           }
           var_size = pic_variable_storage_need_get(pf, vptr, &pointer_slots);
-          base = pic_data_alloc(pf, &pic_data_bank_list, 
+          base = pic_data_alloc(pf, &pic_var.data_bank_list, 
             var_size, pointer_slots);
           if (VARIABLE_BASE_UNKNOWN == base) {
             unsigned bank_size = pic_target_bank_size_get(pf);
@@ -3018,7 +3065,7 @@ static void pic_variable_shared_set(pfile_t *pf)
             variable_sz_t    need;
 
             need = pic_variable_storage_need_get(pf, vptr, 0);
-            for (bank = pic_shared_pragma_list;
+            for (bank = pic_var.shared_pragma_list;
                  bank && !((bank->lo <= base) && (base <= bank->hi));
                  bank = bank->link)
               ;
@@ -3064,11 +3111,10 @@ static void pic_variable_shared_set(pfile_t *pf)
  * chunk-walk temps -- chunk maps only exist after pass-1 placement, so
  * their temps are requested in later passes) must allocate themselves
  * immediately or they can never get an address (2026-10-26 band 2). */
-static boolean_t pic_var_placement_done;
 
 boolean_t pic_var_placement_done_get(void)
 {
-  return pic_var_placement_done;
+  return pic_var.placement_done;
 }
 
 /* late allocation for emit-time scratch: give the previous extent back
@@ -3087,7 +3133,7 @@ boolean_t pic_variable_late_alloc(pfile_t *pf, variable_t var)
   sz = pic_variable_storage_need_get(pf, var, &pointer_slots);
   base = variable_base_get(var, 0);
   if (VARIABLE_BASE_UNKNOWN != base) {
-    pic_blist_add(pf, &pic_data_bank_list, base, base + sz - 1);
+    pic_blist_add(pf, &pic_var.data_bank_list, base, base + sz - 1);
     pic_blist_max -= sz;
     variable_base_set(var, VARIABLE_BASE_UNKNOWN, 0);
   }
@@ -3184,7 +3230,7 @@ void pic_variable_alloc(pfile_t *pf)
                   }
                 }
               }
-              pic_blist_remove(pf, &pic_data_bank_list, base,
+              pic_blist_remove(pf, &pic_var.data_bank_list, base,
                 need + pic_pointer_slot_padding_get(pf, pointer_slots));
             }
           }
@@ -3274,7 +3320,7 @@ void pic_variable_alloc(pfile_t *pf)
   pic_variable_alloc_volatile(pf);
   pic_variable_alloc_isr(pf);
   pic_variable_alloc_indirect(pf);
-  pic_var_placement_done = BOOLEAN_TRUE;
+  pic_var.placement_done = BOOLEAN_TRUE;
   /* finally, allocate some variables! */
 #if 0
   {
@@ -3309,7 +3355,7 @@ void pic_variable_alloc(pfile_t *pf)
         if (VARIABLE_BASE_UNKNOWN == variable_base_get(var, 0)) {
           variable_base_t base;
 
-          base = pic_data_alloc(pf, &pic_data_bank_list, variable_sz_get(var));
+          base = pic_data_alloc(pf, &pic_var.data_bank_list, variable_sz_get(var));
           if (VARIABLE_BASE_UNKNOWN == base) {
 #if 0
             pfile_log(pf, PFILE_LOG_ERR, "out of data space: %s",
@@ -3333,7 +3379,7 @@ void pic_variable_alloc(pfile_t *pf)
         var  = *variable_array_entry_get(allocated_vars, ix);
         base = variable_base_get(var, 0);
 
-        pic_blist_add(pf, &pic_data_bank_list, base,
+        pic_blist_add(pf, &pic_var.data_bank_list, base,
           base + variable_sz_get(var) - 1);
         variable_array_entry_remove(allocated_vars, ix);
       }
@@ -3362,7 +3408,7 @@ unsigned pic_data_bank_free_bytes_get(void)
   const pic_bank_info_t *bank;
   unsigned               free_bytes;
 
-  for (bank = pic_data_bank_list, free_bytes = 0; bank; bank = bank->link) {
+  for (bank = pic_var.data_bank_list, free_bytes = 0; bank; bank = bank->link) {
     free_bytes += (unsigned) (bank->hi - bank->lo + 1);
   }
   return free_bytes;
@@ -3392,26 +3438,26 @@ void pic_blist_free(pfile_t *pf)
 {
   UNUSED(pf);
 
-  while (pic_data_bank_list) {
+  while (pic_var.data_bank_list) {
     pic_bank_info_t *bank;
 
-    bank = pic_data_bank_list->link;
-    FREE(pic_data_bank_list);
-    pic_data_bank_list = bank;
+    bank = pic_var.data_bank_list->link;
+    FREE(pic_var.data_bank_list);
+    pic_var.data_bank_list = bank;
   }
-  while (pic_shared_bank_list) {
+  while (pic_var.shared_bank_list) {
     pic_bank_info_t *bank;
 
-    bank = pic_shared_bank_list->link;
-    FREE(pic_shared_bank_list);
-    pic_shared_bank_list = bank;
+    bank = pic_var.shared_bank_list->link;
+    FREE(pic_var.shared_bank_list);
+    pic_var.shared_bank_list = bank;
   }
-  while (pic_shared_pragma_list) {
+  while (pic_var.shared_pragma_list) {
     pic_bank_info_t *bank;
 
-    bank = pic_shared_pragma_list->link;
-    FREE(pic_shared_pragma_list);
-    pic_shared_pragma_list = bank;
+    bank = pic_var.shared_pragma_list->link;
+    FREE(pic_var.shared_pragma_list);
+    pic_var.shared_pragma_list = bank;
   }
 }
 
@@ -3419,6 +3465,6 @@ pic_bank_info_t *pic_bank_info_get(pfile_t *pf)
 {
   UNUSED(pf);
 
-  return pic_data_bank_list;
+  return pic_var.data_bank_list;
 }
 

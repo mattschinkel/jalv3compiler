@@ -29,6 +29,11 @@ void pic_blist_free(pfile_t *pf);
 void pic_blist_info_log(pfile_t *pf);
 pic_bank_info_t *pic_bank_info_get(pfile_t *pf);
 
+/* A4: zero this module's file-scope state so a second compile in the
+ * same process starts clean. Call while the module is idle (after the
+ * pfile teardown). */
+void pic_var_reset(void);
+
 #endif /* pic_var_h__ */
 
 
