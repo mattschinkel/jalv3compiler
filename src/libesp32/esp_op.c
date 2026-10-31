@@ -43,7 +43,85 @@
 #include "../libcore/indirect_alg.h"
 
 /* a branch already consumed by a fused compare+branch pair */
-static cmd_t esp_skip_cmd;
+
+/* esp_helper_t is defined up here, next to the state that owns an
+ * array of them (it used to sit 400 lines below). */
+typedef struct {
+  const char *name;      /* label                                    */
+  boolean_t   used;
+  boolean_t   signed_op; /* magnitude prep + result sign fixup       */
+  boolean_t   remainder; /* result = remainder (a4), not quotient    */
+} esp_helper_t;
+
+/*
+ * All mutable file-scope state, in ONE object (Tier-A A4; see
+ * fix_esp_op_state_reset.md).
+ *
+ * Nearly all of it is the three growable pending tables -- branch fixups,
+ * unconditional-goto literals and call literals -- which accumulate for a
+ * whole resolve pass. The helper table is state too (its flags are filled
+ * in as the helpers are synthesised); it is the FIRST member so the static
+ * initializer below only has to name it and every other member zero-fills.
+ *
+ * NOT here: `const walg_ops_t esp_walg_ops` -- a constant operations
+ * table, not state.
+ */
+typedef struct {
+  esp_code_t node;
+  label_t    lbl;
+} esp_fixup_t;
+
+typedef struct {
+  esp_code_t lit;
+  label_t    lbl;
+} esp_pend_t;
+
+#define ESP_OP_HELPERS_INIT                                          \
+  { {"__esp32_udiv", BOOLEAN_FALSE, BOOLEAN_FALSE, BOOLEAN_FALSE},   \
+    {"__esp32_umod", BOOLEAN_FALSE, BOOLEAN_FALSE, BOOLEAN_TRUE},    \
+    {"__esp32_sdiv", BOOLEAN_FALSE, BOOLEAN_TRUE,  BOOLEAN_FALSE},   \
+    {"__esp32_smod", BOOLEAN_FALSE, BOOLEAN_TRUE,  BOOLEAN_TRUE} }
+
+typedef struct esp_op_state_ {
+  esp_helper_t  helpers[4];
+  cmd_t         skip_cmd;
+  esp_fixup_t  *fixups;
+  unsigned      fixup_ct;
+  unsigned      fixup_cap;
+  esp_pend_t   *goto_pend;
+  unsigned      goto_pend_ct;
+  unsigned      goto_pend_cap;
+  esp_pend_t   *call_pend;
+  unsigned      call_pend_ct;
+  unsigned      call_pend_cap;
+} esp_op_state_t;
+
+static esp_op_state_t esp_op = {
+  ESP_OP_HELPERS_INIT,      /* helpers      */
+  0,                        /* skip_cmd     */
+  0, 0, 0,                  /* fixups       */
+  0, 0, 0,                  /* goto pend    */
+  0, 0, 0                   /* call pend    */
+};
+
+/*
+ * TEARDOWN reset -- distinct from esp_op_reset() below, which is the
+ * LOGICAL per-compile reset (counters to 0, used flags cleared). This one
+ * additionally frees the three pending tables and restores the helper
+ * table, so a second compile in the same process starts clean AND
+ * leak-free (A4). The tables were never freed by anything; they lived
+ * until process exit.
+ */
+void esp_op_state_reset(void)
+{
+  static const esp_helper_t helpers_init[4] = ESP_OP_HELPERS_INIT;
+
+  free(esp_op.fixups);
+  free(esp_op.goto_pend);
+  free(esp_op.call_pend);
+  memset(&esp_op, 0, sizeof(esp_op));
+  memcpy(esp_op.helpers, helpers_init, sizeof(esp_op.helpers));
+}
 
 static void esp_load_value(pfile_t *pf, value_t val, unsigned reg);
 static void esp_store_value(pfile_t *pf, value_t dst, unsigned reg);
@@ -65,63 +143,51 @@ static void esp_emit_call_proc(pfile_t *pf, const cmd_t cmd);
 /* forward-label fixups: branch nodes waiting for their label's code.
  * Growable: entries accumulate for a whole resolve pass, so a fixed cap
  * silently dropped them on branch-heavy programs. */
-static struct {
-  esp_code_t node;
-  label_t    lbl;
-} *esp_fixups;
-static unsigned esp_fixup_ct;
-static unsigned esp_fixup_cap;
 
 static boolean_t esp_fixups_grow(void)
 {
   unsigned ncap;
   void    *nd;
 
-  ncap = esp_fixup_cap ? (esp_fixup_cap * 2U) : 256U;
-  nd = REALLOC(esp_fixups, ncap * sizeof(*esp_fixups));
+  ncap = esp_op.fixup_cap ? (esp_op.fixup_cap * 2U) : 256U;
+  nd = REALLOC(esp_op.fixups, ncap * sizeof(*esp_op.fixups));
   if (!nd) {
     return BOOLEAN_FALSE;
   }
-  esp_fixups = nd;
-  esp_fixup_cap = ncap;
+  esp_op.fixups = nd;
+  esp_op.fixup_cap = ncap;
   return BOOLEAN_TRUE;
 }
 
 void esp_add_fixup(pfile_t *pf, esp_code_t node, label_t lbl)
 {
-  if ((esp_fixup_ct == esp_fixup_cap) && !esp_fixups_grow()) {
+  if ((esp_op.fixup_ct == esp_op.fixup_cap) && !esp_fixups_grow()) {
     pfile_log(pf, PFILE_LOG_ERR,
         "ESP32 out of memory growing the branch fixup table");
     return;
   }
-  esp_fixups[esp_fixup_ct].node = node;
-  esp_fixups[esp_fixup_ct].lbl  = lbl;   /* pfile-owned for the run */
-  esp_fixup_ct++;
+  esp_op.fixups[esp_op.fixup_ct].node = node;
+  esp_op.fixups[esp_op.fixup_ct].lbl  = lbl;   /* pfile-owned for the run */
+  esp_op.fixup_ct++;
 }
 
 /* unconditional-goto literals: (pool LIT, label) pairs bound after the
  * labels exist (J's near form needs 4-aligned targets, which 3-byte
  * instruction streams rarely give; l32r + jx always works).  Growable
  * for the same reason as the fixup table. */
-static struct {
-  esp_code_t lit;
-  label_t    lbl;
-} *esp_goto_pend;
-static unsigned esp_goto_pend_ct;
-static unsigned esp_goto_pend_cap;
 
 static boolean_t esp_goto_pend_grow(void)
 {
   unsigned ncap;
   void    *nd;
 
-  ncap = esp_goto_pend_cap ? (esp_goto_pend_cap * 2U) : 128U;
-  nd = REALLOC(esp_goto_pend, ncap * sizeof(*esp_goto_pend));
+  ncap = esp_op.goto_pend_cap ? (esp_op.goto_pend_cap * 2U) : 128U;
+  nd = REALLOC(esp_op.goto_pend, ncap * sizeof(*esp_op.goto_pend));
   if (!nd) {
     return BOOLEAN_FALSE;
   }
-  esp_goto_pend = nd;
-  esp_goto_pend_cap = ncap;
+  esp_op.goto_pend = nd;
+  esp_op.goto_pend_cap = ncap;
   return BOOLEAN_TRUE;
 }
 
@@ -131,14 +197,14 @@ static void esp_goto_pend_add(pfile_t *pf, label_t lbl, esp_code_t lit)
   if (!lit || !lbl) {
     return;
   }
-  if ((esp_goto_pend_ct == esp_goto_pend_cap) && !esp_goto_pend_grow()) {
+  if ((esp_op.goto_pend_ct == esp_op.goto_pend_cap) && !esp_goto_pend_grow()) {
     pfile_log(pf, PFILE_LOG_ERR,
         "ESP32 out of memory growing the goto literal table");
     return;
   }
-  esp_goto_pend[esp_goto_pend_ct].lit = lit;
-  esp_goto_pend[esp_goto_pend_ct].lbl = lbl;
-  esp_goto_pend_ct++;
+  esp_op.goto_pend[esp_op.goto_pend_ct].lit = lit;
+  esp_op.goto_pend[esp_op.goto_pend_ct].lbl = lbl;
+  esp_op.goto_pend_ct++;
 }
 
 /* bind a branch to a label now (backward) or via fixup (forward) */
@@ -181,30 +247,30 @@ void esp_op_resolve_fixups(pfile_t *pf)
 {
   unsigned ii;
 
-  for (ii = 0; ii < esp_fixup_ct; ii++) {
-    esp_code_t tgt = (esp_code_t) label_code_get(esp_fixups[ii].lbl);
+  for (ii = 0; ii < esp_op.fixup_ct; ii++) {
+    esp_code_t tgt = (esp_code_t) label_code_get(esp_op.fixups[ii].lbl);
 
     if (tgt) {
-      esp_fixups[ii].node->target = tgt;
+      esp_op.fixups[ii].node->target = tgt;
     } else {
       pfile_log(pf, PFILE_LOG_ERR,
           "ESP32 branch to undefined label %s",
-          label_name_get(esp_fixups[ii].lbl));
+          label_name_get(esp_op.fixups[ii].lbl));
     }
   }
-  esp_fixup_ct = 0;
-  for (ii = 0; ii < esp_goto_pend_ct; ii++) {
-    esp_code_t tgt = (esp_code_t) label_code_get(esp_goto_pend[ii].lbl);
+  esp_op.fixup_ct = 0;
+  for (ii = 0; ii < esp_op.goto_pend_ct; ii++) {
+    esp_code_t tgt = (esp_code_t) label_code_get(esp_op.goto_pend[ii].lbl);
 
     if (tgt) {
-      esp_goto_pend[ii].lit->target = tgt;
+      esp_op.goto_pend[ii].lit->target = tgt;
     } else {
       pfile_log(pf, PFILE_LOG_ERR,
           "ESP32 goto to undefined label %s",
-          label_name_get(esp_goto_pend[ii].lbl));
+          label_name_get(esp_op.goto_pend[ii].lbl));
     }
   }
-  esp_goto_pend_ct = 0;
+  esp_op.goto_pend_ct = 0;
 }
 
 static void esp_load_const(pfile_t *pf, unsigned reg, long value)
@@ -457,19 +523,7 @@ static void esp_store_value(pfile_t *pf, value_t dst, unsigned reg)
 
 /* ---------------- divide / mod helpers (outlined) ---------------- */
 
-typedef struct {
-  const char *name;      /* label                                    */
-  boolean_t   used;
-  boolean_t   signed_op; /* magnitude prep + result sign fixup       */
-  boolean_t   remainder; /* result = remainder (a4), not quotient    */
-} esp_helper_t;
 
-static esp_helper_t esp_helpers[4] = {
-  {"__esp32_udiv", BOOLEAN_FALSE, BOOLEAN_FALSE, BOOLEAN_FALSE},
-  {"__esp32_umod", BOOLEAN_FALSE, BOOLEAN_FALSE, BOOLEAN_TRUE},
-  {"__esp32_sdiv", BOOLEAN_FALSE, BOOLEAN_TRUE,  BOOLEAN_FALSE},
-  {"__esp32_smod", BOOLEAN_FALSE, BOOLEAN_TRUE,  BOOLEAN_TRUE}
-};
 
 /* the helper's label (created on first use; helpers_create binds it to
  * a code node placed after all main code). Ownership: the caller receives
@@ -477,10 +531,10 @@ static esp_helper_t esp_helpers[4] = {
  * label list keeps the label itself alive (mips_opfn.c convention). */
 static label_t esp_helper_lbl_ensure(pfile_t *pf, unsigned idx)
 {
-  label_t lbl = pfile_label_find(pf, PFILE_LOG_NONE, esp_helpers[idx].name);
+  label_t lbl = pfile_label_find(pf, PFILE_LOG_NONE, esp_op.helpers[idx].name);
 
   if (!lbl) {
-    lbl = pfile_label_alloc(pf, esp_helpers[idx].name);
+    lbl = pfile_label_alloc(pf, esp_op.helpers[idx].name);
   }
   return lbl;
 }
@@ -493,25 +547,19 @@ static label_t esp_helper_lbl_ensure(pfile_t *pf, unsigned idx)
  * so the table grows on demand -- a fixed 64-slot cap once silently
  * dropped entries and the L32R then failed with "without literal", far
  * from the cause. */
-static struct {
-  esp_code_t lit;
-  label_t    lbl;
-} *esp_call_pend;
-static unsigned esp_call_pend_ct;
-static unsigned esp_call_pend_cap;
 
 static boolean_t esp_call_pend_grow(void)
 {
   unsigned ncap;
   void    *nd;
 
-  ncap = esp_call_pend_cap ? (esp_call_pend_cap * 2U) : 64U;
-  nd = REALLOC(esp_call_pend, ncap * sizeof(*esp_call_pend));
+  ncap = esp_op.call_pend_cap ? (esp_op.call_pend_cap * 2U) : 64U;
+  nd = REALLOC(esp_op.call_pend, ncap * sizeof(*esp_op.call_pend));
   if (!nd) {
     return BOOLEAN_FALSE;
   }
-  esp_call_pend = nd;
-  esp_call_pend_cap = ncap;
+  esp_op.call_pend = nd;
+  esp_op.call_pend_cap = ncap;
   return BOOLEAN_TRUE;
 }
 
@@ -522,14 +570,14 @@ void esp_pend_label_lit(pfile_t *pf, label_t lbl, esp_code_t lit)
   if (!lit || !lbl) {
     return;
   }
-  if ((esp_call_pend_ct == esp_call_pend_cap) && !esp_call_pend_grow()) {
+  if ((esp_op.call_pend_ct == esp_op.call_pend_cap) && !esp_call_pend_grow()) {
     pfile_log(pf, PFILE_LOG_ERR,
         "ESP32 out of memory growing the helper-call literal table");
     return;
   }
-  esp_call_pend[esp_call_pend_ct].lit = lit;
-  esp_call_pend[esp_call_pend_ct].lbl = lbl;
-  esp_call_pend_ct++;
+  esp_op.call_pend[esp_op.call_pend_ct].lit = lit;
+  esp_op.call_pend[esp_op.call_pend_ct].lbl = lbl;
+  esp_op.call_pend_ct++;
 }
 
 /* emit one l32r whose literal is pended for lbl's code node; the
@@ -560,7 +608,7 @@ static void esp_emit_call(pfile_t *pf, unsigned idx)
 
 /* call / jump a late-created helper by label name (task intrinsics):
  * the body is emitted after the main code, so the literal is pended in
- * esp_call_pend and bound when the helper's label node appears */
+ * esp_op.call_pend and bound when the helper's label node appears */
 void esp_emit_helper_call(pfile_t *pf, const char *name)
 {
   label_t lbl = esp_task_helper_label(pf, name);
@@ -588,10 +636,10 @@ void esp_op_helper_bind(label_t lbl, esp_code_t node)
 {
   unsigned pp;
 
-  for (pp = 0; pp < esp_call_pend_ct; pp++) {
-    if ((esp_call_pend[pp].lbl == lbl)
-        && !esp_call_pend[pp].lit->target) {
-      esp_call_pend[pp].lit->target = node;
+  for (pp = 0; pp < esp_op.call_pend_ct; pp++) {
+    if ((esp_op.call_pend[pp].lbl == lbl)
+        && !esp_op.call_pend[pp].lit->target) {
+      esp_op.call_pend[pp].lit->target = node;
     }
   }
 }
@@ -633,7 +681,7 @@ static void esp_emit_helper_body(unsigned idx)
   esp_code_t br;
   esp_code_t lbl;
 
-  if (esp_helpers[idx].signed_op) {
+  if (esp_op.helpers[idx].signed_op) {
     /* magnitudes first; a8 = num negative, a9 = den negative, a7 = 0.
      * The flags must live in a8/a9: the udiv core clobbers a5 (shift
      * scratch) and a6 (bit counter), and the post-core sign fix-ups
@@ -653,7 +701,7 @@ static void esp_emit_helper_body(unsigned idx)
     lbl = esp_code_label_alloc();
     if (br) { br->target = lbl; }
     esp_emit_udiv_core();
-    if (esp_helpers[idx].remainder) {
+    if (esp_op.helpers[idx].remainder) {
       /* remainder takes the dividend's sign (a8) */
       br = esp_code_alloc(ESP_OP_BEQZ, 0, ESP_REG_A8, 0);
       (void) esp_code_alloc(ESP_OP_NEG, ESP_REG_A4, ESP_REG_A4, 0);
@@ -670,7 +718,7 @@ static void esp_emit_helper_body(unsigned idx)
     }
   } else {
     esp_emit_udiv_core();
-    if (esp_helpers[idx].remainder) {
+    if (esp_op.helpers[idx].remainder) {
       (void) esp_code_alloc(ESP_OP_OR, ESP_REG_A2, ESP_REG_A4, ESP_REG_A4);
     }
   }
@@ -682,7 +730,7 @@ void esp_helpers_create(pfile_t *pf)
   unsigned ii;
 
   for (ii = 0; ii < 4; ii++) {
-    if (esp_helpers[ii].used) {
+    if (esp_op.helpers[ii].used) {
       label_t    lbl = esp_helper_lbl_ensure(pf, ii);
       esp_code_t node;
 
@@ -712,7 +760,7 @@ static void esp_emit_divmod(pfile_t *pf, operator_t op,
 
   sgn = value_is_signed(v1) || value_is_signed(v2);
   idx = (OPERATOR_MOD == op) ? (sgn ? 3 : 1) : (sgn ? 2 : 0);
-  esp_helpers[idx].used = BOOLEAN_TRUE;
+  esp_op.helpers[idx].used = BOOLEAN_TRUE;
   esp_load_value(pf, v2, ESP_REG_A3);
   esp_load_value(pf, v1, ESP_REG_A2);
   esp_emit_call(pf, idx);
@@ -783,7 +831,7 @@ static void esp_emit_compare_branch(pfile_t *pf, const cmd_t cmd,
   rt = swap ? ESP_REG_A2 : ESP_REG_A3;
   br = esp_code_alloc(bop, rt, rs, 0);
   esp_branch_target(pf, br, lbl);
-  esp_skip_cmd = next;          /* consume the branch cmd */
+  esp_op.skip_cmd = next;          /* consume the branch cmd */
 }
 
 /* `!v` / truth-test `v` followed by goto true/false: branch directly
@@ -814,7 +862,7 @@ static void esp_emit_truth_branch(pfile_t *pf, const cmd_t cmd, value_t v1,
   br = esp_code_alloc(invert ? ESP_OP_BEQZ : ESP_OP_BNEZ, 0,
       ESP_REG_A2, 0);
   esp_branch_target(pf, br, lbl);
-  esp_skip_cmd = next;          /* consume the branch cmd */
+  esp_op.skip_cmd = next;          /* consume the branch cmd */
 }
 
 /* materialize a comparison into dst (movi 0 / branch-over / movi 1) */
@@ -1005,7 +1053,7 @@ static void esp_emit_float_compare_branch(pfile_t *pf, const cmd_t cmd,
   rt = swap ? ESP_REG_A2 : ESP_REG_A3;
   br = esp_code_alloc(bop, rt, rs, 0);
   esp_branch_target(pf, br, lbl);
-  esp_skip_cmd = next;          /* consume the branch cmd */
+  esp_op.skip_cmd = next;          /* consume the branch cmd */
   {
     esp_code_t l = esp_code_label_alloc();
 
@@ -1886,7 +1934,7 @@ static boolean_t esp_wide_compare_branch(pfile_t *pf, const cmd_t cmd,
   lbl     = cmd_brdst_get(next);
   br_true = (CMD_BRANCHCOND_TRUE == cmd_brcond_get(next))
       ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-  esp_skip_cmd = next;
+  esp_op.skip_cmd = next;
   walg_compare_branch_emit(pf, &esp_walg_ops, op, br_true, lbl, v1, v2);
   return BOOLEAN_TRUE;
 }
@@ -1907,7 +1955,7 @@ static boolean_t esp_wide_value_branch(pfile_t *pf, const cmd_t cmd,
   lbl     = cmd_brdst_get(next);
   br_true = (CMD_BRANCHCOND_TRUE == cmd_brcond_get(next))
       ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-  esp_skip_cmd = next;
+  esp_op.skip_cmd = next;
   walg_value_branch_emit(pf, &esp_walg_ops, not_form, br_true, lbl, v1);
   return BOOLEAN_TRUE;
 }
@@ -3629,8 +3677,8 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
 {
   cmd_type_t type;
 
-  if (cmd == esp_skip_cmd) {
-    esp_skip_cmd = 0;
+  if (cmd == esp_op.skip_cmd) {
+    esp_op.skip_cmd = 0;
     return;
   }
 
@@ -4190,13 +4238,13 @@ void esp_op_reset(void)
 {
   unsigned ii;
 
-  esp_skip_cmd = 0;
-  esp_fixup_ct = 0;
-  esp_call_pend_ct = 0;
-  esp_goto_pend_ct = 0;
+  esp_op.skip_cmd = 0;
+  esp_op.fixup_ct = 0;
+  esp_op.call_pend_ct = 0;
+  esp_op.goto_pend_ct = 0;
   esp_bitarg_ct = 0;
   for (ii = 0; ii < 4; ii++) {
-    esp_helpers[ii].used = BOOLEAN_FALSE;
+    esp_op.helpers[ii].used = BOOLEAN_FALSE;
   }
   /* wide RAM temporaries (kernel-held) */
   walg_reset();

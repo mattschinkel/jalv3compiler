@@ -219,6 +219,11 @@ void       esp_op_generate(pfile_t *pf, const cmd_t cmd);
 void       esp_helpers_create(pfile_t *pf);   /* __esp32_*div/mod */
 void       esp_op_resolve_fixups(pfile_t *pf);
 void       esp_op_reset(void);
+
+/* TEARDOWN: like esp_op_reset() but also frees the pending tables, so a
+ * second compile in the same process starts clean and leak-free (A4).
+ * Call while the back end is idle. */
+void       esp_op_state_reset(void);
 void       esp_startup_emit(pfile_t *pf);   /* sp/WOE/WDT */
 void       esp_delay_create(pfile_t *pf, variable_const_t usec);
 
