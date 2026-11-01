@@ -788,6 +788,42 @@ static void pic_task_suicide_create(pfile_t *pf)
  *
  * Note2: to kill a task, suspend with the lsb/msb of 0
  */
+/*
+ * Pop the suspended task's return address off the task stack into
+ * PCLATU/PCLATH/PCL (PIC18, 3 bytes) or PCLATH/PCL (14-bit, 2 bytes).
+ *
+ * Both cores follow the same rule, which is why this is one function:
+ * INCF (n-1) times to climb to the top of the address, then pop the top
+ * byte, then DECF once and pop each remaining byte.  The two sequences
+ * used to be hand-kept copies in pic_task_yield_create().
+ */
+static void pic_task_pop_return_addr(pfile_t *pf, value_t fsr, value_t ind)
+{
+  static const char * const regs16[] = { "_pclatu", "_pclath", "_pcl" };
+  static const char * const regs14[] = { "_pclath", "_pcl" };
+  const char * const *regs;
+  size_t n;
+  size_t ii;
+
+  if (pic_is_16bit(pf)) {
+    regs = regs16;
+    n    = COUNT(regs16);
+  } else {
+    regs = regs14;
+    n    = COUNT(regs14);
+  }
+  for (ii = 0; ii + 1 < n; ii++) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsr, 0, PIC_OPDST_F);
+  }
+  for (ii = 0; ii < n; ii++) {
+    if (ii) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
+    }
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, regs[ii]);
+  }
+}
+
 static void pic_task_yield_create(pfile_t *pf)
 {
   value_t       idx;
@@ -874,25 +910,7 @@ static void pic_task_yield_create(pfile_t *pf)
     paused_val = paused;
   }
   /* jump to the active task */
-  if (pic_is_16bit(pf)) {
-    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsr, 0, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsr, 0, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
-    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pclatu");
-    pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
-    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pclath");
-    pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
-    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pcl");
-  } else {
-    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsr, 0, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
-    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pclath");
-    pic_instr_append_f_d(pf, PIC_OPCODE_DECF, fsr, 0, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
-    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pcl");
-  }
+  pic_task_pop_return_addr(pf, fsr, ind);
   /* paused != 0 path: restore the list pointer and rescan (placed after
    * the computed jump, which never falls through) */
   if (lbl_preskip_emit) {
