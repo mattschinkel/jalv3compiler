@@ -75,7 +75,16 @@ jobs:
     # full rehearsal). Timings measured locally 2026-10-31: build 30 s,
     # corpus 45 s, ASan corpus 78 s, 20 000 fuzz inputs 363 s, analyzer
     # 76 s -- about 11 minutes, well inside the 60-minute cap.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Triggerable three ways: the nightly timer, the Actions "Run workflow"
+    # button, or -- so it can be started from a terminal without `gh` -- a
+    # push whose head commit message contains [nightly]. The last one exists
+    # because dispatch needs an authenticated API call and a plain push does
+    # not.
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       contains(github.event.head_commit.message, '[nightly]'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
