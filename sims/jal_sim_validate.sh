@@ -8,7 +8,7 @@
 #   ./sims/jal_sim_validate.sh [options] path/to/file.jal
 #
 # Options:
-#   --compiler PATH     Compiler binary (default: ./bin/jalv3-x86-64)
+#   --compiler PATH     Compiler binary (default: ./bin/beta/jalv3-x86-64)
 #   -s DIR              First library search path (default: lib); sims/
 #                       is always appended
 #   --quiet             Less console output
@@ -25,7 +25,7 @@ cd "$ROOT"
 ENGINE="$ROOT/sims/sim_validate_engine.py"
 QEMU_PY="$ROOT/sims/pic32_qemu.py"
 LIBDIR="demo_lib;third_party/jallib/lib"   # 32-bit lib variants shadow pristine jallib
-COMPILER="$ROOT/bin/jalv3-x86-64"
+COMPILER="$ROOT/bin/beta/jalv3-x86-64"
 NO_VALIDATE=0
 QUIET=0
 JAL=""

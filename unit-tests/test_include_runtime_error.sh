@@ -4,7 +4,7 @@
 # error shapes must fail with the message; const/defined() shapes must be clean.
 # Usage: unit-tests/test_include_runtime_error.sh [compiler]
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CC="${1:-$ROOT/bin/jalv3-x86-64}"
+CC="${1:-$ROOT/bin/beta/jalv3-x86-64}"
 TMP="$(mktemp -d)"
 # self-contained: the include target the test bodies reference
 echo "var byte injected = 42" > "$TMP/mylib_inc.jal"

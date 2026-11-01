@@ -10,7 +10,7 @@
 # Usage: unit-tests/test_optional_empty_string.sh [compiler]
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-CC=${1:-$REPO/bin/jalv3-x86-64}
+CC=${1:-$REPO/bin/beta/jalv3-x86-64}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 fails=0

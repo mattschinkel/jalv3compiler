@@ -12,12 +12,12 @@
 # Usage: unit-tests/run_compile_pin_tests.sh [compiler]
 # Exit:  0 = every pin passed, 1 = at least one pin failed/missing.
 #
-# The compiler defaults to bin/jalv3-x86-64; the gate runner passes its
+# The compiler defaults to bin/beta/jalv3-x86-64; the gate runner passes its
 # pinned compiler snapshot so a mid-run rebuild cannot mix binaries.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CC="${1:-$ROOT/bin/jalv3-x86-64}"
+CC="${1:-$ROOT/bin/beta/jalv3-x86-64}"
 PIN_TIMEOUT="${JALV2_PIN_TIMEOUT:-600}"
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jalv2_pins-XXXXXX")"
 trap 'rm -rf "$LOG_DIR"' EXIT

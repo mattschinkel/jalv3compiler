@@ -38,10 +38,13 @@ PUBLIC_DIRS=".github doc documentation src demo_lib demo_sample sims unit-tests"
 #  READMEs inside the allowed directories; docs/ is investigations-only and
 #  stays private)
 ROOT_PUBLIC="README.md README.txt NOTICE"
-# Release compilers, published as STRIPPED copies of bin/ (see the strip step
-# below).  Named individually: bin/ also holds old_versions/ and the
-# instrumented -cov/-san flavors, which must never be published.
-PUBLIC_BIN="bin/jalv3-x86-64 bin/jalv3-win64.exe"
+# Release compilers, published as STRIPPED copies of bin/beta/ (see the strip
+# step below).  Named individually: bin/beta also holds the instrumented
+# -cov/-san flavors, which must never be published.
+PUBLIC_BIN="bin/beta/jalv3-x86-64 bin/beta/jalv3-win64.exe"
+# bin/release/ is a human-curated cut (see its README); whatever is placed
+# there is published AS IS -- it is already a release artifact.
+PUBLIC_BIN_RELEASE="bin/release"
 # bin/old_versions/ is the RELEASED jalv2 line (jalv24q6*, jalv25*, r1..r9;
 # 35 files, 20.3 MB, largest 1.3 MB).  Published AS RELEASED -- these are the
 # artifacts as shipped, so they are NOT stripped.  A versioned jALv3 binary
@@ -55,6 +58,7 @@ PUBLIC_BIN_ARCHIVE="bin/old_versions"
   git ls-files $PUBLIC_DIRS
   git ls-files $ROOT_PUBLIC
   git ls-files $PUBLIC_BIN_ARCHIVE
+  git ls-files $PUBLIC_BIN_RELEASE
   for f in $PUBLIC_BIN; do echo "$f"; done
 } | sort -u > "$STAGE/.filelist"
 
@@ -112,11 +116,14 @@ src/jal/jal_build.h
 !/sims/
 !/unit-tests/
 !/bin/
-# bin/: the two current compilers plus the released jalv2 line; never the
-# instrumented -cov/-san flavors, never a versioned jALv3 build
+# bin/: beta builds, cut releases, and the released jalv2 line.  Never the
+# instrumented -cov/-san flavors, never a versioned jALv3 in old_versions/.
 /bin/*
-!/bin/jalv3-x86-64
-!/bin/jalv3-win64.exe
+!/bin/beta/
+/bin/beta/*
+!/bin/beta/jalv3-x86-64
+!/bin/beta/jalv3-win64.exe
+!/bin/release/
 # released jalv2 binaries, but never a versioned jALv3 (beta) build
 !/bin/old_versions/
 /bin/old_versions/jalv3*

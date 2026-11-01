@@ -8,7 +8,7 @@
 #
 LIBS=../libpic12/libpic12-$(LIBTAG).a ../libpic32/libpic32-$(LIBTAG).a ../libesp32/libesp32-$(LIBTAG).a ../libcore/libcore-$(LIBTAG).a ../libutils/libutils-$(LIBTAG).a
 # Must follow Makefile.inc: JAL2_BIN_STEM is `original` for ARCH=native, else same as ARCH.
-PROGRAM=../../bin/jalv3-$(JAL2_BIN_STEM)
+PROGRAM=../../bin/beta/jalv3-$(JAL2_BIN_STEM)
 
 .PHONY: dummy
 

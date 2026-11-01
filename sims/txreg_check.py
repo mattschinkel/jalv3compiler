@@ -40,7 +40,7 @@ def main() -> int:
                     help="text that must appear in the captured serial output "
                          "(repeatable; CRLF in the program output is normalised "
                          "to plain newlines before matching)")
-    ap.add_argument("--compiler", type=Path, default=REPO / "bin/jalv3-x86-64")
+    ap.add_argument("--compiler", type=Path, default=REPO / "bin/beta/jalv3-x86-64")
     ap.add_argument("-s", "--libdir", default="demo_lib;third_party/jallib/lib",
                     help="include path passed to -s (default: demo_lib first, "
                          "the sample-kit order)")

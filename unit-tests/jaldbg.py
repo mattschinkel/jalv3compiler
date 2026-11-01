@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-COMPILER = REPO / "bin/jalv3-x86-64"
+COMPILER = REPO / "bin/beta/jalv3-x86-64"
 LIBS = f"{REPO}/demo_lib;{REPO}/third_party/jallib/lib;{REPO}/sims/shared"
 BUILD_CACHE = REPO / "unit-tests/.cache/jaldbg-builds"
 
@@ -377,10 +377,10 @@ def do_build(ref: str, asan: bool) -> Path:
         if asan:
             cmd.append("SAN=1")
         r2 = subprocess.run(cmd, capture_output=True, text=True)
-        # SAN=1 links bin/jalv3-x86-64-san, NOT the plain name -- copying the
+        # SAN=1 links bin/beta/jalv3-x86-64-san, NOT the plain name -- copying the
         # plain name here silently produced an UNINSTRUMENTED "asan" build,
         # so `jaldbg cost --asan` had never actually run a sanitizer.
-        built = wt / ("bin/jalv3-x86-64-san" if asan else "bin/jalv3-x86-64")
+        built = wt / ("bin/beta/jalv3-x86-64-san" if asan else "bin/beta/jalv3-x86-64")
         if r2.returncode != 0 or not built.is_file():
             # parallel races hit this Makefile before; retry serial
             r2 = subprocess.run(["make", "-C", str(wt / "src")], capture_output=True, text=True)
@@ -500,7 +500,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--compiler", type=Path, default=COMPILER,
-                    help="compiler binary (default: bin/jalv3-x86-64)")
+                    help="compiler binary (default: bin/beta/jalv3-x86-64)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("compile")

@@ -43,7 +43,7 @@ def expectations(text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--compiler", default=os.path.join(ROOT, "bin", "jalv3-x86-64"))
+    ap.add_argument("--compiler", default=os.path.join(ROOT, "bin", "beta", "jalv3-x86-64"))
     ap.add_argument("--lib", default=DEFAULT_LIB)
     args = ap.parse_args()
 

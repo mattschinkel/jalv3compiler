@@ -21,7 +21,7 @@
 # Usage: unit-tests/test_malformed_input_clean.sh [compiler]
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-CC=${1:-$REPO/bin/jalv3-x86-64}
+CC=${1:-$REPO/bin/beta/jalv3-x86-64}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/jalv2_malformed-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 fails=0

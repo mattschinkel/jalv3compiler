@@ -10,7 +10,7 @@
 #
 # Usage:
 #   higher level makefiles define PROGRAM (program name) or LIBRARY
-#   (jal emits bin/jalv3-<stem>)
+#   (jal emits bin/beta/jalv3-<stem>)
 #   (library name) but not both. All sources in the directory are
 #   assumed to belong. The result is left in the same directory
 #   as the sources.
@@ -23,7 +23,7 @@ default: project
 #PROFILE=-pg
 DEBUG=-g
 
-# Default ARCH on Linux/x86_64 so `make -C src` (no args) produces **`bin/jalv3-x86-64`**
+# Default ARCH on Linux/x86_64 so `make -C src` (no args) produces **`bin/beta/jalv3-x86-64`**
 # from this tree — primary regression compiler (see **`instruction_compile.txt`**).
 # Use **`make ARCH=native`** for host **`jalv3-original`** (`-march=native`).
 ifeq ($(origin ARCH),undefined)
@@ -56,7 +56,7 @@ else ifeq ($(ARCH),win64)
    # 64-bit Windows, cross-compiled from Linux (packages:
    # gcc-mingw-w64-x86-64).  Own obj-dir/lib tags via ARCH=win64 so the
    # mingw objects never mix with the Linux build (mixed-object lesson).
-   # Output stem `win64` -> bin/jalv3-win64.exe is the ONLY Windows
+   # Output stem `win64` -> bin/beta/jalv3-win64.exe is the ONLY Windows
    # binary (no duplicate: the old cp-to-x86-64.exe twin was removed
    # 2026-10-30 -- it was a manual copy under the jalv25r9 share name).
    MARCH = -m64
@@ -82,8 +82,8 @@ CFLAGS += $(EXTRA_CFLAGS)
 
 # Build flavors (dev tooling, 2026-10-05 — fixes/fix_dev_tooling.md):
 #   SAN=1 (or the historical ASAN=1) -> ASan+UBSan debug build,
-#     bin/jalv3-x86-64-san, objects in .obj-x86-64-san/
-#   COV=1 -> gcov instrumentation, bin/jalv3-x86-64-cov,
+#     bin/beta/jalv3-x86-64-san, objects in .obj-x86-64-san/
+#   COV=1 -> gcov instrumentation, bin/beta/jalv3-x86-64-cov,
 #     objects in .obj-x86-64-cov/ (.gcda written beside them)
 # Flavors get their OWN object dirs and output names so instrumented and
 # primary artifacts never mix (mixed-object lesson,
@@ -117,7 +117,7 @@ LFLAGS += $(FLAVORFLAGS)
 
 export ARCH
 
-# Stems `bin/jalv3-*` (jal only): `native` -> `original` to avoid clashing with gcc `-march=native` and with JAL "native" language features.
+# Stems `bin/beta/jalv3-*` (jal only): `native` -> `original` to avoid clashing with gcc `-march=native` and with JAL "native" language features.
 JAL2_BIN_STEM := $(if $(filter native,$(ARCH)),original,$(ARCH))$(FLAVOR)
 
 LIBTAG := $(ARCH)$(FLAVOR)
@@ -128,13 +128,13 @@ SRCS=$(wildcard *.c)
 OBJS=$(addprefix $(OBJ_DIR)/, $(SRCS:.c=.o))
 
 %.asm : %.jal
-	../bin/jalv3-x86-64 -pcode -no-fuse -s lib $<
+	../bin/beta/jalv3-x86-64 -pcode -no-fuse -s lib $<
 
 %.a : %.jal
-	../bin/jalv3-x86-64 -pcode -no-fuse -s lib $<
+	../bin/beta/jalv3-x86-64 -pcode -no-fuse -s lib $<
 
 %.d : %.jal
-	../bin/jalv3-x86-64 -debug -pcode -no-fuse -s lib $<
+	../bin/beta/jalv3-x86-64 -debug -pcode -no-fuse -s lib $<
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
@@ -169,8 +169,13 @@ ifneq ($(PROGRAM),)
 
 project: $(PROGRAM)
 
-# Order-only bin/ prerequisite: a fresh clone has no bin/ directory and the
-# link would abort ('cannot open output file ../../bin/jalv3-x86-64').
+# Order-only bin/ prerequisite: a fresh clone has neither bin/ nor bin/beta/
+# and the link would abort ('cannot open output file .../bin/beta/...').
+#
+# LAYOUT: every build lands in bin/beta/ (this rule creates it).  bin/release/
+# holds CUT releases only -- nothing writes there, a human copies an artifact
+# in when a release is made.  bin/old_versions/ holds the RELEASED jalv2 line
+# and never receives a jalv3 build (jALv3 is beta; see .gitignore).
 BIN_DIR = $(dir $(PROGRAM))
 
 $(PROGRAM): $(OBJS) $(LIBS) | $(BIN_DIR)
@@ -180,14 +185,12 @@ $(PROGRAM): $(OBJS) $(LIBS) | $(BIN_DIR)
 $(BIN_DIR):
 	mkdir -p $@
 	
-# `$(PROGRAM).exe` is a build intermediate only where the toolchain
-# appends .exe (the win64 cross, Windows-native builds).  For the Linux
-# x86-64 flavor that same name is the PUBLISHED Windows binary in bin/
-# (cut from the win64 build) -- a Linux clean must never delete it.
+# The toolchain appends .exe for the win64 cross and Windows-native builds,
+# so clean must remove BOTH spellings.  The old `x86-64Linux -> EXE_RM empty`
+# special case existed because a Linux clean sat beside the published Windows
+# artifact under the SAME name; with builds confined to bin/beta that artifact
+# is bin/beta/jalv3-win64.exe, so the clash (and the carve-out) is gone.
 EXE_RM := $(PROGRAM).exe
-ifeq ($(ARCH)$(shell uname -s 2>/dev/null),x86-64Linux)
-  EXE_RM :=
-endif
 
 clean::
 	-rm -f $(PROGRAM) $(EXE_RM)

@@ -4,7 +4,7 @@
 # each snippet must FAIL to compile with the expected diagnostic.
 # Usage: unit-tests/test_optional_params_negative.sh [compiler]
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CC="${1:-$ROOT/bin/jalv3-x86-64}"
+CC="${1:-$ROOT/bin/beta/jalv3-x86-64}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fails=0

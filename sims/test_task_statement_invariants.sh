@@ -19,7 +19,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-COMPILER="${1:-$ROOT/bin/jalv3-x86-64}"
+COMPILER="${1:-$ROOT/bin/beta/jalv3-x86-64}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 

@@ -5,7 +5,7 @@
 # compile errors or if compiler output contains "skip error".
 #
 # Environment:
-#   JALV2  — path to jalv2 executable (default: first of bin/jalv3-x86-64,
+#   JALV2  — path to jalv2 executable (default: first of bin/beta/jalv3-x86-64,
 #            bin/jalv2-original, bin/jalv2 under repo root).
 #
 # Exit codes: 0 success, 1 compile/log failure or skip error in output,
@@ -25,7 +25,7 @@ resolve_jalv2() {
     echo "JALV2 is set but not an executable file: $JALV2" >&2
     return 1
   fi
-  for c in "$ROOT/bin/jalv3-x86-64" "$ROOT/bin/jalv2-original" "$ROOT/bin/jalv2"; do
+  for c in "$ROOT/bin/beta/jalv3-x86-64" "$ROOT/bin/jalv2-original" "$ROOT/bin/jalv2"; do
     if [[ -x "$c" ]]; then
       echo "$c"
       return 0

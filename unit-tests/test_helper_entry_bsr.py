@@ -34,7 +34,7 @@ INSTR = re.compile(r"^\s{2,}([a-z][a-z0-9]*)\s+(.*)$")
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--compiler", default=str(REPO / "bin/jalv3-x86-64"))
+    ap.add_argument("--compiler", default=str(REPO / "bin/beta/jalv3-x86-64"))
     args = ap.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="helperbsr_") as td:

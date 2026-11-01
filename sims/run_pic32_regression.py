@@ -29,7 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VALIDATE = ROOT / "sims" / "jal_sim_validate.sh"
-DEFAULT_COMPILER = ROOT / "bin" / "jalv3-x86-64"
+DEFAULT_COMPILER = ROOT / "bin" / "beta" / "jalv3-x86-64"
 
 
 @dataclass(frozen=True)

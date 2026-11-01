@@ -66,7 +66,7 @@ end if
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--compiler", type=Path, default=REPO / "bin/jalv3-x86-64")
+    ap.add_argument("--compiler", type=Path, default=REPO / "bin/beta/jalv3-x86-64")
     args = ap.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="proc_entry_bsr_") as td:

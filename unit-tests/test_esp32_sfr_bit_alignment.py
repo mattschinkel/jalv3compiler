@@ -30,7 +30,7 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-DEFAULT_COMPILER = ROOT / "bin" / "jalv3-x86-64"
+DEFAULT_COMPILER = ROOT / "bin" / "beta" / "jalv3-x86-64"
 INCLUDE = ";".join([
     str(ROOT / "demo_lib"),
     str(ROOT / "third_party" / "jallib" / "lib"),

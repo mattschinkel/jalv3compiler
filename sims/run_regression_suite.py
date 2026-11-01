@@ -14,7 +14,7 @@ Usage (from repo root):
   ./sims/run_regression_suite.py --suite 18f4620 --run
   ./sims/run_regression_suite.py --suite-all --quiet
   ./sims/run_regression_suite.py --baseline --run
-  ./sims/run_regression_suite.py --compiler ./bin/jalv3-x86-64 --run
+  ./sims/run_regression_suite.py --compiler ./bin/beta/jalv3-x86-64 --run
   ./sims/run_regression_suite.py --jobs 4 --run
   ./sims/run_regression_suite.py --quiet
   ./sims/run_regression_suite.py --fail-fast
@@ -26,7 +26,7 @@ Environment:
                           Set to e.g. 18f4620 to run a single suite.
   REGRESSION_SUITE_COMPILER
                           Current compiler path used unless --compiler or --baseline is supplied.
-                          Default: bin/jalv3-x86-64 (built from src/).
+                          Default: bin/beta/jalv3-x86-64 (built from src/).
   JALV2_NO_REPORT_ARCHIVE When set to 1/true/yes, skip post-run snapshots under report_archive/ (suite still
                           clears gpsim_regression_summary.txt before running). JALV2_GPSIM_SUBPROCESS=1 when
                           invoked from unittests.py (skips duplicate snapshot and web copy here; parent copies
@@ -66,7 +66,7 @@ from pathlib import Path
 from typing import Callable
 
 GPSIM_RUN_STATS_JSON = "gpsim_regression_run.json"
-DEFAULT_CURRENT_COMPILER = "bin/jalv3-x86-64"
+DEFAULT_CURRENT_COMPILER = "bin/beta/jalv3-x86-64"
 
 _gather_jal_merged: Callable[[str], str] | None = None
 
@@ -558,7 +558,7 @@ def _build_argparser() -> argparse.ArgumentParser:
             "  ./sims/run_regression_suite.py --suite 18f4620 --quiet\n"
             "  ./sims/run_regression_suite.py --suite all --quiet\n"
             "  ./sims/run_regression_suite.py --suite-all --quiet\n"
-            "  ./sims/run_regression_suite.py --compiler ./bin/jalv3-x86-64 --run\n"
+            "  ./sims/run_regression_suite.py --compiler ./bin/beta/jalv3-x86-64 --run\n"
             "  ./sims/run_regression_suite.py --baseline --jobs 4 --run"
         ),
     )

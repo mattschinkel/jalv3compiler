@@ -57,11 +57,13 @@ demo_sample/backup/
 # scratch / tooling
 tmp/
 .zcodeignore
-bin/jalv3-x86-64-san
-bin/jalv3-x86-64-cov
+bin/beta/jalv3-x86-64-san
+bin/beta/jalv3-x86-64-cov
 unit-tests/.cache/
-bin/jalv3-x86-64.exe
+bin/beta/jalv3-x86-64.exe
 
+# bin/beta/ holds every build (the two current compilers are tracked, the
+# instrumented flavors above are not).  bin/release/ is written by hand only.
 # bin/old_versions/ holds RELEASED versions only (the jalv2 line: jalv24q6*,
 # jalv25*, jalv25r1..r9).  jALv3 is in beta, so its builds stay in bin/ root
 # as bin/jalv3-x86-64 and bin/jalv3-win64.exe and are replaced in place --

@@ -40,7 +40,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SRC = os.path.join(REPO, "src")
-BIN = os.path.join(REPO, "bin", "jalv3-x86-64-cov")
+BIN = os.path.join(REPO, "bin", "beta", "jalv3-x86-64-cov")
 BASELINE = os.path.join(HERE, "coverage_baseline.txt")
 REPORT = os.path.join(HERE, "Comparison", "coverage_report.txt")
 

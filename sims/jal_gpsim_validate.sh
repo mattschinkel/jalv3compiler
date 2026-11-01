@@ -9,7 +9,7 @@
 #
 # Options:
 #   --baseline          Use bin/old_versions/jalv25r9-x86-64 (original jalv2)
-#   --current           Use ./bin/jalv2-original or ./bin/jalv3-x86-64 (default)
+#   --current           Use ./bin/jalv2-original or ./bin/beta/jalv3-x86-64 (default)
 #   --compiler PATH     Use this compiler binary
 #   -s DIR              First library search path (default: lib); sims/ is always
 #                       appended: compiler gets -s DIR;<repo>/tests
@@ -123,7 +123,7 @@ else
   if [[ -f "$ROOT/bin/jalv2-original" ]]; then
     COMPILER="$ROOT/bin/jalv2-original"
   else
-    COMPILER="$ROOT/bin/jalv3-x86-64"
+    COMPILER="$ROOT/bin/beta/jalv3-x86-64"
   fi
 fi
 

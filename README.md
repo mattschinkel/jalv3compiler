@@ -33,8 +33,8 @@ See NOTICE for full attribution.
   gradual underflow)
 - **Text conversion casts** — `string(x)`, `hex(x)`, `bin(x)` — and
   `COUNT()` for array/string lengths
-- Prebuilt **Linux and Windows x86-64 binaries** in [bin/](bin/), with
-  the historical jalv2 releases preserved in `bin/old_versions/`
+- Prebuilt **Linux and Windows x86-64 binaries** in [bin/beta/](bin/beta/),
+  with the historical jalv2 releases preserved in `bin/old_versions/`
 
 ## Device files and libraries
 
@@ -45,7 +45,7 @@ libraries built for jalv3 are in [demo_sample/](demo_sample/) and
 
 ## Building and testing
 
-- Build the compiler: `make -C src` (output: `bin/jalv3-x86-64`;
+- Build the compiler: `make -C src` (output: `bin/beta/jalv3-x86-64`;
   cross-build Windows with `make -C src ARCH=win64`)
 - Fetch the pristine jallib corpus for the tests:
   `unit-tests/fetch_jallib.sh`

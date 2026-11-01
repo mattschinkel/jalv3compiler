@@ -19,7 +19,7 @@ Mutations (seeded, deterministic per run):
   - splice: tail of one seed appended to another
 
 Usage:
-  python3 scripts/fuzz_jal_inputs.py --compiler ./bin/jalv3-x86-64 \
+  python3 scripts/fuzz_jal_inputs.py --compiler ./bin/beta/jalv3-x86-64 \
       --minutes 10 --seeds 40
   python3 scripts/fuzz_jal_inputs.py ... --resume runs/fuzz_2026.../state.json
 
@@ -301,7 +301,7 @@ def classify(rc: int, out: str):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--compiler", default=os.path.join(ROOT, "bin/jalv3-x86-64"))
+    ap.add_argument("--compiler", default=os.path.join(ROOT, "bin/beta/jalv3-x86-64"))
     ap.add_argument("--seeds", type=int, default=40,
                     help="number of seed .jal files (small ones)")
     ap.add_argument("--minutes", type=float, default=10.0)

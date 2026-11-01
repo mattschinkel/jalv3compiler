@@ -32,7 +32,7 @@
 #                                         #   inherited-lock-fd holders;
 #                                         #   safe while a run is in flight)
 #   unit-tests/run_gates.sh --compiler PATH   # compiler for L0/L1 (unit/compare
-#                                          # always test ./bin/jalv3-x86-64)
+#                                          # always test ./bin/beta/jalv3-x86-64)
 #   unit-tests/run_gates.sh --no-san          # L3 without the ASan corpus
 #
 # HEX A/B: unit-tests/manifest/hex_manifest.txt via unit-tests/hex_manifest.py
@@ -173,7 +173,7 @@ DRY=0
 SKIP_GPSIM=0
 WITH_SAN=1
 UPDATE_MANIFEST=0
-COMPILER="$ROOT/bin/jalv3-x86-64"
+COMPILER="$ROOT/bin/beta/jalv3-x86-64"
 WITNESSES=()
 LEGACY_QUICK=0
 
@@ -403,14 +403,14 @@ if (( DRY )); then
 fi
 
 # ---------------------------------------------------------------- L0
-if [[ "$COMPILER" == "$ROOT/bin/jalv3-x86-64" ]]; then
+if [[ "$COMPILER" == "$ROOT/bin/beta/jalv3-x86-64" ]]; then
   gate "L0 build (incremental)" make -C src ARCH=x86-64
 else
   skip "L0 build (custom compiler: $COMPILER)"
 fi
 
 # pin the compiler for the rest of the run: suites exec it hundreds of
-# times, and a mid-run rebuild of bin/jalv3-x86-64 (a "quick fix" while
+# times, and a mid-run rebuild of bin/beta/jalv3-x86-64 (a "quick fix" while
 # tests are in flight) would silently mix binaries.  Every gate below
 # uses the snapshot; rebuilds of the tree cannot reach this run.
 GATE_SNAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jalv2_gate-bin-XXXXXX")"
@@ -520,7 +520,7 @@ if (( LEVEL >= 3 )); then
     gate "L3 sanitizer build" make -C src SAN=1 ARCH=x86-64
     # pin the -san binary for the corpus gate below (same mid-run-rebuild
     # immunity as the primary compiler snapshot)
-    if cp "$ROOT/bin/jalv3-x86-64-san" "$GATE_SNAP_DIR/jalv3-x86-64-san" \
+    if cp "$ROOT/bin/beta/jalv3-x86-64-san" "$GATE_SNAP_DIR/jalv3-x86-64-san" \
         2>/dev/null; then
       SAN_SNAP="$GATE_SNAP_DIR/jalv3-x86-64-san"
       echo "gates: sanitizer compiler pinned to snapshot"
@@ -529,7 +529,7 @@ if (( LEVEL >= 3 )); then
       env JALV2_NO_REPORT_ARCHIVE=1 JALV2_NO_CHANGELOG_ENTRY=1 \
         ASAN_OPTIONS=detect_leaks=0 JALV2_UNIT_TEST_COMPILE_TIMEOUT=600 \
         python3 unit-tests/unittests.py --current \
-        --compiler "${SAN_SNAP:-$ROOT/bin/jalv3-x86-64-san}" \
+        --compiler "${SAN_SNAP:-$ROOT/bin/beta/jalv3-x86-64-san}" \
         --parallel "$JOBS"
   else
     skip "L3 sanitizer corpus (--no-san)"

@@ -26,7 +26,7 @@ with `-s demo_lib;third_party/jallib/lib;tests` (requires `--compiler PATH`; bas
 IMPORTANT: When this script is updated, UNITTESTS.md must also be updated
 to reflect any changes in functionality, command line options, or output structure.
 
-`--current` requires `--compiler PATH` (no implicit choice between `bin/jalv2-original` and `bin/jalv3-x86-64`).
+`--current` requires `--compiler PATH` (no implicit choice between `bin/jalv2-original` and `bin/beta/jalv3-x86-64`).
 
 **Ephemeral shadow:** Each run copies **`third_party/jallib/samples/`** and **`demo_lib/`** into **`unit-tests/.unittests_shadow/{baseline,current}/<run_id>/`** (unique **`run_id`** per process — **`fixes/fix_unittests_shadow_concurrent_run_rmtree.md`**). No automatic **`COUNT(`**↔**`_LENGTH(`** text rewriting; the repo sources are compiled as-is. The shadow tree is removed in **`finally`**.
 
@@ -161,7 +161,7 @@ def _require_runnable_compiler(compiler_path: str) -> str:
 def _compiler_build_id(compiler_path: str) -> str:
     """The compiler's own build stamp, from `--version`.
 
-    A path identifies a file, not a build: the same `bin/jalv3-x86-64` is
+    A path identifies a file, not a build: the same `bin/beta/jalv3-x86-64` is
     rebuilt constantly, and a gate run compiles with a pinned snapshot in a
     temp directory. The binary carries its compile date (`__DATE__`), so ask
     it and record the answer next to the path.
@@ -751,7 +751,7 @@ def _print_unittests_usage() -> None:
     print("")
     print("  --baseline, -b    Use baseline compiler (bin/old_versions/jalv25r9-x86-64)")
     print("  --current, -c     Use a compiler you choose (requires --compiler PATH)")
-    print("  --compiler PATH   Required with --current and --pic32: jalv2 binary (e.g. ./bin/jalv3-x86-64)")
+    print("  --compiler PATH   Required with --current and --pic32: jalv2 binary (e.g. ./bin/beta/jalv3-x86-64)")
     print("  --compare         Compare baseline vs current; writes Output_Compare/ including static_validation/")
     print("  --clean           Clean/delete old test reports and output directories")
     print("  --gpsim-regression  Run sims/run_regression_suite.py (needs gpsim on PATH);")
@@ -1478,7 +1478,7 @@ if __name__ == "__main__":
         if _want_compile:
             if not _pic32_compiler:
                 print(
-                    "error: --pic32 requires --compiler PATH (e.g. ./bin/jalv3-x86-64)",
+                    "error: --pic32 requires --compiler PATH (e.g. ./bin/beta/jalv3-x86-64)",
                     file=sys.stderr,
                 )
                 sys.exit(2)
@@ -2104,7 +2104,7 @@ if __name__ == "__main__":
     if saw_current:
         if not current_compiler_path:
             print(
-                "error: --current requires --compiler PATH (e.g. ./bin/jalv3-x86-64)",
+                "error: --current requires --compiler PATH (e.g. ./bin/beta/jalv3-x86-64)",
                 file=sys.stderr,
             )
             sys.exit(2)

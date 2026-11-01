@@ -51,22 +51,22 @@ jobs:
       - name: Corpus compile (2937 samples, 0 errors / 0 warnings)
         run: |
           python3 unit-tests/unittests.py --current \
-            --compiler ./bin/jalv3-x86-64 --parallel 4
+            --compiler ./bin/beta/jalv3-x86-64 --parallel 4
 
       - name: Negative table (expected refusals)
         run: |
           python3 unit-tests/run_negative_tests.py \
-            --compiler ./bin/jalv3-x86-64 --jobs 4
+            --compiler ./bin/beta/jalv3-x86-64 --jobs 4
 
       - name: Compile pins (diagnostics + implementation-defined codegen shapes)
-        run: unit-tests/run_compile_pin_tests.sh ./bin/jalv3-x86-64
+        run: unit-tests/run_compile_pin_tests.sh ./bin/beta/jalv3-x86-64
 
       - name: Upload the compiler on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: jalv3-x86-64-debug
-          path: bin/jalv3-x86-64
+          path: bin/beta/jalv3-x86-64
           if-no-files-found: ignore
 
   nightly:
@@ -119,7 +119,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
         run: |
           python3 unit-tests/unittests.py --current \
-            --compiler ./bin/jalv3-x86-64-san --parallel 4 \
+            --compiler ./bin/beta/jalv3-x86-64-san --parallel 4 \
             --output-dir tmp/asan_corpus
 
       - name: Static analysis (-fanalyzer, gated on a baseline)

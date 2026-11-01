@@ -164,11 +164,11 @@ def check_classic(compiler, workdir, failures):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--compiler", default=os.path.join(ROOT, "bin", "jalv3-x86-64"))
+    ap.add_argument("--compiler", default=os.path.join(ROOT, "bin", "beta", "jalv3-x86-64"))
     args = ap.parse_args()
 
     # compile_sample runs with cwd=workdir, so a relative --compiler path
-    # (e.g. ./bin/jalv3-x86-64) would not resolve there.
+    # (e.g. ./bin/beta/jalv3-x86-64) would not resolve there.
     compiler = os.path.abspath(args.compiler)
     failures = []
     with tempfile.TemporaryDirectory(prefix="jalv2_v6ab_") as workdir:

@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JAL = os.path.join(ROOT, "bin", "jalv3-x86-64")
+JAL = os.path.join(ROOT, "bin", "beta", "jalv3-x86-64")
 LIB = os.path.join(ROOT, "lib")
 REPRO = os.path.join(ROOT, "tmp", "github_issues", "repro")
 

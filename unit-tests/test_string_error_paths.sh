@@ -10,7 +10,7 @@
 # Usage: unit-tests/test_string_error_paths.sh [path-to-jalv2]
 set -u
 
-COMPILER="${1:-./bin/jalv3-x86-64}"
+COMPILER="${1:-./bin/beta/jalv3-x86-64}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 LIBS="$ROOT/demo_lib;$ROOT/demo_lib"

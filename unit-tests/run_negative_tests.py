@@ -8,7 +8,7 @@ institutionalizes what the per-fix scripts asserted one at a time
 (SDCC survey: "diagnostics are recorded, never asserted").
 
 Run:
-  python3 unit-tests/run_negative_tests.py [--compiler ./bin/jalv3-x86-64] [--jobs 8]
+  python3 unit-tests/run_negative_tests.py [--compiler ./bin/beta/jalv3-x86-64] [--jobs 8]
 
 Exit 0 iff every entry fails to compile with its expected diagnostic.
 Compile-only -- no simulator, safe at any gate level.
@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DEFAULT_COMPILER = os.path.join(ROOT, "bin", "jalv3-x86-64")
+DEFAULT_COMPILER = os.path.join(ROOT, "bin", "beta", "jalv3-x86-64")
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIBS = f"{_REPO}/demo_lib;{_REPO}/third_party/jallib/lib"
 

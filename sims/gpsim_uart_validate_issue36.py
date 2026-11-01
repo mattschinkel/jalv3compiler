@@ -6,7 +6,7 @@ and verify the expected print_string / print_crlf sequence.
 
 Usage (from repo root):
   python3 scripts/gpsim_uart_validate_issue36.py
-  python3 scripts/gpsim_uart_validate_issue36.py --compiler ./bin/jalv3-x86-64 --steps 30000000
+  python3 scripts/gpsim_uart_validate_issue36.py --compiler ./bin/beta/jalv3-x86-64 --steps 30000000
 
 Requires: jalv2, gpsim on PATH.
 
@@ -59,7 +59,7 @@ def main() -> int:
     ap.add_argument(
         "--compiler",
         type=Path,
-        default=REPO / "bin/jalv3-x86-64",
+        default=REPO / "bin/beta/jalv3-x86-64",
         help="jalv2 compiler binary",
     )
     ap.add_argument(
