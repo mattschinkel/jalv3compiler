@@ -34,6 +34,10 @@ PUBLIC_DIRS="src demo_lib demo_sample sims unit-tests"
 #  READMEs inside the allowed directories; docs/ is investigations-only and
 #  stays private)
 ROOT_PUBLIC="README.md README.txt NOTICE"
+# Release compilers, published as STRIPPED copies of bin/ (see the strip step
+# below).  Named individually: bin/ also holds old_versions/ and the
+# instrumented -cov/-san flavors, which must never be published.
+PUBLIC_BIN="bin/jalv3-x86-64 bin/jalv3-win64.exe"
 # (pic2jal split out to its own repo 2026-10-28; tools/ is a local pointer only)
 
 # ------------------------------------------------------------------- stage
@@ -41,6 +45,7 @@ ROOT_PUBLIC="README.md README.txt NOTICE"
 {
   git ls-files $PUBLIC_DIRS
   git ls-files $ROOT_PUBLIC
+  for f in $PUBLIC_BIN; do echo "$f"; done
 } | sort -u > "$STAGE/.filelist"
 
 n_expected=$(wc -l < "$STAGE/.filelist")
@@ -49,6 +54,26 @@ while IFS= read -r f; do
   cp "$ROOT/$f" "$STAGE/$f"
 done < "$STAGE/.filelist"
 rm "$STAGE/.filelist"
+
+# Publish STRIPPED compilers.  The internal builds carry -g, so their DWARF
+# holds absolute build paths, which the personal-string sweep must reject --
+# and it also brings both well under the 2 MB sweep limit
+# (jalv3-x86-64 4193920 -> ~953k, jalv3-win64.exe 4837025 -> ~909k).
+# The private bin/ artifacts are left untouched.
+for f in $PUBLIC_BIN; do
+  case "$f" in
+    *.exe) strip_cmd="x86_64-w64-mingw32-strip" ;;
+    *)     strip_cmd="strip" ;;
+  esac
+  if ! command -v "$strip_cmd" >/dev/null 2>&1; then
+    echo "publish_prepare: $strip_cmd not found; cannot publish a stripped $f" >&2
+    exit 1
+  fi
+  if ! "$strip_cmd" "$STAGE/$f"; then
+    echo "publish_prepare: strip failed for $f" >&2
+    exit 1
+  fi
+done
 
 # ------------------------------------------------- allowlist .gitignore
 cat > "$STAGE/.gitignore" <<'EOF'
@@ -70,6 +95,11 @@ src/jal/jal_build.h
 !/demo_sample/
 !/sims/
 !/unit-tests/
+!/bin/
+# only the two release compilers under bin/: no old_versions/, no -cov/-san
+/bin/*
+!/bin/jalv3-x86-64
+!/bin/jalv3-win64.exe
 # compile artifacts under the re-included trees stay untracked
 # (golden canary .hex fixtures are the tracked exception)
 *.cod
