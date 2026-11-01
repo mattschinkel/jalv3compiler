@@ -24,24 +24,24 @@ typedef struct pic_code_daop_data_ {
 
 /*
  * NAME
- *   pic_code_databits_analyze
+ *   pic_code_daop_analyze
  *
  * DESCRIPTION
- *   analyze the databits in the pic_codes[] array
+ *   analyze the databits in the pic code list
  *
  * PARAMETERS
- *   pf       : 
- *   pcl      : pcl on entry
- *   databits : current databits
- *   depth    : depth (for statistics only)
+ *   pf       : pfile handle
+ *   code     : code node
+ *   which    : walk phase
+ *   odata    : analysis state
  *
  * RETURN
- *   none
+ *   PIC_CODE_GOP_RC_*
  *
  * NOTES
- *   This follows all codepaths to determine when
- *   status<irp> and status<rp1:rp0> need to be changed, thus minimizing
- *   these changes.
+ *   This follows all codepaths to determine when status<rp1:rp0> must
+ *   change, thus minimizing these changes. IRP is not tracked here; an
+ *   indirect access sets it at the access site (pic_op_indirect.c).
  *   Note about calls: the statement after a call is assumed to
  *     have lost all information about the databits. This is unfortunate,
  *     but it is very difficult to accurately detemine without building
@@ -138,7 +138,7 @@ pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
   return rc;
 }
 
-/* run through the pic_codes and remove any redundant dataset commands */
+/* run through the pic code list and remove any redundant dataset commands */
 void pic_code_databits_post_analyze(pfile_t *pf)
 {
   pic_code_t code;

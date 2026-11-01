@@ -1,6 +1,6 @@
 /************************************************************
  **
- ** array.h : array definitions
+ ** array.c : array definitions
  **
  ** Copyright (c) 2007, Kyle A. York
  ** All rights reserved

@@ -1,6 +1,6 @@
 /**********************************************************
  **
- ** cmd_br.c : the CMD_TYPE_BRANCH functions
+ ** cmd_brch.c : the CMD_TYPE_BRANCH functions
  **
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved

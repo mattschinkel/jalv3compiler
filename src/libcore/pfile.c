@@ -139,18 +139,20 @@ void pfile_str_heap_defer_free(pfile_t *pf)
  *   create the pfile structure
  *
  * PARAMETERS
- *   dst : [out] holds result
- *   name  : source name
- *   f_src : source file    (input)
- *   f_asm : assembly file  (output)
- *   f_lst : listing file   (output)
- *   f_hex : intel hex file (output)
- *   f_log : log file       (output)
+ *   dst      : [out] holds the pfile
+ *   f_asm    : assembly file (output)
+ *   f_lst    : listing file (output)
+ *   f_hex    : intel hex file (output)
+ *   f_log    : log file (output)
+ *   COD_name : COD file name, or 0
+ *   flags    : PFILE_FLAG_* flags
+ *   vectors  : back-end vectors
+ *   arg      : back-end argument
+ *   task_ct  : number of tasks
+ *   compiler : compiler name/version for the COD file
  *
  * RETURN
- *   0 : no error
- *
- * NOTES
+ *   RESULT_OK, RESULT_MEMORY, or the back end's pfile_open_fn() result
  */
 result_t pfile_open(pfile_t **dst, 
     FILE *f_asm, FILE *f_lst, FILE *f_hex, FILE *f_log, 
@@ -271,14 +273,6 @@ result_t pfile_open(pfile_t **dst,
  *
  * DESCRIPTION
  *   flush the current line in the hex buffer
- *
- * PARAMETERS
- *   pf : pfile
- *
- * RETURN
- *   none
- *
- * NOTES
  */
 static void pfile_hex_line_flush(pfile_t *pf)
 {
@@ -308,14 +302,6 @@ static void pfile_hex_line_flush(pfile_t *pf)
  *
  * DESCRIPTION
  *   close an open pfile
- *
- * PARAMETERS
- *   pf : returned from pfile_open
- *
- * RETURN
- *   none
- *
- * NOTES
  */
 void pfile_close(pfile_t *pf)
 {
@@ -404,34 +390,10 @@ void pfile_close(pfile_t *pf)
 
 /*
  * NAME
- *   pfile_reset
- *
- * DESCRIPTION
- *   reset the pfile descriptor
- *
- * PARAMETERS
- *   pf : pfile
- *
- * RETURN
- *   none
- *
- * NOTES
- *   this:
- *      1. free all commands
- *      2. reset the temp var ptr
- *      3. reset the temp label ptr
- *      4. rewind the source file
- */
-
-/*
- * NAME
  *   pfile_ch_get
  *
  * DESCRIPTION
  *   get the next character from the file
- *
- * PARAMETERS
- *   pf : returned from pfile_open
  *
  * RETURN
  *   character read, or EOF
@@ -462,9 +424,6 @@ int pfile_ch_get(pfile_t *pf)
  *   pf : returned from pfile_open
  *   ch : last character read
  *
- * RETURN
- *   none
- *  
  * NOTES
  *   only one character can be unget()
  */
@@ -476,24 +435,6 @@ void pfile_ch_unget(pfile_t *pf, int ch)
   }
   pf->stats.chars--;
 }
-
-/*
- * NAME
- *   pfile_constant_get
- *
- * DESCRIPTION
- *   return an unnamed constant whose value matches val
- *
- * PARAMETERS
- *   pf  :
- *   val : value to match
- *   dst : holds result on success
- *
- * RETURN
- *   0 : no error
- *
- * NOTES
- */
 
 /* unnamed constant find */
 
@@ -512,6 +453,21 @@ static boolean_t uncfind_cb(void *arg, const variable_t var,
         || (variable_def_is_same(data->def, variable_def_get(var))));
 }
 
+/*
+ * NAME
+ *   pfile_constant_get
+ *
+ * DESCRIPTION
+ *   return an unnamed constant whose value matches val
+ *
+ * PARAMETERS
+ *   pf       : pfile handle
+ *   n        : constant value
+ *   def      : definition (VARIABLE_DEF_NONE for a plain integer)
+ *
+ * RETURN
+ *   the constant value
+ */
 value_t pfile_constant_get(pfile_t *pf, variable_const_t n, variable_def_t def)
 {
   /* let's find a suitable constant or create one */
@@ -623,10 +579,14 @@ value_t pfile_constant_float_get(pfile_t *pf, float n, variable_def_t def)
  *   allocate a variable and a value to contain it
  *
  * PARAMETERS
+ *   pf       : pfile handle
+ *   which    : PFILE_VARIABLE_ALLOC_* scope
+ *   name     : variable name, or 0
+ *   def      : variable definition
+ *   dst      : [out] holds the value
  *
  * RETURN
- *
- * NOTES
+ *   RESULT_OK, RESULT_MEMORY, ...
  */
 result_t pfile_value_alloc(pfile_t *pf, pfile_variable_alloc_t which,
     const char *name, variable_def_t def, value_t *dst)
@@ -662,14 +622,12 @@ result_t pfile_value_alloc(pfile_t *pf, pfile_variable_alloc_t which,
  *   return a temporary; allocate a new one if necessary
  *
  * PARAMETERS
- *   pf    : 
- *   sz    : 
- *   flags : 
- *   dst   : [out] holds result on success
+ *   pf       : pfile handle
+ *   type     : temporary type
+ *   sz       : size in bytes
  *
  * RETURN
- *
- * NOTES
+ *   the temporary value
  */
 value_t pfile_value_temp_get(pfile_t *pf, variable_def_type_t type,
     variable_sz_t sz)
@@ -684,10 +642,9 @@ value_t pfile_value_temp_get_from_def(pfile_t *pf, variable_def_t def)
   return pfile_proc_value_temp_get_from_def(pf->proc_active, pf, def);
 }
 
-
 /*
  * NAME
- *   pfile_line
+ *   pfile_line_get
  *
  * DESCRIPTION
  *   return the current line #
@@ -717,11 +674,6 @@ unsigned pfile_line_get(const pfile_t *pf)
  *   plog : log level
  *   fmt  : log format
  *   ...
- *
- * RETURN
- *   none
- *
- * NOTES
  */
 void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
 {
@@ -780,6 +732,32 @@ void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
 }
 
 /*
+ * Out-of-memory policy.
+ *
+ * Memory exhaustion is an environment failure, not a source error.  Before
+ * this, pfile_log_syserr() logged "internal error out of memory" and every
+ * caller carried on against objects that had never been created: a probe
+ * limited to 15 MB produced 125 unrelated diagnostics, and at 8 MB the
+ * compiler aborted inside the value-staleness detector.  There is no
+ * meaningful way to finish building the IR after an allocation fails, so
+ * the first failure reports once and stops the process with a non-zero
+ * status -- the same choice every mainstream compiler makes.  Recovery is
+ * deliberately NOT attempted: a half-built IR has no safe continuation.
+ */
+void pfile_oom_report(pfile_t *pf)
+{
+  FILE  *dst;
+
+  dst = (pf && pf->f_log) ? pf->f_log : stdout;
+  fprintf(dst, "error: out of memory; compilation stopped\n");
+  fflush(dst);
+  if (dst != stdout) {
+    fflush(stdout);
+  }
+  exit(EXIT_FAILURE);
+}
+
+/*
  * NAME
  *   pfile_log_syserr
  *
@@ -788,19 +766,24 @@ void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
  *
  * PARAMETERS
  *   pf : pfile
- *   rc : result
- *
- * RETURN
- *   none
+ *   rc : result (a result_t, or errno's ENOMEM)
  *
  * NOTES
- *   used mostly for ``out of memory'' and such
+ *   Used mostly for ``out of memory'' and such.  A memory failure is
+ *   fatal (see pfile_oom_report above); everything else is logged.
  */
 void pfile_log_syserr(pfile_t *pf, result_t rc)
 {
   if (RESULT_OK != rc) {
     const char *str;
 
+    /* A memory failure is not a per-statement error: nothing downstream
+     * can be trusted once an allocation has failed.  Callers pass either
+     * the result_t code or errno's ENOMEM. */
+    if ((RESULT_MEMORY == rc) || (ENOMEM == (int) rc)) {
+      pfile_oom_report(pf);
+      return;
+    }
     str = "{??unknown??}";
     switch (rc) {
       case RESULT_OK:             str = " no error";       break;
@@ -825,16 +808,13 @@ void pfile_log_syserr(pfile_t *pf, result_t rc)
  *   find an existing variable
  *
  * PARAMETERS
- *   pf   : returned by pfile_open()
- *   log  : how to log result
- *   name : name to find
- *   dst  : holds result on success
+ *   pf       : pfile handle
+ *   plog     : how to report a miss
+ *   name     : name to find
+ *   blk      : [out] block that holds it
  *
  * RETURN
- *   0      : no error
- *   ENOENT : not found
- *
- * NOTES
+ *   the variable, or VARIABLE_NONE
  */
 variable_t pfile_variable_find(pfile_t *pf, pfile_log_t plog,
   const char *name, pfile_block_t **blk)
@@ -861,10 +841,12 @@ variable_t pfile_variable_find(pfile_t *pf, pfile_log_t plog,
  *   find an existing variable & wrap it in a value
  *
  * PARAMETERS
+ *   pf       : pfile handle
+ *   plog     : how to report a miss
+ *   name     : name to find
  *
  * RETURN
- *
- * NOTES
+ *   the value, or VALUE_NONE
  */
 value_t pfile_value_find(pfile_t *pf, pfile_log_t plog,
   const char *name)
@@ -892,17 +874,15 @@ value_t pfile_value_find(pfile_t *pf, pfile_log_t plog,
  *   allocate a variable
  *
  * PARAMETERS
- *   pf : returned by pfile_open()
- *   name : variable name (0 for unnamed)
- *   flags :
- *   sz    :
- *   ct    : array size, must be >= 1
- *   cbuf  : constant buffer
- *   dst   : [out] holds result on success
+ *   pf       : pfile handle
+ *   which    : PFILE_VARIABLE_ALLOC_* scope
+ *   name     : variable name, or 0
+ *   def      : variable definition
+ *   master   : master variable, or VARIABLE_NONE
+ *   dst      : [out] holds the variable
  *
  * RETURN
- *
- * NOTES
+ *   RESULT_OK, RESULT_EXISTS, ...
  */
 result_t pfile_variable_alloc(pfile_t *pf, pfile_variable_alloc_t which,
     const char *name, variable_def_t def, variable_t master, variable_t *dst)
@@ -930,7 +910,6 @@ result_t pfile_variable_alloc(pfile_t *pf, pfile_variable_alloc_t which,
   }
   return rc;
 }
-
 
 label_t pfile_label_alloc(pfile_t *pf, const char *label)
 {
@@ -982,10 +961,12 @@ label_t pfile_label_temp_head_get(pfile_t *pf)
  *   find an existing label
  *
  * PARAMETERS
+ *   pf       : pfile handle
+ *   plog     : how to report a miss
+ *   name     : name to find
  *
  * RETURN
- *
- * NOTES
+ *   the label, or LABEL_NONE
  */
 label_t pfile_label_find(pfile_t *pf, pfile_log_t plog, const char *name)
 {
@@ -1005,38 +986,18 @@ label_t pfile_label_find(pfile_t *pf, pfile_log_t plog, const char *name)
 
 /*
  * NAME
- *   pfile_label_remove_unused
- *
- * DESCRIPTION
- *   remove unused labels
- *
- * PARAMETERS
- *   lst  : label list
- *   name : list name (for reporting)
- *
- * RETURN
- *   none
- *
- * NOTES
- */
-
-/*
- * NAME
  *   pfile_mem_minimize
  *
  * DESCRIPTION
- *   minimize the amount of used memory
- *
- * PARAMETERS
- *   pf : pfile
- *
- * RETURN
- *   none
+ *   pre-allocation memory sweep -- currently a no-op
  *
  * NOTES
- *   this release all unused temporaries, isr temporaries,
- *   labels, and cmds before calling pic_cmd_alloc() for
- *   the times when memory is at a premium.
+ *   it used to free unused labels and temporaries just before the
+ *   allocator ran, when memory was at a premium. The sweep it called
+ *   (pfile_label_remove_unused) no longer exists, so the calls are
+ *   commented out in the body and the function returns immediately; the
+ *   call site in pfile_cmd_dump() is kept so the pass order still reads
+ *   the same.
  */
 
 static void pfile_mem_minimize(pfile_t *pf)
@@ -1071,7 +1032,6 @@ boolean_t value_is_temp(const value_t val)
           || !memcmp(ptr, PFILE_BTMP_VARNAME, sizeof(PFILE_BTMP_VARNAME) - 1)) 
          ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
-
 
 /*
  * Interval-based `_temp` offset allocation (replaces the per-statement
@@ -1832,29 +1792,7 @@ void pfile_temp_fixup(pfile_t *pf)
   }
 }
 
-
-/*
- * NAME
- *   pfile_cexpr_reduction
- *
- * DESCRIPTION
- *   constant expression reduction
- *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
- *
- * NOTES
- *   This replaces constant expressions with a simple assignment.
- *   If the assignment is to a temporary, all references to the
- *   temporary are replaced by the expression.
- *
- *   nb: *don't* check for value_is_const, instead check for
- *       the value never being assigned!
- */
-static void pfile_cexpr_reduction_val2(value_t *pval, value_t dst, 
+static void pfile_cexpr_reduction_val2(value_t *pval, value_t dst,
     value_t cval)
 {
   if (value_baseofs_get(*pval) == dst) {
@@ -1864,8 +1802,8 @@ static void pfile_cexpr_reduction_val2(value_t *pval, value_t dst,
   }
 }
 
-static void pfile_cexpr_reduction_val(cmd_t cmd, 
-    value_t (*val_get)(const cmd_t cmd), 
+static void pfile_cexpr_reduction_val(cmd_t cmd,
+    value_t (*val_get)(const cmd_t cmd),
     void (*val_set)(cmd_t cmd, value_t val), value_t dst, value_t cval)
 {
   value_t val;
@@ -1875,6 +1813,23 @@ static void pfile_cexpr_reduction_val(cmd_t cmd,
   val_set(cmd, val);
 }
 
+/*
+ * NAME
+ *   pfile_cexpr_reduction
+ *
+ * DESCRIPTION
+ *   constant expression reduction
+ *
+ * NOTES
+ *   This replaces constant expressions with a simple assignment
+ *   (`dst = const`).
+ *   The branch that rewrote every reference to a temporary with the
+ *   folded expression is compiled out in the body (`if (1) { ... }`);
+ *   only the rewrite runs, so the claim does not apply.
+ *
+ *   nb: *don't* check for value_is_const, instead check for
+ *       the value never being assigned!
+ */
 void pfile_cexpr_reduction(pfile_t *pf)
 {
   if (pfile_flag_test(pf, PFILE_FLAG_OPT_CEXPR_REDUCTION)) {
@@ -1966,12 +1921,6 @@ void pfile_cexpr_reduction(pfile_t *pf)
  *
  * DESCRIPTION
  *   cleans up trivial expressions
- *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
  *
  * NOTES
  *   this fixes up any operators and removes redundant
@@ -2433,7 +2382,6 @@ static void pfile_expr_node_array_reset(pfile_t *pf,
   expr_node_id_reset();
 }
 
-
 /*
  * this does a few different things depending on the operator:
  *    +, - : combine constants
@@ -2766,7 +2714,6 @@ static void pfile_expr_simplify(pfile_t *pf)
  * and reduce to:
  *   y = x
  */
-
 
 /* this attempts to eliminate unnecessary temporaries
    for example:
@@ -3252,7 +3199,6 @@ static void pfile_opt_temp_replace(pfile_t *pf, cmd_t cmd_pv, cmd_t cmd,
   }
 }
 
-
 boolean_t pfile_opt_single_constant_assign(pfile_t *pf, unsigned pass)
 {
   cmd_t     cmd;
@@ -3566,12 +3512,6 @@ static void pfile_lookup_mark(pfile_t *pf)
  *
  * DESCRIPTION
  *   optimize the way procedure return values are handled
- *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
  *
  * NOTES
  *   In general, the return value of procedure is immediately
@@ -4030,18 +3970,15 @@ variable_t pfile_dynstr_reg_get(const pfile_t *pf, size_t i)
   return pf->dynstr_reg[i];
 }
 
-
 /*
  * NAME
- *   dump the command list
- *
- * DESCRIPTION
+ *   pfile_cmd_dump
  *
  * PARAMETERS
- *
- * RETURN
- *
- * NOTES
+ *   pf        : pfile handle
+ *   prog_name : compiler/date banner written into the asm header
+ *   argc      : command-line argument count
+ *   argv      : command line, echoed into the asm header
  */
 void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
      size_t argc, char **argv)
@@ -4147,8 +4084,8 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
   (void) cmd_analyze_link_inline_procs_for_alloc(pf);
   /* remove all code that is unreachable.
    * note that pfile_cmd_remove_unreachable() must be called at least
-   * once before pic_cmd_alloc() or the variable allocator will not
-   * see variables in unused space & issue a bunch of errors! */
+   * once before the variable allocator runs or it will not see variables
+   * in unused space & issue a bunch of errors! */
   (void) pfile_cmd_remove_unreachable(pf);
 
   if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_DEADCODE)) {
@@ -4370,7 +4307,6 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
   }
 }
 
-
 /*
  * NAME
  *   pfile_label_list_dump
@@ -4383,9 +4319,8 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
  *   lst  :
  *   name :
  *
- * RETURN
- *
  * NOTES
+ *
  */
 static void pfile_label_list_dump(pfile_t *pf, lbllist_t *lst, const char *name)
 {
@@ -4403,12 +4338,10 @@ static void pfile_label_list_dump(pfile_t *pf, lbllist_t *lst, const char *name)
   }
 }
 
-
 void pfile_label_dump(pfile_t *pf)
 {
   pfile_label_list_dump(pf, &pf->label_temp, "Temporary");
 }
-
 
 /*
  * NAME
@@ -4419,10 +4352,8 @@ void pfile_label_dump(pfile_t *pf)
  *   also, look for any bit variable chains and fix them up
  *
  * PARAMETERS
- *
- * RETURN
- *
- * NOTES
+ *   pf       : pfile handle
+ *   flags    : flags passed to pfile_proc_variable_fixup()
  */
 void pfile_variable_fixup(pfile_t *pf, flag_t flags)
 {
@@ -4453,9 +4384,8 @@ void pfile_variable_fixup(pfile_t *pf, flag_t flags)
  *   lst   :
  *   title :
  *
- * RETURN
- *
  * NOTES
+ *
  */
 static void pfile_variable_list_dump(pfile_t *pf, varlist_t *lst, 
       const char *title)
@@ -4505,19 +4435,13 @@ unsigned pfile_warnct_get(const pfile_t *pf)
  *   pfile_isr_preamble
  *
  * DESCRIPTION
- *   generate the generic ISR preamble code
- *
- * PARAMETERS
- *   pf : pfile
- *
- * RETURN
- *   none
+ *   no-op placeholder -- the back ends emit their own ISR preamble
  *
  * NOTES
- *   isr preamble:
- *      1. save any temporaries
- *      2. jump to first defined ISR
- *   this is ignored if there are no ISRs defined
+ *   this used to emit the generic preamble (save the temporaries, jump
+ *   to the first ISR). That code is gone; the call site is kept and the
+ *   `_isr_preamble` label is still allocated at pfile_open(), but nothing
+ *   reads it any more.
  */
 void pfile_isr_preamble(pfile_t *pf)
 {
@@ -4573,7 +4497,6 @@ label_t pfile_user_entry_get(pfile_t *pf)
   return lbl;
 }
 
-
 label_t pfile_isr_entry_get(pfile_t *pf) 
 {
   label_t lbl;
@@ -4594,7 +4517,6 @@ boolean_t pfile_isr_entry_active(const pfile_t *pf)
 {
   return (pf->label_isr) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
-
 
 /*
  * nb : don't rely on the output of this, as the file written
@@ -4651,19 +4573,14 @@ void pfile_write_hex(pfile_t *pf, ulong pc, unsigned char data)
  *   pfile_string_find
  *
  * DESCRIPTION
- *   return a string if it exists
- *
- * PARAMETERS
- *   pf  : 
- *   sz  : 
- *   ptr : 
+ *   stub: always returns VALUE_NONE
  *
  * RETURN
- *   value describing the string, or NULL if not found
+ *   VALUE_NONE
  *
  * NOTES
- *   this checks all existing lookup tables to see if a substring
- *   matches the passed in string.
+ *   it used to search the lookup tables for a matching substring. That
+ *   search is gone, nothing calls it, and the parameters are unused.
  */
 value_t pfile_string_find(pfile_t *pf, size_t sz, const char *ptr)
 {
@@ -4885,7 +4802,6 @@ result_t pfile_variable_def_add(pfile_t *pf, variable_def_t def)
   return pfile_proc_variable_def_add(pf->proc_active, def);
 }
 
-
 /*
  * NAME
  *   pfile_proc_create
@@ -4894,20 +4810,17 @@ result_t pfile_variable_def_add(pfile_t *pf, variable_def_t def)
  *   create a new procedure
  *
  * PARAMETERS
- *   pf         : pfile handle
- *   tag        : procedure name
- *   param_ct   : # of parameters
- *   params     : array of parameters
- *   return_def : return type
+ *   pf       : pfile handle
+ *   tag      : procedure name
+ *   proc_def : function definition
  *
  * RETURN
- *   matching procedure
+ *   the new or existing procedure
  *
  * NOTES
- *   if the procedure already exists, this checks to make sure
- *   the parameters & return value are the same
- *   if the procedure does not exist, it allocates a matching
- *   function variable and procedure  
+ *   the JAL front end is what compares an existing procedure against a new
+ *   definition (it reports a function-signature mismatch); this layer only
+ *   creates the procedure on its first definition.
  */
 pfile_proc_t *pfile_proc_create(pfile_t *pf, const char *tag, 
     variable_def_t proc_def)
@@ -5034,7 +4947,6 @@ result_t pfile_block_leave(pfile_t *pf)
   return pfile_proc_block_leave(pf->proc_active);
 }
 
-
 /* look for procedure named, ``tag''. 
  *    1st -- search all children
  *    2nd -- move up the tree & repeat */
@@ -5077,19 +4989,15 @@ pfile_proc_t *pfile_proc_root_get(const pfile_t *pf)
 
 /*
  * NAME
- *   pf_include_process
+ *   pfile_include_process
  *
  * DESCRIPTION
  *   process an include file
  *
  * PARAMETERS
- *   pf    : file
- *   fname : include file name
- *
- * RETURN
- *   none
- *
- * NOTES
+ *   pf       : pfile handle
+ *   fname_sz : length of fname, 0 to compute it
+ *   fname    : include file name
  */
 void pfile_include_process(pfile_t *pf, size_t fname_sz,
   const char *fname)
@@ -5672,5 +5580,4 @@ const pfile_multiply_width_table_entry_t *
     ? pf->multiply_widths + ii
     : 0;
 }
-
 

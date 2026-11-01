@@ -69,30 +69,6 @@ static void pic12_delay_movwf_after_movlw(pfile_t *pf, value_t dst)
   }
 }
 
-/*
- * NAME
- *   pic_delay_create
- *
- * DESCRIPTION
- *   create an n us delay
- *
- * PARAMETERS
- *   pf   :
- *   usec : # of usec to delay
- *
- * RETURN
- *   none
- *
- * NOTES
- *   all delays are inline. There are three used:
- *   1, 2, or 3 variable. all of them force PCLATH<4:3>
- *   to be set always.
- *   Governing equations
- *
- *   1 variable : (3x + 5);        8 instr;  8 <= cycles <=         773
- *   2 variable : y(5x+6) + 3;    14 instr; 14 <= cycles <=     329,219
- *   3 variable : z(y(5x+6)+6)+3; 20 instr; 20 <= cycles <=  84,280,835
- */
 static unsigned long pic12_delay3_create(pfile_t *pf, unsigned long cycles)
 {
   unsigned long x;
@@ -589,6 +565,25 @@ static unsigned long pic16_delay_create(pfile_t *pf, unsigned long cycles,
   return cycles;
 }
 
+/*
+ * NAME
+ *   pic_delay_create
+ *
+ * DESCRIPTION
+ *   create an n us delay
+ *
+ * PARAMETERS
+ *   pf   :
+ *   usec : # of usec to delay
+ *
+ * NOTES
+ *   all delays are inline, using 1, 2 or 3 loop variables. The 12/14-bit
+ *   loops force PCLATH<4:3> (branch-bit clears, or MOVLP on the 14-bit
+ *   hybrid); the PIC18 loops select the bank with MOVLB instead.
+ *   The cycles a loop consumes are derived in pic12_delay3_create()
+ *   (12/14-bit) and pic16_delay_create() (14-bit hybrid / PIC18); they
+ *   differ per target, so there is no single equation table here.
+ */
 void pic_delay_create(pfile_t *pf, variable_const_t usec)
 {
   double        dcycles;

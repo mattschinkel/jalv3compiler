@@ -26,8 +26,7 @@
  * It used to be six independent statics scattered through this file with
  * no reset anywhere -- fine for a one-shot compiler, but it is exactly what
  * makes a second compile in the same process (unit tests, a faster fuzzer,
- * an exit-time leak check) impossible. Part of the Tier-A A4 conversion;
- * pic_var.c (27 statics) is the next module.
+ * an exit-time leak check) impossible. Part of the Tier-A A4 conversion.
  */
 static struct pic_stk_state_ {
   /* Lines remaining for pic_stack_depth debug, reset per depth walk. */

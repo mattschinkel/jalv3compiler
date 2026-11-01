@@ -445,6 +445,15 @@ variable_array_t *cmd_kill_get(cmd_t cmd)
   return cmd_var_array_get(cmd, offsetof(struct cmd_, var_kill));
 }
 
+boolean_t cmd_is_executable(cmd_t cmd)
+{
+  return (CMD_TYPE_NOP           != cmd_type_get(cmd))
+      && (CMD_TYPE_LABEL         != cmd_type_get(cmd))
+      && (CMD_TYPE_BLOCK_START   != cmd_type_get(cmd))
+      && (CMD_TYPE_BLOCK_END     != cmd_type_get(cmd))
+      && (CMD_TYPE_STATEMENT_END != cmd_type_get(cmd));
+}
+
 /*
  * NAME
  *   cmd_next_exec_get
@@ -462,15 +471,6 @@ variable_array_t *cmd_kill_get(cmd_t cmd)
  *   this skips non-exectuable commands. it's helpful when looking
  *   past all labels
  */
-boolean_t cmd_is_executable(cmd_t cmd)
-{
-  return (CMD_TYPE_NOP           != cmd_type_get(cmd))
-      && (CMD_TYPE_LABEL         != cmd_type_get(cmd))
-      && (CMD_TYPE_BLOCK_START   != cmd_type_get(cmd))
-      && (CMD_TYPE_BLOCK_END     != cmd_type_get(cmd))
-      && (CMD_TYPE_STATEMENT_END != cmd_type_get(cmd));
-}
-
 cmd_t cmd_next_exec_get(cmd_t cmd)
 {
   while (cmd && !cmd_is_executable(cmd)) {

@@ -766,22 +766,6 @@ static void pic_blist_check(const pic_bank_info_t *blist)
 }
 #endif
 
-/*
- * NAME
- *   pic_variable_alloc
- *
- * DESCRIPTION
- *   allocate space for all variables
- *
- * PARAMETERS
- *   pf
- *
- * RETURN
- *
- * NOTES
- *   this is dummied up for now. eventually i'll need to sort
- *   the variables by size for a more optimimal filling
- */
 /* this is the union of  blist with {lo,hi} */
 void pic_blist_add(pfile_t *pf, pic_bank_info_t **pblist, 
     size_t lo, size_t hi)
@@ -3067,6 +3051,13 @@ boolean_t pic_variable_late_alloc(pfile_t *pf, variable_t var)
   return pic_variable_alloc_one(pf, PFILE_PROC_NONE, var);
 }
 
+/*
+ * NAME
+ *   pic_variable_alloc
+ *
+ * DESCRIPTION
+ *   allocate space for all variables
+ */
 void pic_variable_alloc(pfile_t *pf)
 {
   pfile_proc_t *proc;
@@ -3283,12 +3274,7 @@ void pic_variable_alloc(pfile_t *pf)
           variable_base_t base;
 
           base = pic_data_alloc(pf, &pic_var.data_bank_list, variable_sz_get(var));
-          if (VARIABLE_BASE_UNKNOWN == base) {
-#if 0
-            pfile_log(pf, PFILE_LOG_ERR, "out of data space: %s",
-              variable_name_get(var));
-#endif
-          } else {
+          if (VARIABLE_BASE_UNKNOWN != base) {
             variable_base_set(var, base, 0);
             variable_array_entry_add(allocated_vars, &var,
               ARRAY_ADD_FLAG_NONE, variable_unique_cmp, 0);

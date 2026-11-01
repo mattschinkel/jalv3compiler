@@ -508,19 +508,19 @@ void pic_branchbits_pc_set(pfile_t *pf, unsigned flag)
 
 /*
  * NAME
- *   pic_code_branchbits_analyze
+ *   pic_code_brop_analyze
  *
  * DESCRIPTION
  *   branch analyzing & fixing
  *
  * PARAMETERS
- *   pf : pfile
+ *   pf       : pfile handle
+ *   code     : code node
+ *   which    : walk phase
+ *   odata    : analysis state
  *
  * RETURN
- *   TRUE if a branchbit transitions from NOP to SET/CLR
- *   FALSE if not
- *
- * NOTES
+ *   PIC_CODE_GOP_RC_STOP when the state matches, CONTINUE otherwise
  */
 static pic_code_gop_rc_t pic_code_brop_analyze(pfile_t *pf, pic_code_t code,
     pic_code_gop_which_t which, void *odata)
@@ -883,35 +883,9 @@ void pic_code_branchbits_optimize(pfile_t *pf)
   pic_brop_sums_free(&sums);
 }
 
-/*
- * NAME
- *   pic_code_branch_optimize
- *
- * DESCRIPTION
- *   optimize branches
- *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
- *
- * NOTES
- *   optimizations performed:
- *     branch to goto
- *     ---> resolve & branch
- *     goto to return
- *     ---> replace with return
- *     call to return
- *     ---> remove call
- *     goto following instruction
- *     ---> remove goto
- *     call followed by return
- *     ---> call changed to goto 
- */
 /* if the code becomes less than 6K, remove all branchhi_* ops,
  * if it becomes less than 4K, remove all branchlo_* ops
- */ 
+ */
 pic_code_t pic_code_brnext_get(pfile_t *pf, pic_code_t code, label_t *dst_lbl)
 {
   label_t    brlbl;
@@ -932,6 +906,30 @@ pic_code_t pic_code_brnext_get(pfile_t *pf, pic_code_t code, label_t *dst_lbl)
 }
 
 
+/*
+ * NAME
+ *   pic_code_branch_optimize
+ *
+ * DESCRIPTION
+ *   optimize branches
+ *
+ * PARAMETERS
+ *   pf : pfile handle
+ *
+ * NOTES
+ *   optimizations performed:
+ *     branch to goto
+ *     ---> resolve & branch
+ *     goto to return
+ *     ---> replace with return
+ *     call to return
+ *     ---> remove call
+ *     goto following instruction
+ *     ---> remove goto
+ *     call followed by return
+ *     ---> call changed to goto, except calls to a regression_checkpoint
+ *          label (pic_brop_tail_call_forbidden)
+ */
 void pic_code_branch_optimize(pfile_t* pf)
 {
 	pic_code_t code;

@@ -1,6 +1,6 @@
 /************************************************************
  **
- ** pic_cmdo.c : pic cmd optimization declarations
+ ** pic_cmdo.h : pic cmd optimization declarations
  **
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved

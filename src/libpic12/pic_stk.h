@@ -1,6 +1,6 @@
 /************************************************************
  **
- ** pic_stk.c : determine PIC stack usage declarations
+ ** pic_stk.h : determine PIC stack usage declarations
  **
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved

@@ -82,7 +82,6 @@ variable_sz_t pic_dynamic_index_byte_sz_get(value_t idx)
   return (idx_sz < 1) ? 1 : idx_sz;
 }
 
-
 void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
     value_t array_val)
 {
@@ -409,25 +408,6 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
     pic_classic_irp_set_from_w(pf);
   }
 }
-
-/*
- * NAME
- *   pic_indirect_setup
- *
- * DESCRIPTION
- *   setup irp:fsr
- *
- * PARAMETERS
- *   pf    : file
- *   val   : value
- *   offset: offset from start of value
- *
- * RETURN
- *
- * NOTES
- *   1. A value is assumed to not span banks
- *   2. Normally this is called if val.baseofs is non-const
- */
 
 /* PIC14 lookup CALL needs the table index in W. pic_instr_append_f_d(MOVF)
  * is only correct for a plain file register; indexed RAM (INDF / v__ind)

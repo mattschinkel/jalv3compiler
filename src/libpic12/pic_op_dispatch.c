@@ -29,25 +29,6 @@
 #include "pic_op.h"
 #include "pic_op_priv.h"
 
-/*
- * NAME
- *   pic_op
- *
- * DESCRIPTION
- *   create code for an operator
- *
- * PARAMETERS
- *   pf  : file
- *   op  :
- *   dst :
- *   val1:
- *   val2:
- *
- * RETURN
- *   none
- *
- * NOTES
- */
 extern variable_sz_t pic_temp_sz_in_use;
 
 typedef void (*operator_fn_t)(pfile_t *pf, operator_t op, value_t dst, 
@@ -88,6 +69,20 @@ static const struct operator_fn_tbl_ {
   { OPERATOR_LOGICAL,     pic_op_logical_or_not, 0}
 };
 
+/*
+ * NAME
+ *   pic_op
+ *
+ * DESCRIPTION
+ *   create code for an operator
+ *
+ * PARAMETERS
+ *   pf  : file
+ *   op  :
+ *   dst :
+ *   val1:
+ *   val2:
+ */
 void pic_op(pfile_t *pf, operator_t op, value_t dst, value_t val1,
     value_t val2)
 {

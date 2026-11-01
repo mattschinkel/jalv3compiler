@@ -1,6 +1,6 @@
 /************************************************************
  **
- ** cache.h : low-memory caching definitions
+ ** cache.c : low-memory caching definitions
  **
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved

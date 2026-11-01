@@ -79,14 +79,11 @@ static boolean_t allow_any(int ch)
  *   retrieve a token
  *
  * PARAMETERS
- *   pf    : returned by pfile_open()
- *   which : which token to get (first, current, next)
- *   dst   : [out] points to retrieved token
+ *   pf       : returned by pfile_open()
+ *   which    : which token to get (first, current, next)
  *
  * RETURN
- *   none
- *
- * NOTES
+ *   the token text
  */
 const char *jal_token_get(pfile_t *pf, pf_token_get_t which)
 {
@@ -381,17 +378,13 @@ const char *jal_token_get(pfile_t *pf, pf_token_get_t which)
  *   convert the current token to an unnamed constant
  *
  * PARAMETERS
- *   pf   : returned by pfile_open()
- *   plog : how to log an invalid result
- *   dst  : [out] holds result on success
+ *   pf       : pfile handle
+ *   plog     : how to report a bad token
  *
  * RETURN
- *   0      : no error
- *   EINVAL : current token is not a constant
- *   ERANGE : constant is too large
- *
+ *   the constant value
  * NOTES
- *   [dst] will be *locked* on successful return
+ *   the returned value is *locked*; the caller releases it
  */
 value_t jal_token_to_constant(pfile_t *pf, pfile_log_t plog)
 {

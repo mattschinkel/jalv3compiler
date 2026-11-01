@@ -64,19 +64,72 @@ static boolean_t jal_const_var_whereis_metadata_set(variable_t dst_var,
   return BOOLEAN_FALSE;
 }
 
+/*
+ * Names the compiler creates itself.  Several of them are looked up by
+ * string and, when absent, created on the spot -- so a program that
+ * declared the same name first would have its variable silently adopted
+ * as compiler scratch (wrong size, wrong storage: silent memory damage).
+ *
+ * This is deliberately an explicit list, NOT a blanket "_" rule: jallib's
+ * device files legitimately declare other underscore names (_pic_accum,
+ * _pic_isr_w, _saved_sfr, _status, ...) and `_string_heap_size` is the
+ * documented user-declared heap-size constant.
+ */
+static const char *const jal_compiler_names[] = {
+  "_pfile_strc_cpt",  /* string-heap compaction work table  */
+  "_pic_temp",        /* PIC scratch byte (pic_stvar.c)     */
+  "_task_list",       /* cooperative-task slot table        */
+  "_task_paused",
+  "_task_active",
+  0
+};
+
+/* Generated names: a numeric suffix is appended, so match on the prefix. */
+static const char *const jal_compiler_name_prefixes[] = {
+  "_string_fixarg",   /* per-call-site string marshalling buffer */
+  "_pic_bss_",        /* clear-BSS block name (pic.c)            */
+  0
+};
+
 boolean_t jal_identifier_is_reserved(pfile_t *pf)
 {
-  boolean_t rc;
+  boolean_t   rc;
+  const char *name;
+  int         ii;
+
+  rc   = BOOLEAN_FALSE;
+  name = pf_token_get(pf, PF_TOKEN_CURRENT);
 
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "count")
     || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "_length")
     || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "defined")
     || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "whereis")) {
-    pfile_log(pf, PFILE_LOG_ERR, "'%s' is a reserved word", 
-      pf_token_get(pf, PF_TOKEN_CURRENT));
+    pfile_log(pf, PFILE_LOG_ERR, "'%s' is a reserved word", name);
     rc = BOOLEAN_TRUE;
-  } else {
-    rc = BOOLEAN_FALSE;
+  } else if (name && *name) {
+    for (ii = 0; jal_compiler_names[ii]; ii++) {
+      if (0 == strcmp(name, jal_compiler_names[ii])) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "'%s' is reserved for the compiler", name);
+        rc = BOOLEAN_TRUE;
+        break;
+      }
+    }
+    if (!rc) {
+      for (ii = 0; jal_compiler_name_prefixes[ii]; ii++) {
+        size_t plen;
+
+        plen = strlen(jal_compiler_name_prefixes[ii]);
+        if ((0 == strncmp(name, jal_compiler_name_prefixes[ii], plen))
+          && (name[plen] != '\0')) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "'%s' uses the compiler-reserved prefix '%s'",
+              name, jal_compiler_name_prefixes[ii]);
+          rc = BOOLEAN_TRUE;
+          break;
+        }
+      }
+    }
   }
   return rc;
 }
@@ -337,27 +390,6 @@ variable_def_t jal_vdef_get(pfile_t *pf, flag_t flags)
   return vdef;
 }
 
-/*
- * NAME
- *   jal_value_find
- *
- * DESCRIPTION
- *   find a named value
- *
- * PARAMETERS
- *   pf      : pfile handle
- *   name    : value name
- *   val[]   : [out] holds all values found
- *
- * RETURN
- *   block in which the values were found, or NULL if none
- *
- * NOTES
- *   1. unlike most routines, all entries in val[] are set to VALUE_NONE
- *      on entry.
- *   2. val, 'get and 'put, 'vget, or 'vput if defined, must all be defined 
- *      at the same place (same block).
- */
 const char *jal_value_type_to_name(char *dst, size_t dst_sz,
     const char *name, jal_val_type_t type)
 {
@@ -579,6 +611,28 @@ static boolean_t jal_value_find_registry(pfile_t *pf, const char *name,
   return found;
 }
 
+/*
+ * NAME
+ *   jal_value_find
+ *
+ * DESCRIPTION
+ *   find a named value
+ *
+ * PARAMETERS
+ *   pf       : pfile handle
+ *   name     : value name
+ *   val      : [out] holds the value when found
+ *
+ * RETURN
+ *   BOOLEAN_TRUE when the name resolves -- including the hardcoded
+ *   serial_data_available / serial_hw_* fallbacks that synthesise a
+ *   value for an undefined name
+ * NOTES
+ *   1. unlike most routines, all entries in val[] are set to VALUE_NONE
+ *      on entry.
+ *   2. val, 'get and 'put, 'vget, or 'vput if defined, must all be defined
+ *      at the same place (same block).
+ */
 boolean_t jal_value_find(pfile_t *pf, const char *name,
     value_t val[JAL_VAL_TYPE_CT])
 {

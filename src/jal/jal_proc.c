@@ -1065,13 +1065,11 @@ void jal_parse_return(pfile_t *pf, const pfile_pos_t *statement_start)
  *
  * PARAMETERS
  *   pf       : pfile handle
- *   var_name : variable name
- *   fn_name  : function name
+ *   type     : JAL_VOLATILE_FN_GET or _PUT
+ *   var_name : variable name; the function name derives from it
  *
  * RETURN
- *   value
- *
- * NOTES
+ *   the created function value
  */
 typedef enum {
   JAL_VOLATILE_FN_GET,
@@ -1208,23 +1206,6 @@ static value_t jal_volatile_function_create(pfile_t *pf,
   return tmp;
 }
 
-/*
- * NAME
- *   jal_parse_call
- *
- * DESCRIPTION
- *   parse a call
- *
- * PARAMETERS
- *   pf  : pfile handle
- *   val : a function, a function pointer, or a function reference
- *
- * RETURN
- *   The resulting value, or VALUE_NONE
- *
- * NOTES
- *   This will automatically deference val.
- */
 /* function-pointer formal: bind the caller's _get/_put (or synthesize
  * the volatile accessor); an IN|OUT pair consumes the next formal
  * slot (advances ii and the member walk) */
@@ -1663,6 +1644,24 @@ static void jal_call_optional_defaults_fill(pfile_t *pf, value_t call_val, flag_
   *pii = ii;
 }
 
+/*
+ * NAME
+ *   jal_parse_call
+ *
+ * DESCRIPTION
+ *   parse a call
+ *
+ * PARAMETERS
+ *   pf       : pfile handle
+ *   call_val : function, function pointer, or reference
+ *   flags    : call flags
+ *
+ * RETURN
+ *   the resulting value, or VALUE_NONE
+ * NOTES
+ *   call_val is used as given; a function-pointer callee's target
+ *   definition is read, but no dereference is emitted.
+ */
 value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
 {
   value_t              *parms;

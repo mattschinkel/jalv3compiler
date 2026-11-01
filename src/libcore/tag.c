@@ -1,6 +1,6 @@
 /************************************************************
  **
- ** tag.h : tag definitons
+ ** tag.c : tag definitons
  **
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved

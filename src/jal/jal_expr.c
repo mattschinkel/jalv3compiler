@@ -1444,19 +1444,71 @@ static value_t value_get_defined(pfile_t *pf)
 }
 
 /*
+ * Maximum nesting of jal_parse_expr.  The '(' case in value_get calls
+ * jal_parse_expr again, so a left-parenthesis run recurses once per
+ * character: before this cap, 50 000 nested '(' (a 100 kB input file)
+ * overflowed the C stack and killed the process with SIGSEGV.  Real
+ * programs nest a handful deep; 256 leaves two orders of magnitude of
+ * headroom while keeping the worst-case stack use well under 64 kB.
+ */
+#define JAL_EXPR_MAX_DEPTH 256U
+
+static unsigned jal_expr_depth; /* current jal_parse_expr nesting */
+
+/*
+ * NAME
+ *   jal_expr_depth_error
+ *
+ * DESCRIPTION
+ *   report the nesting-limit diagnostic (once; the caller resynchronises
+ *   so the unwinding expression does not repeat it per level)
+ */
+static void jal_expr_depth_error(pfile_t *pf)
+{
+  pfile_log(pf, PFILE_LOG_ERR,
+      "expression nested too deeply (limit %u); simplify the expression",
+      JAL_EXPR_MAX_DEPTH);
+}
+
+/*
+ * NAME
+ *   jal_expr_skip_to_close
+ *
+ * DESCRIPTION
+ *   consume tokens up to and including the ')' that closes a construct
+ *   whose '(' has already been consumed.  Used only on the nesting-limit
+ *   error path so the rest of the expression is parsed once, not once
+ *   per abandoned level.
+ */
+static void jal_expr_skip_to_close(pfile_t *pf)
+{
+  unsigned depth;
+
+  depth = 1U;
+  while ((0U != depth) && !pf_token_is_eof(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "(")) {
+      depth++;
+    } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, ")")) {
+      depth--;
+    }
+    if (0U != depth) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
+  }
+  if (0U == depth) {
+    pf_token_get(pf, PF_TOKEN_NEXT); /* step past the closing ')' */
+  }
+}
+
+/*
  * NAME
  *   value_get
  *
  * DESCRIPTION
  *   get an expression's value
  *
- * PARAMETERS
- *   pf    : return from pfile_open()
- *   var   : [out] holds result
- *
  * RETURN
- *
- * NOTES
+ *   the parsed value
  */
 static value_t value_get(pfile_t *pf)
 {
@@ -1540,10 +1592,19 @@ static value_t value_get(pfile_t *pf)
         break;
       case '(':
         pf_token_get(pf, PF_TOKEN_NEXT);
-        val = jal_parse_expr(pf);
-        /* prepend the existing result to the new result */
-        if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, ")")) {
-          pf_token_get(pf, PF_TOKEN_NEXT);
+        if (jal_expr_depth >= JAL_EXPR_MAX_DEPTH) {
+          /* The recursion guard would fire one level down; report it here,
+           * once, and swallow the rest of the parenthesised construct so
+           * the unwind does not emit "')' expected" once per level. */
+          jal_expr_depth_error(pf);
+          jal_expr_skip_to_close(pf);
+          val = VALUE_NONE;
+        } else {
+          val = jal_parse_expr(pf);
+          /* prepend the existing result to the new result */
+          if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, ")")) {
+            pf_token_get(pf, PF_TOKEN_NEXT);
+          }
         }
         break;
       default:
@@ -1569,15 +1630,8 @@ static value_t value_get(pfile_t *pf)
  * DESCRIPTION
  *   get an operator
  *
- * PARAMETERS
- *   expr : expression
- *   pf   : returned by pfile_open()
- *
  * RETURN
- *   0      : no error
- *   EINVAL : no operator present
- *
- * NOTES
+ *   the operator for the current token
  */
 static operator_t operator_get(pfile_t *pf)
 {
@@ -1625,19 +1679,27 @@ static operator_t operator_get(pfile_t *pf)
 
 /*
  * NAME
- *   expr_parse
+ *   jal_expr_state_reset
+ *
+ * DESCRIPTION
+ *   clear the parser's nesting counter so a second compile in the same
+ *   process starts at depth 0 (see jal_reset_between_compiles).
+ */
+void jal_expr_state_reset(void)
+{
+  jal_expr_depth = 0U;
+}
+
+/*
+ * NAME
+ *   jal_parse_expr
  *
  * DESCRIPTION
  *   parse an expression
  *
- * PARAMETERS
- *   dst   : [out] holds result
- *   pf    : parse file
- *   lhvar : for assignments, this is the base left-hand variable
- *
  * RETURN
- *
- * NOTES
+ *   the parsed expression value, or VALUE_NONE when the expression is
+ *   nested deeper than JAL_EXPR_MAX_DEPTH
  */
 value_t jal_parse_expr(pfile_t *pf)
 {
@@ -1645,6 +1707,12 @@ value_t jal_parse_expr(pfile_t *pf)
   operator_t  prev_op;
   expr_t     *exprstk;
   value_t     val;
+
+  if (jal_expr_depth >= JAL_EXPR_MAX_DEPTH) {
+    jal_expr_depth_error(pf);
+    return VALUE_NONE;
+  }
+  jal_expr_depth++;
 
   exprstk  = 0;
   op       = OPERATOR_NULL;
@@ -1692,6 +1760,7 @@ value_t jal_parse_expr(pfile_t *pf)
     value_lock(val);
     expr_list_free(&exprstk);
   }
+  jal_expr_depth--;
   return val;
 }
 

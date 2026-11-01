@@ -115,7 +115,7 @@ static void pic_assign_shift_left_4_bits(pfile_t *pf, value_t dst,
  * pf         : pfile handle
  * dst        : destination value
  * src        : source vlaue
- * sz         : result size (will be <= value_size_get(dst))
+ * sz         : result size (will be <= value_sz_get(dst))
  * byte_shift : number of bytes to shift
  * action     : *_COPY : all shifted bytes are copied
  *              *_SWAP : the MSB has the nibbles swapped and the

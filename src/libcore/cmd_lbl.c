@@ -121,12 +121,11 @@ void cmd_label_set(cmd_t cmd, label_t lbl)
  *   find a label in the command list
  *
  * PARAMETERS
- *   cmd : head of list
+ *   cmd_head : head of the command list
+ *   lbl      : label to find
  *
  * RETURN
- *   label, or 0
- *
- * NOTES
+ *   the command defining lbl, or CMD_NONE
  */
 cmd_t cmd_label_find(cmd_t cmd_head, const label_t lbl)
 {

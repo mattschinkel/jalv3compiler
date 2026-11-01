@@ -333,9 +333,21 @@ void cmd_opval2_set(cmd_t cmd, value_t val2)
   }
 }
 
+static boolean_t value_const_cmp(const value_t val, variable_const_t n)
+{
+  return value_is_const(val)
+      && (value_const_get(val) == n);
+}
+
+static boolean_t value_is_unsigned(const value_t val)
+{
+  return !value_dflag_test(val, VARIABLE_DEF_FLAG_SIGNED);
+}
+
+
 /*
  * NAME
- *   cmd_op_cleanup
+ *   cmd_op_reduction
  *
  * DESCRIPTION
  *   cleanup an operator
@@ -355,7 +367,7 @@ void cmd_opval2_set(cmd_t cmd, value_t val2)
  *     1. the constant is *always* on the right for commutative
  *        operators and relations
  *     2. reduce the following identities:
- *       x = x -- nop
+ *       x = x -- removed by the caller (pfile_expr_reduction), not here
  *       x + 0 -- nop
  *       x - 0 -- nop
  *       0 - x = -x
@@ -385,27 +397,15 @@ void cmd_opval2_set(cmd_t cmd, value_t val2)
  *       x ^ x  = 0
  *       0 << # = 0
  *       x << 0 = x
- *       x << # = 0 if # >= bits in x
+ *       x << #, # >= bits in x : range error, operand left unchanged
  *       0 >> # = 0
  *       x >> 0 = x
- *       x >> # = 0 if # >= bits in x
+ *       x >> #, # >= bits in x : range error, operand left unchanged
  *       x == 0 = !x
  *       x != 0 = !!x
  *       x == 1 = x iff x is single bit
  *       x != 1 = !x iff x is single bit
  */
-static boolean_t value_const_cmp(const value_t val, variable_const_t n)
-{
-  return value_is_const(val)
-      && (value_const_get(val) == n);
-}
-
-static boolean_t value_is_unsigned(const value_t val)
-{
-  return !value_dflag_test(val, VARIABLE_DEF_FLAG_SIGNED);
-}
-
-
 result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
 
 {

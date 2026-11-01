@@ -109,23 +109,27 @@ void pfile_proc_free(pfile_proc_t *proc, pfile_t *pf)
 
 /*
  * NAME
- *   pfile_proc_params_define
+ *   pfile_proc_define
  *
  * DESCRIPTION
  *   Move the variables out of the params into the block variable
  *   list.
  *
  * PARAMETERS
- *   proc   : procedure handle
- *   params : parameters to use
+ *   proc     : procedure
+ *   def      : unused; the definition was attached at pfile_proc_alloc()
+ *   pf       : pfile handle
  *
  * RETURN
- *   none
+ *   RESULT_OK, RESULT_EXISTS when already defined, or RESULT_MEMORY if
+ *   the parameter array cannot be allocated
  *
  * NOTES
  *   this is required to allow the declaration of a function
  *     outside its definition
  *   it must be called after the block has been initialized
+ *   the first call allocates the parameter values from proc->def;
+ *   a later call finds proc->params set and does nothing
  */
 result_t pfile_proc_define(pfile_proc_t *proc, variable_def_t def, pfile_t *pf)
 {

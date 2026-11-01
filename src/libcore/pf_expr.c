@@ -113,12 +113,13 @@ variable_def_t pfile_variable_def_promotion_get(pfile_t *pf,
  *   push a subexpression onto the expression stack
  *
  * PARAMETERS
- *   pf   : returned by pfile_open()
- *   stk  : top of the expression stack
- *   expr : expression to append
+ *   pf       : returned by pfile_open()
+ *   stk      : top of the expression stack
+ *   val      : value to push
+ *   op       : operator binding it (OPERATOR_NULL at the top level)
  *
  * RETURN
- *   none
+ *   RESULT_OK, or RESULT_MEMORY
  *
  * NOTES
  *   this creates commands as necessary
@@ -692,31 +693,6 @@ static void pfile_value_type_check(pfile_t *pf, operator_t op, value_t dst,
   pfile_value_def_type_check(pf, op, value_def_get(dst), val1, val2);
 }
 
-/*
- * NAME
- *   pfile_cmd_op_add
- *
- * DESCRIPTION
- *   add an operation
- *
- * PARAMETERS
- *   pf:
- *   label : line label
- *   op    : operation
- *   dst   : destination, can be 0 to allocate a temporary
- *   val1  : value 1 (can be 0 for unary operations, cannot be 0 for binary)
- *   val2  : value 2 (must be 0 for unary, can be 0 for binary)
- *
- * RETURN
- *
- * NOTES
- *   if dst is NULL on entry, it will hold a value on successful exit
- *   if dst is a function
- *     *error*
- *   if dst is a reference
- *     if *dst is a function
- *       src must be a function with a matching signature
- */
 void pfile_cmd_op_add_assign(pfile_t *pf, operator_t op,
   value_t *pdst, value_t src)
 {
@@ -964,6 +940,28 @@ static boolean_t pfile_value_writes_through_const_pointee(const value_t val)
   return BOOLEAN_FALSE;
 }
 
+/*
+ * NAME
+ *   pfile_cmd_op_add
+ *
+ * DESCRIPTION
+ *   add an operation
+ *
+ * PARAMETERS
+ *   pf       : pfile handle
+ *   op       : operation
+ *   pdst     : destination, 0 to allocate a temporary
+ *   val1     : value 1 (0 for unary operations)
+ *   val2     : value 2 (must be 0 for unary operations)
+ *
+ * NOTES
+ *   if dst is NULL on entry, it will hold a value on successful exit
+ *   if dst is a function
+ *     *error*
+ *   if dst is a reference
+ *     if *dst is a function
+ *       src must be a function with a matching signature
+ */
 void pfile_cmd_op_add(pfile_t *pf,
   operator_t op, value_t *pdst, value_t val1, value_t val2)
 {

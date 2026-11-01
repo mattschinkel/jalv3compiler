@@ -372,12 +372,10 @@ label_t pfile_block_label_list_head(pfile_block_t *blk)
  *   assign all bits locations in the procedure's bitbucket
  *
  * PARAMETERS
- *   blk             : 
- *   bitbucket       :
- *   bitbucket_inuse : # of bits in the bit bucket currently in use
- *
- * RETURN
- *   none
+ *   blk             : block to fix up
+ *   bitbucket       : bit bucket variable
+ *   bitbucket_inuse : whether the bit bucket is in use
+ *   flags           : fixup flags
  *
  * NOTES
  *   this recurses through all child blocks
@@ -482,16 +480,16 @@ void pfile_block_bitchain_fixup(pfile_block_t *blk)
  *
  * DESCRIPTION
  *   calculate the amount of space needed for all data in a block
- *   also mark all automatic variables automatic
+ *   (it classifies nothing; pfile_block_variable_fixup() marks AUTO)
  *
  * PARAMETERS
- *   proc : procedure
+ *   blk      : block to measure
  *
  * RETURN
- *   none
+ *   the data size in bytes
  *
  * NOTES
- *   an automatic variable has the following features:
+ *   pfile_block_variable_fixup() marks a variable automatic when:
  *      * is not constant
  *      * has a sz > 0
  *      * has no master

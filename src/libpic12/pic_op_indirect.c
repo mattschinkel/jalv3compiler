@@ -154,6 +154,22 @@ static boolean_t pic_value_indirect_heap_string_through_pointer(const value_t va
       : BOOLEAN_FALSE;
 }
 
+/*
+ * NAME
+ *   pic_indirect_setup
+ *
+ * DESCRIPTION
+ *   setup irp:fsr
+ *
+ * PARAMETERS
+ *   pf    : file
+ *   val   : value
+ *   offset: offset from start of value
+ *
+ * NOTES
+ *   1. A value is assumed to not span banks
+ *   2. Normally this is called if val.baseofs is non-const
+ */
 void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
 {
   value_t baseofs;

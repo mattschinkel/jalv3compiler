@@ -30,20 +30,20 @@
  *   implement FOR
  *
  * PARAMETERS
- *   pf       : 
- *
- * RETURN
- *   none
+ *   pf              : pfile handle
+ *   statement_start : statement start position (diagnostics)
  *
  * NOTES
  *   FOR expr LOOP ... END LOOP
- * this becomes:
- *   tmp = expr
+ * this becomes (the counter counts UP from zero and the test is at the
+ * bottom, so a constant `expr` > 0 can skip the initial jump):
+ *   val = 0
+ *   goto test
  *   label_top:
- *     if (!tmp) goto label_end
  *     block
- *     tmp--
- *     goto label_top
+ *     val++
+ *   test:
+ *     if (val != expr) goto label_top
  *   label_end:
  */
 void jal_parse_for(pfile_t *pf, const pfile_pos_t *statement_start)
@@ -226,10 +226,8 @@ void jal_parse_for(pfile_t *pf, const pfile_pos_t *statement_start)
  *   implement FOREVER
  *
  * PARAMETERS
- *   pf: 
- *
- * RETURN
- *   none
+ *   pf              : pfile handle
+ *   statement_start : statement start position (diagnostics)
  *
  * NOTES
  *   FOREVER LOOP ... END LOOP
@@ -280,20 +278,18 @@ void jal_parse_forever(pfile_t *pf, const pfile_pos_t *statement_start)
  *   implement WHILE
  *
  * PARAMETERS
- *   pf: 
- *
- * RETURN
- *   none
+ *   pf              : pfile handle
+ *   statement_start : statement start position (diagnostics)
  *
  * NOTES
  *   WHILE bexpr LOOP ... END LOOP
- * this becomes:
- *   tmp = bexpr
+ * this becomes (the condition is emitted inside the loop and evaluated
+ * on every pass):
  *   label_top:
- *     if (!tmp) goto label_end
+ *     if (!bexpr) goto label_end
  *     block
  *     goto label_top
- *   label_end: 
+ *   label_end:
  */
 void jal_parse_while(pfile_t *pf, const pfile_pos_t *statement_start)
 {
@@ -398,7 +394,8 @@ void jal_parse_repeat(pfile_t *pf, const pfile_pos_t *statement_start)
  *
  * RETURN
  *   TRUE  : this resulted in an `end if' (absorbed)
- *   FALSE : the return is either 'elsif' or 'else'
+ *   FALSE : stopped at 'elsif'/'else' (when is_else is FALSE), or at
+ *           end of file
  *
  * NOTES
  *   this is a rather wacky result of the way the IF statement works in
@@ -443,10 +440,8 @@ static boolean_t jal_skip_if(pfile_t *pf, boolean_t is_else)
  *   implement IF
  *
  * PARAMETERS
- *   pf: 
- *
- * RETURN
- *   none
+ *   pf              : pfile handle
+ *   statement_start : statement start position (diagnostics)
  *
  * NOTES
  *   IF expr THEN .. [ELSIF expr THEN ...] [ELSE ...] END IF
@@ -601,10 +596,8 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
  *   parse the usec_delay command
  *
  * PARAMETERS
- *
- * RETURN
- *
- * NOTES
+ *   pf              : pfile handle
+ *   statement_start : unused (statement-start convention)
  */
 
 void jal_parse_usec_delay(pfile_t *pf, const pfile_pos_t *statement_start)
@@ -638,10 +631,8 @@ void jal_parse_usec_delay(pfile_t *pf, const pfile_pos_t *statement_start)
  *   parse the case command
  *
  * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
+ *   pf              : pfile handle
+ *   statement_start : statement start position (diagnostics)
  *
  * NOTES
  *   CASE expr OF

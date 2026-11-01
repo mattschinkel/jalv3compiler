@@ -349,54 +349,6 @@ const char *pic_opdst_str(pic_opdst_t type)
  **
  ************************************************************/
 
-/*
- * NAME
- *   pic_branch_proc
- *
- * DESCRIPTION
- *   execute a procedure call
- *
- * PARAMETERS
- *   pf          : pfile handle
- *   brcond      : condition
- *   brval       : value for condition
- *   proc        :
- *   proc_params :
- *
- * RETURN
- *   none
- *
- * NOTES
- *   There are three types of procedures
- *     1. normal -- variable block is discretely allocated local variables
- *        1. copy the IN parameters
- *        2. call proc
- *        3. copy the OUT parameters
- *     2. recursive -- all local variables are allocated out of a single block
- *        1. call the pre-fn
- *           (push the local variables onto the stack)
- *        2. copy the IN parameters
- *        3. call proc
- *        4. copy the OUT parameter
- *        5. call the post-fn
- *           (pop the local variables off of the stack)
- *     3. indirect -- parameters are allocated in a single block,
- *                    remaining locals are allocated discretetly
- *        1. copy the IN parameters to the pic_temp block
- *        2. call the indirect fn
- *           1. copy the pic_temp block to the parameter block
- *           2. execute the function
- *              1. copy the function's address into _indirect_call_addr
- *              2. call indirect_call
- *                 1. load PCLATH
- *                 2. load PCL
- *           3. copy the parameter block to the pic_temp block
- *        3. copy the OUT parameters from the pic_temp block
- *
- * the first 1-byte OUT parameter (including the return value)
- * will be returned in W; the first 1-byte IN parameter
- * will be passed in W *except* for indirect functions
- */
 label_t pic_label_find(pfile_t *pf, const char *name, boolean_t alloc)
 {
   label_t lbl;
@@ -787,6 +739,51 @@ static value_t pic_bit_array_actual_normalize(pfile_t *pf, value_t actual)
   return tmp;
 }
 
+/*
+ * NAME
+ *   pic_branch_proc
+ *
+ * DESCRIPTION
+ *   execute a procedure call
+ *
+ * PARAMETERS
+ *   pf          : pfile handle
+ *   brtype      : branch type
+ *   brcond      : condition
+ *   brval       : value for the condition
+ *   prval       : callee value
+ *   proc_params : callee parameters
+ *
+ * NOTES
+ *   There are three types of procedures
+ *     1. normal -- variable block is discretely allocated local variables
+ *        1. copy the IN parameters
+ *        2. call proc
+ *        3. copy the OUT parameters
+ *     2. recursive -- all local variables are allocated out of a single block
+ *        1. the callee pushes its frame at entry (pic_proc_enter)
+ *        2. copy the IN parameters
+ *        3. call proc
+ *        4. copy the OUT parameter
+ *        5. the callee pops its frame on return (pic_proc_leave);
+ *           there is no pre-/post-fn call
+ *     3. indirect -- parameters are allocated in a single block,
+ *                    remaining locals are allocated discretetly
+ *        1. copy the IN parameters to the pic_temp block
+ *        2. call the indirect fn
+ *           1. copy the pic_temp block to the parameter block
+ *           2. execute the function
+ *              1. copy the function's address into _pic_pointer (MSB in W)
+ *              2. call _pic_indirect
+ *                 1. load PCLATH
+ *                 2. load PCL
+ *           3. copy the parameter block to the pic_temp block
+ *        3. copy the OUT parameters from the pic_temp block
+ *
+ * the first 1-byte OUT parameter (including the return value)
+ * will be returned in W; the first 1-byte IN parameter
+ * will be passed in W *except* for indirect functions
+ */
 static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
     cmd_branchcond_t brcond, value_t brval, value_t prval, value_t *proc_params)
 {
@@ -1236,12 +1233,13 @@ static void pic_task_yield(pfile_t *pf)
  *   handle command type CMD_TYPE_BRANCH
  *
  * PARAMETERS
- *   pf  : pfile
- *   cmd : a branch command
- *
- * RETURN
- *
- * NOTES
+ *   pf          : pfile handle
+ *   brtype      : branch type
+ *   brcond      : condition
+ *   dst         : destination label
+ *   val         : condition value
+ *   proc        : callee value
+ *   proc_params : callee parameters
  */
 static void pic_branch(pfile_t *pf, cmd_branchtype_t brtype,
     cmd_branchcond_t brcond, label_t dst, value_t val,
@@ -1544,15 +1542,6 @@ static void pic_branch_cond(pfile_t *pf, cmd_t cmd)
  *
  * DESCRIPTION
  *   handle command type CMD_TYPE_ISR_CLEANUP
- *
- * PARAMETERS
- *   pf  : pfile
- *   cmd : command
- *
- * RETURN
- *   none
- *
- * NOTES
  */
 void pic_isr_cleanup(pfile_t *pf)
 {
@@ -1598,10 +1587,6 @@ void pic_isr_cleanup(pfile_t *pf)
  * DESCRIPTION
  *   handle commands of type CMD_TYPE_END
  *
- * PARAMETERS
- *
- * RETURN
- *
  * NOTES
  *   this simply loops to a sleep instruction
  */
@@ -1622,23 +1607,20 @@ void pic_end(pfile_t *pf)
 
 /*
  * NAME
- *   pic_branch_bittest_out
+ *   pic_brtest_out
  *
  * DESCRIPTION
  *   output a bittest for a branch
  *
  * PARAMETERS
- *   pf   :
- *   val1 : value to test
- *   val2 : bit #
- *
- * RETURN
- *   none
+ *   pf       : pfile handle
+ *   val1     : value to test
+ *   val2     : bit number
+ *   cond     : TRUE selects btfsc, FALSE btfss
  *
  * NOTES
- *   this is similar to pic_bittest() but that cannot be used because
- *   it always assumes btfsc, whereas we need either btfsc or btfss
- *   here
+ *   unlike the general bit-test path, this emits either btfsc or btfss,
+ *   selected by cond
  */
 void pic_brtest_out(pfile_t *pf, value_t val1, value_t val2,
     cmd_branchcond_t cond)
@@ -2171,13 +2153,8 @@ static void pic_cmd_to_asm(pfile_t *pf, cmd_t cmd)
  *   convert a cmd_t to one or more PIC instructions
  *
  * PARAMETERS
- *   pf  : pfile
- *   cmd : cmd to convert
- *
- * RETURN
- *   none
- *
- * NOTES
+ *   pf       : pfile handle
+ *   cmd_ptr  : command to convert
  */
 void pic_cmd_out(pfile_t *pf, cmd_t *cmd_ptr)
 {
@@ -2371,15 +2348,11 @@ boolean_t pic_bitstate_changed(pic_bitstate_t old, pic_bitstate_t new)
  *   find a label in the code
  *
  * PARAMETERS
- *   pf   :
- *   lbl  : label to find
- *   ppcl : [out] holds result on success
+ *   pf       : pfile handle
+ *   lbl      : label to find
  *
  * RETURN
- *   0      : no error
- *   ENOENT : label not found
- *
- * NOTES
+ *   the code node, or PIC_CODE_NONE
  */
 pic_code_t pic_code_label_find(pfile_t *pf, const label_t lbl)
 {
@@ -2403,18 +2376,6 @@ pic_code_t pic_code_label_find(pfile_t *pf, const label_t lbl)
   return code;
 }
 
-/*
- * NAME
- *   pic_cmd_dump
- *
- * DESCRIPTION
- *
- * PARAMETERS
- *
- * RETURN
- *
- * NOTES
- */
 static int pic_tag_dump(pfile_t *pf, pfile_write_t where,
   const char *pre, const char *name, unsigned tag_n,
   COD_symbol_type_t type, unsigned value, boolean_t COD_add)
@@ -3097,6 +3058,15 @@ static void pic_config_dump(pfile_t *pf, value_t config)
 }
 
 
+/*
+ * NAME
+ *   pic_cmd_dump
+ *
+ * PARAMETERS
+ *   pf       : pfile handle
+ *   cmd      : first command to dump
+ *   first    : TRUE to dump the preamble too
+ */
 void pic_cmd_dump(pfile_t *pf, const cmd_t cmd, boolean_t first)
 {
   const pic_backend_t *be = pic_backend_get(pf);
@@ -3238,246 +3208,311 @@ void pic_cmd_dump(pfile_t *pf, const cmd_t cmd, boolean_t first)
   }
 }
 
+/*
+ * Upper bound accepted for a PIC data-area address.  libpic12 targets have
+ * at most 4 KB of GPRs; the limit only exists so a corrupt base address
+ * cannot turn the map allocation into a multi-gigabyte request.
+ */
+#define PIC_DATA_MAP_LIMIT 0x10000UL
+
+/*
+ * Cycle tests for the compiler's own singly linked chains.
+ *
+ * The IR lists are built by append, so a cycle means memory corruption --
+ * but a walk that simply trusts the chain would spin forever.  Floyd's
+ * tortoise and hare answers the question in O(n) time and O(1) space, with
+ * no arbitrary iteration cap that could misfire on a legitimately large
+ * program (2 000 nested IF blocks is legal input, not an infinite loop).
+ */
+static boolean_t pic_proc_chain_cyclic(pfile_proc_t *head)
+{
+  pfile_proc_t *slow;
+  pfile_proc_t *fast;
+
+  slow = head;
+  fast = head;
+  while (fast) {
+    fast = pfile_proc_next(fast);
+    if (!fast) {
+      return BOOLEAN_FALSE;
+    }
+    fast = pfile_proc_next(fast);
+    slow = pfile_proc_next(slow);
+    if (fast && (fast == slow)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static boolean_t pic_block_chain_cyclic(pfile_block_t *head)
+{
+  pfile_block_t *slow;
+  pfile_block_t *fast;
+
+  slow = head;
+  fast = head;
+  while (fast) {
+    fast = pfile_block_next(fast);
+    if (!fast) {
+      return BOOLEAN_FALSE;
+    }
+    fast = pfile_block_next(fast);
+    slow = pfile_block_next(slow);
+    if (fast && (fast == slow)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static boolean_t pic_variable_chain_cyclic(variable_t head)
+{
+  variable_t slow;
+  variable_t fast;
+
+  slow = head;
+  fast = head;
+  while (fast) {
+    fast = variable_link_get(fast);
+    if (!fast) {
+      return BOOLEAN_FALSE;
+    }
+    fast = variable_link_get(fast);
+    slow = variable_link_get(slow);
+    if (fast && (fast == slow)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 /* create a map of all used data areas! the map will show 'v'
  * for volatile, '*' for used and '-' for unused */
 static void pic_data_area_map_create(pfile_t *pf)
 {
-  char *map;
+  char           *map;
   pfile_proc_t   *proc;
-  variable_base_t highest;
-  variable_base_t lowest;
-  size_t          ii;
-  int proc_count;
-  pfile_block_t *blk;
-  int block_count;
-  variable_t var;
-  int var_count;
+  pfile_block_t  *blk;
+  variable_t      var;
   variable_base_t base;
+  variable_base_t lowest;
+  variable_base_t highest;  /* EXCLUSIVE end of the used span */
+  size_t          map_sz;
+  size_t          ii;
+  boolean_t       used;
 
-
-  map     = CALLOC(1024, 1); /* nothing should be out of this range */
-  if (map) {
-
-    lowest  = -1;
-    highest = 0;
-    proc_count = 0;
-    for (proc = pfile_proc_root_get(pf);
-         proc;
-         proc = pfile_proc_next(proc)) {
-      proc_count++;
-      if (proc_count > 1000) {
-        printf("ERROR: Infinite loop detected in procedure loop! Breaking...\n");
-        break;
-      }
-
-      block_count = 0;
-      for (blk = pfile_proc_block_root_get(proc);
-           blk;
-           blk = pfile_block_next(blk)) {
-        block_count++;
-        if (block_count > 1000) {
-          printf("ERROR: Infinite loop detected in block loop! Breaking...\n");
-          break;
-        }
-
-        var_count = 0;
-        {
-          variable_t seen_vars[1000];  /* Track recently seen variables */
-          int seen_count = 0;
-          int i;
-          for (var = pfile_block_variable_get_first(blk);
-               var;
-               var = variable_link_get(var)) {
-            var_count++;
-            
-            /* Check for circular reference by tracking recent variables */
-            for (i = 0; i < seen_count && i < 1000; i++) {
-              if (seen_vars[i] == var) {
-                /* Circular reference detected - exit gracefully without error messages */
-                var = NULL;
-                goto break_var_loop;
-              }
-            }
-          
-            /* Add to seen list (circular buffer) */
-            if (seen_count < 1000) {
-              seen_vars[seen_count++] = var;
-            } else {
-              seen_vars[seen_count % 1000] = var;
-              seen_count++;
-            }
-          
-          /* Enhanced circular reference detection */
-          if (var_count > 2000) {  /* Increased limit for complex targets with many library variables */
-            /* This is likely a legitimate large program or circular reference */
-            /* Don't print errors - just exit gracefully */
-            break;
-          }
-          
-          break_var_loop:
-            /* Continue processing after circular reference detection */
-            if (!var) {
-              /* Circular reference was broken, exit variable loop */
-              break;
-            }
-
-            base = variable_base_get(var, 0);
-          if (!variable_master_get(var) && (VARIABLE_BASE_UNKNOWN != base)) {
-            if (base < 1024) {
-              size_t sz;
-
-              sz = variable_sz_get(var);
-              if (0 == highest) {
-                highest = base;
-                lowest = base;
-              } else if (base < lowest) {
-                lowest = base;
-              } else if (base > highest) {
-                highest = base;
-              }
-              for (ii = 0; ii < sz; ii++, base++) {
-                if (variable_is_volatile(var)) {
-                  map[base] = 'v';
-                } else if (!variable_is_auto(var)) {
-                  map[base] = 'u';
-                } else if (0 == map[base]) {
-                  map[base] = '*';
-                }
-              }
-            }
-          }
-          }
-        }
-      }
-    }
-    lowest  = (lowest / 32) * 32;
-    highest = ((highest + 31) / 32) * 32;
-    if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)) {
-      for (ii = lowest; ii < highest; ii+= 32) {
-        char   buf[64];
-        int    col;
-        size_t jj;
-
-        col = sprintf(buf, "%04lx: ", (ulong) ii);
-        for (jj = 0; jj < 32; jj++) {
-          if (!(jj & 0x03)) {
-            buf[col++] = ' ';
-          }
-          buf[col++] = map[ii+jj] ? map[ii+jj] : '-';
-        }
-        buf[col] = 0;
-        pfile_log(pf, PFILE_LOG_DEBUG, "%s", buf);
-      }
-    }
-    if (pfile_flag_test(pf, PFILE_FLAG_MISC_CLEAR_BSS)) {
-      label_t   lbl_memset;
-      value_t   pic_loop;
-      size_t    base_addr;
-
-      lbl_memset = pic_label_find(pf, PIC_LABEL_MEMSET, BOOLEAN_TRUE);
-      pic_loop   = pic_var_loop_get(pf);
-
-      for (base_addr = lowest; base_addr < highest; base_addr++) {
-        if ('*' == map[base_addr]) {
-          size_t len;
-          size_t current_base;
-
-          current_base = base_addr;
-          for (len = 0; 
-               (current_base + len < highest) && ('*' == map[current_base + len]); 
-               len++)
-            ;
-          while (len) {
-            size_t clr;
-
-            clr = (len >= 256) ? 256 : len;
-            if (clr <= 7) {
-              value_t        val;
-              variable_def_t def;
-              char           bss_name[32];
-
-              def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
-                  VARIABLE_DEF_FLAG_VOLATILE, clr);
-              sprintf(bss_name, "_pic_bss_%lx", (ulong) current_base);
-              pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL,
-                  bss_name, def, &val);
-              variable_base_set(value_variable_get(val), current_base, 0);
-              value_assign_ct_bump(val, CTR_BUMP_INCR);
-              for (ii = 0; ii < clr; ii++) {
-                pic_instr_append_f(pf, PIC_OPCODE_CLRF, val, ii);
-              }
-              value_release(val);
-            } else {
-              pic_stvar_fsr_mark(pf);
-              if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
-                pic_fsr0_load_addr(pf, current_base);
-              } else {
-                pic_instr_append_reg_flag(pf,
-                    (current_base & 0x0100) ? PIC_OPCODE_BSF : PIC_OPCODE_BCF,
-                    "_status", "_irp");
-                pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, current_base & 0xff);
-                pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
-              }
-              pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, clr);
-              pic_instr_append_f(pf, PIC_OPCODE_MOVWF, pic_loop, 0);
-              /* pic_instr_append(pf, PIC_OPCODE_CLRW); */
-              pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
-              pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl_memset);
-            }
-            /* bad form, I know, but the clearest I can think to do! */
-            current_base += clr - 1;
-            len  -= clr;
-          }
-        }
-      }
-      pic_var_loop_release(pf, pic_loop);
-      label_release(lbl_memset);
-    }
-    FREE(map);
+  /* A cycle is a compiler bug, not user input: report it as an internal
+   * error and abandon the map rather than truncating it silently (which
+   * used to drop BSS clears for everything past the cap). */
+  if (pic_proc_chain_cyclic(pfile_proc_root_get(pf))) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "internal error: cycle in the procedure list; "
+        "data area map not generated");
+    return;
   }
+
+  /* Pass 1: the used span.
+   *
+   * This used the sentinel `0 == highest` to mean "not set yet", which
+   * misfired whenever the first variable sat at address 0, and stored a
+   * base rather than a base+size, so a variable spanning a 32-byte row
+   * could be written past the end of the fixed 1024-byte map.  Both are
+   * gone: the span is computed here, then sized from `highest`. */
+  lowest  = 0;
+  highest = 0;
+  used    = BOOLEAN_FALSE;
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    if (pic_block_chain_cyclic(pfile_proc_block_root_get(proc))) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "internal error: cycle in the block list; "
+          "data area map not generated");
+      return;
+    }
+    for (blk = pfile_proc_block_root_get(proc);
+         blk;
+         blk = pfile_block_next(blk)) {
+      if (pic_variable_chain_cyclic(pfile_block_variable_get_first(blk))) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "internal error: cycle in the variable list; "
+            "data area map not generated");
+        return;
+      }
+      for (var = pfile_block_variable_get_first(blk);
+           var;
+           var = variable_link_get(var)) {
+        variable_base_t end;
+        variable_sz_t   sz;
+
+        base = variable_base_get(var, 0);
+        if (variable_master_get(var) || (VARIABLE_BASE_UNKNOWN == base)) {
+          continue;
+        }
+        sz = variable_sz_get(var);
+        if (0 == sz) {
+          continue;
+        }
+        end = base + (variable_base_t) sz;
+        if (!used) {
+          lowest  = base;
+          highest = end;
+          used    = BOOLEAN_TRUE;
+        } else {
+          if (base < lowest) {
+            lowest = base;
+          }
+          if (end > highest) {
+            highest = end;
+          }
+        }
+      }
+    }
+  }
+  if (!used) {
+    return; /* nothing placed: no map to draw and no BSS to clear */
+  }
+  if ((ulong) highest > PIC_DATA_MAP_LIMIT) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "internal error: data area map request of %lu bytes exceeds the "
+        "%lu byte limit", (ulong) highest, PIC_DATA_MAP_LIMIT);
+    return;
+  }
+  /* +32: the debug dump below reads whole 32-byte rows */
+  map_sz = (((size_t) highest + 31U) / 32U) * 32U + 32U;
+  map = CALLOC(map_sz, 1);
+  if (!map) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+
+  /* Pass 2: fill. */
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    for (blk = pfile_proc_block_root_get(proc);
+         blk;
+         blk = pfile_block_next(blk)) {
+      for (var = pfile_block_variable_get_first(blk);
+           var;
+           var = variable_link_get(var)) {
+        size_t sz;
+
+        base = variable_base_get(var, 0);
+        if (variable_master_get(var) || (VARIABLE_BASE_UNKNOWN == base)) {
+          continue;
+        }
+        sz = variable_sz_get(var);
+        for (ii = 0; ii < sz; ii++, base++) {
+          if (variable_is_volatile(var)) {
+            map[base] = 'v';
+          } else if (!variable_is_auto(var)) {
+            map[base] = 'u';
+          } else if (0 == map[base]) {
+            map[base] = '*';
+          }
+        }
+      }
+    }
+  }
+
+  lowest  = (lowest / 32U) * 32U;
+  highest = ((highest + 31U) / 32U) * 32U;
+  if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)) {
+    for (ii = lowest; ii < highest; ii+= 32) {
+      char   buf[64];
+      int    col;
+      size_t jj;
+
+      col = sprintf(buf, "%04lx: ", (ulong) ii);
+      for (jj = 0; jj < 32; jj++) {
+        if (!(jj & 0x03)) {
+          buf[col++] = ' ';
+        }
+        buf[col++] = map[ii+jj] ? map[ii+jj] : '-';
+      }
+      buf[col] = 0;
+      pfile_log(pf, PFILE_LOG_DEBUG, "%s", buf);
+    }
+  }
+  if (pfile_flag_test(pf, PFILE_FLAG_MISC_CLEAR_BSS)) {
+    label_t   lbl_memset;
+    value_t   pic_loop;
+    size_t    base_addr;
+
+    lbl_memset = pic_label_find(pf, PIC_LABEL_MEMSET, BOOLEAN_TRUE);
+    pic_loop   = pic_var_loop_get(pf);
+
+    /* Walk the runs of `*` (used, non-volatile, non-auto) LEFT TO RIGHT and
+     * consume each run, so every byte is cleared exactly once.
+     *
+     * The previous shape measured the run length from every byte, but never
+     * advanced past what it had emitted.  When a run was split (anything
+     * over 256 bytes) the inner loop created `_pic_bss_<pos>` for the tail,
+     * and the outer loop then reached `pos` again and created it a second
+     * time: "previously defined", followed by a use-after-release abort.
+     * Reproduced at HEAD on a 2.4 kB program under --clear (`_pic_bss_3`),
+     * so it was not gated on size or on the old 1024-byte clamp. */
+    base_addr = lowest;
+    while (base_addr < highest) {
+      size_t len;
+      size_t pos;
+
+      if ('*' != map[base_addr]) {
+        base_addr++;
+        continue;
+      }
+      for (len = 0;
+           (base_addr + len < highest) && ('*' == map[base_addr + len]);
+           len++)
+        ;
+      pos = base_addr;
+      while (len) {
+        size_t clr;
+
+        clr = (len >= 256) ? 256 : len;
+        if (clr <= 7) {
+          value_t        val;
+          variable_def_t def;
+          char           bss_name[32];
+
+          def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+              VARIABLE_DEF_FLAG_VOLATILE, clr);
+          sprintf(bss_name, "_pic_bss_%lx", (ulong) pos);
+          pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL,
+              bss_name, def, &val);
+          variable_base_set(value_variable_get(val), pos, 0);
+          value_assign_ct_bump(val, CTR_BUMP_INCR);
+          for (ii = 0; ii < clr; ii++) {
+            pic_instr_append_f(pf, PIC_OPCODE_CLRF, val, ii);
+          }
+          value_release(val);
+        } else {
+          pic_stvar_fsr_mark(pf);
+          if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+            pic_fsr0_load_addr(pf, pos);
+          } else {
+            pic_instr_append_reg_flag(pf,
+                (pos & 0x0100) ? PIC_OPCODE_BSF : PIC_OPCODE_BCF,
+                "_status", "_irp");
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, pos & 0xff);
+            pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+          }
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, clr);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, pic_loop, 0);
+          /* pic_instr_append(pf, PIC_OPCODE_CLRW); */
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+          pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl_memset);
+        }
+        pos += clr;
+        len -= clr;
+      }
+      base_addr = pos; /* consume the run just emitted */
+    }
+    pic_var_loop_release(pf, pic_loop);
+    label_release(lbl_memset);
+  }
+  FREE(map);
 }
 
 
-/*
- * NAME
- *   pic_code_isr_preamble
- *
- * DESCRIPTION
- *   create the isr preamble code
- *
- * PARAMETERS
- *   pf : pfile
- *
- * RETURN
- *
- * NOTES
- *   from the PIC reference:
- *      movwf w_temp     ; w --> w_temp
- *      swapf status, w  ; status --> w (nybble swapped but not flags
- *                                      effected)
- *      clrf  status     ; 0 --> status (irp/rp1/rp0 = clr)
- *      movwf status_tmp ; w --> status_temp
- *      movf  pclath, w  ; pclath --> w
- *      movwf pclath_tmp ; w --> pclath_temp
- *      clrf  pclath     ; 0 --> pclath
- *      ...
- *      {isr}
- *      ...
- *      movf  pclath_tmp,w ; pclath_tmp --> w
- *      movwf pclath       ; w --> pclath
- *      swapf status_tmp,w ; status_tmp --> w
- *      movwf status       ; w --> status
- *      swapf w_temp,f     ; w_temp->h <--> w_temp->l --> w_temp
- *      swapf w_temp,w     ; w_temp->h <--> w_temp->l --> w
- *      retfie
- *
- *  also, the lookup tables may not cross 256 byte boundaries (giving a maximum of
- *    254 entries/table). Since I might need to futz with the ORGs here, I don't
- *    want to have to deal with moving them around if branchbits get inserted, so
- *    I'm going to waste a bit of space here & force the branchbits. it doesn't matter
- *    what I use as long as the order is:  HI, LO, goto. The analyzer will make
- *    any necessary corrections later.
- */
 static void pic_preuser_init(pfile_t *pf, label_t lbl_user)
 {
   pfile_proc_t *proc;
@@ -3910,6 +3945,40 @@ static void pic_lookup_unreferenced_pcl_stub_remove(pfile_t *pf)
 }
 
 
+/*
+ * NAME
+ *   pic_code_preamble
+ *
+ * DESCRIPTION
+ *   create the isr preamble code
+ *
+ * NOTES
+ *   from the PIC reference:
+ *      movwf w_temp     ; w --> w_temp
+ *      swapf status, w  ; status --> w (nybble swapped but not flags
+ *                                      effected)
+ *      clrf  status     ; 0 --> status (irp/rp1/rp0 = clr)
+ *      movwf status_tmp ; w --> status_temp
+ *      movf  pclath, w  ; pclath --> w
+ *      movwf pclath_tmp ; w --> pclath_temp
+ *      clrf  pclath     ; 0 --> pclath
+ *      ...
+ *      {isr}
+ *      ...
+ *      movf  pclath_tmp,w ; pclath_tmp --> w
+ *      movwf pclath       ; w --> pclath
+ *      swapf status_tmp,w ; status_tmp --> w
+ *      movwf status       ; w --> status
+ *      swapf w_temp,f     ; w_temp->h <--> w_temp->l --> w_temp
+ *      swapf w_temp,w     ; w_temp->h <--> w_temp->l --> w
+ *      retfie
+ *
+ *  a lookup table that fits inside one 256-byte page is emitted as a
+ *    computed jump into the table; one that does not (sz > 255, or it would
+ *    cross a page) goes through the PCLATH path instead.
+ *  the reset vector's BRANCHHI/BRANCHLO clears are emitted only when the
+ *    image needs them (BOOT_LONG_START, or n_code_sz >= 4096 / 2048).
+ */
 void pic_code_preamble(pfile_t *pf)
 {
   label_t lbl_user;
@@ -4316,12 +4385,6 @@ void pic_code_free_unused(pfile_t *pf)
  * DESCRIPTION
  *   set the assign & use counters on all variables to 0
  *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
- *
  * NOTES
  *   I only want to keep the *real* counters -- those used
  *   by the assembly instructions -- so clear all counters
@@ -4360,14 +4423,6 @@ static void pic_variable_counters_clear(pfile_t *pf)
  *
  * DESCRIPTION
  *   set the assign & use counters based on the generated code
- *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
- *
- * NOTES
  */
 void pic_variable_counters_set(pfile_t *pf)
 {
@@ -5813,22 +5868,6 @@ static boolean_t pic_proc_reentrant_guard_needed(pfile_t *pf,
   return BOOLEAN_TRUE;
 }
 
-/*
- * NAME
- *   pic_cmd_generate
- *
- * DESCRIPTION
- *   populate the pic_codes[] array
- *
- * PARAMETERS
- *   pf  :
- *   cmd : first command
- *
- * RETURN
- *   none
- *
- * NOTES
- */
 /* the post-emission optimization tail (everything that changes code
  * size, excluding stack-depth/verify which only read). Called once on
  * the real final list, and by the PIC18 layout trials so candidate
@@ -5856,8 +5895,9 @@ static void pic_code_tail_optimize(pfile_t *pf)
 
   /* each time something is removed, we must again go through the branchbits
      optimization. otherwise the code could be larger than necessary.
-     For example, say the code is 2K + 1 byte. The first branchbits_optimize
-     will have to address both PCLATH bits. brnachbits_remove() will notice
+     For example, say the code is 2K + 1 byte. The first
+     pic_code_branchbits_optimize() will have to address both PCLATH bits.
+     pic_code_branchbits_remove() will notice
      the smaller size and remove all PCLATH<4> instructions. When these
      instructions are removed, the code size could fall below 2K in which
      case there is no reason to have *any* PCLATH instructions */ 
@@ -5962,6 +6002,17 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
   return total_ct;
 }
 
+/*
+ * NAME
+ *   pic_cmd_generate
+ *
+ * DESCRIPTION
+ *   populate the pic code list (pic_code_list_init / piccolst)
+ *
+ * PARAMETERS
+ *   pf  :
+ *   cmd : first command
+ */
 void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
 {
   label_t       lbl_tmp;

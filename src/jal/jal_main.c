@@ -40,6 +40,7 @@
 #include "../libesp32/esp32.h"
 #include "../libcore/pfile.h"
 #include "jal_blck.h"
+#include "jal_expr.h"
 #include "jal_file.h"
 #include "jal_tokn.h"
 #include "jal_build.h"
@@ -742,9 +743,26 @@ typedef struct cli_expanded_ {
  * Only reached with JAL_REPEAT > 1 today; it is the seam the
  * two-compiles-in-one-process test drives.
  */
+/*
+ * The HEX output is written to a temp file and renamed into place at the
+ * end of a successful compile.  A fatal exit (out of memory: see
+ * pfile_oom_report) would otherwise leave that temp file behind, so the
+ * path is parked here and an atexit hook removes it.
+ */
+static char jal_hex_temp_path[2048];
+static int  jal_hex_temp_live;
+
+static void jal_hex_temp_cleanup(void)
+{
+  if (jal_hex_temp_live && ('\0' != jal_hex_temp_path[0])) {
+    remove(jal_hex_temp_path);
+  }
+}
+
 static void jal_reset_between_compiles(void)
 {
   jal_string_state_reset();
+  jal_expr_state_reset();
   pic_stk_reset();
   pic_var_reset();
   pic_state_reset();
@@ -1271,6 +1289,11 @@ int main(int argc, char **argv)
       } else {
         hex_atomic_pending = BOOLEAN_TRUE;
         hex_atomic_output = BOOLEAN_TRUE;
+        /* park the temp path so a fatal exit can still remove it */
+        strncpy(jal_hex_temp_path, hexb_temp, sizeof jal_hex_temp_path - 1);
+        jal_hex_temp_path[sizeof jal_hex_temp_path - 1] = '\0';
+        jal_hex_temp_live = 1;
+        atexit(jal_hex_temp_cleanup);
       }
     }
     if (!err
@@ -1307,7 +1330,7 @@ int main(int argc, char **argv)
       /* JAL_MULTI never emits: the output names were derived from argv's
        * file, so writing them for a list would overwrite one path N times. */
       rep_emit = (boolean_t) ((repeat_ix + 1U == repeat_ct) && !multi_names);
-      rc = pfile_open(&pf,
+          rc = pfile_open(&pf,
           rep_emit ? f_asm : (FILE *) 0, rep_emit ? f_asm : (FILE *) 0,
           rep_emit ? f_hex : (FILE *) 0, f_log,
           cod_name, pfile_flags, &vectors, 0, task_ct, "JAL "JAL_VERSION_STR);
@@ -1410,6 +1433,7 @@ int main(int argc, char **argv)
         remove(hexb_temp);
       }
       hex_atomic_pending = BOOLEAN_FALSE;
+      jal_hex_temp_live = 0;
     }
     if (f_asm) {
       fclose(f_asm);

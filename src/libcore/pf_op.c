@@ -209,7 +209,7 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
 
           /* Sign fix-up is driven by the constants themselves: a folded
            * negative constant (e.g. -7, or 10 / -2) may carry an unsigned
-           * literal def, so value_is_signed()/result_is_signed() under-
+           * literal def, so value_is_signed()/result_is_signed under-
            * report and the divide ran unsigned over the full constant.
            * A positive literal never has the const sign bit set, so this
            * cannot misfire on genuinely unsigned operands.

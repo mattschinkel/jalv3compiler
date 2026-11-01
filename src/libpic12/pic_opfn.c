@@ -56,7 +56,6 @@ static void pic_multiply_create_fn16(pfile_t *pf,
      ? w1 : value_byte_sz_get(multiplicand);
   prod = pfile_value_find(pf, PFILE_LOG_ERR, "prod");   
 
-
   if (value_is_const(multiplicand)) {
     /* make sure the constant is in the multiplier */
     SWAP(value_t, multiplier, multiplicand);
@@ -269,29 +268,19 @@ static void pic_multiply_create(pfile_t *pf)
 
 /*
  * NAME
- *    pic_divide_create
+ *    pic_sdivide_create
  *
  * DESCRIPTION
- *    create an n-bit divide
- *
- * PARAMETERS
- *    pf : pfile
- *
- * RETURN
+ *    create a signed divide
  *
  * NOTES
- *   entry:
- *     dividend, divisor are set on entry
+ *   on entry:
  *   algorithm:
- *     for ii = 1 to bits
- *       quotient <<= 1
- *       dividend <<= 1
- *       remainder = remainder << 1 | carry from prev. op
- *       if (remainder >= divisor)
- *         remainder -= divisor
- *         quotient |= 1
- *       end if
- *     next 
+ *     if dividend & divisor are not the same sign, the result is (-)
+ *     dividend = abs(dividend)
+ *     divisor = abs(divisor)
+ *     call divide (above)
+ *     if (-) then quotient = -quotient
  */
 static void pic_sdivide_create(pfile_t *pf)
 {
@@ -424,21 +413,21 @@ static void pic_sdivide_create(pfile_t *pf)
  *    pic_divide_create
  *
  * DESCRIPTION
- *    create a signed divide
- *
- * PARAMETERS
- *    pf
- *
- * RETURN
+ *    create an n-bit divide
  *
  * NOTES
- *   on entry:
+ *   entry:
+ *     dividend, divisor are set on entry
  *   algorithm:
- *     if dividend & divisor are not the same sign, the result is (-)
- *     dividend = abs(dividend)
- *     divisor = abs(divisor)
- *     call divide (above)
- *     if (-) then quotient = -quotient
+ *     for ii = 1 to bits
+ *       quotient <<= 1
+ *       dividend <<= 1
+ *       remainder = remainder << 1 | carry from prev. op
+ *       if (remainder >= divisor)
+ *         remainder -= divisor
+ *         quotient |= 1
+ *       end if
+ *     next
  */
 static void pic_divide_create(pfile_t *pf)
 {
@@ -459,17 +448,13 @@ static void pic_divide_create(pfile_t *pf)
  * DESCRIPTION
  *   create memory compare
  *
- * PARAMETERS
- *
- * RETURN
- *
  * NOTES
  *   _pic_temp[0,1] = &a
  *   _pic_temp[2,3] = &b
  *   w holds the length; 0 = 256
  *   uses _sign and _loop
- *   Z set if equal
- *   C set if a < b
+ *   Z set if equal (returns before the ordering test)
+ *   C set if a > b (SUBWF computes a - b; C = no borrow)
  */
 static void pic_memcmp_create(pfile_t *pf)
 {
@@ -521,12 +506,8 @@ static void pic_memcmp_create(pfile_t *pf)
  * DESCRIPTION
  *   create the memset function
  *
- * PARAMETERS
- *   
- * RETURN
- *
  * NOTES
- *   _fsr:_irp = &dst
+ *   _fsr (and _irp on the 12/14-bit cores) = &dst
  *   _pic_loop = length
  *   w         = value
  */
@@ -561,10 +542,6 @@ static void pic_memset_create(pfile_t *pf)
  *
  * DESCRIPTION
  *   create the mem copy
- *
- * PARAMETERS
- *
- * RETURN
  *
  * NOTES
  *   _pic_memcpy_src = src
@@ -616,10 +593,6 @@ static void pic_memcpy_create(pfile_t *pf)
  * DESCRIPTION
  *   create the stack push function
  *
- * PARAMETERS
- *
- * RETURN
- *
  * NOTES
  *   entry
  *     _pic_memcpy_src = src
@@ -658,10 +631,6 @@ static void pic_stkpush_create(pfile_t *pf)
  *
  * DESCRIPTION
  *   create the stack pop function
- *
- * PARAMETERS
- *
- * RETURN
  *
  * NOTES
  *   entry
@@ -706,16 +675,14 @@ static void pic_stkpop_create(pfile_t *pf)
  * DESCRIPTION
  *   create the indirect call routine  
  *
- * PARAMETERS
- *
- * RETURN
- *
  * NOTES
  *   entry:
  *     _pointer[0] holds LSB
  *     _pointer[1] holds SB
  *     W           holds MSB
- *   This simply puts W into _pcl which executes a jump to _pclath:_pcl
+ *   W is the high byte of the PC: it is written first (to _pclatu or
+ *   _pclath), then _pointer[0..] is copied into the remaining PC bytes,
+ *   _pcl last -- writing _pcl executes the jump.
  *   It needs to be its own function because the return value needs
  *   to be put onto the stack.
  */
@@ -735,7 +702,6 @@ static void pic_indirect_create(pfile_t *pf)
   pic_var_pointer_release(pf, lsb);
 }
 
-
 static void pic_task_suicide_create(pfile_t *pf)
 {
   value_t       task_ptr;
@@ -751,43 +717,6 @@ static void pic_task_suicide_create(pfile_t *pf)
   label_release(pic_label_find(pf, PIC_LABEL_TASK_YIELD, BOOLEAN_TRUE));
 }
 
-/*
- * NAME
- *   pic_task_yield_create
- *
- * DESCRIPTION
- *   suspend the current task
- *
- * PARAMETERS
- *   task_ptr[0]      holds the base of the next instruction for this task
- *   task_ptr[1] or W holds the HIGH of the next instruction for this task
- *   task_ptr[2] or W holds the UPPER of the next instruction for this task
- *
- * RETURN
- *   none
- *
- * NOTES
- *   basically:
- *      task_list[task_idx] = ptr
- *      FOREVER LOOP
- *        IF (0 == task_idx) THEN
- *          task_idx = task_ct
- *        END IF
- *        task_idx--
- *        IF (task_list[task_idx]) THEN
- *          GOTO task_list[task_idx]
- *        END IF
- *      END LOOP
-
- *   LOOP task_ct USING task_idx LOOP
- *     IF 0 == task_list[task_idx] THEN
- *       task_list[task_idx] = entry
- *       RETURN
- *     END IF
- *   END_LOOP
- *
- * Note2: to kill a task, suspend with the lsb/msb of 0
- */
 /*
  * Pop the suspended task's return address off the task stack into
  * PCLATU/PCLATH/PCL (PIC18, 3 bytes) or PCLATH/PCL (14-bit, 2 bytes).
@@ -824,6 +753,32 @@ static void pic_task_pop_return_addr(pfile_t *pf, value_t fsr, value_t ind)
   }
 }
 
+/*
+ * NAME
+ *   pic_task_yield_create
+ *
+ * DESCRIPTION
+ *   suspend the current task
+ *
+ * NOTES
+ *   basically:
+ *      task_list[task_idx] = ptr
+ *      FOREVER LOOP
+ *        IF (0 == task_idx) THEN
+ *          task_idx = task_ct
+ *        END IF
+ *        task_idx--
+ *        IF (task_list[task_idx]) THEN
+ *          GOTO task_list[task_idx]
+ *        END IF
+ *      END LOOP
+ *
+ *   task START is not generated here: pic_task_start() stores the entry
+ *   into a compile-time slot. This function only saves the resume PC and
+ *   dispatches to the next runnable task.
+ *
+ * Note2: to kill a task, suspend with the lsb/msb of 0
+ */
 static void pic_task_yield_create(pfile_t *pf)
 {
   value_t       idx;
@@ -1612,7 +1567,6 @@ static void pic_float_divide_create(pfile_t *pf)
     /* exp1 = exp1 - exp2 */
     pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, flt.exp1, 0, PIC_OPDST_F);
 
-
     /* sign1 = sign1 ^ sign2 */
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, flt.fval2, 3, PIC_OPDST_W);
     pic_instr_append_f_d(pf, PIC_OPCODE_XORWF, flt.fval1, 3, PIC_OPDST_W);
@@ -1776,12 +1730,6 @@ static void pic_float_divide_create(pfile_t *pf)
  * DESCRIPTION
  *   create the intrinsic
  *
- * PARAMETERS
- *   pf : pfile handle
- *
- * RETURN
- *   none
- *
  * NOTES
  *   the functions are created if any references exist
  *   make sure to update the static table for any other intrinsice
@@ -1842,7 +1790,6 @@ boolean_t pic_intrinsics_exist(pfile_t *pf)
   size_t  ii;
   const pfile_multiply_width_table_entry_t *mw;
 
-
   for (ii = 0, lbl = LABEL_NONE; !lbl && (ii < COUNT(intrinsics)); ii++) {
     lbl = pfile_label_find(pf, PFILE_LOG_NONE, intrinsics[ii].tag);
     if (lbl) {
@@ -1871,5 +1818,4 @@ boolean_t pic_intrinsics_exist(pfile_t *pf)
       
   return (LABEL_NONE != lbl);
 }
-
 

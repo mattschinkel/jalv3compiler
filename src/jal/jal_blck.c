@@ -1669,14 +1669,9 @@ static void jal_parse_alias(pfile_t *pf, const pfile_pos_t *statement_start)
  * DESCRIPTION
  *   process a single JAL statement
  *
- * PARAMETERS
- *   pf : pfile handle
- *
  * RETURN
  *   BOOLEAN_TRUE : a statement was processed
  *   BOOLEAN_FALSE: no statement was processed
- *
- * NOTES
  */
 boolean_t jal_statement_process(pfile_t *pf)
 {
@@ -1773,9 +1768,6 @@ boolean_t jal_statement_process(pfile_t *pf)
  * PARAMETERS
  *   pf    : returned by pfile_open()
  *   flags : see JAL_BLOCK_PROCESS_FLAG_* in jal_blck.h
- *
- * RETURN
- *   none
  *
  * NOTES
  *   return on EOF or the first non parsable token

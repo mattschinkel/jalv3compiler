@@ -142,10 +142,12 @@ static boolean_t pic_code_z_changed(pic_opcode_t op)
  *   command changes it
  *
  * PARAMETERS
- *   code : place to start
+ *   pf       : pfile handle
+ *   code     : instruction to inspect
  *
  * RETURN
- *   TRUE -- status:z is used, FALSE, it's not
+ *   TRUE when this one instruction reads status:z without changing it;
+ *   the caller checks the following instructions
  *
  * NOTES
  *   an instruction set like:
@@ -391,9 +393,6 @@ static value_t pic_code_w_value_detect(pfile_t *pf, pic_code_t code,
  * DESCRIPTION
  *   after determining what W holds, look for assignments from the same
  *   value & remove these
- *
- * PARAMETERS
- *   pf : pfile handle
  *
  * RETURN
  *   number of instructions removed

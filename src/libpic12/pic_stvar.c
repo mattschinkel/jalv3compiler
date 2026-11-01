@@ -114,8 +114,9 @@ static variable_t pic_var_state_var_get(pfile_t *pf)
  *   value
  *
  * NOTES
- *   the value's size can be reset here; the act of getting a value
- *   bumps the assign & usage count so it will be allocated later!
+ *   the value's size can be reset here; allocation is forced later by
+ *   pic_stvar_fixup(), which sets the use/assign counts to 1 (getting a
+ *   value itself bumps no count).
  */
 static value_t pic_var_value_get(pfile_t *pf, const char *name,
     variable_def_type_t type, variable_sz_t sz)
@@ -556,16 +557,11 @@ void pic_var_isr_release(pfile_t *pf, pic_var_isr_t *dst)
  *   pic_stvar_fixup
  *
  * DESCRIPTION
- *   once all needed state variables have been accessed
- *   position each in its place in the _pic_state union
+ *   position the _pic_state members inside the _pic_state overlay, then
+ *   allocate _pic_isr_state and the standalone state variables
  *
  * PARAMETERS
  *   pf : pfile
- *
- * RETURN
- *   none
- *
- * NOTES
  */
 void pic_stvar_fixup(pfile_t* pf)
 {

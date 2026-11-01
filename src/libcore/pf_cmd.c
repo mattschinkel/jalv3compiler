@@ -29,12 +29,6 @@
  *
  * DESCRIPTION
  *   add a command to the command list
- *
- * PARAMETERS
- *
- * RETURN
- *
- * NOTES
  */
 void pfile_cmd_add(pfile_t *pf, cmd_t cmd)
 {
@@ -775,16 +769,13 @@ cleanup:
  *   add a branching command
  *
  * PARAMETERS
- *   pf : pfile
- *   label : line label
- *   type  : branching type
- *   cond  : branching condition
- *   dst   : destination label
- *   var   : condition variable
- *
- * RETURN
- *
- * NOTES
+ *   pf          : pfile handle
+ *   type        : branch type
+ *   cond        : branch condition
+ *   dst         : destination label
+ *   var         : condition value
+ *   proc        : callee value (VALUE_NONE for a goto)
+ *   proc_params : callee parameters, or 0
  */
 void pfile_cmd_branch_add(pfile_t *pf, 
   cmd_branchtype_t type, cmd_branchcond_t cond, label_t dst,
@@ -847,9 +838,6 @@ void pfile_cmd_branch_add(pfile_t *pf,
  *   pf    :
  *   label :
  *
- * RETURN
- *   none
- *
  * NOTES
  *   this doesn't really do anything other than set the
  *   ``next command gets this label''
@@ -878,9 +866,6 @@ void pfile_cmd_log_add(pfile_t *pf, pfile_log_t plog, size_t sz,
  *
  * DESCRIPTION
  *   remove unreachable commands
- *
- * PARAMETERS
- *   pf : pfile
  *
  * RETURN
  *   TRUE if anything was removed, FALSE if not
@@ -945,11 +930,8 @@ boolean_t pfile_cmd_remove_unreachable(pfile_t *pf)
  * DESCRIPTION
  *   remove all assignments to variables that are never used
  *
- * PARAMETERS
- *   pf : pfile handle
- *
  * RETURN
- *   none
+ *   BOOLEAN_TRUE when at least one assignment was removed
  *
  * NOTES
  *   this is iterative -- at each iteration it removes all variables that are

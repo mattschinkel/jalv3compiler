@@ -32,5 +32,17 @@ void pfile_log(pfile_t *pf, pfile_log_t sev, const char *fmt, ...)
      ATTRIBUTE;
 void pfile_log_syserr(pfile_t *pf, result_t rc);
 
+/*
+ * Out-of-memory policy (see fix_oom_policy.md).
+ *
+ * An allocation failure used to be logged and then ignored: every caller
+ * carried on with a NULL object, producing a cascade of unrelated
+ * diagnostics and, on some limits, an abort inside the value detector.
+ * The first memory failure now reports once and stops the process with a
+ * non-zero status; recovery is not attempted because a half-built IR has
+ * no safe continuation.
+ */
+void pfile_oom_report(pfile_t *pf);
+
 #endif /* pf_log_h__ */
 

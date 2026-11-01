@@ -1,6 +1,6 @@
 /**********************************************************
  **
- ** cmdoptmz.c : command optimizier functions
+ ** cmd_optm.c : command optimizier functions
  **
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
@@ -55,46 +55,6 @@ static boolean_t cmd_opt_return_is_leave_of_proc(cmd_t ret_cmd,
     && (cmd_proc_get(scan) == cur);
 }
 
-/*
- * NAME
- *   cmd_opt_branch
- *
- * DESCRIPTION
- *   basic branch optimization
- *
- * PARAMETERS
- *   cmd : head of the cmd list
- *
- * RETURN
- *   none
- *
- * NOTES
- *   first, the true branch destination is determined by following
- *     any chains of absolute GOTOs
- *   next:
- *     1. call to a return --> removed
- *     2. call immediately followed by return --> call changed to goto
- *     3. goto a return --> goto changed to return
- *     4. if (cond) goto l1
- *        absolute branch
- *        l1:
- *        ...
- *        --> if (!cond) goto l2
- *     5. goto l1 (or if cond goto l1)
- *        l1:
- *        remove!
- *
- * nb: on 5 above, there's a separate conditional possibility introduced
- *     by the PIC backend. Namely:
- *        tmp = expr
- *        if tmp goto l1
- *        l1:
- *     tmp = expr might be removed, so this becomes:
- *        expr
- *        if () goto l1
- *        l1:
- *     where () is simply the flags resulting from `tmp = expr'
- */
 /* on entry, cmd points to a GOTO or a CALL
  * the returned cmd is the *true* destination (aka, this follows
  * a string of absolute GOTOs until it reaches the end) */
@@ -134,6 +94,9 @@ static cmd_t cmd_branch_true_dest_get(cmd_t cmd, cmd_t *cmd_head, label_t *dlbl)
  *         goto f(..., ret_param)
  *   and drop the trailing goto exit, so the callee returns directly to
  *   the caller of the current procedure (legacy jal codegen behavior).
+ *
+ * RETURN
+ *   BOOLEAN_TRUE when the list changed
  */
 boolean_t cmd_opt_tail_return(cmd_t *cmd_head)
 {
@@ -354,6 +317,43 @@ boolean_t cmd_opt_tail_return(cmd_t *cmd_head)
 #undef JAL_TAIL_PROC_STACK
 }
 
+/*
+ * NAME
+ *   cmd_opt_branch
+ *
+ * DESCRIPTION
+ *   basic branch optimization
+ *
+ * PARAMETERS
+ *   cmd_head : head of the cmd list
+ *
+ *
+ * RETURN
+ *   BOOLEAN_TRUE when a command was removed
+ * NOTES
+ *   first, the true branch destination is determined by following
+ *     any chains of absolute GOTOs
+ *   next:
+ *     1. call to a return --> removed
+ *     2. call immediately followed by return --> call changed to goto
+ *     3. goto a return --> goto changed to return
+ *     4. (not implemented: the `if (cond) goto l1 / goto l2 / l1:'
+ *        pair is recognised at the arm below but left intact)
+ *     5. goto l1 (or if cond goto l1)
+ *        l1:
+ *        remove!
+ *
+ * nb: on 5 above, there's a separate conditional possibility introduced
+ *     by the PIC backend. Namely:
+ *        tmp = expr
+ *        if tmp goto l1
+ *        l1:
+ *     tmp = expr might be removed, so this becomes:
+ *        expr
+ *        if () goto l1
+ *        l1:
+ *     where () is simply the flags resulting from `tmp = expr'
+ */
 boolean_t cmd_opt_branch(cmd_t *cmd_head)
 {
   cmd_t cmd;
@@ -611,11 +611,12 @@ boolean_t cmd_opt_branch2(cmd_t *cmd_head)
  *   do branch4 optimizations (see below)
  *
  * PARAMETERS
- *   cmd_head : start of cmd list
+ *   pf       : pfile handle
+ *   cmd_head : head of the cmd list
+ *
  *
  * RETURN
- *   BOOLEAN_TRUE : something was changed
- *
+ *   BOOLEAN_TRUE when a command was removed
  * NOTES
  *   This looks for operations of the form:
  *     val = cexpr
@@ -787,30 +788,6 @@ cmd_analyze_link_inline_procs_for_alloc(pfile_t *pf)
   }
 }
 
-/*
- * NAME
- *   cmd_analyze
- *
- * DESCRIPTION
- *   analyze the command list for dead code
- *
- * PARAMETERS
- *   cmd_head : head of the cmd list
- *   cmd      : current entry
- *   flag     : CMD_FLAG_USER      : analyzing user area
- *              CMD_FLAG_INTERRUPT : analyzing an ISR
- *
- * RETURN
- *   none
- *
- * NOTES
- *   this doesn't solve the NP problem, it simply takes each
- *   path to determine if it's possible to get there from here.
- *   After this pass, pfile.c calls cmd_analyze_link_inline_procs_for_alloc
- *   so pfile_proc_root has call edges to every `pragma inline` JAL forwarder
- *   for pic_variable_alloc_proc (Phase B / builtins may not list them).
- */
-
 static size_t depth_max;
 /* A4 teardown between compiles (debug statistic). */
 void cmd_optm_state_reset(void)
@@ -855,6 +832,27 @@ static cmd_t cmd_proc_enter_cmd_get(cmd_t cmd_top, pfile_proc_t *proc)
   return CMD_NONE;
 }
 
+/*
+ * NAME
+ *   cmd_analyze
+ *
+ * DESCRIPTION
+ *   analyze the command list for dead code
+ *
+ * PARAMETERS
+ *   cmd_top  : head of the command list
+ *   cmd      : current entry
+ *   flag     : CMD_FLAG_USER or CMD_FLAG_INTERRUPT
+ *   depth    : inline nesting depth
+ *   pf       : pfile handle
+ *
+ * NOTES
+ *   this doesn't solve the NP problem, it simply takes each
+ *   path to determine if it's possible to get there from here.
+ *   After this pass, pfile.c calls cmd_analyze_link_inline_procs_for_alloc
+ *   so pfile_proc_root has call edges to every `pragma inline` JAL forwarder
+ *   for pic_variable_alloc_proc (Phase B / builtins may not list them).
+ */
 void cmd_analyze(cmd_t cmd_top, cmd_t cmd, flag_t flag, size_t depth,
   pfile_t *pf)
 {

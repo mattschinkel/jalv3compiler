@@ -44,7 +44,9 @@
  *     integer type that can contain it
  *
  * naming convention
- *   pic_op_* -- only called via pic_op(...)
+ *   pic_op_* -- entry points are dispatched from pic_op(...); a few
+ *   helpers call a sibling directly (pic_op_fsr / pic_op_indirect call
+ *   pic_op_assign for the pointer / lookup paths)
  */
 /*
  * these are used to prevent duplicate calls to _multiply or _divide

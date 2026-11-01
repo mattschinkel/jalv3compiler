@@ -1,6 +1,6 @@
 /**********************************************************
  **
- ** pf_tokn.c : token parsing bits
+ ** pf_token.c : token parsing bits
  **
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
@@ -58,14 +58,11 @@ int pf_token_parse_allow(
  *   retrieve a token
  *
  * PARAMETERS
- *   pf    : returned by pfile_open()
- *   which : which token to get (first, current, next)
- *   dst   : [out] points to retrieved token
+ *   pf       : returned by pfile_open()
+ *   which    : which token to get (first, current, next)
  *
  * RETURN
- *   none
- *
- * NOTES
+ *   the token text
  */
 const char *pf_token_get(pfile_t *pf, pf_token_get_t which)
 {
@@ -82,26 +79,6 @@ const char *pf_token_get(pfile_t *pf, pf_token_get_t which)
   return (pf->vectors->pf_token_get_fn(pf, which));
 }
 
-/*
- * NAME
- *   pf_token_to_variable
- *
- * DESCRIPTION
- *   return the variable named by the current token
- *
- * PARAMETERS
- *   pf : returned by pfile_open
- *   plog : how to log result
- *   dst  : [out] holds result on success
- *
- * RETURN
- *   0      : no error
- *   EINVAL : token is not an identifier
- *   ENOENT : variable does not exist
- *
- * NOTES
- *   *dst is locked when returned
- */
 result_t pf_identifier_to_variable(pfile_t *pf, pfile_log_t plog,
   const char *id, variable_t *dst)
 {
@@ -124,6 +101,26 @@ result_t pf_identifier_to_variable(pfile_t *pf, pfile_log_t plog,
   return rc;
 }
 
+/*
+ * NAME
+ *   pf_token_to_variable
+ *
+ * DESCRIPTION
+ *   return the variable named by the current token
+ *
+ * PARAMETERS
+ *   pf : returned by pfile_open
+ *   plog : how to log result
+ *   dst  : [out] holds result on success
+ *
+ * RETURN
+ *   RESULT_OK
+ *   RESULT_INVALID    : token is not an identifier
+ *   RESULT_NOT_FOUND  : variable does not exist
+ *
+ * NOTES
+ *   *dst is locked when returned
+ */
 result_t pf_token_to_variable(pfile_t *pf, pfile_log_t plog,
     variable_t *dst)
 {

@@ -17,6 +17,9 @@
 
 value_t jal_parse_expr(pfile_t *pf);
 
+/* clear the expression parser's nesting counter (per compile) */
+void      jal_expr_state_reset(void);
+
 typedef enum {
   JAL_PARSE_VALUE_TYPE_ANY,
   JAL_PARSE_VALUE_TYPE_LVALUE,
