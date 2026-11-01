@@ -891,9 +891,12 @@ def test_all_samples(
         samples_with_warnings = 0
         failed_files = []
         spawn_failed = []
+        clean = 0
         missing_hex_names = []
         missing_hex_when_passed_names = []
     
+        strict_warnings = not use_baseline
+
         def run_single_sample(jal_file):
             filename = os.path.basename(jal_file)
             base_name = filename.replace('.jal', '')
@@ -939,7 +942,11 @@ def test_all_samples(
                     "base_name": base_name,
                     "errors": errors,
                     "warnings": warnings,
-                    "passed": (errors == 0),
+                    # The corpus contract is 0 errors AND 0 warnings. The
+                    # baseline compiler is a reference, not a gate target, so
+                    # only the current compiler is held to it.
+                    "passed": (errors == 0
+                               and (warnings == 0 or not strict_warnings)),
                     "internal_errors": internal_errors,
                     "saved_exts": saved_exts,
                     "hex_present": hex_present,
@@ -1026,7 +1033,28 @@ def test_all_samples(
 
             for future in as_completed(future_to_index):
                 i = future_to_index[future]
-                result = future.result()
+                try:
+                    result = future.result()
+                except Exception as exc:  # worker died: harness bug, not a result
+                    print(
+                        f"error: worker raised for {jal_files[i - 1]}: {exc}",
+                        file=sys.stderr,
+                    )
+                    result = {
+                        "filename": os.path.basename(jal_files[i - 1]),
+                        "base_name": os.path.basename(jal_files[i - 1]),
+                        "errors": 0,
+                        "warnings": 0,
+                        "passed": False,
+                        "internal_errors": 0,
+                        "saved_exts": [],
+                        "hex_present": False,
+                        "output": "",
+                        "timeout": False,
+                        "exception": f"worker raised: {exc}",
+                        "spawn_error": None,
+                        "worker_crash": True,
+                    }
                 filename = result["filename"]
                 print(f"=== TEST {i}: {filename} ===")
 
@@ -1053,8 +1081,18 @@ def test_all_samples(
                     if result["passed"]:
                         print(f"✅ PASSED - 0 errors, {result['warnings']} warnings")
                         passed += 1
+                    if result["errors"] == 0 and result["warnings"] == 0:
+                        clean += 1
                     else:
-                        print(f"❌ FAILED - {result['errors']} errors, {result['warnings']} warnings")
+                        _why = (
+                            "warnings"
+                            if result["errors"] == 0 and result["warnings"] > 0
+                            else "errors"
+                        )
+                        print(
+                            f"❌ FAILED ({_why}) - {result['errors']} errors, "
+                            f"{result['warnings']} warnings"
+                        )
                         if result["internal_errors"] > 0:
                             print(f"   Counted internal errors: {result['internal_errors']}")
                         failed += 1
@@ -1104,6 +1142,29 @@ def test_all_samples(
             for i, filename in enumerate(failed_files, 1):
                 print(f"{i:2d}. {filename}")
     
+        # --- completion: every submitted sample must produce exactly one result
+        accounted = passed + failed + len(spawn_failed)
+        completion_ok = (accounted == len(jal_files))
+        clean_ok = (clean == len(jal_files))
+        print("=== VERDICT ===")
+        print(
+            f"  0 errors, 0 warnings: {clean} of {len(jal_files)} samples"
+            f" ({'OK' if clean_ok else str(len(jal_files) - clean) + ' not clean'})"
+        )
+        print(f"  summed errors      : {total_errors}")
+        print(f"  samples with >0 warnings: {samples_with_warnings}")
+        print(f"  no spawn failures  : {'OK' if not spawn_failed else str(len(spawn_failed)) + ' failed'}")
+        print(
+            f"  completion         : {'OK' if completion_ok else 'MISMATCH'}"
+            f" ({accounted} results for {len(jal_files)} samples)"
+        )
+        if not completion_ok:
+            print(
+                "error: worker completion mismatch -- not every sample produced a "
+                "result (harness bug, not a compiler result)",
+                file=sys.stderr,
+            )
+
         if spawn_failed:
             print(f"\n=== COMPILER SPAWN ERRORS ({len(spawn_failed)} samples) ===")
             print("The compiler could not be EXECUTED; these are not compile failures.")
@@ -1118,8 +1179,10 @@ def test_all_samples(
             print("🎉 ALL TESTS PASSED!")
         elif failed > 0:
             print(f"⚠️  {failed} tests failed")
-        if spawn_failed:
+        if spawn_failed or not completion_ok:
             raise SystemExit(2)
+        if not clean_ok:
+            raise SystemExit(1)
     
         # Save comprehensive summary report
         summary_file = f"unit-tests/Comparison/reports/{output_type.lower()}_test_summary.txt"
@@ -1139,6 +1202,10 @@ def test_all_samples(
             f.write(f"Total samples tested: {len(jal_files)}\n")
             f.write(f"Passed: {passed}\n")
             f.write(f"Failed: {failed}\n")
+            f.write(
+                f"Clean (0 errors, 0 warnings): {clean} of {len(jal_files)} samples"
+                f" ({'OK' if clean == len(jal_files) else 'NOT CLEAN'})\n"
+            )
             f.write(f"Success rate: {success_rate:.1f}%\n")
             f.write(f"Total errors across all tests: {total_errors}\n")
             f.write(
@@ -1229,6 +1296,11 @@ def test_all_samples(
             "missing_hex": len(missing_hex_names),
             "missing_hex_when_passed": len(missing_hex_when_passed_names),
             "compiler_path": compiler_path,
+            "completion_ok": completion_ok,
+            "clean_samples": clean,
+            "clean_ok": clean_ok,
+            "spawn_failures": len(spawn_failed),
+            "warned_samples": samples_with_warnings,
         }
 
 
