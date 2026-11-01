@@ -103,6 +103,105 @@ static void pic_assign_from_const(pfile_t *pf, value_t dst, value_t src)
   }
 }
 
+/*
+ * Const-table reads have two homes, one per core family:
+ *
+ *   _16bit  PIC18 reads program memory through TBLPTR/TBLRD and latches
+ *           the byte from TABLAT;
+ *   _14bit  classic and 14-bit hybrid parts have no table-read
+ *           instruction, so the byte comes from a RETLW table reached by a
+ *           computed CALL, with PCLATH paged by hand on the non-hybrid
+ *           cores.
+ *
+ * They were interleaved as two arms of one function; splitting them gives
+ * each a name, so a per-core witness can point at the arm it exercises.
+ */
+static void pic_assign_from_lookup_setup_16bit(pfile_t *pf, value_t src,
+    value_t baseofs, label_t *plbl, value_t *ptablat)
+{
+  pic_code_t    code;
+  value_t       tblptr;
+  variable_sz_t ii;
+
+  *plbl = pic_lookup_label_find(pf, value_variable_get(src),
+      PIC_LOOKUP_LABEL_FIND_FLAG_DATA);
+  tblptr = pfile_value_find(pf, PFILE_LOG_ERR, "_tblptr");
+  pic_stvar_tblptr_mark(pf);
+  for (ii = 0; ii < 3; ii++) {
+    code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+    pic_code_brdst_set(code, *plbl);
+    pic_code_ofs_set(code, ii);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tblptr, ii);
+  }
+  if (baseofs) {
+    pic_op(pf, OPERATOR_ADD, tblptr, baseofs, VALUE_NONE);
+  }
+  value_release(tblptr);
+  *ptablat = pfile_value_find(pf, PFILE_LOG_ERR, "_tablat");
+}
+
+static void pic_assign_from_lookup_setup_14bit(pfile_t *pf, value_t src,
+    value_t baseofs, variable_def_member_t mbr, label_t *plbl,
+    value_t *ptmp)
+{
+  *plbl = pic_lookup_label_find(pf, value_variable_get(src),
+      PIC_LOOKUP_LABEL_FIND_FLAG_NONE);
+  *ptmp = VALUE_NONE;
+  if (variable_def_member_sz_get(mbr) * variable_def_member_ct_get(mbr)
+      > 255) {
+    /* need to pass LSB in _pic_loop, MSB in W */
+    *ptmp = pic_var_loop_get(pf);
+    pic_lookup_index_load_w(pf, baseofs);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, *ptmp, 0);
+    if (value_byte_sz_get(baseofs) > 1) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 1, PIC_OPDST_W);
+    } else {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+    }
+  } else {
+    /* set PCLATH to the high byte of the table
+     * nb: not needed on the 14bit hybrid as pclath will be set correctly
+     *     by `movlp' */
+    if (!pic_is_14bit_hybrid(pf)) {
+      pic_code_t code;
+
+      code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+      pic_code_brdst_set(code, *plbl);
+      pic_code_ofs_set(code, 1);
+      pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pclath");
+    }
+    pic_lookup_index_load_w(pf, baseofs);
+    *ptmp = baseofs;
+  }
+}
+
+/* one byte: TBLRD*+ then latch TABLAT into W */
+static void pic_assign_from_lookup_byte_16bit(pfile_t *pf, value_t tablat)
+{
+  pic_instr_append_w_kn(pf, PIC_OPCODE_TBLRD, PIC_TBLPTR_CHANGE_POST_INC);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tablat, 0, PIC_OPDST_W);
+}
+
+/* one byte: index in W, computed CALL, result in W */
+static void pic_assign_from_lookup_byte_14bit(pfile_t *pf, label_t lbl,
+    value_t baseofs, variable_def_member_t mbr, value_t tmp,
+    variable_sz_t ii)
+{
+  if (ii) {
+    if ((variable_def_member_sz_get(mbr) * variable_def_member_ct_get(mbr)
+        > 255) && (value_byte_sz_get(baseofs) > 1)) {
+      /* Since we use _pic_loop we have to increment with 1, not with ii.*/
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 1);
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, tmp, 0, PIC_OPDST_F);
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 1, PIC_OPDST_W);
+    } else {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, ii);
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, tmp, 0, PIC_OPDST_W);
+    }
+  }
+  pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
+}
+
 /* dst is anything, src is lookup */
 static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
     value_t src)
@@ -139,76 +238,17 @@ static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
     sz = pic_result_sz_get(src, VALUE_NONE, dst);
     pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
     if (pic_is_16bit(pf)) {
-      pic_code_t code;
-      value_t    tblptr;
-
-      lbl = pic_lookup_label_find(pf, value_variable_get(src), 
-          PIC_LOOKUP_LABEL_FIND_FLAG_DATA);
-      tblptr = pfile_value_find(pf, PFILE_LOG_ERR, "_tblptr");
-      pic_stvar_tblptr_mark(pf);
-      for (ii = 0; ii < 3; ii++) {
-        code   = pic_instr_append(pf, PIC_OPCODE_MOVLW);
-        pic_code_brdst_set(code, lbl);
-        pic_code_ofs_set(code, ii);
-        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tblptr, ii);
-      }
-      if (baseofs) {
-        pic_op(pf, OPERATOR_ADD, tblptr, baseofs, VALUE_NONE);
-      }
-      value_release(tblptr);
-      tablat = pfile_value_find(pf, PFILE_LOG_ERR, "_tablat");
+      pic_assign_from_lookup_setup_16bit(pf, src, baseofs, &lbl, &tablat);
     } else {
-      lbl = pic_lookup_label_find(pf, value_variable_get(src), 
-          PIC_LOOKUP_LABEL_FIND_FLAG_NONE);
+      pic_assign_from_lookup_setup_14bit(pf, src, baseofs, mbr, &lbl, &tmp);
       tablat = VALUE_NONE;
-      if (variable_def_member_sz_get(mbr) * variable_def_member_ct_get(mbr)
-          > 255) {
-        /* need to pass LSB in _pic_loop, MSB in W */
-        tmp = pic_var_loop_get(pf);
-        pic_lookup_index_load_w(pf, baseofs);
-        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tmp, 0);
-        if (value_byte_sz_get(baseofs) > 1) {
-          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 1, PIC_OPDST_W);
-        } else {
-          /* pic_instr_append(pf, PIC_OPCODE_CLRW); */
-          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
-        }
-      } else {
-        /* need to find a way to set PCLATH to the high byte of the dst
-         * nb: not needed on the 14bit hybrid as pclath will be set correctly
-         *     by `movlp' */
-        if (!pic_is_14bit_hybrid(pf)) {
-          pic_code_t code;
-
-          code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
-          pic_code_brdst_set(code, lbl);
-          pic_code_ofs_set(code, 1);
-          pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_pclath");
-        }
-        pic_lookup_index_load_w(pf, baseofs);
-        tmp = baseofs;
-      }
     }
     for (ii = 0; ii < sz; ii++) {
       pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
       if (pic_is_16bit(pf)) {
-        pic_instr_append_w_kn(pf, PIC_OPCODE_TBLRD, PIC_TBLPTR_CHANGE_POST_INC);
-        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tablat, 0, PIC_OPDST_W);
+        pic_assign_from_lookup_byte_16bit(pf, tablat);
       } else {
-        if (ii) {
-           if ((variable_def_member_sz_get(mbr) * variable_def_member_ct_get(mbr)
-              > 255) && (value_byte_sz_get(baseofs) > 1)) {
-              /* Since we use _pic_loop we have to increment with 1, not with ii.*/
-              pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 1);
-              pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, tmp, 0, PIC_OPDST_F);
-              pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseofs, 1, PIC_OPDST_W);
-          }
-          else {
-              pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, ii);
-              pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, tmp, 0, PIC_OPDST_W);
-          }
-        }
-        pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
+        pic_assign_from_lookup_byte_14bit(pf, lbl, baseofs, mbr, tmp, ii);
       }
       if (!pic_value_is_w(dst)) {
         pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
