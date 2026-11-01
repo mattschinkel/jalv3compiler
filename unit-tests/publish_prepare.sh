@@ -42,6 +42,11 @@ ROOT_PUBLIC="README.md README.txt NOTICE"
 # below).  Named individually: bin/ also holds old_versions/ and the
 # instrumented -cov/-san flavors, which must never be published.
 PUBLIC_BIN="bin/jalv3-x86-64 bin/jalv3-win64.exe"
+# bin/old_versions/ is the RELEASED jalv2 line (jalv24q6*, jalv25*, r1..r9;
+# 35 files, 20.3 MB, largest 1.3 MB).  Published AS RELEASED -- these are the
+# artifacts as shipped, so they are NOT stripped.  A versioned jALv3 binary
+# never goes here: jALv3 is beta and its builds are replaced in place.
+PUBLIC_BIN_ARCHIVE="bin/old_versions"
 # (pic2jal split out to its own repo 2026-10-28; tools/ is a local pointer only)
 
 # ------------------------------------------------------------------- stage
@@ -49,6 +54,7 @@ PUBLIC_BIN="bin/jalv3-x86-64 bin/jalv3-win64.exe"
 {
   git ls-files $PUBLIC_DIRS
   git ls-files $ROOT_PUBLIC
+  git ls-files $PUBLIC_BIN_ARCHIVE
   for f in $PUBLIC_BIN; do echo "$f"; done
 } | sort -u > "$STAGE/.filelist"
 
@@ -106,10 +112,14 @@ src/jal/jal_build.h
 !/sims/
 !/unit-tests/
 !/bin/
-# only the two release compilers under bin/: no old_versions/, no -cov/-san
+# bin/: the two current compilers plus the released jalv2 line; never the
+# instrumented -cov/-san flavors, never a versioned jALv3 build
 /bin/*
 !/bin/jalv3-x86-64
 !/bin/jalv3-win64.exe
+# released jalv2 binaries, but never a versioned jALv3 (beta) build
+!/bin/old_versions/
+/bin/old_versions/jalv3*
 # compile artifacts under the re-included trees stay untracked
 # (golden canary .hex fixtures are the tracked exception)
 *.cod
