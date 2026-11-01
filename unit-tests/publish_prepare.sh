@@ -28,7 +28,11 @@ trap 'rm -rf "$STAGE" "$IDX" "$SWEEP"' EXIT
 
 # ---------------------------------------------------------------- allowlist
 # Fully public directories (tracked files only):
-PUBLIC_DIRS="src demo_lib demo_sample sims unit-tests"
+# Everything the repo TRACKS is publishable; this list is the whole of it.
+# .github is the CI workflows, doc/ the documentation sources, documentation/
+# the manuals (jalv3.pdf is the language reference).  bin/old_versions/ is
+# deliberately NOT here -- 20.3 MB of prebuilt third-party binaries.
+PUBLIC_DIRS=".github doc documentation src demo_lib demo_sample sims unit-tests"
 # Public files inside otherwise-private directories:
 # (the public docs are README.md / NOTICE at the root plus the per-tree
 #  READMEs inside the allowed directories; docs/ is investigations-only and
@@ -84,6 +88,12 @@ cat > "$STAGE/.gitignore" <<'EOF'
 !/README.md
 !/README.txt
 !/NOTICE
+!/.github/
+!/doc/
+# doc/ build intermediates are already untracked upstream; keep them out here too
+doc/pdf/
+doc/html/
+!/documentation/
 !/src/
 # build artifacts under the re-included trees stay untracked
 src/*/.obj-*/
@@ -126,7 +136,10 @@ echo "== sweep: symlinks / hidden files / large files =="
 if [ -n "$(find "$STAGE" -type l -print -quit)" ]; then
   echo "SYMLINKS FOUND:"; find "$STAGE" -type l; fail=1
 else echo "no symlinks"; fi
-hidden=$(find "$STAGE" -name '.*' -not -name '.' -not -name '.gitignore' | sed "s|$STAGE/||")
+# .github is a tracked dot-DIRECTORY (the CI workflows); every other dot entry
+# is an accident worth failing on (.DS_Store, .env, editor droppings).
+hidden=$(find "$STAGE" -name '.*' -not -name '.' -not -name '.gitignore' \
+    -not -path "$STAGE/.github" | sed "s|$STAGE/||")
 if [ -n "$hidden" ]; then echo "HIDDEN FILES:"; echo "$hidden"; fail=1
 else echo "no hidden files"; fi
 big=$(find "$STAGE" -type f -size +2M -printf '%s %p\n' | awk -v s="$STAGE" '{printf "%.1fMB %s\n", $1/1048576, substr($2, length(s)+2)}')
