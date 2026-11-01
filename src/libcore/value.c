@@ -16,7 +16,15 @@
 #include "value.h"
 #include <stdlib.h>
 #include <stdio.h>
+/* execinfo (backtrace) is glibc/macOS only -- mingw has no such header, so
+ * the Windows cross-build failed on it.  The symbolic half of the death
+ * certificate is a convenience; the diagnostic itself ("value used after
+ * release: id N") does not depend on it.  JAL_VALUE_HAVE_BACKTRACE keeps
+ * the two halves in step instead of guarding each site separately. */
+#if defined(JALV2_VALUE_DEBUG) && !defined(_WIN32)
 #include <execinfo.h>
+#define JAL_VALUE_HAVE_BACKTRACE 1
+#endif
 
 static unsigned value_id;
 
@@ -116,7 +124,7 @@ static struct value_ *value_element_seek(value_t el, boolean_t mod)
    * stack, so the report names the code that released it. */
   if (el && (el->flags & VALUE_FLAG_DEAD)) {
     fprintf(stderr, "!!! value used after release: id %u\n", el->id);
-#ifdef JALV2_VALUE_DEBUG
+#if defined(JALV2_VALUE_DEBUG) && defined(JAL_VALUE_HAVE_BACKTRACE)
     {
       char **sym = backtrace_symbols(el->dbg_bt, el->dbg_bt_ct);
 
@@ -288,7 +296,10 @@ void value_release(value_t val)
     if (ptr) {
       ptr->flags |= VALUE_FLAG_DEAD;
 #ifdef JALV2_VALUE_DEBUG
+      ptr->dbg_bt_ct = 0;
+#ifdef JAL_VALUE_HAVE_BACKTRACE
       ptr->dbg_bt_ct = backtrace(ptr->dbg_bt, 6);
+#endif
 #endif
     }
   }

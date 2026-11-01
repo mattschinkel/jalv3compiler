@@ -150,7 +150,13 @@ $(DEP_DIR):
 # (I don't) I need to use '-weak'
 #
 DEP=$(DEP_DIR)/$(*F)
-$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
+# `$(DEP_DIR)` is an ORDER-ONLY prerequisite, not just a rule: the recipe
+# below writes $(DEP)/.d with -MMD, so a build where the object dir
+# exists but .dep was removed (any per-flavor `make clean`, which drops
+# the SHARED .dep) would fail with "opening dependency file .dep/x.d".
+# The $(DEP_DIR) rule alone never fired; hit again 2026-11-01 on a
+# win64 build over a stale .obj-win64.
+$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR) $(DEP_DIR)
 	#splint -weak -bufferoverflowhigh -pred-bool -cast-fcn-ptr -unrecog -skipisoheaders $<
 	$(CC) -MMD -MF $(DEP).d -c -o $@ $(CFLAGS) $<
 
