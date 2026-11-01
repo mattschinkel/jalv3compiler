@@ -131,6 +131,33 @@ _PIC32_REGRESSION_SUMMARY = os.path.join(
 )
 
 
+def _require_runnable_compiler(compiler_path: str) -> str:
+    """Resolve the compiler path and refuse to start if it cannot be run.
+
+    A spawn failure (missing file, mode without +x, wrong architecture) used
+    to surface as N per-sample "failures" with only `str(e)` recorded, which
+    reads like a codegen problem. Check once, up front, and say exactly what
+    is wrong.
+    """
+    resolved = os.path.abspath(compiler_path)
+    if not os.path.isfile(resolved):
+        print(
+            f"error: compiler not found: {compiler_path}"
+            + ("" if resolved == compiler_path else f" (resolved to {resolved})"),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if not os.access(resolved, os.X_OK):
+        mode = oct(os.stat(resolved).st_mode & 0o777)
+        print(
+            f"error: compiler is not executable: {compiler_path} "
+            f"(mode {mode}); a spawn would fail for every sample",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return resolved
+
+
 def _compiler_build_id(compiler_path: str) -> str:
     """The compiler's own build stamp, from `--version`.
 
@@ -803,7 +830,7 @@ def test_all_samples(
     else:
         if not current_compiler_path:
             raise ValueError("current_compiler_path is required when use_baseline is False")
-        compiler_path = current_compiler_path
+        compiler_path = _require_runnable_compiler(current_compiler_path)
         output_type = "Current"
         compiler_desc = f"current compiler ({compiler_path})"
     
@@ -863,6 +890,7 @@ def test_all_samples(
         max_warnings = 0
         samples_with_warnings = 0
         failed_files = []
+        spawn_failed = []
         missing_hex_names = []
         missing_hex_when_passed_names = []
     
@@ -948,6 +976,24 @@ def test_all_samples(
                     "timeout": True,
                     "exception": None,
                 }
+            except OSError as e:
+                # The compiler could not be spawned at all (EACCES/ENOENT/
+                # ENOEXEC...). That is NOT a compile failure and must not be
+                # counted as one -- see _require_runnable_compiler().
+                return {
+                    "filename": filename,
+                    "base_name": base_name,
+                    "errors": 0,
+                    "warnings": 0,
+                    "passed": False,
+                    "internal_errors": 0,
+                    "saved_exts": [],
+                    "hex_present": False,
+                    "output": "",
+                    "timeout": False,
+                    "exception": None,
+                    "spawn_error": f"{e.__class__.__name__}: {e}",
+                }
             except Exception as e:
                 return {
                     "filename": filename,
@@ -961,6 +1007,7 @@ def test_all_samples(
                     "output": "",
                     "timeout": False,
                     "exception": str(e),
+                    "spawn_error": None,
                 }
 
         _workers = _sample_compile_worker_count(parallel_workers)
@@ -986,7 +1033,15 @@ def test_all_samples(
                 for ext in result["saved_exts"]:
                     print(f"   📁 Saved: {ext} file")
 
-                if result["timeout"]:
+                if result.get("spawn_error"):
+                    # one line per sample would bury the summary for a broken
+                    # compiler path; the full list is printed at the end
+                    spawn_failed.append(f"{filename}: {result['spawn_error']}")
+                    if len(spawn_failed) <= 3:
+                        print(f"🛑 SPAWN ERROR - {result['spawn_error']}")
+                    elif len(spawn_failed) == 4:
+                        print("🛑 SPAWN ERROR - ... (same for every sample; see the summary)")
+                elif result["timeout"]:
                     print("⏰ TIMEOUT - Test took too long")
                     failed += 1
                     failed_files.append(filename)
@@ -1049,10 +1104,22 @@ def test_all_samples(
             for i, filename in enumerate(failed_files, 1):
                 print(f"{i:2d}. {filename}")
     
-        if failed == 0:
+        if spawn_failed:
+            print(f"\n=== COMPILER SPAWN ERRORS ({len(spawn_failed)} samples) ===")
+            print("The compiler could not be EXECUTED; these are not compile failures.")
+            print(f"  compiler: {compiler_path}")
+            for line in spawn_failed[:10]:
+                print(f"  - {line}")
+            if len(spawn_failed) > 10:
+                print(f"  ... and {len(spawn_failed) - 10} more")
+            print("Fix the compiler path/mode and re-run; nothing above is a codegen result.")
+
+        if failed == 0 and not spawn_failed:
             print("🎉 ALL TESTS PASSED!")
-        else:
+        elif failed > 0:
             print(f"⚠️  {failed} tests failed")
+        if spawn_failed:
+            raise SystemExit(2)
     
         # Save comprehensive summary report
         summary_file = f"unit-tests/Comparison/reports/{output_type.lower()}_test_summary.txt"
