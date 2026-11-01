@@ -74,7 +74,7 @@ jobs:
     # Schedule only, or manual (workflow_dispatch then runs BOTH jobs as a
     # full rehearsal). Timings measured locally 2026-10-31: build 30 s,
     # corpus 45 s, ASan corpus 78 s, 20 000 fuzz inputs 363 s, analyzer
-    # 76 s -- about 11 minutes, well inside the 60-minute cap.
+    # 76 s, coverage 50 s -- about 12 minutes, well inside the 60-minute cap.
     # Triggerable three ways: the nightly timer, the Actions "Run workflow"
     # button, or -- so it can be started from a terminal without `gh` -- a
     # push whose head commit message contains [nightly]. The last one exists
@@ -124,6 +124,14 @@ jobs:
 
       - name: Static analysis (-fanalyzer, gated on a baseline)
         run: unit-tests/run_analyzer.sh
+
+      # Line coverage of src/ over the corpus, checked against the committed
+      # baseline (unit-tests/coverage_baseline.txt). ~50 s. Every other gate
+      # answers "does it still work?"; this one answers "which code has no
+      # test at all?". A drop below the baseline fails the run, so a change
+      # that adds a large untested block is visible in the diff.
+      - name: Corpus line coverage (vs baseline)
+        run: python3 unit-tests/coverage_report.py --all
 
       - name: Upload fuzz artifacts on failure
         if: failure()
