@@ -15,6 +15,8 @@
 #include "pf_proc.h"
 #include "value.h"
 #include <stdlib.h>
+#include <stdio.h>
+#include <execinfo.h>
 
 static unsigned value_id;
 
@@ -28,6 +30,10 @@ struct value_
   flag_t          flags;
   unsigned        bitofs_delta;
   const char     *name;
+#ifdef JALV2_VALUE_DEBUG
+  void           *dbg_bt[6];        /* release call stack (death certificate) */
+  int             dbg_bt_ct;
+#endif
 };
 
 
@@ -95,6 +101,29 @@ static value_t value_element_alloc(void)
 static struct value_ *value_element_seek(value_t el, boolean_t mod)
 {
   (void) mod;                 /* elements are never moved or recycled */
+#ifdef JALV2_VALUE_DEBUG
+  /* The region keeps dead values readable, so a use after release would
+   * otherwise read plausible stale data. This is the deliberate detector
+   * that replaces the accidental one refcounting gave: a freed element
+   * used to be poisoned or recycled. Debug builds only (-DJALV2_VALUE_DEBUG,
+   * which the SAN flavor turns on so the sanitizer corpus exercises it). */
+  if (el && (el->flags & VALUE_FLAG_DEAD)) {
+    char **sym;
+
+    fprintf(stderr, "!!! value used after release: id %u, released from:\n",
+        el->id);
+    sym = backtrace_symbols(el->dbg_bt, el->dbg_bt_ct);
+    if (sym) {
+      int i;
+
+      for (i = 0; i < el->dbg_bt_ct; i++) {
+        fprintf(stderr, "    %s\n", sym[i]);
+      }
+      free(sym);
+    }
+    abort();
+  }
+#endif
   return el;
 }
 
@@ -237,11 +266,24 @@ void value_release(value_t val)
   struct value_ *ptr;
 
   ptr = value_element_seek(val, BOOLEAN_TRUE);
+#ifdef JALV2_VALUE_DEBUG
+  if (ptr && (ptr->flags & VALUE_FLAG_DEAD)) {
+    fprintf(stderr, "!!! value released twice: id %u\n", ptr->id);
+    abort();
+  }
+#endif
   if (ptr && !--ptr->ref_ct) {
     /* the memory belongs to the compile's region; the variable reference
      * does not, and must be dropped here (see the note above) */
     value_baseofs_set(val, 0);
     value_variable_set(val, 0);
+#ifdef JALV2_VALUE_DEBUG
+    ptr = value_element_seek(val, BOOLEAN_TRUE);
+    if (ptr) {
+      ptr->flags |= VALUE_FLAG_DEAD;
+      ptr->dbg_bt_ct = backtrace(ptr->dbg_bt, 6);
+    }
+#endif
   }
 }
 

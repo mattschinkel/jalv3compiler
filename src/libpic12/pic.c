@@ -2978,6 +2978,18 @@ static void pic_eeprom_or_id_dump(pfile_t *pf, value_t eeprom_or_id,
   const char *comment)
 {
   value_t sz;
+  value_t cur;
+  value_t data;
+
+  /* the argument is NOT consumed: pic_cmd_dump owns the three block values
+   * and releases them after the dumps (pic_config_dump has always worked
+   * that way). This function used to release its argument and then reuse
+   * the slot for an internal lookup, so pic_cmd_dump's release was a
+   * DOUBLE release -- silently a no-op while freed cache elements failed
+   * to resolve, and a refcount underflow once values became region-scoped.
+   * The stale-value detector caught it on 21 corpus samples. */
+  cur  = eeprom_or_id;
+  data = VALUE_NONE;
 
   sz = pfile_value_find(pf, PFILE_LOG_NONE, name_used);
   if (sz && (value_const_get(sz))) {
@@ -2993,14 +3005,12 @@ static void pic_eeprom_or_id_dump(pfile_t *pf, value_t eeprom_or_id,
     pfile_write(pf, pfile_write_asm, "\n; %s data\n\n", comment);
     pfile_write(pf, pfile_write_asm,
       "%*s%-" STRINGIZE(PIC_OPCODE_COLUMN_SZ) "s0x%04x\n",
-      PIC_LABEL_COLUMN_SZ - 1, "", "org", value_const_get(eeprom_or_id));
+      PIC_LABEL_COLUMN_SZ - 1, "", "org", value_const_get(cur));
     pfile_write(pf, pfile_write_asm,
       "%*s%-" STRINGIZE(PIC_OPCODE_COLUMN_SZ) "s",
       PIC_LABEL_COLUMN_SZ - 1, "", (pic_is_16bit(pf)) ? "db" : "dw");
-    value_release(eeprom_or_id);
-
-    eeprom_or_id = pfile_value_find(pf, PFILE_LOG_NONE, name);
-    value_dereference(eeprom_or_id);
+    data = pfile_value_find(pf, PFILE_LOG_NONE, name);
+    value_dereference(data);
     if (!pic_is_16bit(pf)) {
       base *= 2;
     }
@@ -3009,9 +3019,9 @@ static void pic_eeprom_or_id_dump(pfile_t *pf, value_t eeprom_or_id,
       variable_const_t    n;
 
       c = pfile_constant_get(pf, ii, VARIABLE_DEF_NONE);
-      value_baseofs_set(eeprom_or_id, c);
+      value_baseofs_set(data, c);
       value_release(c);
-      n = value_const_get(eeprom_or_id);
+      n = value_const_get(data);
       pfile_write(pf, pfile_write_lst, "%s%u",
           (ii) ? "," : "", n);
       pic_obj_write_byte(pf, base, n);
@@ -3026,6 +3036,7 @@ static void pic_eeprom_or_id_dump(pfile_t *pf, value_t eeprom_or_id,
     }
     pfile_write(pf, pfile_write_lst, "\n");
   }
+  value_release(data);           /* the internal lookup, balanced here */
   value_release(sz);
 }
 

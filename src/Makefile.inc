@@ -98,7 +98,12 @@ ifeq ($(ASAN),1)
   FLAVOR := -san
 endif
 ifeq ($(FLAVOR),-san)
-  FLAVORFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+  # The sanitizer flavor also carries the value lifetime detector: a value
+  # used after its release is reported (with the release stack) instead of
+  # silently reading stale data. Values are region-scoped, so this is the
+  # deliberate replacement for the poisoning refcounting used to do.
+  FLAVORFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -DJALV2_VALUE_DEBUG
   # -O1 for readable traces; no -Werror (lower opt levels surface format
   # warnings on intentional null-format pfile_log calls that -O2 hides)
   CFLAGS := $(filter-out -Werror,$(subst -O2,-O1,$(CFLAGS)))
