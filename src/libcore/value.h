@@ -149,6 +149,39 @@ value_t value_variable_remap(value_t val, const variable_map_t *map);
 
 value_t value_remap(value_t val, const value_map_t *map);
 
+/*
+ * OWNERSHIP CONTRACT
+ * ------------------
+ * value_t is a handle with a release contract, and the convention is the
+ * only thing that enforces it.
+ *
+ *  - A function that HANDS OUT a value transfers a reference: value_alloc,
+ *    value_clone, value_constant_get, pfile_constant_get, pfile_value_find,
+ *    pfile_proc_value_temp_get*, jal_parse_expr, jal_token_to_constant, ...
+ *    The receiver releases it.
+ *
+ *  - A function that STORES or CONSUMES a value takes its OWN reference and
+ *    the caller still releases: pfile_cmd_op_add, value_baseofs_set,
+ *    value_variable_set, pic_code_value_set, expr_val_set, ...
+ *    (This asymmetry -- stores lock, callers must release -- produced three
+ *    leaks of the MOVLB family, all fixed 2026-10-31.)
+ *
+ *  - A function that takes a value_t BY VALUE and releases that parameter
+ *    has CONSUMED it, and nothing in the signature says so. That ambiguity
+ *    produced a double release in pic_eeprom_or_id_dump() vs pic_cmd_dump()
+ *    (21 corpus samples, hidden for years because a freed cache element
+ *    failed to resolve).
+ *
+ * RULE for new code: do NOT consume a value_t parameter. Release at the
+ * caller, or take `value_t *` and clear the caller's handle so the transfer
+ * is visible. Existing consuming functions are listed by
+ *     unit-tests/value_ownership_scan.py --cond
+ * which is a review aid (brace/depth heuristic), not a gate.
+ *
+ * Lifetime note: values are region-scoped (see value_arena_*), so a missing
+ * release no longer leaks MEMORY -- but the reference still owns the
+ * value's `variable`, so getting it wrong still corrupts refcounts.
+ */
 /* Values allocated since the region was last destroyed. The region is
  * compile-scoped, so this is 0 once pfile_close() has run -- an invariant,
  * not a leak counter. */
