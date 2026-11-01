@@ -225,5 +225,7 @@ void  cmd_pos_get(const cmd_t cmd, pfile_pos_t *pos);
 
 ulong cmd_id_get(const cmd_t cmd);
 
+unsigned long cmd_live_ct(void);
+
 #endif /* cmd_h__ */
 

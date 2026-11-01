@@ -67,6 +67,13 @@ cmd_t cmd_alloc(cmd_type_t type,
   return cmd;
 }
 
+/* Commands allocated and not yet freed -- the third and last compiler
+ * object layer (values and variables are region-scoped now). */
+unsigned long cmd_live_ct(void)
+{
+  return cache_live_ct(&cmd_cache);
+}
+
 void cmd_free(cmd_t cmd)
 {
   struct cmd_ *ptr;

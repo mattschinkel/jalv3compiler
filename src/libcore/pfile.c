@@ -395,6 +395,7 @@ void pfile_close(pfile_t *pf)
           released, value_live_ct());
       fprintf(stderr, "!!! variable arena: %lu released, %lu live\n",
           vreleased, variable_live_ct());
+      fprintf(stderr, "!!! cmd(s) still live at close: %lu\n", cmd_live_ct());
     }
   }
 
