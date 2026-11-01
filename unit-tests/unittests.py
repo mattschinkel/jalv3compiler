@@ -131,6 +131,28 @@ _PIC32_REGRESSION_SUMMARY = os.path.join(
 )
 
 
+def _compiler_build_id(compiler_path: str) -> str:
+    """The compiler's own build stamp, from `--version`.
+
+    A path identifies a file, not a build: the same `bin/jalv3-x86-64` is
+    rebuilt constantly, and a gate run compiles with a pinned snapshot in a
+    temp directory. The binary carries its compile date (`__DATE__`), so ask
+    it and record the answer next to the path.
+    """
+    try:
+        r = subprocess.run([compiler_path, "--version"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"(unavailable: {exc.__class__.__name__})"
+    out = (r.stdout or "").strip().splitlines()
+    if out:
+        return out[0].strip()
+    err = (r.stderr or "").strip().splitlines()
+    if err:
+        return err[0].strip()
+    return "(no version output)"
+
+
 def _report_timestamp_first_line() -> str:
     """Local date and time for line 1 of generated text reports (YYYY-MM-DD HH:MM:SS)."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -789,6 +811,7 @@ def test_all_samples(
     print(f"Testing all samples with {compiler_desc}")
     print("Date:", subprocess.check_output(["date"], text=True).strip())
     print(f"Compiler: {compiler_path}")
+    print(f"Compiler build: {_compiler_build_id(compiler_path)}")
     print("")
     
     # Create output directories
@@ -1038,6 +1061,7 @@ def test_all_samples(
             f.write(f"{output_type.upper()} COMPILER TEST SUMMARY\n")
             f.write("=" * 50 + "\n")
             f.write(f"Compiler: {compiler_path} ({output_type.upper()})\n")
+            f.write(f"Compiler build: {_compiler_build_id(compiler_path)}\n")
             f.write(f"Parallel workers: {_sample_compile_worker_count(parallel_workers)}\n")
             f.write(f"Sample directory (ephemeral): {sample_dir}\n")
             f.write(f"Lib include path (ephemeral): {lib_path}\n")
