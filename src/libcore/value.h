@@ -148,8 +148,12 @@ value_t value_variable_remap(value_t val, const variable_map_t *map);
 
 value_t value_remap(value_t val, const value_map_t *map);
 
-/* value_t's handed out and not yet released (0 after a clean compile). */
+/* Values allocated since the region was last destroyed. The region is
+ * compile-scoped, so this is 0 once pfile_close() has run -- an invariant,
+ * not a leak counter. */
 unsigned long value_live_ct(void);
+void          value_arena_begin(void);
+unsigned long value_arena_destroy(void);
 
 #endif /* value_h__ */
 

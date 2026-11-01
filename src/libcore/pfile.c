@@ -160,6 +160,7 @@ result_t pfile_open(pfile_t **dst,
   pfile_t *pf;
   int      rc;
 
+  value_arena_begin();
   pf = MALLOC(sizeof(*pf));
   if (0 == pf) {
     rc = RESULT_MEMORY;
@@ -370,23 +371,25 @@ void pfile_close(pfile_t *pf)
   hash_free(pf->tag_idx);
   variable_def_ugly_hack_cleanup();
 
-  /* How many value_t are still checked out of the cache at teardown.
+  /* The value region dies with the compile.
    *
-   * DIAGNOSTIC, not an invariant: the count is NOT zero on a clean compile
-   * and scales with the program (18f67j50_blink 89, 16f1825 pointers 1222,
-   * 18f4620 tcp_client 6649). Something holds values until the process
-   * exits -- the cache itself is reclaimed by its atexit handler, so these
-   * are retained references, not OS leaks. Until that baseline is
-   * understood and driven to zero (see the backlog), a non-zero count
-   * cannot fail a compile; a REGRESSION in it is still visible, which is
-   * what the operand-guard bug of 2026-10-31 would have moved.
+   * This used to be a diagnostic: values were refcounted objects with
+   * manual release, and the count at close was a baseline to watch
+   * (18f67j50_blink 89, 16f1825 pointers 1222, 18f4620 tcp_client 6649,
+   * 105 left after the release fixes -- and it grew linearly across
+   * compiles). Values are region-scoped now, so the count is an
+   * INVARIANT: everything the compile allocated is reclaimed here.
    *
    * -debug=compiler keeps it on for a whole corpus run:
-   *   jalv3 -debug=compiler ... 2>&1 | grep 'value(s) still live' */
-  if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)
-      && (0 == pfile_errct_get(pf))) {
-    fprintf(stderr, "!!! value(s) still live at close: %lu\n",
-        value_live_ct());
+   *   jalv3 -debug=compiler ... 2>&1 | grep 'value arena' */
+  {
+    unsigned long released = value_arena_destroy();
+
+    if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)
+        && (0 == pfile_errct_get(pf))) {
+      fprintf(stderr, "!!! value arena: %lu released, %lu live\n",
+          released, value_live_ct());
+    }
   }
 
   FREE(pf);

@@ -14,6 +14,7 @@
 #include <assert.h>
 #include "pf_proc.h"
 #include "value.h"
+#include <stdlib.h>
 
 static unsigned value_id;
 
@@ -30,32 +31,91 @@ struct value_
 };
 
 
-static cache_t   value_cache;
-static boolean_t value_cache_is_init;
+/*
+ * Compile-scoped region for value_t.
+ *
+ * Values used to be refcounted objects with manual release, with 1090
+ * release sites and no compiler help: a forgotten release was silent and
+ * accumulated (measured: 105 leaked per compile, linear across compiles).
+ * A value is dead when its compile ends, so lifetime is the region's:
+ * allocate by bumping a chunk, free the chunks at pfile_close.
+ *
+ * What is NOT deferred is the VARIABLE release. A value locks its variable
+ * when it is created, and variable slots are reused as those references
+ * drop; deferring that release to teardown changed the data placement (and
+ * so the HEX) of 34 of 2937 corpus samples. value_release() therefore still
+ * runs its cleanup at refcount zero -- only the element free is gone.
+ */
+#define VALUE_CHUNK_CT 8192
+
+typedef struct value_chunk_ {
+  struct value_chunk_ *next;
+  size_t               used;
+  struct value_        vals[VALUE_CHUNK_CT];
+} value_chunk_t;
+
+static value_chunk_t *value_chunks;
+static value_chunk_t *value_cur;
+static unsigned long  value_allocated;
 
 unsigned long value_live_ct(void)
 {
-  return value_cache_is_init ? cache_live_ct(&value_cache) : 0;
+  return value_allocated;
 }
 
-static void value_cache_cleanup(void)
+void value_arena_begin(void)
 {
-  cache_cleanup(&value_cache);
+  /* A region still standing here means the previous compile never reached
+   * pfile_close (a fatal exit). Nothing can reference it any more, so it is
+   * reclaimed rather than leaked; the assert flags the missing close in
+   * debug builds, where that path is reachable by a failed compile. */
+  assert(0 == value_chunks);
+  if (value_chunks) {
+    (void) value_arena_destroy();
+  }
 }
 
 static value_t value_element_alloc(void)
 {
-  if (!value_cache_is_init) {
-    value_cache_is_init = BOOLEAN_TRUE;
-    atexit(value_cache_cleanup);
-    (void) cache_init(&value_cache, sizeof(struct value_), "value");
+  if ((0 == value_cur) || (VALUE_CHUNK_CT == value_cur->used)) {
+    value_chunk_t *chunk = (value_chunk_t *) malloc(sizeof(*chunk));
+
+    if (0 == chunk) {
+      return 0;
+    }
+    chunk->next   = value_chunks;
+    chunk->used   = 0;
+    value_chunks  = chunk;
+    value_cur     = chunk;
   }
-  return cache_element_alloc(&value_cache);
+  value_allocated++;
+  return &value_cur->vals[value_cur->used++];
 }
 
 static struct value_ *value_element_seek(value_t el, boolean_t mod)
 {
-  return cache_element_seek(&value_cache, el, mod);
+  (void) mod;                 /* elements are never moved or recycled */
+  return el;
+}
+
+unsigned long value_arena_destroy(void)
+{
+  value_chunk_t *chunk;
+  unsigned long  freed;
+
+  freed = value_allocated;
+  chunk = value_chunks;
+  while (chunk) {
+    value_chunk_t *next = chunk->next;
+
+    free(chunk);
+    chunk = next;
+  }
+  value_chunks    = 0;
+  value_cur       = 0;
+  value_allocated = 0;
+
+  return freed;
 }
 
 void value_variable_set(value_t val, variable_t var)
@@ -178,9 +238,10 @@ void value_release(value_t val)
 
   ptr = value_element_seek(val, BOOLEAN_TRUE);
   if (ptr && !--ptr->ref_ct) {
+    /* the memory belongs to the compile's region; the variable reference
+     * does not, and must be dropped here (see the note above) */
     value_baseofs_set(val, 0);
     value_variable_set(val, 0);
-    cache_element_free(&value_cache, val);
   }
 }
 
