@@ -84,6 +84,15 @@ def scan(root):
                         hits.append((j, d))
                 if not hits:
                     continue
+                # a parameter REASSIGNED before the release is no longer the
+                # argument -- releasing it releases an internal value (the
+                # `f = pic_indirect_get(...)` pattern). Only report releases
+                # of the parameter as received.
+                body_lines = body.split('\n')
+                first = hits[0][0]
+                if any(re.search(r'(?<![=!<>])\b' + re.escape(prm) + r'\s*=(?!=)', l)
+                       for l in body_lines[:first]):
+                    continue
                 early = any(re.search(r'\breturn\b', l)
                             for l in body.split('\n')[:hits[0][0]])
                 kind = 'conditional'
