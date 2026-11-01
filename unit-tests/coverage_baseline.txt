@@ -1,0 +1,13 @@
+# coverage baseline -- regenerate with
+#   python3 unit-tests/coverage_report.py --update-baseline
+# overall <percent> <executable lines>
+# mode <all|strideN>  -- the input set this number describes;
+#   a run with a different mode is reported but not compared
+mode all
+overall 80.67 49819
+module  jal        80.77 11068
+module  libcore    80.41 10777
+module  libpic12   79.66 16628
+module  libpic32   86.62 6728
+module  libesp32   88.65 3673
+module  libutils   26.67 945

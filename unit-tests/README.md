@@ -20,6 +20,18 @@ L1 runtime suites + compile-pin tests, L2 unit/compare + HEX manifest,
 L3 second QEMU suite + ASan corpus). `run_compile_pin_tests.sh` runs the
 `test_*` pin scripts in this folder.
 
+`test_adversarial_inputs.sh` — shape-pathological inputs (deep nesting,
+huge arrays, thousands of blocks, binary junk) that the mutating fuzzer
+cannot generate. Registered in the L1 pin gate; every entry pins a defect
+that mutation fuzzing structurally missed. See
+`fixes/fix_adversarial_input_gate.md`.
+
+`coverage_report.py` — line coverage of `src/` over a spread of the corpus,
+using the `COV=1` flavor and `gcov`, compared against
+`coverage_baseline.txt`. Answers "which code has no test at all?"; runs in
+the nightly CI job (~50 s), not in the L1 ladder. See
+`fixes/fix_coverage_gate.md`.
+
 `jaldbg.py` — the bug-investigation harness (2026-10-29, born from the
 proc-entry-BSR chase). Diagnosis layer only: the suites above stay the
 detection layer and always run first. Subcommands: `compile`, `symbols`,

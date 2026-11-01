@@ -103,6 +103,13 @@ run_py helper_entry_bsr            unit-tests/test_helper_entry_bsr.py --compile
 # (fixed seed + fixed input count) and the fuzz job fails on any crash or hang.
 # fixes/fix_malformed_input_clean.md.
 run_sh malformed_input_clean       unit-tests/test_malformed_input_clean.sh "$CC"
+# Shape-pathological inputs the mutating fuzzer cannot generate (deep
+# nesting, 2000 blocks, 1 MB arrays, binary junk). Every entry pins a
+# defect found by hand: unbounded parser recursion (SIGSEGV), the 1000-block
+# map cap that printed ERROR and exited 0, and the 1024-byte clamp that
+# silently skipped BSS clearing. fixes/fix_bounded_parser_recursion.md,
+# fixes/fix_data_area_map_guards.md.
+run_sh adversarial_inputs          unit-tests/test_adversarial_inputs.sh "$CC"
 run_py malformed_input_fuzz        unit-tests/fuzz_jal_inputs.py --compiler "$CC" \
   --inputs 4000 --seed 20261030 --minutes 30 --out-dir tmp/fuzz_gate
 # A4: the SAME sweep through the in-process seam (JAL_MULTI), which compiles a
@@ -127,6 +134,9 @@ run_py esp32_sfr_bit_alignment    unit-tests/test_esp32_sfr_bit_alignment.py --c
 run_py pic32_bootflash_fuses       unit-tests/test_pic32_bootflash_fuses.py --compiler "$CC"
 run_py pic32_isr_shapes            unit-tests/test_pic32_isr_shapes.py --compiler "$CC"
 run_py pic32mx_mvec_layout         unit-tests/test_pic32mx_mvec_layout.py --compiler "$CC"
+
+# Source comment blocks vs the code they document (no build needed).
+run_py comment_docs                unit-tests/check_comment_docs.py
 # (test_pic32mx_clock_words.py is its own L1 gate in unit-tests/run_gates.sh.)
 
 echo ""
