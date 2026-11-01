@@ -1671,21 +1671,23 @@ void pfile_temp_fixup(pfile_t *pf)
         }
       }
       qsort(regions, region_ct, sizeof(*regions), pfile_temp_region_cmp);
-      /* merge overlapping/touching hulls into disjoint regions */
+      /* keep nested/overlapping hulls SEPARATE: a merged hull hides the
+       * inner loop a temp is carried around (a temp written before an
+       * inner loop but inside the merged outer hull looked "entirely
+       * inside" and was not extended across the inner back edge). Only
+       * exact duplicates (several branches to one label) are dropped. */
       {
         size_t rr;
         size_t gg2;
 
         rr = 0;
         for (gg2 = 1; gg2 < region_ct; gg2++) {
-          if (regions[gg2].lo <= regions[rr].hi) {
-            if (regions[gg2].hi > regions[rr].hi) {
-              regions[rr].hi = regions[gg2].hi;
-            }
-          } else {
-            rr++;
-            regions[rr] = regions[gg2];
+          if (regions[gg2].lo == regions[rr].lo
+              && regions[gg2].hi == regions[rr].hi) {
+            continue;
           }
+          rr++;
+          regions[rr] = regions[gg2];
         }
         region_ct = region_ct ? rr + 1 : 0;
       }
