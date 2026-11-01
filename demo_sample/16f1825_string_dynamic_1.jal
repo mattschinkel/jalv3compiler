@@ -67,7 +67,7 @@ pragma string index byte
 
 include strings_dynamic
 var string greeting
-var string name = "JALv2 ESP32!"
+var string name = "JALv2!"
 var string out
 var byte cnt
 var volatile byte checks = 0
@@ -88,7 +88,7 @@ print_crlf(serial_data)
 -- Concatenate onto an existing string and compare with a literal
 print_string(serial_data, "--- assignment chain + compare ----------\r\n")
 greeting = "Hello, " & name          -- assignment chains: string operands
-if greeting == "Hello, JALv2 ESP32!" then
+if greeting == "Hello, JALv2!" then
    checks = checks + 1
    print_string(serial_data, "combined:        MATCH (")
    print_byte_dec(serial_data, COUNT(greeting))

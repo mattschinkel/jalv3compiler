@@ -137,7 +137,7 @@ end loop
 
 print_string(serial_data, "========================================\r\n")
 print_string(serial_data, "jalv2 optional-params demo - PIC32MZ\r\n")
-print_string(serial_data, "boot: own boot init, SYSCLK 200 MHz, 115200 8N1\r\n")
+print_string(serial_data, "boot: own boot init, 115200 8N1\r\n")
 print_string(serial_data, "========================================\r\n")
 
 print_string(serial_data, "--- scalar defaults, every arity ---\r\n")

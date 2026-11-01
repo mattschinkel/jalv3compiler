@@ -87,7 +87,7 @@ end loop
 
 print_string(serial_data, "========================================\r\n")
 print_string(serial_data, "jalv2 print demo - PIC32MZ1024EFH064\r\n")
-print_string(serial_data, "boot: own boot init, SYSCLK 200 MHz, 115200 8N1\r\n")
+print_string(serial_data, "boot: own boot init, 115200 8N1\r\n")
 print_string(serial_data, "========================================\r\n")
 
 print_string(serial_data, "byte  dec: ")

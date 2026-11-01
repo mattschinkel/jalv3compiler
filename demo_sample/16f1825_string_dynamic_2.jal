@@ -67,7 +67,7 @@ const word _string_heap_size = 80
 pragma string index byte
 
 include strings_dynamic
-var string name = "JALv2 ESP32!"
+var string name = "JALv2!"
 var string out
 var byte src[4]
 var byte cnt

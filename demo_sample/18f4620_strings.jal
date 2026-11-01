@@ -95,7 +95,7 @@ print_string(serial_data, "========================================\r\n")
 
 print_string(serial_data, "--- basics: assign + COUNT --------------\r\n")
 -- name = "JAL" & "v2 " & "ESP32!"   -- literals-only chains were already legal;
-name = "JALv2 ESP32!"               -- (kept as the heapfull-suite baseline)
+name = "JALv2!"               -- (kept as the heapfull-suite baseline)
 
 print_string(serial_data, "name:            ")
 print_string(serial_data, name)
@@ -112,7 +112,7 @@ print_crlf(serial_data)
 -- Concatenate onto an existing string and compare with a literal
 print_string(serial_data, "--- assignment chain + compare ----------\r\n")
 greeting = "Hello, " & name          -- assignment chains: string operands
-if greeting == "Hello, JALv2 ESP32!" then
+if greeting == "Hello, JALv2!" then
    checks = checks + 1
    print_string(serial_data, "combined:        MATCH (")
    print_byte_dec(serial_data, COUNT(greeting))

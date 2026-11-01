@@ -62,7 +62,7 @@ var byte n = 0
 
 print_string(serial_data, "========================================\r\n")
 print_string(serial_data, "jalv2 software-serial print demo - PIC32MZ1024EFH064\r\n")
-print_string(serial_data, "9600 8N1, TX=RF0, RX=RF1, SYSCLK 200 MHz\r\n")
+print_string(serial_data, "9600 8N1, TX=RF0, RX=RF1\r\n")
 print_string(serial_data, "========================================\r\n")
 
 forever loop
