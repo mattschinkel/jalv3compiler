@@ -27,9 +27,7 @@
 #define VALUE_FLAG_POINTER      0x0010U /* before dereferencing, this
                                           was a poitner */
 #define VALUE_FLAG_PTR_SLOT_RAW 0x0020U /* read pointer slot storage bytes */
-#ifdef JALV2_VALUE_DEBUG
 #define VALUE_FLAG_DEAD         0x0040U /* refcount reached 0: any use is a bug */
-#endif
 
 value_t   value_alloc(variable_t var);
 void      value_lock(value_t val);

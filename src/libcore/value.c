@@ -84,7 +84,11 @@ void value_arena_begin(void)
 static value_t value_element_alloc(void)
 {
   if ((0 == value_cur) || (VALUE_CHUNK_CT == value_cur->used)) {
-    value_chunk_t *chunk = (value_chunk_t *) malloc(sizeof(*chunk));
+    /* zeroed: the dead-value check reads a value's flags through
+     * value_element_seek during value_alloc, BEFORE value_alloc has
+     * initialised them -- garbage here used to trip the detector on a
+     * fresh value. calloc costs one pass per 8192 values. */
+    value_chunk_t *chunk = (value_chunk_t *) calloc(1, sizeof(*chunk));
 
     if (0 == chunk) {
       return 0;
@@ -101,29 +105,34 @@ static value_t value_element_alloc(void)
 static struct value_ *value_element_seek(value_t el, boolean_t mod)
 {
   (void) mod;                 /* elements are never moved or recycled */
-#ifdef JALV2_VALUE_DEBUG
+
   /* The region keeps dead values readable, so a use after release would
-   * otherwise read plausible stale data. This is the deliberate detector
-   * that replaces the accidental one refcounting gave: a freed element
-   * used to be poisoned or recycled. Debug builds only (-DJALV2_VALUE_DEBUG,
-   * which the SAN flavor turns on so the sanitizer corpus exercises it). */
+   * otherwise read plausible stale data. This is the single chokepoint --
+   * struct value_ is opaque outside this file and every accessor lands
+   * here -- so the check is ALWAYS on: one load of a word the caller is
+   * about to dereference anyway. A stale handle must never ship silently.
+   *
+   * -DJALV2_VALUE_DEBUG (the SAN flavor) additionally records the release
+   * stack, so the report names the code that released it. */
   if (el && (el->flags & VALUE_FLAG_DEAD)) {
-    char **sym;
+    fprintf(stderr, "!!! value used after release: id %u\n", el->id);
+#ifdef JALV2_VALUE_DEBUG
+    {
+      char **sym = backtrace_symbols(el->dbg_bt, el->dbg_bt_ct);
 
-    fprintf(stderr, "!!! value used after release: id %u, released from:\n",
-        el->id);
-    sym = backtrace_symbols(el->dbg_bt, el->dbg_bt_ct);
-    if (sym) {
-      int i;
+      if (sym) {
+        int i;
 
-      for (i = 0; i < el->dbg_bt_ct; i++) {
-        fprintf(stderr, "    %s\n", sym[i]);
+        fprintf(stderr, "    released from:\n");
+        for (i = 0; i < el->dbg_bt_ct; i++) {
+          fprintf(stderr, "    %s\n", sym[i]);
+        }
+        free(sym);
       }
-      free(sym);
     }
+#endif
     abort();
   }
-#endif
   return el;
 }
 
@@ -266,24 +275,22 @@ void value_release(value_t val)
   struct value_ *ptr;
 
   ptr = value_element_seek(val, BOOLEAN_TRUE);
-#ifdef JALV2_VALUE_DEBUG
-  if (ptr && (ptr->flags & VALUE_FLAG_DEAD)) {
-    fprintf(stderr, "!!! value released twice: id %u\n", ptr->id);
+  if (val && (val->flags & VALUE_FLAG_DEAD)) {
+    fprintf(stderr, "!!! value released twice: id %u\n", val->id);
     abort();
   }
-#endif
   if (ptr && !--ptr->ref_ct) {
     /* the memory belongs to the compile's region; the variable reference
      * does not, and must be dropped here (see the note above) */
     value_baseofs_set(val, 0);
     value_variable_set(val, 0);
-#ifdef JALV2_VALUE_DEBUG
     ptr = value_element_seek(val, BOOLEAN_TRUE);
     if (ptr) {
       ptr->flags |= VALUE_FLAG_DEAD;
+#ifdef JALV2_VALUE_DEBUG
       ptr->dbg_bt_ct = backtrace(ptr->dbg_bt, 6);
-    }
 #endif
+    }
   }
 }
 

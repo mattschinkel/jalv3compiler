@@ -2479,11 +2479,17 @@ static value_t jal_string_parse_operand(pfile_t *pf)
         pf_token_get(pf, PF_TOKEN_NEXT);
         if (VARIABLE_DEF_TYPE_FLOAT == value_type_get(val)) {
           /* negative float literal: negate the float constant */
-          float nf;
+          float           nf;
+          variable_def_t  fdef;
 
           nf = -value_const_float_get(val);
+          /* the def must be read BEFORE the release: this used to be
+           * value_def_get(val) after value_release(val), i.e. a read of a
+           * released value (it worked only because freed cache elements
+           * still held the old bytes; the value-use detector caught it) */
+          fdef = value_def_get(val);
           value_release(val);
-          val = pfile_constant_float_get(pf, nf, value_def_get(val));
+          val = pfile_constant_float_get(pf, nf, fdef);
           if (!val) {
             pfile_log_syserr(pf, ENOMEM);
           }
