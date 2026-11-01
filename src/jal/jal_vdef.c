@@ -919,20 +919,20 @@ static value_t jal_coerce_string_literal_array_to_scalar(pfile_t *pf,
   if (!data) {
     return val;
   }
+  /* The coerced value is RETURNED; the caller owns `val` and releases it
+   * when it replaces its handle. (This used to release `val` here, i.e.
+   * "consume on the paths that coerce, keep on the paths that do not" --
+   * the shape the ownership pass exists to remove.) */
   if (VARIABLE_DEF_TYPE_FLOAT == variable_def_type_get(want_def)) {
     float f;
 
     f = (float) (signed char) (unsigned char) data[0];
-    value_release(val);
     return pfile_constant_float_get(pf, f, want_def);
   } else {
-    value_t            out;
     variable_const_t   n;
 
     n = (variable_const_t) (unsigned char) data[0];
-    out = pfile_constant_get(pf, n, want_def);
-    value_release(val);
-    return out;
+    return pfile_constant_get(pf, n, want_def);
   }
 }
 
@@ -1051,7 +1051,15 @@ static value_t jal_parse_array_init(pfile_t *pf, variable_def_t def)
     for ( ; ; ) {
       pf_token_get(pf, PF_TOKEN_NEXT);
       stval = jal_parse_init(pf, mbr_def);
-      stval = jal_coerce_string_literal_array_to_scalar(pf, mbr_def, stval);
+      {
+        value_t cval;
+
+        cval  = jal_coerce_string_literal_array_to_scalar(pf, mbr_def, stval);
+        if (cval != stval) {
+          value_release(stval);
+          stval = cval;
+        }
+      }
       if (vals_ct == mbr_ct) {
         value_release(stval);
         is_overflow = BOOLEAN_TRUE;
@@ -1234,8 +1242,16 @@ static value_t jal_parse_struct_init(pfile_t *pf, variable_def_t def)
         }
       }
       stval = jal_parse_init(pf, variable_def_member_def_get(mbr));
-      stval = jal_coerce_string_literal_array_to_scalar(pf,
-        variable_def_member_def_get(mbr), stval);
+      {
+        value_t cval;
+
+        cval  = jal_coerce_string_literal_array_to_scalar(pf,
+            variable_def_member_def_get(mbr), stval);
+        if (cval != stval) {
+          value_release(stval);
+          stval = cval;
+        }
+      }
       if (vals_ct < vals_sz) {
         vals[vals_ct] = stval;
         is_const &= value_is_const(vals[vals_ct]);

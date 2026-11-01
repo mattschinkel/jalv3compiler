@@ -536,7 +536,8 @@ static value_t jal_string_max_index_coerce(pfile_t *pf, value_t max)
   if (!b) {
     return max;
   }
-  value_release(max);
+  /* the coerced constant is RETURNED; `max` belongs to the caller, which
+   * releases it when it replaces its handle */
   return b;
 }
 
@@ -2563,6 +2564,7 @@ static value_t jal_string_jal_proc_call_value_get(pfile_t *pf,
  * back). The chain item is the buffer; len_out is the return temp --
  * the same (array, runtime length) shape the number machinery
  * produces. The parms array is owned by the emitted cmd. */
+/* value consumes: v */
 static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
     value_t *len_out, value_t v)
 {
@@ -2656,6 +2658,7 @@ static value_t jal_string_number_source_emit(pfile_t *pf, value_t v,
  * become one chain source by STRING-flagging a dup of the array def
  * (length = element count, a constant).  BYTE elements only; other
  * element types keep the explicit string()/per-element forms. */
+/* value consumes: item */
 static value_t jal_string_array_chain_source(pfile_t *pf, value_t item,
     value_t *len)
 {
@@ -5012,6 +5015,7 @@ static value_t jal_string_const_int_text(pfile_t *pf, variable_const_t cn,
 /* stage 2: runtime scalar cast -- render through the base/pad-
  * generalized number machinery and build the result exactly like a
  * one-item & chain (compiler heap-string cell, concat-emit copy) */
+/* value consumes: operand */
 static value_t jal_string_cast_runtime_result(pfile_t *pf, value_t operand,
     unsigned base, unsigned pad)
 {
@@ -5066,6 +5070,7 @@ static value_t jal_string_cast_runtime_result(pfile_t *pf, value_t operand,
  * the stage-1 const semantics) and concat-emit appends all items. */
 #define JAL_STRING_CAST_ARRAY_MAX 16
 
+/* value consumes: operand */
 static value_t jal_string_cast_runtime_array(pfile_t *pf, value_t operand,
     jal_string_cast_t which, unsigned pad)
 {
@@ -5551,7 +5556,15 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
     if (!max) {
       goto done;
     }
-    max = jal_string_max_index_coerce(pf, max);
+    {
+      value_t nmax;
+
+      nmax = jal_string_max_index_coerce(pf, max);
+      if (nmax != max) {
+        value_release(max);
+        max = nmax;
+      }
+    }
     if (jal_string_builtin_sep_get(pf, ")")) {
       jal_string_silent_truncate_begin(pf);
       result = jal_string_truncate_emit(pf, dst, max);
@@ -5589,7 +5602,15 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
     if (!max) {
       goto done;
     }
-    max = jal_string_max_index_coerce(pf, max);
+    {
+      value_t nmax;
+
+      nmax = jal_string_max_index_coerce(pf, max);
+      if (nmax != max) {
+        value_release(max);
+        max = nmax;
+      }
+    }
   }
   if (!jal_string_builtin_sep_get(pf, ")")) {
     goto done;

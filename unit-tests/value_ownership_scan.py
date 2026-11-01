@@ -75,6 +75,12 @@ def scan(root):
             name, params = parse_signature(header)
             if not name:
                 continue
+            # a function whose header says what it consumes is DOCUMENTED:
+            # `value consumes: a, b` (see the contract in value.h)
+            declared = set()
+            m = re.search(r'value consumes:([^*\n]*)', header)
+            if m:
+                declared = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', m.group(1)))
             for prm in params:
                 hits = []
                 d = 0
@@ -90,6 +96,11 @@ def scan(root):
                 # of the parameter as received.
                 body_lines = body.split('\n')
                 first = hits[0][0]
+                # a release that BALANCES an earlier value_lock(param) drops
+                # the lock this function took, not the caller's reference
+                if any(re.search(r'value_lock\s*\(\s*' + re.escape(prm) + r'\s*\)', l)
+                       for l in body_lines[:first]):
+                    continue
                 if any(re.search(r'(?<![=!<>])\b' + re.escape(prm) + r'\s*=(?!=)', l)
                        for l in body_lines[:first]):
                     continue
@@ -98,6 +109,8 @@ def scan(root):
                 kind = 'conditional'
                 if hits[0][1] <= 1 and not early and len(hits) == 1:
                     kind = 'unconditional'
+                if prm in declared:
+                    kind = 'documented'
                 out.append((path, line, name, prm, kind, len(hits)))
     return out
 
@@ -107,9 +120,11 @@ def main(argv):
     findings = scan(root)
     cond = [f for f in findings if f[4] == 'conditional']
     uncond = [f for f in findings if f[4] == 'unconditional']
+    doc = [f for f in findings if f[4] == 'documented']
     print("functions taking a value_t by value that release that parameter: %d"
           % len(findings))
     print("  unconditional consume: %d" % len(uncond))
+    print("  documented consume:    %d   (header says `value consumes: ...`)" % len(doc))
     print("  conditional consume:   %d   <- read these" % len(cond))
     if '--cond' in argv or '--list' in argv:
         for path, line, name, prm, kind, n in (cond if '--cond' in argv else findings):
