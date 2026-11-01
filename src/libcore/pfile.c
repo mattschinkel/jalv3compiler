@@ -161,6 +161,7 @@ result_t pfile_open(pfile_t **dst,
   int      rc;
 
   value_arena_begin();
+  variable_arena_begin();
   pf = MALLOC(sizeof(*pf));
   if (0 == pf) {
     rc = RESULT_MEMORY;
@@ -383,12 +384,17 @@ void pfile_close(pfile_t *pf)
    * -debug=compiler keeps it on for a whole corpus run:
    *   jalv3 -debug=compiler ... 2>&1 | grep 'value arena' */
   {
-    unsigned long released = value_arena_destroy();
+    unsigned long released  = value_arena_destroy();
+    unsigned long vreleased = variable_arena_destroy();
 
+    /* the DESTROY is unconditional (it is the compile's lifetime); only
+     * the report needs -debug=compiler */
     if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)
         && (0 == pfile_errct_get(pf))) {
       fprintf(stderr, "!!! value arena: %lu released, %lu live\n",
           released, value_live_ct());
+      fprintf(stderr, "!!! variable arena: %lu released, %lu live\n",
+          vreleased, variable_live_ct());
     }
   }
 

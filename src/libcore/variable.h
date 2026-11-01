@@ -340,5 +340,9 @@ struct array_ *variable_interference_get(variable_t var);
 
 unsigned variable_id_get(variable_t var);
 
+unsigned long variable_live_ct(void);
+void          variable_arena_begin(void);
+unsigned long variable_arena_destroy(void);
+
 #endif /* variable_h__ */
 
