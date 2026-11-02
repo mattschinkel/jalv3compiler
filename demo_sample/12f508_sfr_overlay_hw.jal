@@ -51,7 +51,7 @@ if (PORTA & 0x04) != 0 then
 end if
 gpio_bits[0] = ON
 gpio_bits[5] = ON
-if (PORTA & 0x25) != 0x25 then
+if (PORTA & 0x21) != 0x21 then
    ok = FALSE
 end if
 --
