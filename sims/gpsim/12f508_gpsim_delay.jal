@@ -1,0 +1,42 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core `_usec_delay`
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    At 4 MHz one instruction cycle is 1 us; TMR0 with prescaler 1:2 ticks
+--    every 2 us, so `_usec_delay(200)` must land near 100 TMR0 counts and
+--    must not disturb a live variable.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_keep 90
+-- expect byte v_r_ok 1
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var byte keep = 0x5a
+var volatile byte r_keep = 0
+var volatile byte r_ticks = 0
+var volatile byte r_ok = 0
+
+OPTION_REG_T0CS = low
+OPTION_REG_PSA = low
+OPTION_REG_PS = 0b000     -- prescaler 1:2, TMR0 from the instruction clock
+TMR0 = 0
+
+_usec_delay(200)
+
+r_ticks = TMR0
+r_keep = keep
+
+if (r_keep == 0x5a) & (r_ticks >= 80) & (r_ticks <= 130) then
+   r_ok = 1
+end if
+
+forever loop
+end loop

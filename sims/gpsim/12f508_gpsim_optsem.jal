@@ -1,0 +1,39 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core optimizer semantics
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Argument order and byte wrap across a call, plus a volatile re-read
+--    that must not be folded from the earlier value.
+--
+-- @gpsim_validate begin
+-- steps: 100000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_arg1 7
+-- expect byte v_r_arg2 249
+-- expect byte v_r_vol 14
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+function _sub2(byte in a, byte in b) return byte is
+   return a - b
+end function
+
+var byte v = 5
+var volatile byte r_arg1 = 0
+var volatile byte r_arg2 = 0
+var volatile byte r_vol = 0
+
+r_arg1 = _sub2(10, 3)     -- 7: argument order must be preserved
+r_arg2 = _sub2(3, 10)     -- 3 - 10 wraps to 249
+
+r_vol = v                 -- 5
+v = 9
+r_vol = r_vol + v         -- 14: the second read sees the new value
+
+forever loop
+end loop

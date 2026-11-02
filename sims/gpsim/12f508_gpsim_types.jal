@@ -1,0 +1,46 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core types and truncation
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    byte / sbyte / word / sword storage, implicit truncation on assignment,
+--    explicit `byte()` casts and signed comparisons.  (dword/sdword live in
+--    `12f508_gpsim_wide.jal`, which has the RAM for them.)
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_badd 0
+-- expect byte v_r_wshr 156
+-- expect byte v_r_swbyte 212
+-- expect byte v_r_wbyte 64
+-- expect byte v_r_cmp 1
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var byte  b  = 200
+var sbyte sb = -3
+var word  wv = 40000
+var sword sv = -300
+
+var volatile byte r_badd = 0
+var volatile byte r_wshr = 0
+var volatile byte r_swbyte = 0
+var volatile byte r_wbyte = 0
+var volatile byte r_cmp = 0
+
+r_badd = byte(b + 56)    -- 200 + 56 = 256 -> 0
+r_wshr = byte(wv >> 8)    -- 40000 >> 8 = 156
+r_swbyte = byte(sv)      -- -300 -> 212
+r_wbyte = byte(wv)        -- 40000 & 0xFF = 64
+
+if (sv < 0) & (wv > 0) & (sb < 0) then
+   r_cmp = 1
+end if
+
+forever loop
+end loop

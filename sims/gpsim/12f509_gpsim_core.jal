@@ -1,0 +1,54 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F509 gpsim — 12-bit core on a second device file
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Flow, arithmetic wrap, a constant-index bit array and a value-returning
+--    procedure on PIC12F509 (41 bytes of RAM), i.e. the 12-bit codegen on a
+--    device file other than 12F508.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_flow 10
+-- expect byte v_r_math 44
+-- expect byte v_r_bit 1
+-- expect byte v_r_proc 42
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f509_device
+
+function _twice(byte in x) return byte is
+   return x + x
+end function
+
+var bit flags[8]
+var byte i
+var byte n
+var volatile byte r_flow = 0
+var volatile byte r_math = 0
+var volatile byte r_bit = 0
+var volatile byte r_proc = 0
+
+n = 0
+for 5 using i loop
+   n = n + i
+end loop
+r_flow = n                  -- 0+1+2+3+4 = 10
+
+n = 200
+r_math = byte(n + 100)      -- 300 -> 44
+
+flags[3] = true
+flags[5] = true
+if flags[3] & flags[5] then
+   r_bit = 1
+end if
+
+r_proc = _twice(21)         -- 42
+
+forever loop
+end loop

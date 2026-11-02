@@ -1,0 +1,40 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core boundary values
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Carry, borrow, shift and wrap edges at 8/16 bits, all reduced to byte
+--    results so the whole test fits in a 25-byte part.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_carry 0
+-- expect byte v_r_borrow 255
+-- expect byte v_r_shl7 128
+-- expect byte v_r_shl8 0
+-- expect byte v_r_wsat 0
+-- expect byte v_r_neg 255
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var volatile byte r_carry = 0
+var volatile byte r_borrow = 0
+var volatile byte r_shl7 = 0
+var volatile byte r_shl8 = 0
+var volatile byte r_wsat = 0
+var volatile byte r_neg = 0
+
+r_carry = byte(255 + 1)          -- 0
+r_borrow = byte(0 - 1)           -- 255
+r_shl7 = 1 << 7                  -- 128
+r_shl8 = byte(1 << 8)            -- 0
+r_wsat = byte(word(65535) + 1)   -- 0
+r_neg = byte(-1)                 -- 255
+
+forever loop
+end loop

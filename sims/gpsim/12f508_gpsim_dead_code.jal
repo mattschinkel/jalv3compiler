@@ -1,0 +1,41 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core dead code and constant folding
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `if FALSE`, a branch whose condition folds to false, an uncalled
+--    procedure (ROM only) and a folded constant expression.  The live values
+--    must survive the dead-block elision.
+--
+-- @gpsim_validate begin
+-- steps: 100000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_live 7
+-- expect byte v_r_fold 7
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var volatile byte r_live = 0
+var volatile byte r_fold = 0
+
+procedure never_called() is
+   r_live = 42
+end procedure
+
+if FALSE then
+   r_live = 99
+end if
+
+if (1 + 1) == 3 then
+   r_fold = 99
+end if
+
+r_live = 7
+r_fold = (2 * 3) + 1
+
+forever loop
+end loop

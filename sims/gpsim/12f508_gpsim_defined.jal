@@ -1,0 +1,49 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core `defined()`
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `defined()` on a constant, on a missing name and on a procedure label.
+--    Front-end behaviour, run on the smallest part to prove it is independent
+--    of the target size.
+--
+-- @gpsim_validate begin
+-- steps: 100000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_r_def1 1
+-- expect byte v_r_def2 2
+-- expect byte v_r_def3 3
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+const byte _GPR_EXISTING = 99
+
+procedure _defined_label_probe() is
+end procedure
+
+var volatile byte r_def1 = 0
+var volatile byte r_def2 = 0
+var volatile byte r_def3 = 0
+
+if defined(_GPR_EXISTING) then
+   if _GPR_EXISTING == 99 then
+      r_def1 = 1
+   end if
+end if
+
+if defined(_GPR_DOES_NOT_EXIST_ZZZ) then
+   r_def2 = 9
+else
+   r_def2 = 2
+end if
+
+if defined(_defined_label_probe) then
+   r_def3 = 3
+end if
+
+forever loop
+end loop

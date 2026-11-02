@@ -1,0 +1,25 @@
+-- Title: PIC12F509 gpsim regression — device defaults (12-bit core, 41 bytes RAM)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Second 12-bit **device file** witness (the 12F508 bundle only proves
+--    `12f508.jal`).  The 12F509 is the same core with 41 bytes of RAM
+--    (`pragma data 0x7-0x1F,0x30-0x3F`) and PORTA on GP0..GP3, so a test
+--    here exercises the 12-bit SFR/shadow layer of a different part.
+--
+--    Not `include regression`: its pinned GPRs (0x77/0x78) do not exist on a
+--    12-bit part; tests carry `checkpoint_verify: off` and their own
+--    `expect` lines.  gpsim processor **`p12f509`**.
+--
+-- Notes:
+--    Include only on **PIC12F509** tests under
+--    **`sims/gpsim/12f509_gpsim_*.jal`**.
+
+include 12f509
+
+pragma target clock 4_000_000
+pragma target OSC   INTOSC_NOCLKOUT
+pragma target WDT   DISABLED
+pragma target MCLR  EXTERNAL
+
+enable_digital_io()
