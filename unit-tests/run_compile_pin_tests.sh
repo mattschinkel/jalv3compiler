@@ -38,6 +38,14 @@ report() { # name log rc
     echo "FAIL $name (rc=$rc)"
     tail -60 "$log" | sed 's/^/     /'
     fails+=("$name")
+    # In CI the step log needs a token to read; an annotation is visible
+    # through the public API, so name the group and the first failure line.
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      local detail
+      detail=$(grep -m1 -E 'FAIL|error:|Error|assert' "$log" 2>/dev/null \
+               | tr '\r\n' '  ' | cut -c1-300)
+      echo "::error title=compile pin group failed::${name} (rc=${rc}) ${detail}"
+    fi
   fi
 }
 
