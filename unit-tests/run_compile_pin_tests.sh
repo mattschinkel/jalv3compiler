@@ -2,7 +2,7 @@
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 # Aggregate gate for the compile-only regression pins under scripts/.
 #
-# These scripts existed as documented "pins" in fix docs and AGENTS.md
+# These scripts existed as documented "pins" in fix docs and the project notes
 # (each one guards a specific diagnostic or codegen shape) but NOTHING
 # ran them: the tiered ladder only invoked the task canaries, the three
 # runtime suites, the negative table and the MX clock words.  A pin that

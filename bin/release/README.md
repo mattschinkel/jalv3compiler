@@ -30,4 +30,4 @@ x86_64-w64-mingw32-strip bin/release/jalv3-win64.exe
 
 Publishing is a plain `git add` / `git commit` / `git push` from `master`;
 `.gitignore` (private by default) is the only thing that decides what ships.
-See AGENTS.md, "Publishing".
+Publishing is a plain `git add` / `git commit` / `git push` from `master`.

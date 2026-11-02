@@ -62,7 +62,7 @@ _psp_slots[0] = 55
 -- NOTE: a plain-element WRITE (_psp_slots[1] = v) is deliberately not
 -- exercised here: read+write through the same pointer-slot array
 -- mis-compiles on classic cores as a PRE-EXISTING defect (independent
--- of pseudos; logged in AGENTS.md) -- the pseudo write above is a CALL
+-- of pseudos; logged in the project notes) -- the pseudo write above is a CALL
 -- and unaffected.
 regression_checkpoint()
 if _psp_snap1 != 41 then
