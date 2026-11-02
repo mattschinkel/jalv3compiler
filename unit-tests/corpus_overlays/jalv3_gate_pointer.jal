@@ -1,0 +1,23 @@
+-- Title: jalv3 corpus overlay — typed pointer (corpus gate coverage)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Give the JALv3 typed-pointer feature a corpus entry (the jallib 2.1.0
+--    corpus has 0 `var pointer` uses, so the HEX manifest could not see it).
+--    Compile-only and deterministic.  Fork-only: baseline/--compare skip
+--    `jalv3_*` (unittests.py).
+--
+-- ------------------------------------------------------
+
+include 16f1825
+
+var byte target
+var pointer p as var byte
+
+p is target
+p = 42
+target = p + 1
+
+forever loop
+end loop

@@ -42,11 +42,60 @@ static void pic_binary_and_or_xor(pfile_t *pf, operator_t op,
  * if dst is VALUE_NONE, the caller must check _Z and act
  * appropriately.
  */
+/*
+ * NAME
+ *   pic_equality_bit_operand_load
+ *
+ * DESCRIPTION
+ *   A runtime-indexed bit-array element has no static bit address: BTFSS/
+ *   BTFSC would test the INDF/FSR register itself (its bit field carries
+ *   the file address, so the comparison read bit 7 of INDF and 8 of 16
+ *   checks failed).  Read such an operand into a 1-byte temp through the
+ *   dynamic-bit loader first; the comparison then runs on a value that has
+ *   a real bit position.  Only the DYNAMIC element is handled here: an
+ *   indirect bit (open `bit in bits[]` formal, pin alias) keeps the direct
+ *   path it already had.
+ *
+ * PARAMETERS
+ *   pf  : pfile
+ *   val : operand
+ *
+ * RETURN
+ *   the temp holding the operand's value (0/1), or VALUE_NONE when the
+ *   operand has a static bit position and needs no load
+ */
+static value_t pic_equality_bit_operand_load(pfile_t *pf, value_t val)
+{
+  value_t tmp;
+
+  if (!value_is_single_bit(val)
+      || !pic_value_is_dynamic_bit_array_element(val)) {
+    return VALUE_NONE;
+  }
+  tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+  if (tmp) {
+    pic_op(pf, OPERATOR_ASSIGN, tmp, val, VALUE_NONE);
+  }
+  return tmp;
+}
+
 static void pic_equality(pfile_t *pf, operator_t op, value_t dst,
   value_t val1, value_t val2)
 {
+  value_t tmp1;
+  value_t tmp2;
+
   assert(!pic_value_is_w(val1));
   assert(!pic_value_is_w(val2));
+
+  tmp1 = pic_equality_bit_operand_load(pf, val1);
+  if (VALUE_NONE != tmp1) {
+    val1 = tmp1;
+  }
+  tmp2 = pic_equality_bit_operand_load(pf, val2);
+  if (VALUE_NONE != tmp2) {
+    val2 = tmp2;
+  }
 
   if (value_is_same(val1, val2)) {
     value_t          c;
@@ -321,6 +370,12 @@ static void pic_equality(pfile_t *pf, operator_t op, value_t dst,
       pic_assign_from_w(pf, dst, BOOLEAN_FALSE);
     }
     }
+  }
+  if (VALUE_NONE != tmp2) {
+    pic_var_temp_release(pf, tmp2);
+  }
+  if (VALUE_NONE != tmp1) {
+    pic_var_temp_release(pf, tmp1);
   }
 }
 

@@ -1,0 +1,83 @@
+-- Title: PIC16F887 print — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: the print library on the classic midrange PIC16F887 over the
+--              hardware EUSART: strings, decimal/hex bytes and words,
+--              CRLF, and a formatted status line.  The same print calls are
+--              used by the other 16f887_* tours; the software-serial variant
+--              of the same traffic is in 16f887_serial_software.jal.
+--
+--              Results are printed on the EUSART and mirrored on the LED.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+print_string(serial_data, "JALv2 PIC16F887: print library\r\n")
+--
+print_string(serial_data, "byte  dec: ")
+print_byte_dec(serial_data, 200)
+print_string(serial_data, "  hex: 0x")
+print_byte_hex(serial_data, 0xA5)
+print_crlf(serial_data)
+--
+print_string(serial_data, "word  dec: ")
+print_word_dec(serial_data, 12345)
+print_string(serial_data, "  hex: 0x")
+print_word_hex(serial_data, 0xBEEF)
+print_crlf(serial_data)
+--
+var byte n = 7
+print_string(serial_data, "loop  ")
+for 3 loop
+   print_byte_dec(serial_data, n)
+   print_string(serial_data, " ")
+   n = n + 1
+end loop
+print_crlf(serial_data)
+--
+print_string(serial_data, "checks: ")
+if (n == 10) & (200 > 100) then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+print_string(serial_data, "##DONE##\r\n")
+led = ON
+--
+forever loop
+end loop

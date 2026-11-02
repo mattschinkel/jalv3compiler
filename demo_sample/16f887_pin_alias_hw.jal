@@ -1,0 +1,85 @@
+-- Title: PIC16F887 pin aliases — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: pin aliases on the classic midrange PIC16F887.  A pin name
+--              (`pin_D0`) and its `_direction` twin are aliases over the
+--              port/TRIS registers; two different aliases of the same pin
+--              must address the same bit, and a write through one must be
+--              visible in the port register.
+--
+--              Results are printed on the EUSART and mirrored on the LED.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+alias led is pin_D0                  -- the board LED
+alias led_alias is pin_D0            -- second alias to the same pin
+pin_D0_direction = OUTPUT
+var byte bad = 0
+--
+print_string(serial_data, "JALv2 PIC16F887: pin aliases\r\n")
+--
+-- write through the first alias, read the port bit back
+led = ON
+if (PORTD & 0x01) == 0 then
+   bad = bad + 1
+end if
+--
+-- write through the second alias, the first one sees it
+led_alias = OFF
+if (PORTD & 0x01) != 0 then
+   bad = bad + 1
+end if
+--
+-- the direction alias drives TRIS: make the pin an input, then an output
+pin_D0_direction = INPUT
+if (TRISD & 0x01) == 0 then
+   bad = bad + 1
+end if
+pin_D0_direction = OUTPUT
+if (TRISD & 0x01) != 0 then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "pin alias checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop

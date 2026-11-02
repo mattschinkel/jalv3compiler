@@ -80,6 +80,10 @@ typedef struct pic_var_state_ {
   pic_bank_info_t             *data_bank_list;
   pic_bank_info_t             *shared_bank_list;
   pic_bank_info_t             *shared_pragma_list;
+  pic_bank_info_t             *data_pragma_list; /* the DATA area as the
+                                                  * device declared it; never
+                                                  * consumed -- containment
+                                                  * queries only */
   pic_variable_chunk_map_t    *chunk_maps;
   pic_var_banked_edge_t       *banked_edges;
   size_t                       banked_edges_used;
@@ -854,6 +858,7 @@ void pic_blist_add(pfile_t *pf, pic_bank_info_t **pblist,
 void pic_data_bank_list_add(pfile_t *pf, size_t lo, size_t hi)
 {
   pic_blist_add(pf, &pic_var.data_bank_list, lo, hi);
+  pic_blist_add(pf, &pic_var.data_pragma_list, lo, hi);
 }
 
 void pic_shared_bank_list_add(pfile_t *pf, size_t lo, size_t hi)
@@ -1006,6 +1011,81 @@ static variable_base_t pic_data_first_single_bank_lo(pic_bank_info_t *bank,
 }
 
 /* allocate a block out of the data area */
+/* NAME
+ *   pic_blist_range_free
+ *
+ * DESCRIPTION
+ *   TRUE when [base, base+need-1] lies entirely inside one free-list node.
+ *   Used by the shared-window fallback: on a part whose `pragma shared'
+ *   range overlaps the data area (a single-bank 12-bit part declares the
+ *   whole GPR block shared), the shared list can offer bytes the data list
+ *   has already handed out -- placing there overlapped live variables
+ *   silently.
+ *
+ * PARAMETERS
+ *   list : free list
+ *   base : first byte
+ *   need : byte count
+ *
+ * RETURN
+ *   BOOLEAN_TRUE when the whole range is free in `list'
+ */
+static boolean_t pic_blist_range_free(const pic_bank_info_t *list,
+    variable_base_t base, variable_sz_t need)
+{
+  const pic_bank_info_t *node;
+  variable_base_t        hi;
+
+  if (0 == need) {
+    return BOOLEAN_TRUE;
+  }
+  hi = (variable_base_t) (base + need - 1);
+  for (node = list; node; node = node->link) {
+    if ((node->lo <= base) && (hi <= node->hi)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* NAME
+ *   pic_blist_range_dataspace
+ *
+ * DESCRIPTION
+ *   TRUE when [base, base+need-1] lies inside one node of the DATA area as
+ *   the device declared it (the never-consumed mirror of the data ranges).
+ *   The shared-window fallback uses it to tell the two shared-window shapes
+ *   apart: a real access window (0x00-0x5F on PIC18) is OUTSIDE the data
+ *   area and may be handed out without consulting the data free list, while
+ *   a `pragma shared' block inside the data area (12-bit: the whole GPR
+ *   block) is the same bytes as the data list and must not be double-booked.
+ *
+ * PARAMETERS
+ *   list : declared data-area mirror
+ *   base : first byte
+ *   need : byte count
+ *
+ * RETURN
+ *   BOOLEAN_TRUE when the range is in the declared data area
+ */
+static boolean_t pic_blist_range_dataspace(const pic_bank_info_t *list,
+    variable_base_t base, variable_sz_t need)
+{
+  const pic_bank_info_t *node;
+  variable_base_t        hi;
+
+  if (0 == need) {
+    return BOOLEAN_FALSE;
+  }
+  hi = (variable_base_t) (base + need - 1);
+  for (node = list; node; node = node->link) {
+    if ((node->lo <= base) && (hi <= node->hi)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 static variable_base_t pic_data_alloc(pfile_t *pf, pic_bank_info_t **blist,
   variable_sz_t need, variable_ct_t pointer_slots)
 {
@@ -1230,6 +1310,11 @@ static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
      If so, good! */
 
   base = pic_data_alloc(pf, blist, need, pointer_slots);
+  if (getenv("JALV2_DBG_REFUSAL")) {
+    fprintf(stderr, "DBG first %-18s need=%u base=0x%x\n",
+        variable_name_get(vptr) ? variable_name_get(vptr) : "?",
+        (unsigned) need, (unsigned) base);
+  }
   rc   = BOOLEAN_FALSE;
   if (VARIABLE_BASE_UNKNOWN == base) {
     pfile_log(pf, PFILE_LOG_ERR, "no space for %s:%s (need=%u available=%u)",
@@ -1650,6 +1735,11 @@ boolean_t pic_var_refusal_get(variable_t *var, variable_sz_t *sz,
 
 void pic_var_refusal_report(pfile_t *pf)
 {
+  if (getenv("JALV2_DBG_REFUSAL")) {
+    fprintf(stderr, "DBG refusal free=%u data_nodes=%d\n",
+        (unsigned) pic_data_bank_free_bytes_get(),
+        (int) (pic_var.data_bank_list ? 1 : 0));
+  }
   if (pic_var.refused) {
     const char *name;
 
@@ -1687,12 +1777,31 @@ void pic_var_refusal_report(pfile_t *pf)
           name,
           (unsigned) pic_var.refused_sz,
           (unsigned) pic_var.refused_best);
-    } else {
+    } else if (pic_var.refused_var
+        && variable_is_array(pic_var.refused_var)) {
       pfile_log(pf, PFILE_LOG_ERR,
           "Array of '%s' (%u bytes) exceeds total available memory space. "
           "Consider reducing array size or using external storage.",
           name,
           (unsigned) pic_var.refused_sz);
+    } else if ('_' == name[0]) {
+      /* the compiler's own scratch lost the race for the last bytes; the
+       * user needs to know the PROGRAM is too big, not a name they cannot
+       * find in their source */
+      pfile_log(pf, PFILE_LOG_ERR,
+          "the data area is full: no room for the compiler's '%s' scratch "
+          "(%u byte%s); the program is too big for this part",
+          name,
+          (unsigned) pic_var.refused_sz,
+          (1U == pic_var.refused_sz) ? "" : "s");
+    } else {
+      /* scalars reach here too: the old wording said "Array of" for a
+       * one-byte variable, which reads as the wrong diagnosis */
+      pfile_log(pf, PFILE_LOG_ERR,
+          "no room for '%s' (%u byte%s): the data area is full",
+          name,
+          (unsigned) pic_var.refused_sz,
+          (1U == pic_var.refused_sz) ? "" : "s");
     }
   }
 }
@@ -1739,11 +1848,27 @@ static boolean_t pic_variable_group_place_shared(pfile_t *pf,
 {
   variable_base_t base;
 
-  base = pic_data_alloc(pf, &pic_var.shared_bank_list, sz_reqd,
-      pointer_slots_reqd);
-  if (VARIABLE_BASE_UNKNOWN == base) {
-    return BOOLEAN_FALSE;
+  /* The shared window can overlap the data area (a 12-bit part declares
+   * its whole GPR block `pragma shared'), so the shared list may offer
+   * bytes a data allocation already owns.  Accepting them placed two live
+   * variables on one address -- and the compile still reported 0 errors.
+   * pic_data_alloc has already dropped the rejected range from the shared
+   * list, so retry: the next candidate is a different run, and a genuinely
+   * free byte is found when one exists.  Only when none does is the group
+   * refused (the driver turns a refusal in the final install into a clean
+   * "no room" error). */
+  for (;;) {
+    base = pic_data_alloc(pf, &pic_var.shared_bank_list, sz_reqd,
+        pointer_slots_reqd);
+    if (VARIABLE_BASE_UNKNOWN == base) {
+      return BOOLEAN_FALSE;
+    }
+    if (!pic_blist_range_dataspace(pic_var.data_pragma_list, base, rm_reqd)
+        || pic_blist_range_free(pic_var.data_bank_list, base, rm_reqd)) {
+      break;
+    }
   }
+  pic_blist_remove(pf, &pic_var.data_bank_list, base, rm_reqd);
   pfile_log(pf, PFILE_LOG_DEBUG,
       "Allocated %u bytes from shared memory at 0x%04X",
       (unsigned) sz_reqd, (unsigned) base);
@@ -2039,6 +2164,12 @@ static void pic_variable_fixup_place(pfile_t *pf,
     }
     base = pic_data_alloc(pf, &pic_var.data_bank_list, sz_reqd,
         pointer_slots_reqd);
+    if (getenv("JALV2_DBG_REFUSAL")) {
+      fprintf(stderr, "DBG place %-16s sz=%u base=0x%x free=%u\n",
+          variable_name_get(data[ii]) ? variable_name_get(data[ii]) : "?",
+          (unsigned) sz_reqd, (unsigned) base,
+          (unsigned) pic_data_bank_free_bytes_get());
+    }
     if (VARIABLE_BASE_UNKNOWN == base) {
       unsigned bank_size = pic_target_bank_size_get(pf);
       /* Multi-bank: always remove from the sorted free-list head so partial
@@ -3062,6 +3193,10 @@ void pic_variable_alloc(pfile_t *pf)
 {
   pfile_proc_t *proc;
 
+  if (getenv("JALV2_DBG_REFUSAL")) {
+    fprintf(stderr, "DBG alloc round, free-before=%u\n",
+        (unsigned) pic_data_bank_free_bytes_get());
+  }
   blist_total();
   pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_ALLOCATING_VARS);
 
@@ -3357,6 +3492,13 @@ void pic_blist_free(pfile_t *pf)
     bank = pic_var.shared_pragma_list->link;
     FREE(pic_var.shared_pragma_list);
     pic_var.shared_pragma_list = bank;
+  }
+  while (pic_var.data_pragma_list) {
+    pic_bank_info_t *bank;
+
+    bank = pic_var.data_pragma_list->link;
+    FREE(pic_var.data_pragma_list);
+    pic_var.data_pragma_list = bank;
   }
 }
 

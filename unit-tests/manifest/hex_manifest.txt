@@ -1,4 +1,4 @@
-# jalv2 corpus HEX manifest (md5) — 2026-10-31 03:03 — 2937 files
+# jalv2 corpus HEX manifest (md5) — 2026-11-02 01:15 — 2941 files
 6b7d53a846e5e6470ac84385c371a26c  10f200_blink_intosc.hex
 79b14d442c25bda675163301fb3fb138  10f202_blink_intosc.hex
 e6bae01d017d780258ead6a1efd4e8d5  10f204_blink_intosc.hex
@@ -610,8 +610,8 @@ e2b87dad7407afdccfd45f10b35ea503  16f648a_timer0_interval.hex
 c373185ee754323715680ecd270730a9  16f648a_tm1640.hex
 7982fd53c279dcc9f73f16c3cbdab3a6  16f676_blink_hs.hex
 c36f1ea47eaefe630e2f991b86f65947  16f676_blink_intosc.hex
-70a66dbd869147c6629e7032d594480d  16f676_lcd_hd44780_4_1.hex
-aaf7fb5bba41c11113833d6b8304cb63  16f676_lcd_hd44780_4_4.hex
+ae2a4192aba29b4d9941da2607b611d5  16f676_lcd_hd44780_4_1.hex
+291d68408d704e6297846c20a9ad50af  16f676_lcd_hd44780_4_4.hex
 d350c6ea1588cfd9cf4a7844c5e4a50f  16f677_blink_hs.hex
 14d58e39417065a5babeaf2b015a21d1  16f677_blink_intosc.hex
 4d2908d46dd85489fc157e8d5a077c9b  16f684_blink_hs.hex
@@ -1859,7 +1859,7 @@ e86a0b1c050237ff3520f9e73821d424  18f4525_fat32_sd_card.hex
 7c455f33c42b02d9730386de54895280  18f4525_fat32_small_pata_hard_disk.hex
 f85f3c70c6e64e46748be6ca8704efdb  18f4525_fat32_small_sd_card.hex
 c296dbb2c8ebed87ad99636635d7830a  18f4525_mp3_decoder_vs1053b_pata_hard_disk.hex
-342074a376cb27493e4277e58076f472  18f4525_mp3_decoder_vs1053b_sd_card.hex
+871be97c1b666f564175a03e86ab2765  18f4525_mp3_decoder_vs1053b_sd_card.hex
 367a1fef29d9ddd90e4b88f1942b436d  18f4525_pata_hard_disk.hex
 83fae0e8ab4e8b4e182b27b348a7c973  18f4525_sd_card.hex
 b7559541cb4ba38487f7a23263d8e71e  18f4525_servo_rc_slave.hex
@@ -2936,3 +2936,7 @@ ce51fc2efe68b9f1bfdf4da0aeb4a75e  18lf8722_blink_hs.hex
 1998818252d992cd4b4bcd37022def4a  18lf8722_blink_intosc.hex
 ce51fc2efe68b9f1bfdf4da0aeb4a75e  18lf8723_blink_hs.hex
 1998818252d992cd4b4bcd37022def4a  18lf8723_blink_intosc.hex
+9643b4daa8c10111509d891e3ca9ab1a  jalv3_gate_heap_string.hex
+93c0ad16c53d7a5cdd10067b057096cd  jalv3_gate_native_bit_array.hex
+d00b909ccfb5ab2c61df470b7dcd004b  jalv3_gate_pointer.hex
+7ab960eb121abcae49c75bac381c6693  jalv3_gate_wide_integer.hex

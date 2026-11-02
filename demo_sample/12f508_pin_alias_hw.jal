@@ -1,0 +1,50 @@
+-- Title: PIC12F508 pin aliases — 12-bit core feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: pin aliases on the 12-bit core PIC12F508.  There is one port
+--              (PORTA) and one direction register (TRIS); a pin alias and a
+--              second alias of the same pin must address the same bit, and a
+--              write through one is visible in PORTA.
+--
+--              Pinned by the LED: the loop blinks only when every alias
+--              check held.
+
+include 12f508
+pragma target clock 4_000_000
+pragma target OSC INTOSC_NOCLKOUT
+pragma target WDT DISABLED
+pragma target MCLR EXTERNAL
+--
+enable_digital_io()
+--
+
+alias led is pin_A0                 -- the LED
+alias led_alias is pin_A0           -- second alias to the same pin
+pin_A0_direction = OUTPUT
+--
+var bit ok
+--
+ok = TRUE
+led = ON
+if (PORTA & 0x01) == 0 then
+   ok = FALSE
+end if
+led_alias = OFF
+if (PORTA & 0x01) != 0 then
+   ok = FALSE
+end if
+--
+forever loop
+   if ok then
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(100_000)
+   else
+      led = OFF
+   end if
+end loop

@@ -1,0 +1,23 @@
+-- Title: jalv3 corpus overlay — wide integers (corpus gate coverage)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Give the JALv3 qword/sqword feature a corpus entry (0 occurrences in the
+--    jallib 2.1.0 corpus).  Compile-only, deterministic.  Fork-only:
+--    baseline/--compare skip `jalv3_*` (unittests.py).
+--
+-- ------------------------------------------------------
+
+include 16f1825
+
+const qword seed = 0x0123456789ABCDEF
+
+var qword q = seed
+var sqword s = -2
+
+q = q + 1
+s = s * 3
+
+forever loop
+end loop

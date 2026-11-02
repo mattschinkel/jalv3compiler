@@ -1,0 +1,23 @@
+-- Title: jalv3 corpus overlay — native bit array (corpus gate coverage)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Give the JALv3 packed bit-array feature a corpus entry (0 occurrences in
+--    the jallib 2.1.0 corpus).  Compile-only, deterministic.  Fork-only:
+--    baseline/--compare skip `jalv3_*` (unittests.py).
+--
+-- ------------------------------------------------------
+
+include 16f1825
+
+var bit flags[16]
+
+flags[0] = true
+flags[15] = true
+if flags[0] & flags[15] then
+   flags[0] = false
+end if
+
+forever loop
+end loop

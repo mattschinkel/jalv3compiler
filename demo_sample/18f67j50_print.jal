@@ -1,0 +1,81 @@
+-- Title: PIC18F67J50 print — classic PIC18 (16-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: the print library on the PIC18F67J50 over UART1: strings,
+--              decimal/hex bytes and words, CRLF and a status line.  This is
+--              the 16-bit-core counterpart of 16f887_print.
+--
+--              Results are printed on UART1 and mirrored on the LED.
+
+include 18f67j50
+
+pragma target clock     48_000_000
+pragma target OSC       INTOSC_NOCLKOUT_PLL
+pragma target PLLDIV    P2
+pragma target CPUDIV    P1
+pragma target WDT       CONTROL
+pragma target XINST     DISABLED
+pragma target DEBUG     DISABLED
+pragma target FCMEN     DISABLED
+pragma target IESO      DISABLED
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCTUNE_PLLEN = TRUE
+--
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led1 is pin_G2
+pin_G2_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+
+print_string(serial_data, "JALv2 PIC18F67J50: print library\r\n")
+--
+print_string(serial_data, "byte  dec: ")
+print_byte_dec(serial_data, 200)
+print_string(serial_data, "  hex: 0x")
+print_byte_hex(serial_data, 0xA5)
+print_crlf(serial_data)
+--
+print_string(serial_data, "word  dec: ")
+print_word_dec(serial_data, 12345)
+print_string(serial_data, "  hex: 0x")
+print_word_hex(serial_data, 0xBEEF)
+print_crlf(serial_data)
+--
+var byte n = 7
+print_string(serial_data, "loop  ")
+for 3 loop
+   print_byte_dec(serial_data, n)
+   print_string(serial_data, " ")
+   n = n + 1
+end loop
+print_crlf(serial_data)
+--
+print_string(serial_data, "checks: ")
+if (n == 10) & (200 > 100) then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+print_string(serial_data, "##DONE##\r\n")
+led1 = ON
+forever loop
+end loop

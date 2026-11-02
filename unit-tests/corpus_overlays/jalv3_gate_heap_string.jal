@@ -1,0 +1,32 @@
+-- Title: jalv3 corpus overlay — heap string (corpus gate coverage)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The jallib 2.1.0 corpus predates the JALv3 heap-string type (0 of 2937
+--    samples use `var string`), so the HEX manifest / unit corpus could never
+--    see this feature.  This overlay gives it a corpus entry: compile-only,
+--    deterministic, no device I/O — the manifest stores its HEX and any
+--    accidental codegen change shows up as drift.
+--
+--    Fork-only: the jalv25r9 reference cannot compile it, so baseline and
+--    --compare runs skip `jalv3_*` (unittests.py).
+--
+-- ------------------------------------------------------
+
+include 16f1825
+
+const word _string_heap_size = 64
+include strings_dynamic
+
+var string a
+var string b
+
+a = "JALv3"
+b = a & "!"
+if COUNT(b) == 6 then
+   a = b
+end if
+
+forever loop
+end loop

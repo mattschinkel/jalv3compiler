@@ -12,8 +12,11 @@
 -- steps: 40000000
 -- frequency_hz: auto
 -- checkpoint_verify: off
--- (the pin is expect byte v__fb_bad 0, not the _check_step convention)
--- expect byte v__fb_bad 0
+-- Positive completion marker: _fb_res is 90 only after the whole battery
+-- ran clean (90 + _fb_bad on failure).  It is written at the END, so a
+-- stall/reset leaves it 0 and fails; the old `expect v__fb_bad 0` alone was
+-- satisfied by power-on RAM (proved with `-n 1`, 2026-11-01).
+-- expect byte v__fb_res 90
 -- @gpsim_validate end
 --
 include 18f4620
@@ -147,6 +150,9 @@ _fb_case(_fb_v41, 42, 4, 57, 46, 57, 57, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
 var float _fb_v44 = 9.999999e+38
 _fb_case(_fb_v44, 45, 3, 105, 110, 102, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48)
 
-var volatile byte _fb_res = _fb_bad
+var volatile byte _fb_res = 90
+if _fb_bad != 0 then
+   _fb_res = _fb_bad
+end if
 forever loop
 end loop

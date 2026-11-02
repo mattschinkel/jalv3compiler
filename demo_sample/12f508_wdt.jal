@@ -1,0 +1,47 @@
+-- Title: PIC12F508 watchdog — 12-bit core feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: the watchdog on the 12-bit core PIC12F508.  The WDT is armed
+--              by the CONFIG fuse (no runtime enable bit on this part) and
+--              software services it with `clrwdt`.  Phase 1 services it every
+--              pass so the part keeps running; phase 2 stops servicing, so on
+--              silicon the WDT reset restarts the program (the LED pattern
+--              starts over).
+--
+--              Compile-checked only: gpsim does not model the 12-bit WDT.
+
+include 12f508
+pragma target clock 4_000_000
+pragma target OSC INTOSC_NOCLKOUT
+pragma target WDT ENABLED            -- watchdog armed by fuse, serviced below
+pragma target MCLR EXTERNAL
+--
+enable_digital_io()
+--
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+--
+var byte beat
+--
+-- phase 1: service the watchdog once per pass -- this section never resets
+beat = 0
+while beat < 10 loop
+   beat = beat + 1
+   asm clrwdt                       -- service the watchdog
+   led = ON
+   _usec_delay(100_000)
+   led = OFF
+   _usec_delay(100_000)
+end loop
+--
+-- phase 2: stop servicing -- on silicon the WDT reset fires here
+forever loop
+   led = ON
+   _usec_delay(100_000)
+   led = OFF
+   _usec_delay(100_000)
+end loop

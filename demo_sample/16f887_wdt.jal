@@ -1,0 +1,82 @@
+-- Title: PIC16F887 watchdog — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: the watchdog timer on the classic midrange PIC16F887.  On
+--              this family the WDT is armed by the CONFIG fuse (there is no
+--              runtime enable register), and software services it with the
+--              `clrwdt` instruction.  Phase 1 services it every pass, so the
+--              part keeps running; phase 2 stops servicing, so on silicon
+--              the WDT reset fires and the log restarts (the serial banner
+--              is printed again).
+--
+--              The build is compile-checked only: gpsim does not model the
+--              classic-core WDT, so the reset is a silicon property.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT
+pragma target WDT      CONTROL      -- watchdog armed by fuse, serviced below
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF                 -- (no runtime enable on this part)
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var volatile byte phase = 0
+var byte beat
+--
+print_string(serial_data, "JALv2 PIC16F887: watchdog\r\n")
+print_string(serial_data, "fuse: WDT CONTROL (armed)\r\n")
+phase = 1
+--
+-- phase 1: service the watchdog once per pass -- this section never resets
+beat = 0
+while beat < 5 loop
+   beat = beat + 1
+   asm clrwdt                       -- service the watchdog
+   print_string(serial_data, "serviced ")
+   print_byte_dec(serial_data, beat)
+   print_crlf(serial_data)
+   led = ON
+   _usec_delay(100_000)
+   led = OFF
+   _usec_delay(100_000)
+end loop
+--
+-- phase 2: stop servicing -- on silicon the WDT reset fires here
+print_string(serial_data, "##HANG## no more clrwdt - reset expected\r\n")
+phase = 2
+forever loop
+   print_string(serial_data, "hang beat\r\n")
+   led = ON
+   _usec_delay(100_000)
+   led = OFF
+   _usec_delay(100_000)
+end loop

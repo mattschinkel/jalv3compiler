@@ -1,0 +1,102 @@
+-- Title: PIC18F67J50 INT0 interrupt — classic PIC18 (16-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: hardware interrupt on the PIC18F67J50 bench board, matching
+--              the PIC32/ESP32 tours: a `pragma interrupt` handler owns the
+--              event, the main line keeps running, and a counter proves
+--              every edge was serviced.  INT0 is RB0; the handler clears
+--              its own flag.  This is the 16-bit-core counterpart of
+--              16f887_isr_hw / the 16f877 INT0 witness.
+--
+--              Results are printed on UART1 and mirrored on the LED.
+--
+
+include 18f67j50
+
+pragma target clock     48_000_000
+pragma target OSC       INTOSC_NOCLKOUT_PLL
+pragma target PLLDIV    P2
+pragma target CPUDIV    P1
+pragma target WDT       CONTROL
+pragma target XINST     DISABLED
+pragma target DEBUG     DISABLED
+pragma target FCMEN     DISABLED
+pragma target IESO      DISABLED
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCTUNE_PLLEN = TRUE
+--
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led1 is pin_G2
+pin_G2_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var volatile byte edges = 0
+var byte bad = 0
+
+procedure int0_handler() is
+   pragma interrupt
+
+   if !INTCON_INT0IF then
+      return
+   end if
+   INTCON_INT0IF = off
+   edges = edges + 1
+end procedure
+--
+print_string(serial_data, "JALv2 PIC18F67J50: INT0 interrupt\r\n")
+--
+INTCON2_INTEDG0 = 1                 -- rising edge on RB0/INT0
+INTCON_INT0IE = off
+INTCON_INT0IF = off
+INTCON_GIEH = off
+INTCON_GIEL = off
+pin_B0_direction = OUTPUT
+pin_B0 = low
+--
+for 3 loop
+   INTCON_INT0IF = off
+   INTCON_INT0IE = on
+   INTCON_GIEH = on
+   INTCON_GIEL = on
+   pin_B0 = low
+   _usec_delay(1000)
+   pin_B0 = high                    -- rising edge -> INT0 handler
+   _usec_delay(1000)
+   if edges != 1 then
+      bad = bad + 1
+   end if
+   edges = 0
+   INTCON_GIEH = off
+   INTCON_GIEL = off
+   INTCON_INT0IE = off
+end loop
+--
+print_string(serial_data, "interrupt checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led1 = bad == 0
+--
+forever loop
+end loop

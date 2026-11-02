@@ -138,6 +138,11 @@ run_py pic32mx_mvec_layout         unit-tests/test_pic32mx_mvec_layout.py --comp
 
 # Source comment blocks vs the code they document (no build needed).
 run_py comment_docs                unit-tests/check_comment_docs.py
+# Every simulator validate block must pin something a stall cannot satisfy:
+# a checkpoint-counter expectation or at least one nonzero value.  The
+# runtime harness cannot see the difference (18f4620_float_str_battery passed
+# `-n 1` with only `expect v__fb_bad 0` until 2026-11-01).  No build needed.
+run_py validate_contract           unit-tests/check_validate_contract.py
 # (test_pic32mx_clock_words.py is its own L1 gate in unit-tests/run_gates.sh.)
 
 echo ""

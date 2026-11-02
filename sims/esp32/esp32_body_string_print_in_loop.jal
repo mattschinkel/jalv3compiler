@@ -1,0 +1,60 @@
+-- ------------------------------------------------------
+-- Title: ESP32 QEMU body — heap string printed inside a loop
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    ESP32 counterpart of sims/gpsim/16f1825_gpsim_string_print_in_loop.jal:
+--    `print_string` of a heap `var string` through an open-array formal,
+--    inside a user loop (the marshalling copy loop is nested in the outer
+--    loop).  Two passes must both capture the 9-byte payload.
+--
+--    COVERAGE, NOT A FIX WITNESS: the pre-fix build of the 16F temp-region
+--    fix passes it — the ESP32 back end does not use the `_temp` interval
+--    allocator, so that defect cannot manifest here.  It pins the
+--    marshalling path end-to-end on ESP32.
+--
+-- @sim_validate begin
+-- duration_s: 20.0
+-- machine: esp32
+-- expect byte v_done 1
+-- expect byte v_n1 9
+-- expect byte v_b0 77
+-- expect byte v_b8 103
+-- @sim_validate end
+-- ------------------------------------------------------
+
+include regression_esp32_device
+include regression_esp32
+
+const word _string_heap_size = 48
+pragma string index byte
+include print
+
+var byte _cap[24]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+var string my_string
+var volatile byte done = 0
+var volatile byte n1 = 0
+var volatile byte b0 = 0
+var volatile byte b8 = 0
+
+my_string = "My string"
+
+for 2 loop
+   _capn = 0
+   print_string(cap, my_string)
+end loop
+
+n1 = _capn
+b0 = _cap[0]
+b8 = _cap[8]
+done = 1
+forever loop
+end loop

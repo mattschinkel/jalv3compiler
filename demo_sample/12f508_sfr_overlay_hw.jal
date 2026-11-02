@@ -1,0 +1,67 @@
+-- Title: PIC12F508 SFR bit overlay — 12-bit core feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: the PORTA register seen through a `var bit gpio_bits[8] at
+--              PORTA` overlay on the 12-bit core: a CONSTANT-index write must
+--              set the matching PORTA bit and read back.  A runtime index is
+--              not usable here (the dynamic bit path needs indirect
+--              addressing, which this core does not have).
+--
+--              The LED blinks only when the overlay checks held.
+
+include 12f508
+pragma target clock 4_000_000
+pragma target OSC INTOSC_NOCLKOUT
+pragma target WDT DISABLED
+pragma target MCLR EXTERNAL
+--
+enable_digital_io()
+--
+
+alias led is pin_A0
+-- make EVERY pin an output first: the overlay writes are read-modify-write
+-- on the port register, so a floating input pin would latch its level into
+-- the written byte
+pin_A0_direction = OUTPUT
+pin_A1_direction = OUTPUT
+pin_A2_direction = OUTPUT
+pin_A3_direction = OUTPUT
+pin_A4_direction = OUTPUT
+pin_A5_direction = OUTPUT
+--
+var bit gpio_bits[8] at PORTA
+var bit ok
+--
+ok = TRUE
+PORTA = 0
+gpio_bits[2] = ON
+if (PORTA & 0x04) == 0 then
+   ok = FALSE
+end if
+if gpio_bits[2] == 0 then
+   ok = FALSE
+end if
+gpio_bits[2] = OFF
+if (PORTA & 0x04) != 0 then
+   ok = FALSE
+end if
+gpio_bits[0] = ON
+gpio_bits[5] = ON
+if (PORTA & 0x25) != 0x25 then
+   ok = FALSE
+end if
+--
+forever loop
+   if ok then
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(100_000)
+   else
+      led = OFF
+   end if
+end loop

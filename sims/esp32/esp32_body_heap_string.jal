@@ -1,0 +1,70 @@
+-- ------------------------------------------------------
+-- Title: ESP32 QEMU body — heap string basics
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The ESP32 back end had no dedicated heap-string runtime test (the only
+--    one that used `var string` was esp32_body_float_chain, incidentally, for
+--    float rendering) -- found by the 2026-11-01 coverage audit.  Covers
+--    literal assign, COUNT, string-to-string assign, comparison, subscript
+--    and a runtime chain, all through @sim_validate flags.
+--
+-- @sim_validate begin
+-- duration_s: 20.0
+-- machine: esp32
+-- expect byte v_ra 1
+-- expect byte v_rb 1
+-- expect byte v_rc 1
+-- expect byte v_rd 1
+-- expect byte v_re 1
+-- expect byte v_rf 1
+-- @sim_validate end
+-- ------------------------------------------------------
+
+include regression_esp32_device
+include regression_esp32
+
+const word _string_heap_size = 64
+pragma string index byte
+include strings_dynamic
+
+var string a
+var string b
+var volatile byte ra = 0
+var volatile byte rb = 0
+var volatile byte rc = 0
+var volatile byte rd = 0
+var volatile byte re = 0
+var volatile byte rf = 0
+
+a = "Hello"
+if COUNT(a) == 5 then
+   ra = 1
+end if
+
+b = a
+if (COUNT(b) == 5) & (b == "Hello") then
+   rb = 1
+end if
+
+if (a[0] == "H") & (a[4] == "o") then
+   rc = 1
+end if
+
+b = a & "!" & "x"
+if COUNT(b) == 7 then
+   rd = 1
+end if
+
+if b == "Hello!x" then
+   re = 1
+end if
+
+if (a != b) & (COUNT(a) == 5) then
+   rf = 1
+end if
+
+forever loop
+end loop

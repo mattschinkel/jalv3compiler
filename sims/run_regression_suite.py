@@ -150,8 +150,10 @@ SUITES: dict[str, RegressionSuite] = {
     ),
     "16f877": RegressionSuite(
         id="16f877",
-        description="PIC16F877 data-pointer gpsim smoke (sims/gpsim/16f877_gpsim_*.jal; split/extended from 16f877_pointer_basic_test.jal)",
-        globs=("sims/gpsim/16f877_gpsim_*.jal",),
+        description="PIC16F877 classic mid-range gpsim (sims/gpsim/16f877_gpsim_*.jal"
+                    " + the shared pic14 compiler-regression bodies)",
+        globs=("sims/gpsim/16f877_gpsim_*.jal",
+            "sims/gpsim/16f877_compiler_regression_*.jal"),
     ),
     "print_shadow": RegressionSuite(
         id="print_shadow",

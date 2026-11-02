@@ -790,6 +790,30 @@ def _print_unittests_usage() -> None:
     print("")
 
 
+_FORK_ONLY_PREFIX = "jalv3_"
+
+# Corpus samples that are genuinely larger than the RAM of the part they
+# target.  They used to compile only because the shared-window placement
+# fallback silently put a second live variable on an address the data list
+# had already handed out (the 2026-11-02 allocator fix reports it instead).
+# The EXACT diagnostic is required: any other failure still fails the run.
+_EXPECTED_OVER_RAM = {
+    "16f630_stepper_unipolar_nonblocking.jal": "the data area is full",
+}
+
+
+def _is_fork_only_sample(name: str) -> bool:
+    """True for corpus overlays that need JALv3-only language features.
+
+    ``unit-tests/corpus_overlays/jalv3_*`` exists so the HEX manifest and the
+    unit run actually see heap strings / pointers / native bit arrays / wide
+    integers (the jallib 2.1.0 corpus predates all of them).  The jalv25r9
+    reference compiler cannot compile those features, so baseline runs and the
+    baseline side of ``--compare`` skip them by name.
+    """
+    return os.path.basename(name).startswith(_FORK_ONLY_PREFIX)
+
+
 def test_all_samples(
     max_samples=None,
     use_baseline=True,
@@ -872,6 +896,18 @@ def test_all_samples(
         # Get all JAL files (paths point into the shadow tree, not the repo working copies)
         jal_files = glob.glob(os.path.join(sample_dir, "*.jal"))
 
+        # Fork-only corpus overlays (jalv3_*): JALv3-only features the
+        # jalv25r9 reference cannot compile.  Skip them in baseline mode so
+        # `--baseline` stays green; --current/ASan/manifest still compile them.
+        if use_baseline:
+            skipped = [f for f in jal_files if _is_fork_only_sample(f)]
+            if skipped:
+                print(
+                    f"Skipping {len(skipped)} fork-only sample(s) in baseline mode: "
+                    + ", ".join(os.path.basename(f) for f in skipped)
+                )
+            jal_files = [f for f in jal_files if not _is_fork_only_sample(f)]
+
         # Limit samples if specified
         if max_samples and max_samples > 0:
             jal_files = jal_files[:max_samples]
@@ -890,6 +926,7 @@ def test_all_samples(
         max_warnings = 0
         samples_with_warnings = 0
         failed_files = []
+        expected_over_ram = []
         spawn_failed = []
         clean = 0
         missing_hex_names = []
@@ -1083,6 +1120,15 @@ def test_all_samples(
                         passed += 1
                     if result["errors"] == 0 and result["warnings"] == 0:
                         clean += 1
+                    elif (_EXPECTED_OVER_RAM.get(filename)
+                          and _EXPECTED_OVER_RAM[filename] in result["output"]):
+                        # known over-RAM sample: the diagnostic is the expected
+                        # outcome, not a regression
+                        print(
+                            f"⚠️  EXPECTED over-RAM - {result['errors']} errors "
+                            f"(allowlisted: {_EXPECTED_OVER_RAM[filename]!r})"
+                        )
+                        expected_over_ram.append(filename)
                     else:
                         _why = (
                             "warnings"
@@ -1143,14 +1189,19 @@ def test_all_samples(
                 print(f"{i:2d}. {filename}")
     
         # --- completion: every submitted sample must produce exactly one result
-        accounted = passed + failed + len(spawn_failed)
+        accounted = passed + failed + len(spawn_failed) + len(expected_over_ram)
         completion_ok = (accounted == len(jal_files))
-        clean_ok = (clean == len(jal_files))
+        clean_ok = ((clean + len(expected_over_ram)) == len(jal_files))
         print("=== VERDICT ===")
         print(
             f"  0 errors, 0 warnings: {clean} of {len(jal_files)} samples"
             f" ({'OK' if clean_ok else str(len(jal_files) - clean) + ' not clean'})"
         )
+        if expected_over_ram:
+            print(
+                f"  expected over-RAM  : {len(expected_over_ram)} allowlisted "
+                f"({', '.join(expected_over_ram)})"
+            )
         print(f"  summed errors      : {total_errors}")
         print(f"  samples with >0 warnings: {samples_with_warnings}")
         print(f"  no spawn failures  : {'OK' if not spawn_failed else str(len(spawn_failed)) + ' failed'}")
@@ -1633,6 +1684,15 @@ if __name__ == "__main__":
             names.update([os.path.splitext(n)[0] for n in os.listdir(base_hex) if n.lower().endswith(".hex")])
         if os.path.isdir(curr_hex):
             names.update([os.path.splitext(n)[0] for n in os.listdir(curr_hex) if n.lower().endswith(".hex")])
+        # Fork-only overlays have no baseline HEX by design; keep them out of
+        # the baseline comparison instead of reporting them as missing-baseline.
+        fork_only_names = sorted(n for n in names if n.startswith(_FORK_ONLY_PREFIX))
+        if fork_only_names:
+            names -= set(fork_only_names)
+            print(
+                f"Excluding {len(fork_only_names)} fork-only sample(s) from the "
+                "baseline comparison: " + ", ".join(fork_only_names)
+            )
 
         equal_sizes = 0
         different_sizes = 0

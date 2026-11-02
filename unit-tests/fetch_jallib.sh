@@ -10,8 +10,13 @@
 #   - sample/**.jal flattens into third_party/jallib/samples
 #   - scripts/jallib_exclusions.txt files are dropped (dead device libs and
 #     their samples, absent from the corpus this repo is gated against)
-#   - tests/corpus_overlays/* overwrite their corpus counterparts (fork
-#     adaptations recorded in name_changes.md, e.g. 12f617_tasks.jal)
+#   - tests/corpus_overlays/* are copied over the corpus: same-name files
+#     overwrite their counterparts (fork adaptations recorded in
+#     name_changes.md, e.g. 12f617_tasks.jal), and new names are ADDED.
+#     The `jalv3_*` overlays are fork-only coverage samples (JALv3 heap
+#     strings / pointers / native bit arrays / wide integers) that the
+#     jalv25r9 reference cannot compile; unittests.py skips them in
+#     baseline mode and in the --compare union.
 #
 # Usage: unit-tests/fetch_jallib.sh [--force]
 set -eu
