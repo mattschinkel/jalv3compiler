@@ -96,6 +96,19 @@ else
     "$(whatif | head -5)"
 fi
 
+# 6. A failing sub-make must fail the top-level build.  The project rule used
+#    to ignore every sub-make's status, so a broken tree still exited 0 and
+#    the final link reused the previous archive (the mixed-object trap).
+#    No file is touched here: force a rebuild with a C compiler that always
+#    fails, so the first object compile fails and the sub-make exits non-zero
+#    (command-line variables and -B both propagate to the sub-makes).
+if make -C "$REPO/src" ARCH=x86-64 -B CC=/bin/false \
+     >"$WORK/fail.log" 2>&1; then
+  bad "top-level make IGNORED a failing sub-make (exit 0)"
+else
+  ok "a failing sub-make fails the top-level build"
+fi
+
 echo "----"
 if [ "$fails" -eq 0 ]; then
   echo "build deps: PASS"
