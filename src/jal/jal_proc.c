@@ -998,11 +998,13 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
       case JAL_PARSE_FUNCTION:  etype = "function";  break;
       case JAL_PARSE_TASK:      etype = "task";      break;
     }
-    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
-      && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, etype)) {
-      pf_token_get(pf, PF_TOKEN_NEXT);
-    } else {
-      jal_block_start_show(pf, etype, statement_start);
+    if (!jal_parse_aborted(pf)) {
+      if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+        && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, etype)) {
+        pf_token_get(pf, PF_TOKEN_NEXT);
+      } else {
+        jal_block_start_show(pf, etype, statement_start);
+      }
     }
     if (proc) {
       pfile_cmd_label_add(pf, pfile_proc_exit_label_get(proc));

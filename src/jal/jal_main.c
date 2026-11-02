@@ -763,6 +763,7 @@ static void jal_reset_between_compiles(void)
 {
   jal_string_state_reset();
   jal_expr_state_reset();
+  jal_block_state_reset();
   pic_stk_reset();
   pic_var_reset();
   pic_state_reset();

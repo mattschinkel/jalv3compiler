@@ -35,6 +35,88 @@
 #define FILENAME_MAX MAXPATH
 #endif
 
+/*
+ * Bound on nested statement blocks.
+ *
+ * Every IF / loop / CASE / BLOCK body recurses through jal_block_process()
+ * (jal_block_process -> jal_statement_process -> jal_parse_if -> ...), and
+ * nothing bounded that recursion: ~12 000 nested IFs overflowed the C stack
+ * and killed the compiler with SIGSEGV (SIGABRT while unwinding).  The
+ * expression parser got a cap on 2026-11-01 (JAL_EXPR_MAX_DEPTH); this is
+ * the statement-level twin.  The limit is 1024 (not the expression parser's
+ * 256) because it must not bite real code: the whole 2937-sample corpus
+ * compiles clean at a 256 cap, so 1024 is four times the highest cap proven
+ * not to reject anything.  It is also measured against the stack: this
+ * build overflows at ~1800 levels with a 1 MB stack (the Windows default)
+ * and between 12 000 and 20 000 with 8 MB (Linux/macOS), so 1024 keeps
+ * ~40% headroom on the smallest supported stack.
+ * (JAL_BLOCK_DEPTH_MAX lives in jal_blck.h so jal_ctrl.c can share it.)
+ */
+static unsigned  jal_block_depth;         /* current block nesting */
+static boolean_t jal_parse_aborted_flag;  /* nesting cap fired */
+
+/*
+ * NAME
+ *   jal_parse_aborted
+ *
+ * DESCRIPTION
+ *   TRUE once the nesting cap has fired.  The rest of the input has been
+ *   consumed, so enclosing constructs must not try to match their own
+ *   terminators -- each would add a bogus "end expected" diagnostic.
+ *
+ * PARAMETERS
+ *   pf : pfile (not consulted; the flag is per compile)
+ *
+ * RETURN
+ *   TRUE when the nesting cap has fired for this compile
+ */
+boolean_t jal_parse_aborted(pfile_t *pf)
+{
+  UNUSED(pf);
+  return jal_parse_aborted_flag;
+}
+
+/*
+ * NAME
+ *   jal_parse_abort
+ *
+ * DESCRIPTION
+ *   report the nesting-limit diagnostic once, flag the parser as aborted
+ *   and consume the rest of the input.  Unwinding then reports nothing
+ *   further (one diagnostic instead of one per abandoned level).
+ *
+ * PARAMETERS
+ *   pf : pfile
+ */
+void jal_parse_abort(pfile_t *pf)
+{
+  if (!jal_parse_aborted_flag) {
+    /* force: a compile-time-disabled region (`if FALSE then ...') would
+     * otherwise swallow the one diagnostic that explains the truncation */
+    pfile_log_force(pf, PFILE_LOG_ERR,
+      "statement blocks nested too deeply (limit %u); simplify the program",
+      (unsigned) JAL_BLOCK_DEPTH_MAX);
+    jal_parse_aborted_flag = BOOLEAN_TRUE;
+  }
+  while (!pf_token_is_eof(pf)) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+}
+
+/*
+ * NAME
+ *   jal_block_state_reset
+ *
+ * DESCRIPTION
+ *   clear the nesting counter and the abort flag so a second compile in
+ *   the same process starts clean (see jal_reset_between_compiles).
+ */
+void jal_block_state_reset(void)
+{
+  jal_block_depth        = 0;
+  jal_parse_aborted_flag = BOOLEAN_FALSE;
+}
+
 
 /* this traces the masters back to find one with a _get or _put function */
 
@@ -1600,11 +1682,13 @@ static boolean_t jal_parse_assign(pfile_t *pf)
 static void jal_parse_block(pfile_t *pf, const pfile_pos_t *statement_start)
 {
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
-    && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "block")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "BLOCK", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+      && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "block")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "BLOCK", statement_start);
+    }
   }
 }
 
@@ -1730,6 +1814,19 @@ boolean_t jal_statement_process(pfile_t *pf)
     {"record",      jal_parse_record,     JAL_STATEMENT_TOKEN_ABSORB}
   };
 
+  /* the nesting cap counts STATEMENTS, not blocks: CASE recurses through
+   * jal_statement_process directly (case body -> statement -> case) and
+   * never calls jal_block_process, so counting there missed it */
+  if (jal_parse_aborted_flag) {
+    jal_parse_abort(pf);
+    return BOOLEAN_FALSE;
+  }
+  if (jal_block_depth >= JAL_BLOCK_DEPTH_MAX) {
+    jal_parse_abort(pf);
+    return BOOLEAN_FALSE;
+  }
+  ++jal_block_depth;
+
   pf_token_start_get(pf, &pos);
   pfile_statement_start_set(pf, &pos);
 
@@ -1754,6 +1851,7 @@ boolean_t jal_statement_process(pfile_t *pf)
   if (pfile_cmdlist_tail_get(pf) != cmd_init) {
     pfile_cmd_special_add(pf, CMD_TYPE_STATEMENT_END, 0);
   }
+  --jal_block_depth;
   return rc;
 }
 
@@ -1774,6 +1872,10 @@ boolean_t jal_statement_process(pfile_t *pf)
  */
 void jal_block_process(pfile_t *pf, flag_t flags)
 {
+  if (jal_parse_aborted_flag) {
+    jal_parse_abort(pf);   /* rest of the input is already consumed */
+    return;
+  }
   if (!(flags & JAL_BLOCK_PROCESS_FLAG_NO_BLOCK)) {
     pfile_block_enter(pf);
   }

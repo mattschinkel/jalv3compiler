@@ -11,6 +11,7 @@
  **
  ************************************************************/
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 #include "../libutils/mem.h"
 #include "../libcore/pf_proc.h"
@@ -22,9 +23,8 @@
 #include "picmovlpop.h"
 
 typedef struct pic_code_movlp_data_ {
-  uchar    pclath[PIC_CODE_GOP_DEPTH];
-  unsigned ix;
-  unsigned changed;
+  pic_gop_stack_t stack;   /* one uchar (PCLATH state) per walk level */
+  unsigned        changed;
 } pic_code_pclath_data_t;
 
 static pic_code_gop_rc_t pic_code_pclath_analyze(pfile_t *pf, pic_code_t code,
@@ -34,10 +34,12 @@ static pic_code_gop_rc_t pic_code_pclath_analyze(pfile_t *pf, pic_code_t code,
   pic_code_gop_rc_t       rc;
   uchar                   pclath;
   pic_pclath_state_t      cpclath_state;
+  uchar                  *top;
 
   data = odata;
-  if (PIC_CODE_NONE != code) {
-    pclath = data->pclath[data->ix];
+  top = pic_gop_stack_top(&data->stack);
+  if ((PIC_CODE_NONE != code) && top) {
+    pclath = *top;
     pic_code_pclath_get(code, &cpclath_state);
   } else {
     pclath = PIC_PCLATH_UNKNOWN;
@@ -48,14 +50,12 @@ static pic_code_gop_rc_t pic_code_pclath_analyze(pfile_t *pf, pic_code_t code,
 
   switch (which) {
     case PIC_CODE_GOP_WHICH_ENTER:
-      data->ix++;
-      assert(data->ix < PIC_CODE_GOP_DEPTH);
-      if (data->ix > 0) {
-        data->pclath[data->ix] = data->pclath[data->ix - 1];
+      if (!pic_gop_stack_push(&data->stack)) {
+        pfile_log_syserr(pf, ENOMEM);
       }
       break;
     case PIC_CODE_GOP_WHICH_EXIT:
-      data->ix--;
+      pic_gop_stack_pop(&data->stack);
       break;
     case PIC_CODE_GOP_WHICH_PRE:  
       if (cpclath_state.before == pclath) {
@@ -126,8 +126,9 @@ static pic_code_gop_rc_t pic_code_pclath_analyze(pfile_t *pf, pic_code_t code,
       }
       break;
   }
-  if (PIC_CODE_NONE != code) {
-    data->pclath[data->ix] = pclath;
+  top = pic_gop_stack_top(&data->stack);
+  if ((PIC_CODE_NONE != code) && top) {
+    *top = pclath;
   }
   return rc;
 }
@@ -136,19 +137,23 @@ static void pic_code_pclath_optimize0(pfile_t *pf,
     pic_code_gop_who_t who, void *odata)
 {
   pic_code_pclath_data_t *data;
+  uchar                  *base;
 
   UNUSED(pf);
   data = odata;
-  switch (who) {
-    case PIC_CODE_GOP_WHO_ISR:
-    case PIC_CODE_GOP_WHO_USER:
-      data->pclath[0] = 0;
-      break;
-    case PIC_CODE_GOP_WHO_INDIRECT:
-      data->pclath[0] = PIC_PCLATH_INDETERMINATE;
-      break;
+  base = pic_gop_stack_base(&data->stack);
+  if (base) {
+    switch (who) {
+      case PIC_CODE_GOP_WHO_ISR:
+      case PIC_CODE_GOP_WHO_USER:
+        *base = 0;
+        break;
+      case PIC_CODE_GOP_WHO_INDIRECT:
+        *base = PIC_PCLATH_INDETERMINATE;
+        break;
+    }
   }
-  data->ix = (unsigned) -1;
+  pic_gop_stack_reset(&data->stack);
 }
 
 /* this returns TRUE if a label has crossed as code boundary. in that
@@ -295,6 +300,7 @@ void pic_code_movlp_optimize(pfile_t *pf)
   pic_code_pclath_data_t data;
 
   pass = 0;
+  pic_gop_stack_init(&data.stack, sizeof(uchar));
   pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
   do {
     data.changed = 0;
@@ -306,6 +312,7 @@ void pic_code_movlp_optimize(pfile_t *pf)
       pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
     }
   } while (pic_code_pclath_post_analyze(pf) || data.changed);
+  pic_gop_stack_free(&data.stack);
   pic_code_movlp_nop_remove(pf);
 }
 

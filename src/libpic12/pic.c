@@ -1932,7 +1932,10 @@ void pic_proc_leave(pfile_t *pf, pfile_proc_t *proc)
       size_t   ct;
 
       ct = pfile_proc_param_ct_get(proc);
-      tval = MALLOC(sizeof(*tval) * ct);
+      /* calloc: every element is assigned in the loop below, but the array
+       * must be a defined VALUE_NONE even if that loop is ever refactored
+       * (gcc -fanalyzer flagged the malloc version on the release loop) */
+      tval = CALLOC(ct, sizeof(*tval));
       if (!tval) {
         pfile_log_syserr(pf, ENOMEM);
       } else {

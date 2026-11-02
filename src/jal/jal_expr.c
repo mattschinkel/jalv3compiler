@@ -1465,7 +1465,8 @@ static unsigned jal_expr_depth; /* current jal_parse_expr nesting */
  */
 static void jal_expr_depth_error(pfile_t *pf)
 {
-  pfile_log(pf, PFILE_LOG_ERR,
+  /* force: the same suppression applies to a disabled region */
+  pfile_log_force(pf, PFILE_LOG_ERR,
       "expression nested too deeply (limit %u); simplify the expression",
       JAL_EXPR_MAX_DEPTH);
 }

@@ -28,7 +28,12 @@ typedef unsigned short boolean_t;
 enum {BOOLEAN_FALSE, BOOLEAN_TRUE};
 
 typedef unsigned long  flag_t;  /* flags             */
-typedef unsigned short refct_t; /* reference counter */
+/* reference counter -- MUST hold every reference a large program can take.
+ * It was `unsigned short`: each p-code command locks the source file it
+ * came from, so a flat 70 000-statement program wrapped the counter at
+ * 65 536, freed a source that was still in use and died with SIGSEGV
+ * (2026-11-01).  Values, variables, labels and tags use this type too. */
+typedef unsigned long  refct_t; /* reference counter */
 typedef unsigned short ctr_t;   /* usage counter     */
 
 typedef enum result_ {

@@ -10,6 +10,7 @@
  ** Changes: fork extensions (heavy rework)
  **
  ************************************************************/
+#include <errno.h>
 #include <string.h>
 #include <assert.h>
 
@@ -24,8 +25,7 @@
 #include "pic_brop.h"
 
 typedef struct pic_code_brop_data_ {
-  pic_branchbits_t branchbits[PIC_CODE_GOP_DEPTH];
-  unsigned         ix;
+  pic_gop_stack_t  stack;   /* one pic_branchbits_t per walk level */
   unsigned         changed;
   struct pic_brop_sums_ *sums;   /* callee PCLATH summaries (14-bit) */
 } pic_code_brop_data_t;
@@ -529,10 +529,12 @@ static pic_code_gop_rc_t pic_code_brop_analyze(pfile_t *pf, pic_code_t code,
   pic_code_gop_rc_t      rc;
   pic_branchbits_t       bbits;
   pic_branchbits_state_t cbitstate;
+  pic_branchbits_t      *top;
 
   data = odata;
-  if (PIC_CODE_NONE != code) {
-    bbits = data->branchbits[data->ix];
+  top = pic_gop_stack_top(&data->stack);
+  if ((PIC_CODE_NONE != code) && top) {
+    bbits = *top;
     pic_code_branchbits_get(code, &cbitstate);
   } else {
     bbits.pclath3 = PIC_BITSTATE_UNKNOWN;
@@ -544,14 +546,12 @@ static pic_code_gop_rc_t pic_code_brop_analyze(pfile_t *pf, pic_code_t code,
 
   switch (which) {
     case PIC_CODE_GOP_WHICH_ENTER:
-      data->ix++;
-      assert(data->ix < PIC_CODE_GOP_DEPTH);
-      if (data->ix > 0) {
-        data->branchbits[data->ix] = data->branchbits[data->ix - 1];
+      if (!pic_gop_stack_push(&data->stack)) {
+        pfile_log_syserr(pf, ENOMEM);
       }
       break;
     case PIC_CODE_GOP_WHICH_EXIT:
-      data->ix--;
+      pic_gop_stack_pop(&data->stack);
       break;
     case PIC_CODE_GOP_WHICH_PRE:  
       if ((cbitstate.before.pclath3 == bbits.pclath3)
@@ -688,8 +688,9 @@ static pic_code_gop_rc_t pic_code_brop_analyze(pfile_t *pf, pic_code_t code,
       }
       break;
   }
-  if (PIC_CODE_NONE != code) {
-    data->branchbits[data->ix] = bbits;
+  top = pic_gop_stack_top(&data->stack);
+  if ((PIC_CODE_NONE != code) && top) {
+    *top = bbits;
   }
   return rc;
 }
@@ -698,21 +699,25 @@ static void pic_code_brop_optimize(pfile_t *pf,
     pic_code_gop_who_t who, void *odata)
 {
   pic_code_brop_data_t *data;
+  pic_branchbits_t     *base;
 
   UNUSED(pf);
   data = odata;
-  switch (who) {
-    case PIC_CODE_GOP_WHO_ISR:
-    case PIC_CODE_GOP_WHO_USER:
-      data->branchbits[0].pclath3 = PIC_BITSTATE_CLR;
-      data->branchbits[0].pclath4 = PIC_BITSTATE_CLR;
-      break;
-    case PIC_CODE_GOP_WHO_INDIRECT:
-      data->branchbits[0].pclath3 = PIC_BITSTATE_INDETERMINATE;
-      data->branchbits[0].pclath4 = PIC_BITSTATE_INDETERMINATE;
-      break;
+  base = pic_gop_stack_base(&data->stack);
+  if (base) {
+    switch (who) {
+      case PIC_CODE_GOP_WHO_ISR:
+      case PIC_CODE_GOP_WHO_USER:
+        base->pclath3 = PIC_BITSTATE_CLR;
+        base->pclath4 = PIC_BITSTATE_CLR;
+        break;
+      case PIC_CODE_GOP_WHO_INDIRECT:
+        base->pclath3 = PIC_BITSTATE_INDETERMINATE;
+        base->pclath4 = PIC_BITSTATE_INDETERMINATE;
+        break;
+    }
   }
-  data->ix      = (unsigned) -1;
+  pic_gop_stack_reset(&data->stack);
 }
 
 /* this returns TRUE if a label has crossed as code boundary. in that
@@ -856,6 +861,7 @@ void pic_code_branchbits_optimize(pfile_t *pf)
   pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
   memset(&data, 0, sizeof(data));
   memset(&sums, 0, sizeof(sums));
+  pic_gop_stack_init(&data.stack, sizeof(pic_branchbits_t));
   do {
     data.changed = 0;
     pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_FIXING_CODE_BITS, ++pass);
@@ -880,6 +886,7 @@ void pic_code_branchbits_optimize(pfile_t *pf)
       pic_branchbits_pc_set(pf, PIC_BRANCHBITS_PC_SET_FLAG_NONE);
     }
   } while (pic_code_branchbits_post_analyze(pf) || data.changed);
+  pic_gop_stack_free(&data.stack);
   pic_brop_sums_free(&sums);
 }
 

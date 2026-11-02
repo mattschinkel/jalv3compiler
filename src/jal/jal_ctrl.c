@@ -200,11 +200,13 @@ void jal_parse_for(pfile_t *pf, const pfile_pos_t *statement_start)
     value_release(tmp);
   }
   pfile_cmd_label_add(pf, lbl_exit);
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
-    && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "FOR", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+      && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "FOR", statement_start);
+    }
   }
 
   value_release(zero);
@@ -255,11 +257,13 @@ void jal_parse_forever(pfile_t *pf, const pfile_pos_t *statement_start)
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
   pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
-    && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "FOREVER", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+      && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "FOREVER", statement_start);
+    }
   }
   if (lbl_top) {
     pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
@@ -328,11 +332,13 @@ void jal_parse_while(pfile_t *pf, const pfile_pos_t *statement_start)
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
   pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
-    && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "WHILE", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+      && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "loop")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "WHILE", statement_start);
+    }
   }
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
       CMD_BRANCHCOND_NONE, lbl_top, VALUE_NONE, 0, 0);
@@ -364,18 +370,23 @@ void jal_parse_repeat(pfile_t *pf, const pfile_pos_t *statement_start)
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NONE);
   pfile_runtime_block_pop(pf);
   pfile_exit_label_set(pf, lbl_exit_prev);
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "until")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "REPEAT", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "until")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "REPEAT", statement_start);
+    }
+    /* the condition belongs to the same construct: parsing it at EOF
+     * would add one bogus diagnostic per unwinding level */
+    expr = jal_parse_expr(pf);
+    if (!value_is_boolean(expr)) {
+      pfile_log(pf, PFILE_LOG_WARN, "boolean expression expected");
+    }
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
+        CMD_BRANCHCOND_FALSE, lbl_top, expr, 0, 0);
+    value_release(expr);
+    expr = VALUE_NONE;
   }
-  expr = jal_parse_expr(pf);
-  if (!value_is_boolean(expr)) {
-    pfile_log(pf, PFILE_LOG_WARN, "boolean expression expected");
-  }
-  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
-      CMD_BRANCHCOND_FALSE, lbl_top, expr, 0, 0);
-  value_release(expr);
   pfile_cmd_label_add(pf, lbl_exit);
   label_release(lbl_exit);
   label_release(lbl_top);
@@ -383,7 +394,7 @@ void jal_parse_repeat(pfile_t *pf, const pfile_pos_t *statement_start)
 
 /*
  * NAME
- *   jal_skip_if
+ *   jal_skip_if_depth
  *
  * DESCRIPTION
  *   skip an if block
@@ -391,6 +402,8 @@ void jal_parse_repeat(pfile_t *pf, const pfile_pos_t *statement_start)
  * PARAMETERS
  *   pf       : pfile
  *   is_else  : TRUE if this is an else clause
+ *   depth    : current nesting of skipped IFs (bounded by
+ *              JAL_BLOCK_DEPTH_MAX; the wrapper below starts at 0)
  *
  * RETURN
  *   TRUE  : this resulted in an `end if' (absorbed)
@@ -402,10 +415,21 @@ void jal_parse_repeat(pfile_t *pf, const pfile_pos_t *statement_start)
  *   JAL. JAL, having no preprocessor, uses `IF cexpr THEN...' like the
  *   C preprocessor's #if ...
  */
-static boolean_t jal_skip_if(pfile_t *pf, boolean_t is_else)
+static boolean_t jal_skip_if_depth(pfile_t *pf, boolean_t is_else,
+  unsigned depth)
 {
   boolean_t   is_end;
 
+  /* a skipped IF nests too (constant-false clauses), so the statement
+   * nesting cap applies here as well -- without it `if FALSE' nested
+   * 12 000 deep recursed until the stack died */
+  if (jal_parse_aborted(pf)) {
+    return BOOLEAN_TRUE;
+  }
+  if (depth >= JAL_BLOCK_DEPTH_MAX) {
+    jal_parse_abort(pf);
+    return BOOLEAN_TRUE;
+  }
   is_end = BOOLEAN_FALSE;
   do {
     /* embedded IF */
@@ -414,9 +438,11 @@ static boolean_t jal_skip_if(pfile_t *pf, boolean_t is_else)
       pf_token_get(pf, PF_TOKEN_NEXT);
       is_end = BOOLEAN_TRUE;
     } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "if")) {
-      while (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "if")) {
+      while (!jal_parse_aborted(pf)
+        && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "if")) {
         pf_token_get(pf, PF_TOKEN_NEXT);
-        while (!pf_token_is_eof(pf) && !jal_skip_if(pf, BOOLEAN_FALSE)) {
+        while (!pf_token_is_eof(pf)
+          && !jal_skip_if_depth(pf, BOOLEAN_FALSE, depth + 1U)) {
           /* empty */
         }
       }
@@ -428,8 +454,13 @@ static boolean_t jal_skip_if(pfile_t *pf, boolean_t is_else)
         || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "else"))) {
       break;
     }
-  } while (!pf_token_is_eof(pf) && !is_end);
+  } while (!pf_token_is_eof(pf) && !is_end && !jal_parse_aborted(pf));
   return is_end;
+}
+
+static boolean_t jal_skip_if(pfile_t *pf, boolean_t is_else)
+{
+  return jal_skip_if_depth(pf, is_else, 0U);
 }
 
 /*
@@ -561,7 +592,7 @@ void jal_parse_if(pfile_t *pf, const pfile_pos_t *statement_start)
       }
     }
   }
-  if (!is_end) {
+  if (!is_end && !jal_parse_aborted(pf)) {
     /* pfile_log() prefixes with pf->statement_start; nested statements
      * overwrite the global, so errors at "missing end if" pointed at the
      * wrong line (GitHub jalv2compiler #22). Use this IF's opening position. */
@@ -838,11 +869,13 @@ void jal_parse_case(pfile_t *pf, const pfile_pos_t *statement_start)
   }
   pfile_cmd_label_add(pf, label_done);
   label_release(label_done);
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
-    && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "case")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "CASE", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "end")
+      && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "case")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "CASE", statement_start);
+    }
   }
   FREE(consts_used.data);
 }

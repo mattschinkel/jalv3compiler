@@ -348,9 +348,9 @@ void pfile_close(pfile_t *pf)
 
     if (pfile_flag_test(pf, PFILE_FLAG_DEBUG_COMPILER)) {
         if (tag_ref_ct_get(tag) != 1) {
-            fprintf(stderr, "!!! tag 0x%lx: %s(%u) ct = %u\n",
+            fprintf(stderr, "!!! tag 0x%lx: %s(%u) ct = %lu\n",
              (ulong)(uintptr_t) tag, tag_name_get(tag),
-            tag_n_get(tag), tag_ref_ct_get(tag));
+            tag_n_get(tag), (unsigned long) tag_ref_ct_get(tag));
       }
     }
     tag_release(tag);
@@ -664,22 +664,27 @@ unsigned pfile_line_get(const pfile_t *pf)
 
 /*
  * NAME
- *   pfile_log
+ *   pfile_log_v
  *
  * DESCRIPTION
- *   log a message
+ *   log a message; the two public entry points below differ only in
+ *   `force', which reports the message even while code generation is
+ *   disabled (pfile_log drops everything in that state, because
+ *   `if DEBUG then ... end if' bodies are not compiled and their
+ *   unresolved names are expected)
  *
  * PARAMETERS
- *   pf   : returned by pfile_open()
- *   plog : log level
- *   fmt  : log format
- *   ...
+ *   pf    : returned by pfile_open()
+ *   plog  : log level
+ *   force : TRUE to bypass the codegen-disable suppression
+ *   fmt   : log format
+ *   lst   : the already-started argument list
  */
-void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
+static void pfile_log_v(pfile_t *pf, pfile_log_t plog, boolean_t force,
+  const char *fmt, va_list lst)
 {
   if ((PFILE_LOG_NONE != plog) 
-    && !pfile_codegen_disable_get(pf)) {
-    va_list     lst;
+    && (force || !pfile_codegen_disable_get(pf))) {
     FILE       *dst;
     const char *sev_str;
 
@@ -722,13 +727,37 @@ void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
             pf->statement_start.line);
       }
       fprintf(dst, "%s", sev_str);
-      va_start(lst, fmt);
       vfprintf(dst, fmt, lst);
-      va_end(lst);
       fputc('\n', dst);
       fflush(dst);
     }
   }
+}
+
+void pfile_log(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
+{
+  va_list lst;
+
+  va_start(lst, fmt);
+  pfile_log_v(pf, plog, BOOLEAN_FALSE, fmt, lst);
+  va_end(lst);
+}
+
+/*
+ * Log a message that must be reported even inside a compile-time-disabled
+ * region (pfile_log drops everything while pfile_codegen_disable is set,
+ * because `if DEBUG then ... end if' bodies are not compiled and their
+ * unresolved names are expected).  A hard parser limit is not expected --
+ * silently dropping it would turn "nested too deeply" into a truncated
+ * program that compiles with 0 errors.
+ */
+void pfile_log_force(pfile_t *pf, pfile_log_t plog, const char *fmt, ...)
+{
+  va_list lst;
+
+  va_start(lst, fmt);
+  pfile_log_v(pf, plog, BOOLEAN_TRUE, fmt, lst);
+  va_end(lst);
 }
 
 /*

@@ -17,12 +17,19 @@
 #      "ERROR: Infinite loop detected" to stdout on a LEGAL program and
 #      then exited 0 (pic.c);
 #   3. the same map clamped addresses at 1024, so --clear silently failed
-#      to clear data above 0x3ff on parts with more RAM than that.
+#      to clear data above 0x3ff on parts with more RAM than that;
+#   4. statement nesting was unbounded -- 12 000 nested IFs overflowed the
+#      C stack (SIGSEGV, and SIGABRT while unwinding).  Its root cause was
+#      a 16-bit reference counter wrapping at 65 536, which also crashed a
+#      FLAT 70 000-statement program (pfile_source_lock UAF).
 #
-#   Shapes 1 and 2 are legal JAL, so they are also checked for a CLEAN
+#   Shapes 1-3 are legal JAL, so they are also checked for a CLEAN
 #   compile below; a "fix" that merely turns the crash into a spurious
-#   error would be a regression, not a repair.
+#   error would be a regression, not a repair.  Shape 4 is now an
+#   explicitly bounded construct: legal up to the cap, one clean
+#   diagnostic beyond it.
 #   fixes/fix_bounded_parser_recursion.md, fixes/fix_data_area_map_guards.md
+#   fixes/fix_bounded_statement_recursion.md
 #
 # PASS = rc is not a signal (>=128) and, when the compile fails, an
 #        "N errors, M warnings" summary is present.
@@ -113,9 +120,99 @@ open(sys.argv[1], 'w').write(
 PY
 check "nested subscripts 5000" "$WORK/subscript_deep.jal"
 
+# --- 1b. statement nesting --------------------------------------------------
+# The parser recurses for every IF / loop / CASE / BLOCK body.  Before the
+# statement cap (JAL_BLOCK_DEPTH_MAX), 12 000 nested IFs overflowed the C
+# stack; the FIRST failure seen was even nastier -- a 16-bit source
+# reference counter wrapped at 65 536 and freed a file still in use, which
+# also killed a FLAT 70 000-statement program.  Both counters are pinned
+# here: the nesting must produce ONE diagnostic, and a large flat program
+# must compile.
+gen "$WORK/if_deep_50k.jal" <<'PY'
+import sys
+n = 50000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + 'if a == 1 then\n' * n + 'a = 2\n' + 'end if\n' * n
+    + 'forever loop\nend loop\n')
+PY
+check "50000 nested IFs (statement-nesting cap)" "$WORK/if_deep_50k.jal" \
+  "" "nested too deeply"
+
+gen "$WORK/while_deep.jal" <<'PY'
+import sys
+n = 20000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + 'while a == 0 loop\n' * n + 'a = 2\n' + 'end loop\n' * n
+    + 'forever loop\nend loop\n')
+PY
+check "20000 nested WHILE loops (statement-nesting cap)" "$WORK/while_deep.jal" \
+  "" "nested too deeply"
+
+# CASE recurses through jal_statement_process, not jal_block_process: it
+# needs the same cap (this shape used to SIGSEGV on its own).
+gen "$WORK/case_deep.jal" <<'PY'
+import sys
+n = 5000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + 'case a of\n0:\n' * n + 'a = 2\n' + 'end case\n' * n
+    + 'forever loop\nend loop\n')
+PY
+check "5000 nested CASEs (statement-nesting cap)" "$WORK/case_deep.jal" \
+  "" "nested too deeply"
+
+# A compile-time-false IF is SKIPPED, not parsed: the skip path recurses too,
+# and pfile_log suppresses messages while code generation is disabled -- the
+# cap must still be reported (pfile_log_force), otherwise the program is
+# silently truncated and "0 errors" is printed.
+gen "$WORK/if_false_deep.jal" <<'PY'
+import sys
+n = 20000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + 'if FALSE then\n' * n + 'a = 2\n' + 'end if\n' * n
+    + 'forever loop\nend loop\n')
+PY
+check "20000 nested false IFs (skip path, forced diagnostic)" \
+  "$WORK/if_false_deep.jal" "" "nested too deeply"
+
+# The reference-counter fix, stated as its own shape: 70 000 flat statements
+# each hold a lock on the source file.  A 16-bit counter wrapped at 65 536.
+gen "$WORK/flat_70k.jal" <<'PY'
+import sys
+n = 70000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + 'a = 2\n' * n + 'forever loop\nend loop\n')
+PY
+check "70000 flat statements (source reference counter)" "$WORK/flat_70k.jal"
+
 # --- 2. block / variable counts --------------------------------------------
-# 2000 nested IF blocks is legal and exceeds the old 1000-block cap that
-# made pic.c print "ERROR: Infinite loop detected" and exit 0.
+# The old data-area map dropped every block past 1000 and printed
+# "ERROR: Infinite loop detected" (and exited 0).  Both shapes below carry
+# more than 1000 blocks: the nested one exercises the map's block walk, the
+# sequential one exceeds the count without relying on parser nesting.
+gen "$WORK/blocks_1000.jal" <<'PY'
+import sys
+n = 1000
+body = ''.join('if a == %d then\n' % i for i in range(n))
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + body + 'a = 2\n' + 'end if\n' * n + 'forever loop\nend loop\n')
+PY
+check "1000 nested if blocks (legal, under the parser cap)" \
+  "$WORK/blocks_1000.jal" clean
+if grep -q "Infinite loop detected" <<<"$( \
+    "$CC" $INC -no-codfile "$WORK/blocks_1000.jal" 2>&1)"; then
+  echo "FAIL 1000 nested if blocks: spurious 'Infinite loop detected'"
+  fails=$((fails + 1))
+fi
+
+# Statement nesting is capped (see jal_blck.c): 2000 nested IFs is no longer
+# legal, but it must FAIL CLEANLY -- one diagnostic, no signal, no truncation
+# reported as success.  This is the shape that used to SIGSEGV/SIGABRT.
 gen "$WORK/blocks_2000.jal" <<'PY'
 import sys
 n = 2000
@@ -124,12 +221,37 @@ open(sys.argv[1], 'w').write(
     'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
     + body + 'a = 2\n' + 'end if\n' * n + 'forever loop\nend loop\n')
 PY
-check "2000 nested if blocks" "$WORK/blocks_2000.jal" clean
-if grep -q "Infinite loop detected" <<<"$( \
-    "$CC" $INC -no-codfile "$WORK/blocks_2000.jal" 2>&1)"; then
-  echo "FAIL 2000 nested if blocks: spurious 'Infinite loop detected'"
-  fails=$((fails + 1))
-fi
+check "2000 nested if blocks (statement-nesting cap)" \
+  "$WORK/blocks_2000.jal" "" "nested too deeply"
+
+# --- 2b. long branch chains --------------------------------------------------
+# The GOP walk used to descend into every branch target, once per branch, and
+# keep its analysis state in a fixed [PIC_CODE_GOP_DEPTH] (256) array: 2 000
+# SEQUENTIAL if statements overflowed it and tripped
+# `assert(data->ix < PIC_CODE_GOP_DEPTH)` in the PIC back end.  Legal input,
+# must compile clean.  (Witness: fixes/fix_gop_walk_depth.md)
+gen "$WORK/branches_seq_2000.jal" <<'PY'
+import sys
+n = 2000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + ''.join('if a == %d then\na = 2\nend if\n' % i for i in range(n))
+    + 'forever loop\nend loop\n')
+PY
+check "2000 sequential IF branches (GOP walk depth)" \
+  "$WORK/branches_seq_2000.jal" clean
+
+# The same block count without nesting: still legal, still > 1000 blocks.
+gen "$WORK/blocks_seq_2000.jal" <<'PY'
+import sys
+n = 2000
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\nvar word a\na = 1\n'
+    + 'block\na = a + 1\nend block\n' * n
+    + 'forever loop\nend loop\n')
+PY
+check "2000 sequential blocks (>1000-block map)" \
+  "$WORK/blocks_seq_2000.jal" clean
 
 gen "$WORK/vars_3000.jal" <<'PY'
 import sys

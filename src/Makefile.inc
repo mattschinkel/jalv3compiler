@@ -221,9 +221,14 @@ endif
 #
 ifneq ($(PARTS),)
 
+# The sub-make status MUST abort the build: a failed compile used to be
+# ignored here, so the old archive/binary was linked anyway and a broken
+# tree produced a "successful" build with stale objects (the mixed-object
+# trap, hit again on 2026-11-01 when four files failed to compile and the
+# link still succeeded).
 project:
 	@for dir in $(PARTS) ; do \
-		( make -C $$dir )       \
+		( $(MAKE) -C $$dir ) || exit 1 ; \
 	done
 
 clean::

@@ -10,6 +10,7 @@
  **
  ************************************************************/
 #include <assert.h>
+#include <errno.h>
 
 #include "pic.h"
 #include "pic_gop.h"
@@ -18,8 +19,7 @@
 #include "pic_daop.h"
 
 typedef struct pic_code_daop_data_ {
-  pic_databits_t databits[PIC_CODE_GOP_DEPTH];
-  unsigned       ix;
+  pic_gop_stack_t stack;   /* one pic_databits_t per walk level */
 } pic_code_daop_data_t;
 
 /*
@@ -56,10 +56,12 @@ pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
   pic_code_gop_rc_t     rc;
   pic_databits_state_t  cbits;
   pic_databits_t        dbits;
+  pic_databits_t       *top;
 
   data  = odata;
-  if (PIC_CODE_NONE != code) {
-    dbits = data->databits[data->ix];
+  top = pic_gop_stack_top(&data->stack);
+  if ((PIC_CODE_NONE != code) && top) {
+    dbits = *top;
     pic_code_databits_get(code, &cbits);
   } else {
     dbits.rp0 = PIC_BITSTATE_UNKNOWN;
@@ -74,14 +76,12 @@ pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
   
   switch (which) {
     case PIC_CODE_GOP_WHICH_ENTER:
-      data->ix++;
-      assert(data->ix < PIC_CODE_GOP_DEPTH);
-      if (data->ix > 0) {
-        data->databits[data->ix] = data->databits[data->ix - 1];
+      if (!pic_gop_stack_push(&data->stack)) {
+        pfile_log_syserr(pf, ENOMEM);
       }
       break;
     case PIC_CODE_GOP_WHICH_EXIT:
-      data->ix--;
+      pic_gop_stack_pop(&data->stack);
       break;
     case PIC_CODE_GOP_WHICH_PRE:
       if (((cbits.before.rp0 == dbits.rp0)
@@ -132,8 +132,9 @@ pic_code_gop_rc_t pic_code_daop_analyze(pfile_t *pf,
       pic_code_databits_set(code, &cbits);
       break;
   }
-  if (PIC_CODE_NONE != code) {
-    data->databits[data->ix] = dbits;
+  top = pic_gop_stack_top(&data->stack);
+  if ((PIC_CODE_NONE != code) && top) {
+    *top = dbits;
   }
   return rc;
 }
@@ -186,22 +187,25 @@ static void pic_code_daop_optimize(pfile_t *pf,
     pic_code_gop_who_t who, void *odata)
 {
   pic_code_daop_data_t *data;
+  pic_databits_t       *base;
 
   UNUSED(pf);
   data = odata;
-  switch (who) {
-    case PIC_CODE_GOP_WHO_ISR:
-    case PIC_CODE_GOP_WHO_USER:
-      data->databits[0].rp1 = PIC_BITSTATE_CLR;
-      data->databits[0].rp0 = PIC_BITSTATE_CLR;
-      break;
-    case PIC_CODE_GOP_WHO_INDIRECT:
-      data->databits[0].rp1 = PIC_BITSTATE_INDETERMINATE;
-      data->databits[0].rp0 = PIC_BITSTATE_INDETERMINATE;
-      break;
+  base = pic_gop_stack_base(&data->stack);
+  if (base) {
+    switch (who) {
+      case PIC_CODE_GOP_WHO_ISR:
+      case PIC_CODE_GOP_WHO_USER:
+        base->rp1 = PIC_BITSTATE_CLR;
+        base->rp0 = PIC_BITSTATE_CLR;
+        break;
+      case PIC_CODE_GOP_WHO_INDIRECT:
+        base->rp1 = PIC_BITSTATE_INDETERMINATE;
+        base->rp0 = PIC_BITSTATE_INDETERMINATE;
+        break;
+    }
   }
-  data->ix = (unsigned) -1;
-
+  pic_gop_stack_reset(&data->stack);
 }
 
 /* Reset every instruction's databits annotation before a full GOP walk.
@@ -230,8 +234,10 @@ void pic_code_databits_optimize(pfile_t *pf)
 
   pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_FIXING_DATA_BITS);
   pic_code_databits_reset_all_unknown(pf);
+  pic_gop_stack_init(&data.stack, sizeof(pic_databits_t));
   pic_code_gop_optimize(pf, pic_code_daop_optimize,
     pic_code_daop_analyze, &data);
+  pic_gop_stack_free(&data.stack);
   /* once the analysis is done, we need to run through & make
      sure no further label fixups are needed, or fix them up
      as necessary */

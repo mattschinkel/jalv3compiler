@@ -866,10 +866,12 @@ void jal_parse_assembler(pfile_t *pf, const pfile_pos_t *statement_start)
       pf_token_get(pf, PF_TOKEN_NEXT);
     }
   }
-  if (pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "assembler")) {
-    pf_token_get(pf, PF_TOKEN_NEXT);
-  } else {
-    jal_block_start_show(pf, "ASSEMBLER", statement_start);
+  if (!jal_parse_aborted(pf)) {
+    if (pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "assembler")) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    } else {
+      jal_block_start_show(pf, "ASSEMBLER", statement_start);
+    }
   }
 
   pfile_block_leave(pf);

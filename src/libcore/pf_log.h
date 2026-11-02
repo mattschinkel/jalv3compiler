@@ -30,6 +30,10 @@ typedef enum pfile_log_ {
 
 void pfile_log(pfile_t *pf, pfile_log_t sev, const char *fmt, ...)
      ATTRIBUTE;
+/* as pfile_log(), but reported even while code generation is disabled
+ * (hard limits: nesting depth, OOM); see pfile.c */
+void pfile_log_force(pfile_t *pf, pfile_log_t sev, const char *fmt, ...)
+     ATTRIBUTE;
 void pfile_log_syserr(pfile_t *pf, result_t rc);
 
 /*

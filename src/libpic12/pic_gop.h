@@ -17,10 +17,37 @@
 #include "../libcore/pfile.h"
 #include "pic_code.h"
 
-/* This is the maximum depth the optimizer should reach! 
-   It is an artbitrary choice. Changed from 128 to 256 in 
-   jalv25r5, fixing issue #19. */
-#define PIC_CODE_GOP_DEPTH 256
+/*
+ * The optimizer's per-walk state used to be a fixed
+ * `[PIC_CODE_GOP_DEPTH]` array (256, "an arbitrary choice", raised from
+ * 128 in jalv25r5 for issue #19).  That was a crash waiting for a big
+ * program: the walk descends once per branch target, so ~2 000 sequential
+ * IF statements overflowed the array and tripped an assertion in the
+ * analyze callbacks (pic_daop/pic_brop/picmovlpop).  The state is now a
+ * growable stack and the walk itself is iterative (no C recursion), so
+ * both the array depth and the walk depth are bounded only by memory.
+ */
+#define PIC_CODE_GOP_STACK_INIT 64U
+
+/* growable stack of analysis states, one element per walk level */
+typedef struct pic_gop_stack_ {
+  void    *tab;    /* element storage */
+  size_t   el_sz;  /* sizeof one element */
+  unsigned cap;    /* elements allocated */
+  unsigned ix;     /* current element, PIC_GOP_STACK_NONE when empty */
+} pic_gop_stack_t;
+
+#define PIC_GOP_STACK_NONE ((unsigned) -1)
+
+void      pic_gop_stack_init(pic_gop_stack_t *st, size_t el_sz);
+void      pic_gop_stack_free(pic_gop_stack_t *st);
+/* discard the contents (keeps the allocation); the base state is then
+ * written through pic_gop_stack_base() before the walk starts */
+void      pic_gop_stack_reset(pic_gop_stack_t *st);
+void     *pic_gop_stack_base(pic_gop_stack_t *st);   /* element 0 */
+void     *pic_gop_stack_top(const pic_gop_stack_t *st); /* NULL when empty */
+boolean_t pic_gop_stack_push(pic_gop_stack_t *st);   /* FALSE on OOM */
+void      pic_gop_stack_pop(pic_gop_stack_t *st);
 
 typedef enum {
   PIC_CODE_GOP_WHICH_ENTER, /* analyze fn entered */
