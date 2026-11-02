@@ -470,16 +470,24 @@ if [[ "$VALIDATE_RC" -eq 0 && "$CHK_HW_STK" == "1" ]]; then
     echo "$HW_JSON" >&2
     exit "$HW_RC"
   fi
-  MAX_STK="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["max_stkptr"])' <<<"$HW_JSON")"
-  if [[ "$MAX_STK" -gt "$COMPILER_DEPTH" ]]; then
+  HW_SKIPPED="$(python3 -c 'import json,sys; print(1 if json.load(sys.stdin).get("skipped") else 0)' <<<"$HW_JSON")"
+  if [[ "$HW_SKIPPED" == "1" ]]; then
+    echo "SKIP: hardware return stack (no STKPTR on $PROCESSOR)"
+    MAX_STK=""
+  else
+    MAX_STK="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["max_stkptr"])' <<<"$HW_JSON")"
+  fi
+  if [[ -n "$MAX_STK" ]] && [[ "$MAX_STK" -gt "$COMPILER_DEPTH" ]]; then
     echo "error: gpsim max STKPTR ($MAX_STK) > compiler Hardware stack depth ($COMPILER_DEPTH)" >&2
     echo "  (static bound should be conservative: dynamic max along this run should be <= compiler depth)" >&2
     exit 1
   fi
-  if [[ "$QUIET" -eq 0 ]]; then
-    echo "OK: hardware return stack (gpsim max STKPTR=$MAX_STK <= compiler depth $COMPILER_DEPTH, steps=$STK_STEPS)"
-  else
-    echo "PASS: hardware return stack (gpsim max STKPTR=$MAX_STK <= compiler depth $COMPILER_DEPTH, steps=$STK_STEPS)"
+  if [[ -n "$MAX_STK" ]]; then
+    if [[ "$QUIET" -eq 0 ]]; then
+      echo "OK: hardware return stack (gpsim max STKPTR=$MAX_STK <= compiler depth $COMPILER_DEPTH, steps=$STK_STEPS)"
+    else
+      echo "PASS: hardware return stack (gpsim max STKPTR=$MAX_STK <= compiler depth $COMPILER_DEPTH, steps=$STK_STEPS)"
+    fi
   fi
 fi
 

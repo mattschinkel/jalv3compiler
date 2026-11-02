@@ -143,6 +143,20 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     ok, detail = _stkptr_supported(args.processor, args.hex_path, args.frequency_hz)
     if not ok:
+        if "not available" in detail:
+            # Classic mid-range PIC14 (p16f877 and friends) has no STKPTR at
+            # all: the hardware stack is a fixed 8 levels and the compiler's
+            # depth bound is static, so this measurement is meaningless there.
+            # Report a skip that the caller can distinguish from a PASS.
+            if args.json:
+                print(json.dumps({
+                    "processor": args.processor,
+                    "skipped": True,
+                    "reason": detail,
+                }, sort_keys=True))
+            else:
+                print(f"skip: {detail} (no STKPTR on this processor)")
+            return 0
         print(f"error: {detail}", file=sys.stderr)
         return 1
 
