@@ -9,8 +9,9 @@
  ** propagate quieted; +-inf and +-0 follow the IEEE tables; denormal
  ** inputs are normalized on unpack; results underflow gradually
  ** through the denormals and overflow to inf.  float->int saturates
- ** (NaN -> 0, +-inf and |x| >= 2^31 -> INT_MAX/INT_MIN).
- ** Known limitation: _esp_i2f truncates for |int| >= 2^24.
+ ** (NaN -> 0, +-inf and |x| >= 2^31 -> INT_MAX/INT_MIN).  int->float
+ ** rounds to nearest even too, including |int| >= 2^24 (it truncated
+ ** before 2026-11-02).
  **
  ** Register contract inside a core:
  **   a2/a3 operands, a4 exponent (biased, signed), a5 significand

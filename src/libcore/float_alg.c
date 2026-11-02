@@ -728,6 +728,7 @@ void falg_div_core(pfile_t *pf, const falg_ops_t *ops)
 void falg_i2f_core(pfile_t *pf, const falg_ops_t *ops)
 {
   falg_brh_t br;
+  falg_brh_t br2;
 
   /* if OP1 != 0, run the conversion; zero returns 0.0 unchanged */
   br = BR(FALG_BR_NEZ, 0, FA_OP1);
@@ -750,9 +751,8 @@ void falg_i2f_core(pfile_t *pf, const falg_ops_t *ops)
 
   /* mantissa: shift OP1 left so the leading 1 moves to bit 23.
    * shift = 23 - (31 - clz) = clz - 8.  If clz > 8: shift left by
-   * (clz - 8).  If clz < 8: shift right by (8 - clz).  Bits
-   * shifted out are dropped (truncation for |int| >= 2^24 --
-   * documented limitation). */
+   * (clz - 8), exact.  If clz < 8 (|int| >= 2^24): shift right by
+   * (8 - clz) and round to nearest even (see the right path). */
   MI(FA_T2, 8);
   ALU(FALG_ALU_SUB, FA_T3, FA_T3, FA_T2);  /* t3 = clz - 8 */
 
@@ -763,12 +763,34 @@ void falg_i2f_core(pfile_t *pf, const falg_ops_t *ops)
   SSL(FA_MANT, FA_OP1, FA_T3);
   BIND(br);
 
-  /* if t3 < 0: shift right by -t3 (signed test: a negative t3
-   * reads huge unsigned and would wrongly skip under LTU) */
+  /* t3 < 0: |int| >= 2^24 -- shift right by k = -t3 and ROUND TO
+   * NEAREST EVEN on the discarded bits (this used to truncate, a
+   * 1-ulp error above 2^24).  The branchless trick is
+   * (x + (half-1) + (q&1)) >> k with half = 1<<(k-1), q = x>>k:
+   * adding half-1 rounds up when the remainder exceeds half, and
+   * adding (q&1) rounds the exact tie up only when q is odd --
+   * round-half-to-even.  Rounding past the top of the mantissa
+   * carries into the exponent (2^24 -> 2^23, exp+1). */
   MI(FA_T2, 0);
   br = BR(FALG_BR_GE, FA_T2, FA_T3);   /* t3 >= 0: skip */
-  ops->neg(pf, FA_T3);
-  SSR(FA_MANT, FA_OP1, FA_T3);
+  ops->neg(pf, FA_T3);                 /* t3 = k > 0 */
+  SSR(FA_T1, FA_OP1, FA_T3);           /* t1 = q (truncated) */
+  MI(FA_T2, 1);
+  ALU(FALG_ALU_AND, FA_STICKY, FA_T1, FA_T2);  /* sticky = q & 1 */
+  ALU(FALG_ALU_SUB, FA_T2, FA_T3, FA_T2);      /* t2 = k - 1 */
+  MI(FA_MANT, 1);
+  SSL(FA_MANT, FA_MANT, FA_T2);        /* mant = half = 1<<(k-1) */
+  MI(FA_T0, 1);
+  ALU(FALG_ALU_SUB, FA_MANT, FA_MANT, FA_T0);  /* half - 1 */
+  ALU(FALG_ALU_ADD, FA_MANT, FA_OP1, FA_MANT); /* x + (half-1) */
+  ALU(FALG_ALU_ADD, FA_MANT, FA_MANT, FA_STICKY); /* + (q&1) */
+  SSR(FA_MANT, FA_MANT, FA_T3);        /* rounded quotient */
+  PL(FA_T0, FALG_IMPL << 1);           /* 0x01000000 */
+  br2 = BR(FALG_BR_LTU, FA_T0, FA_MANT); /* mant < 2^24: skip */
+  MI(FA_T2, 1);
+  SSR(FA_MANT, FA_MANT, FA_T2);        /* 2^24 -> 2^23 */
+  ALU(FALG_ALU_ADD, FA_EXP, FA_EXP, FA_T2); /* exponent + 1 */
+  BIND(br2);
   BIND(br);
 
   /* MANT now has the leading 1 at bit 23 (mantissa + implicit bit) */

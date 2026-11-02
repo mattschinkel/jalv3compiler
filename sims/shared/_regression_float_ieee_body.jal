@@ -349,6 +349,26 @@ _fie_si = _fie_fa
 if _fie_si != -12345 then
    _fie_conv = 0
 end if
+-- I2F must ROUND TO NEAREST EVEN for |int| >= 2^24 (it used to truncate):
+-- 16777219 is a tie between ...18 and ...20; even mantissa wins -> ...20
+_fie_dw = 16777219
+_fie_fa = _fie_dw
+if _fie_fa != 16777220.0 then
+   _fie_conv = 0
+end if
+-- 16777217 ties between ...16 and ...18 -> ...16 (even)
+_fie_dw = 16777217
+_fie_fa = _fie_dw
+if _fie_fa != 16777216.0 then
+   _fie_conv = 0
+end if
+-- rounding up past the top of the mantissa carries into the exponent:
+-- 2^31-1 rounds to 2^31 exactly
+_fie_dw = 2147483647
+_fie_fa = _fie_dw
+if _fie_fa != 2147483648.0 then
+   _fie_conv = 0
+end if
 if _fie_conv == 0 then
    _check_failed = true
 end if

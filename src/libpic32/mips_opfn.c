@@ -617,9 +617,9 @@ static void mips_float_conv_create(pfile_t *pf)
   value_t f1;
   value_t conv;
 
-  /* cut 5: ESP-canonical i2f through the float_alg kernel (pre-fix:
-   * shift-loop normalize, truncation, no saturation story on the
-   * toint side) */
+  /* cut 5: ESP-canonical i2f through the float_alg kernel (round to
+   * nearest even, including |int| >= 2^24; pre-fix: shift-loop
+   * normalize with truncation, no saturation story on the toint side) */
   f1   = mips_fval1_get(pf);
   conv = mips_fconv_get(pf, 4);
   mips_load_value(pf, conv, MFALG_OP1);
