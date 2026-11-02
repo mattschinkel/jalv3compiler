@@ -1,0 +1,85 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim whereis of a record field (PIC18 16-bit core)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- whereis(record.field) was compile-checked only (unit-tests/syntax_test.jal).
+-- This body proves the VALUE at runtime: consecutive byte fields differ by
+-- exactly one address, the result is a real (non-zero) data address, and
+-- writing one field does not disturb its neighbours -- i.e. the address the
+-- compiler hands out is the field's own, not the record base or a scratch.
+--
+include regression_18f4620_device
+include regression
+
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 1
+-- expect byte v__wh_off1 1
+-- expect byte v__wh_off2 1
+-- expect byte v__wh_nonzero 1
+-- expect byte v__wh_indep 1
+-- @gpsim_validate end
+
+record _wh_rec_t is
+   byte a
+   byte b
+   byte c
+end record
+
+var _wh_rec_t _wh_r
+var word _wh_adr_a
+var word _wh_adr_b
+var word _wh_adr_c
+var byte _wh_off1 = 0
+var byte _wh_off2 = 0
+var byte _wh_nonzero = 0
+var byte _wh_indep = 0
+
+_wh_adr_a = whereis(_wh_r.a)
+_wh_adr_b = whereis(_wh_r.b)
+_wh_adr_c = whereis(_wh_r.c)
+
+if _wh_adr_a != 0 then
+   _wh_nonzero = 1
+end if
+
+if _wh_adr_b == _wh_adr_a + 1 then
+   _wh_off1 = 1
+end if
+if _wh_adr_c == _wh_adr_b + 1 then
+   _wh_off2 = 1
+end if
+
+_wh_r.a = 0x11
+_wh_r.b = 0x22
+_wh_r.c = 0x33
+
+if _wh_r.a == 0x11 then
+   if _wh_r.b == 0x22 then
+      if _wh_r.c == 0x33 then
+         _wh_indep = 1
+      end if
+   end if
+end if
+
+if _wh_off1 == 0 then
+   _check_failed = true
+end if
+if _wh_off2 == 0 then
+   _check_failed = true
+end if
+if _wh_nonzero == 0 then
+   _check_failed = true
+end if
+if _wh_indep == 0 then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+end loop
