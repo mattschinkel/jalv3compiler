@@ -1,0 +1,47 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — UART0 transmit path
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The demo samples print banners and numbers over UART0, but no sim body
+--    did: the ESP32 serial/print path was compile-only in the gates (the
+--    TXREG check covers the classic PICs, and PIC32 has its own uart bodies).
+--    This body prints a literal banner and a decimal number and asserts the
+--    captured UART0 bytes, so the device-file serial registers, esp32_serial_hw
+--    and the print library's digit renderer are exercised end to end.
+--
+--    QEMU must be told to capture serial (`uart_contains:` does that); the
+--    banner string is long enough to cross the UART FIFO, and the number is
+--    printed through the same _dec renderer the samples use.
+--
+-- @sim_validate begin
+-- machine: esp32
+-- duration_s: 8.0
+-- icount: 6
+-- uart_contains: ESP32-UART-OK n=42
+-- expect byte v__check_step 1
+-- @sim_validate end
+
+include regression_esp32_device
+include regression
+include esp32_xtensa_lx6
+
+pragma target clock 240_000_000
+pragma target OSC      PLL
+
+include esp32_clock
+esp32_clock_init()
+
+include esp32_serial_hw
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+
+include print
+
+print_string(serial_data, "ESP32-UART-OK n=")
+print_byte_dec(serial_data, 42)
+print_string(serial_data, "\r\n")
+
+regression_checkpoint()
