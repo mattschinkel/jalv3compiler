@@ -170,19 +170,28 @@ def gcov_module(mod):
         base = f[:-2]
         if not os.path.exists(os.path.join(objdir, base + ".gcno")):
             continue
-        r = subprocess.run(["gcov", "-o", ".obj-x86-64-cov", f],
-                           cwd=d, stdout=subprocess.PIPE,
-                           stderr=subprocess.DEVNULL)
-        out = r.stdout.decode("utf-8", "replace")
-        m = GCOV_RE.search(out)
-        if not m:
+        subprocess.run(["gcov", "-o", ".obj-x86-64-cov", f],
+                       cwd=d, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        # Take the counts from the annotated source, not from the percentage:
+        # `round(pct * lines)` is off by up to one per file, and the executed
+        # floor below must not wobble with that rounding.
+        exe = n = 0
+        gc = os.path.join(d, f + ".gcov")
+        if os.path.exists(gc):
+            for line in open(gc, errors="replace"):
+                m = re.match(r"^\s*([0-9]+\*?|#####|=====|-):\s*[0-9]+:", line)
+                if not m or m.group(1) == "-":
+                    continue
+                n += 1
+                if m.group(1)[0].isdigit():
+                    exe += 1
+        if not n:
             continue
-        pct = float(m.group(1))
-        n = int(m.group(2))
-        exe = int(round(pct * n / 100.0))
+        pct = 100.0 * exe / n
         executed += exe
         total += n
-        rows.append((f, pct, n))
+        rows.append((f, pct, n, exe))
     # gcov leaves .gcov files next to the sources; do not pollute the tree
     for f in os.listdir(d):
         if f.endswith(".gcov"):
@@ -191,33 +200,40 @@ def gcov_module(mod):
 
 
 def read_baseline():
-    """Return (percent, lines, mode) or None."""
+    """Return {mode, overall:(pct,lines,exe|None), modules:{name:(pct,lines,exe|None)}}."""
     if not os.path.exists(BASELINE):
         return None
-    pct = lines = mode = None
+    out = {"mode": None, "overall": None, "modules": {}}
     for line in open(BASELINE):
-        m = re.match(r"overall\s+([0-9.]+)\s+([0-9]+)", line)
+        m = re.match(r"overall\s+([0-9.]+)\s+([0-9]+)(?:\s+([0-9]+))?", line)
         if m:
-            pct, lines = float(m.group(1)), int(m.group(2))
+            out["overall"] = (float(m.group(1)), int(m.group(2)),
+                              int(m.group(3)) if m.group(3) else None)
+        m = re.match(r"module\s+(\S+)\s+([0-9.]+)\s+([0-9]+)(?:\s+([0-9]+))?",
+                     line)
+        if m:
+            out["modules"][m.group(1)] = (float(m.group(2)),
+                                          int(m.group(3)),
+                                          int(m.group(4)) if m.group(4) else None)
         m = re.match(r"mode\s+(\S+)", line)
         if m:
-            mode = m.group(1)
-    if pct is None:
-        return None
-    return pct, lines, mode
+            out["mode"] = m.group(1)
+    return out if out["overall"] else None
 
 
-def write_baseline(overall_pct, overall_lines, per_mod, mode):
+def write_baseline(overall_pct, overall_lines, overall_exe, per_mod, mode):
     with open(BASELINE, "w") as fh:
         fh.write("# coverage baseline -- regenerate with\n")
         fh.write("#   python3 unit-tests/coverage_report.py --update-baseline\n")
-        fh.write("# overall <percent> <executable lines>\n")
+        fh.write("# overall <percent> <executable lines> <executed lines>\n")
+        fh.write("# The executed count is a FLOOR as well as the percentage:\n")
+        fh.write("# deleting tested code must not be able to buy coverage.\n")
         fh.write("# mode <all|strideN>  -- the input set this number describes;\n")
         fh.write("#   a run with a different mode is reported but not compared\n")
         fh.write("mode %s\n" % mode)
-        fh.write("overall %.2f %d\n" % (overall_pct, overall_lines))
-        for mod, pct, n in per_mod:
-            fh.write("module  %-10s %.2f %d\n" % (mod, pct, n))
+        fh.write("overall %.2f %d %d\n" % (overall_pct, overall_lines, overall_exe))
+        for mod, pct, n, exe in per_mod:
+            fh.write("module  %-10s %.2f %d %d\n" % (mod, pct, n, exe))
 
 
 def main():
@@ -231,6 +247,10 @@ def main():
     ap.add_argument("--update-baseline", action="store_true")
     ap.add_argument("--tolerance", type=float, default=0.5,
                     help="allowed drop in overall percent before failing")
+    ap.add_argument("--exec-tolerance", type=int, default=10,
+                    help="allowed drop in EXECUTED lines before failing "
+                         "(the floor that stops deleting tested code from "
+                         "buying coverage)")
     args = ap.parse_args()
 
     if not args.no_build:
@@ -257,7 +277,7 @@ def main():
         if not tot:
             continue
         pct = 100.0 * exe / tot
-        per_mod.append((mod, pct, tot))
+        per_mod.append((mod, pct, tot, exe))
         detail += [(mod, r) for r in rows]
         overall_exe += exe
         overall_tot += tot
@@ -270,45 +290,66 @@ def main():
     with open(REPORT, "w") as fh:
         fh.write("jalv3 corpus line coverage\n")
         fh.write("inputs: %d   executable lines: %d\n\n" % (len(files), overall_tot))
-        fh.write("%-10s %8s %10s\n" % ("module", "lines", "executed"))
-        for mod, pct, tot in per_mod:
-            fh.write("%-10s %8d %9.2f%%\n" % (mod, tot, pct))
-        fh.write("%-10s %8d %9.2f%%\n" % ("OVERALL", overall_tot, overall))
+        fh.write("%-10s %8s %8s %10s\n" % ("module", "lines", "exe", "pct"))
+        for mod, pct, tot, exe in per_mod:
+            fh.write("%-10s %8d %8d %9.2f%%\n" % (mod, tot, exe, pct))
+        fh.write("%-10s %8d %8d %9.2f%%\n"
+                 % ("OVERALL", overall_tot, overall_exe, overall))
         fh.write("\nper file:\n")
-        for mod, (f, pct, n) in sorted(detail):
-            fh.write("  %-10s %-26s %6.2f%% of %d\n" % (mod, f, pct, n))
+        for mod, (f, pct, n, exe) in sorted(detail):
+            fh.write("  %-10s %-26s %6.2f%% of %d (%d executed)\n"
+                     % (mod, f, pct, n, exe))
 
-    print("module     lines  executed")
-    for mod, pct, tot in per_mod:
-        print("%-10s %6d %8.2f%%" % (mod, tot, pct))
-    print("%-10s %6d %8.2f%%" % ("OVERALL", overall_tot, overall))
+    print("module     lines     exe       pct")
+    for mod, pct, tot, exe in per_mod:
+        print("%-10s %6d %7d %8.2f%%" % (mod, tot, exe, pct))
+    print("%-10s %6d %7d %8.2f%%" % ("OVERALL", overall_tot, overall_exe, overall))
     print("report: %s" % os.path.relpath(REPORT, REPO))
 
     mode = "all" if (args.all or args.stride <= 1) else "stride%d" % args.stride
 
     if args.update_baseline:
-        write_baseline(overall, overall_tot, per_mod, mode)
+        write_baseline(overall, overall_tot, overall_exe, per_mod, mode)
         print("baseline updated: %s" % os.path.relpath(BASELINE, REPO))
         return 0
 
-    base = read_baseline()
+    return compare_baseline(read_baseline(), overall, overall_exe, mode, args)
+
+
+def compare_baseline(base, overall, overall_exe, mode, args):
+    """Verdict for one measurement against the baseline (0 ok, 1 regression)."""
     if base is None:
         print("no baseline yet; run with --update-baseline")
         return 0
-    if base[2] and base[2] != mode:
+    if base["mode"] and base["mode"] != mode:
         # Different input set: the numbers are not comparable, so report
         # but do not fail.  (A stride-8 run legitimately covers slightly
         # less than --all and is not a regression.)
         print("note: baseline was measured with mode %s, this run is %s -- "
               "not comparing (overall %.2f%% vs %.2f%%)"
-              % (base[2], mode, overall, base[0]))
+              % (base["mode"], mode, overall, base["overall"][0]))
         return 0
-    floor = base[0] - args.tolerance
+    base_pct, _base_lines, base_exe = base["overall"]
+    floor = base_pct - args.tolerance
+    fails = []
     if overall + 1e-9 < floor:
-        print("REGRESSION: overall %.2f%% < baseline %.2f%% (floor %.2f%%)"
-              % (overall, base[0], floor))
+        fails.append("overall %.2f%% < baseline %.2f%% (floor %.2f%%)"
+                     % (overall, base_pct, floor))
+    # The executed-line floor: a percentage can be raised by deleting code
+    # that was never executed (legitimate) or code that WAS executed (lost
+    # test coverage).  Only the second is a regression, and only this floor
+    # can tell them apart.
+    if base_exe is not None and overall_exe < base_exe - args.exec_tolerance:
+        fails.append("overall EXECUTED lines %d < baseline %d (tolerance %d)"
+                     % (overall_exe, base_exe, args.exec_tolerance))
+    if fails:
+        print("REGRESSION:")
+        for f in fails:
+            print("  " + f)
         return 1
-    print("ok: overall %.2f%% vs baseline %.2f%%" % (overall, base[0]))
+    print("ok: overall %.2f%% vs baseline %.2f%%; executed %d vs baseline %d"
+          % (overall, base_pct, overall_exe,
+             base_exe if base_exe is not None else overall_exe))
     return 0
 
 

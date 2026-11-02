@@ -1,13 +1,15 @@
 # coverage baseline -- regenerate with
 #   python3 unit-tests/coverage_report.py --update-baseline
-# overall <percent> <executable lines>
+# overall <percent> <executable lines> <executed lines>
+# The executed count is a FLOOR as well as the percentage:
+# deleting tested code must not be able to buy coverage.
 # mode <all|strideN>  -- the input set this number describes;
 #   a run with a different mode is reported but not compared
 mode all
-overall 82.74 49359
-module  jal        80.96 11141
-module  libcore    82.74 10486
-module  libpic12   80.72 16674
-module  libpic32   86.96 6702
-module  libesp32   89.13 3653
-module  libutils   85.78 703
+overall 82.80 49303 40825
+module  jal        80.96 11141 9020
+module  libcore    83.02 10430 8659
+module  libpic12   80.72 16674 13459
+module  libpic32   86.96 6702 5828
+module  libesp32   89.13 3653 3256
+module  libutils   85.78 703 603
