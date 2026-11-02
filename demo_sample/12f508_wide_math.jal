@@ -11,7 +11,10 @@
 --              multiply/divide helpers need the 5-byte `_pic_state`
 --              overlay, so the tour keeps only a handful of live values and
 --              states its expected results in comments; the LED blinks the
---              pass/fail bit.
+--              pass/fail bit.  A dword value does NOT fit here alongside the
+--              word and the state overlay (the part is full at 25 bytes);
+--              dword arithmetic on the 12-bit core is covered at runtime by
+--              sims/gpsim/12f508_gpsim_wide.jal.
 --
 --              Pinned at runtime by sims/gpsim/12f508_gpsim_arith.jal.
 --
@@ -30,7 +33,6 @@ pin_A0_direction = OUTPUT
 var byte  b = 37
 var byte  c = 5
 var word  ww = 1000
-var dword d
 var bit   ok
 --
 -- byte arithmetic: 37 * 5 = 185, / 5 = 37, % 5 = 2, 4 << 1 = 8
@@ -60,13 +62,6 @@ if byte(ww) != 0x58 then
    ok = FALSE
 end if
 if byte(ww >> 8) != 0x21 then
-   ok = FALSE
-end if
---
--- dword arithmetic: 100000 + 23456 = 123456
-d = 100000
-d = d + 23456
-if d != 123456 then
    ok = FALSE
 end if
 --
