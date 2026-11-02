@@ -11,7 +11,6 @@
 --    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/16f1825_compiler_regression_task.jal
 --
 -- @gpsim_validate begin
--- allow_compiler_warnings: 1
 -- (PIC14H **pragma task**: current JALv2 PIC backend reports **pclath** branch diagnostics; see **progress.md**.)
 -- compiler_args: -task 2
 -- steps: 120000

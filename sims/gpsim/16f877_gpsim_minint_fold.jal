@@ -19,6 +19,8 @@
 -- steps: 40000
 -- frequency_hz: auto
 -- allow_compiler_warnings: 1
+-- (the witness exists to prove the compiler FOLDS -2147483648
+--  correctly, so 'operation is always TRUE' is expected here)
 -- expect byte v__check_step 1
 -- expect byte v__mi_eq  1
 -- expect byte v__mi_ne  0

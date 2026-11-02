@@ -6,7 +6,6 @@
 -- @gpsim_validate begin
 -- steps: 400000
 -- frequency_hz: auto
--- allow_compiler_warnings: 1
 -- expect byte v__c7 1
 -- expect byte v__c8 1
 -- expect byte v__check_step 1

@@ -11,7 +11,6 @@
 --    compilertest/Compiler_Linux/jalv2 -s 'third_party/jallib/lib;tests' tests/18f26k22_compiler_regression_arrays.jal
 --
 -- @gpsim_validate begin
--- allow_compiler_warnings: 1
 -- (Deliberate **var byte[256]** triggers “Large array allocation … 100% of bank” — expected for this test.)
 -- steps: 550000
 -- frequency_hz: auto

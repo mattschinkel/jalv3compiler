@@ -9,7 +9,6 @@ include regression
 -- @gpsim_validate begin
 -- steps: 200000
 -- frequency_hz: auto
--- allow_compiler_warnings: yes
 -- expect bit_clear v__bitbucket 0
 -- expect byte v__check_step 1
 -- expect byte v__record_lookup_r0 3

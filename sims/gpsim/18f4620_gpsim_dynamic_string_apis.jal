@@ -12,7 +12,6 @@
 --    to byte-array bridging.
 --
 -- @gpsim_validate begin
--- allow_compiler_warnings: yes
 -- steps: 400000
 -- frequency_hz: auto
 -- expect bit_clear v__bitbucket 0

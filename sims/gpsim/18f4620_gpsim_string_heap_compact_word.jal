@@ -14,7 +14,6 @@
 --    **`expect word_le v__cptw_lb`**.
 --
 -- @gpsim_validate begin
--- allow_compiler_warnings: yes
 -- checkpoint_verify: off
 -- (checkpoints sit inside a loop/conditional; the result variables are the proof)
 -- steps: 400000

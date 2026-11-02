@@ -2,21 +2,9 @@
 # One entry per line: <kind> <path relative to the repo root>.
 # Adding a line is a deliberate decision: the test loses a signal.
 # Remove a line when the exemption is no longer needed.
-allow_compiler_warnings    sims/gpsim/12f1840_compiler_regression_task.jal
-allow_compiler_warnings    sims/gpsim/16f1825_compiler_regression_task.jal
-allow_compiler_warnings    sims/gpsim/16f877_compiler_regression_task.jal
 allow_compiler_warnings    sims/gpsim/16f877_gpsim_minint_fold.jal
-allow_compiler_warnings    sims/gpsim/16f877_gpsim_pointer_record_lookup.jal
-allow_compiler_warnings    sims/gpsim/16f877_gpsim_pointer_rom_proc.jal
 allow_compiler_warnings    sims/gpsim/16f877_gpsim_string_heap_retry_off_fragment_fail.jal
 allow_compiler_warnings    sims/gpsim/16f877_gpsim_string_heap_retry_on_fragment_recover.jal
-allow_compiler_warnings    sims/gpsim/18f26k22_compiler_regression_arrays.jal
-allow_compiler_warnings    sims/gpsim/18f4620_compiler_regression_arrays.jal
-allow_compiler_warnings    sims/gpsim/18f4620_gpsim_dynamic_string_apis.jal
-allow_compiler_warnings    sims/gpsim/18f4620_gpsim_dynamic_string_many_handles_compact.jal
-allow_compiler_warnings    sims/gpsim/18f4620_gpsim_dynstr_diag.jal
-allow_compiler_warnings    sims/gpsim/18f4620_gpsim_numchain_diag.jal
-allow_compiler_warnings    sims/gpsim/18f4620_gpsim_string_heap_compact_word.jal
 checkpoint_verify_off      sims/gpsim/12f508_gpsim_arith.jal
 checkpoint_verify_off      sims/gpsim/12f508_gpsim_bits_proc.jal
 checkpoint_verify_off      sims/gpsim/12f508_gpsim_boundary.jal

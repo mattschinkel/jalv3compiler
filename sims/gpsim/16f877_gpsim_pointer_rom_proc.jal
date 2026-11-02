@@ -14,7 +14,6 @@
 -- @gpsim_validate begin
 -- steps: 200000
 -- frequency_hz: auto
--- allow_compiler_warnings: yes
 -- expect bit_clear v__bitbucket 0
 -- expect byte v__check_step 3
 -- expect byte v__gpsim_prp_r0 11
@@ -57,7 +56,7 @@ _gpsim_prp_cf_arr[3] = 9
 
 --------------------------------------------------------------------------------
 procedure _gpsim_prp_take(byte in _gpsim_prp_cf_buf[]) is
-   _gpsim_prp_cf_buf[0] = COUNT(_gpsim_prp_cf_buf)
+   _gpsim_prp_cf_buf[0] = byte(COUNT(_gpsim_prp_cf_buf))
 end procedure
 
 --------------------------------------------------------------------------------

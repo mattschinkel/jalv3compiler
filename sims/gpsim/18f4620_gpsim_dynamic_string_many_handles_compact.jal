@@ -27,7 +27,6 @@
 --).
 --
 -- @gpsim_validate begin
--- allow_compiler_warnings: yes
 -- steps: 5000000
 -- frequency_hz: auto
 -- checkpoint_verify: off
