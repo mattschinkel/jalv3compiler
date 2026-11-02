@@ -158,6 +158,8 @@ run_py esp32_sfr_bit_alignment    unit-tests/test_esp32_sfr_bit_alignment.py --c
 # good image), and a non-regular destination is never renamed over or removed
 # (fix_cli_help_infinite_loop, fix_atomic_hex_rename_install,
 # fix_hex_output_dev_null_guard). Uses a FIFO, never /dev/null.
+# COD (debug info) output: the only path that exercises src/libutils/cod_file.c.
+run_sh codfile_output             unit-tests/test_codfile_output.sh "$CC"
 run_sh cli_hex_contract           unit-tests/test_cli_hex_contract.sh "$CC"
 
 # PIC32 implementation-defined shapes that QEMU cannot model

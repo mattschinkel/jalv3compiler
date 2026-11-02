@@ -35,6 +35,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -114,6 +115,35 @@ def compile_one(path):
                        stderr=subprocess.DEVNULL, timeout=120)
     except subprocess.TimeoutExpired:
         pass
+
+
+COD_PROBES = (
+    "demo_sample/16f887_blink.jal",
+    "demo_sample/32mz1024efh064_blink_intosc_8mhz.jal",
+    "demo_sample/esp32_xtensa_lx6_blink_240mhz.jal",
+)
+
+
+def run_cod_probe():
+    """Compile a few samples WITH debug information enabled.
+
+    Everything else (the corpus and every pin) passes `-no-codfile`, which
+    left src/libutils/cod_file.c at ~3% -- the COD writer had no coverage at
+    all.  The files are written to a temp dir and dropped; only the executed
+    lines are being measured.
+    """
+    for rel in COD_PROBES:
+        path = os.path.join(REPO, rel)
+        if not os.path.exists(path):
+            continue
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                subprocess.run([BIN] + INCLUDES +
+                               ["-codfile", os.path.join(d, "probe.cod"), path],
+                               cwd=REPO, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=120)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def run_corpus(files, jobs):
@@ -216,6 +246,7 @@ def main():
         log("error: no inputs found")
         return 2
     run_corpus(files, args.jobs)
+    run_cod_probe()
 
     log("collecting coverage ...")
     per_mod = []
