@@ -342,23 +342,6 @@ witness_check() {  # compile 0 errors; run the QEMU gate when the block exists
   fi
 }
 
-sample_kit_sweep() {
-  local fails=0 s base out
-  for s in demo_sample/*.jal; do
-    base="$(basename "$s")"
-    # the summary line must EXIST (a missing tally = compiler abort) and
-    # start "0 errors" — but it is not always the LAST line: ESP32 prints
-    # its usage report after the tally, so grep instead of tail -1
-    out=$("$COMPILER" -s 'demo_lib;third_party/jallib/lib' -no-codfile "$s" 2>&1)
-    if grep -qE '^0 errors, [0-9]+ warnings' <<<"$out"; then
-      echo "  OK   $base"
-    else
-      echo "  FAIL $base ($(grep -Eo '[0-9]+ errors?, [0-9]+ warnings?' <<<"$out" | tail -1))"
-      fails=$((fails + 1))
-    fi
-  done
-  return "$fails"
-}
 
 UNIT_ENV=()
 if (( LEVEL < 3 )); then
@@ -464,6 +447,13 @@ if (( LEVEL >= 1 )); then
   # did before 2026-10-22 -- see fixes/fix_test_suite_gap_audit.md).
   gate "L1 compile-pin regressions" \
     "$ROOT/unit-tests/run_compile_pin_tests.sh" "$COMPILER"
+  # The demo kit is compile-only everywhere (no runtime gate touches it), so
+  # the compile check is its whole safety net.  It used to run only at L3,
+  # and a sample that stopped fitting its part (12f508_wide_math, after the
+  # RAM-exhaustion diagnostic) sat broken for a day.  16 s, so L1 and CI run
+  # the same script.
+  gate "L1 demo sample kit (compile)" \
+    "$ROOT/unit-tests/sample_kit_sweep.sh" "$COMPILER"
 fi
 
 # ---------------------------------------------------------------- L2
@@ -534,7 +524,6 @@ if (( LEVEL >= 3 )); then
   else
     skip "L3 sanitizer corpus (--no-san)"
   fi
-  gate "L3 sample-kit sweep" sample_kit_sweep
 fi
 
 print_summary

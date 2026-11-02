@@ -78,6 +78,13 @@ jobs:
       - name: Compile pins (diagnostics + implementation-defined codegen shapes)
         run: unit-tests/run_compile_pin_tests.sh ./bin/beta/jalv3-x86-64
 
+      # The demo samples are compile-only in every gate (no runtime harness
+      # touches them), so a compile sweep is their whole safety net.  It
+      # used to run only at L3, which CI does not run; a sample that stopped
+      # fitting its part stayed broken until an L3 happened.
+      - name: Demo sample kit (0 errors)
+        run: unit-tests/sample_kit_sweep.sh ./bin/beta/jalv3-x86-64
+
       - name: Upload the compiler and corpus output on failure
         if: failure()
         uses: actions/upload-artifact@v4
