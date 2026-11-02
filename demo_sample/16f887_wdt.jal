@@ -29,7 +29,8 @@ pragma target IESO     DISABLED
 pragma target LVP      DISABLED
 pragma target MCLR     EXTERNAL
 --
-WDTCON_SWDTEN = OFF                 -- (no runtime enable on this part)
+WDTCON_WDTPS = 0b1000               -- ~1:256 of the 31 kHz WDT oscillator (~8 ms)
+WDTCON_SWDTEN = ON                  -- arm the watchdog (fuse is CONTROL)
 OSCCON_SCS = 0
 OSCCON_IRCF = 0b111
 enable_digital_io()
@@ -53,7 +54,7 @@ var volatile byte phase = 0
 var byte beat
 --
 print_string(serial_data, "JALv2 PIC16F887: watchdog\r\n")
-print_string(serial_data, "fuse: WDT CONTROL (armed)\r\n")
+print_string(serial_data, "fuse: WDT CONTROL, armed by SWDTEN\r\n")
 phase = 1
 --
 -- phase 1: service the watchdog once per pass -- this section never resets
@@ -65,18 +66,19 @@ while beat < 5 loop
    print_byte_dec(serial_data, beat)
    print_crlf(serial_data)
    led = ON
-   _usec_delay(100_000)
+   _usec_delay(1_000)
    led = OFF
-   _usec_delay(100_000)
+   _usec_delay(1_000)
 end loop
 --
--- phase 2: stop servicing -- on silicon the WDT reset fires here
+-- phase 2: stop servicing -- the WDT reset fires here (<= 8 ms on silicon)
+-- and the part restarts from the banner, so this loop should never repeat
 print_string(serial_data, "##HANG## no more clrwdt - reset expected\r\n")
 phase = 2
 forever loop
    print_string(serial_data, "hang beat\r\n")
    led = ON
-   _usec_delay(100_000)
+   _usec_delay(1_000)
    led = OFF
-   _usec_delay(100_000)
+   _usec_delay(1_000)
 end loop

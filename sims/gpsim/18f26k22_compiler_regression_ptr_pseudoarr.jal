@@ -1,0 +1,24 @@
+-- ------------------------------------------------------
+-- Title: PIC18F26K22 compiler regression — ptr_pseudoarr (shared 32-bit body)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The same `_regression_ptr_pseudoarr_body.jal` the PIC32/ESP32 suites run, on
+--    the PIC18 back end: the shape is not 32-bit-specific, so the PIC_16
+--    grid gains it too.
+--
+-- @gpsim_validate begin
+-- steps: 100000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f26k22_device
+
+include regression
+
+include _regression_ptr_pseudoarr_body

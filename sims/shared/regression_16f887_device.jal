@@ -1,0 +1,26 @@
+-- Title: PIC16F887 gpsim regression — device defaults (classic 14-bit)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    The device most PIC_14 samples target, now also a **gpsim** device (its
+--    USART cannot be logged in gpsim 0.32.1, but RAM/`expect` checks work).
+--    Internal oscillator at 8 MHz, watchdog off at the fuse (CONTROL) and
+--    disabled at runtime by the tests that do not want it.
+--
+-- Notes:
+--    gpsim processor **`p16f887`**.  Include only on PIC16F887 tests under
+--    **`sims/gpsim/16f887_gpsim_*.jal`**.
+
+include 16f887
+
+pragma target clock 8_000_000
+pragma target OSC      INTOSC_NOCLKOUT
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+
+enable_digital_io()

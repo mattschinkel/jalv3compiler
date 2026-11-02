@@ -1,0 +1,55 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — 2 ms stopwatch probe on TMR0
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The gpsim twin of `demo_sample/16f887_stopwatch_probe.jal`: at 8 MHz the
+--    instruction clock is 2 MHz and TMR0 with prescaler 1:256 ticks every
+--    128 us, so 2 ms is ~15.6 ticks (window 14..20).
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_bad 0
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte bad = 0
+var volatile byte ticks = 0
+
+regression_begin_run()
+
+OPTION_REG_T0CS = low
+OPTION_REG_PSA = low
+OPTION_REG_PS = 0b111      -- 1:256
+TMR0 = 0
+_usec_delay(2000)
+ticks = TMR0
+
+if (ticks >= 14) & (ticks <= 20) then
+   -- in window
+else
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+-- a second measurement must land in the same window
+TMR0 = 0
+_usec_delay(2000)
+ticks = TMR0
+if (ticks >= 14) & (ticks <= 20) then
+   -- in window
+else
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+forever loop
+end loop

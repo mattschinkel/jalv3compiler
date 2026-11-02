@@ -1,0 +1,63 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — pin alias + direction alias on PORTD
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The gpsim twin of `demo_sample/16f887_pin_alias_hw.jal`: two aliases of
+--    the same pin, the direction alias driving TRISD, and a readback through
+--    the port register.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_bad 0
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+alias led is pin_D0
+alias led2 is pin_D0
+var volatile byte bad = 0
+
+regression_begin_run()
+
+TRISD = 0
+PORTD = 0
+
+led = ON
+if (PORTD & 0x01) == 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+led2 = OFF
+if (PORTD & 0x01) != 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+pin_D1_direction = INPUT
+if (TRISD & 0x02) == 0 then
+   bad = bad + 1
+end if
+pin_D1_direction = OUTPUT
+if (TRISD & 0x02) != 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+-- the aliases and the pin are the same address
+led = ON
+if led2 == 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+forever loop
+end loop

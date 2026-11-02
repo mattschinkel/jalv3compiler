@@ -1,0 +1,65 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — SFR bit overlay on PORTD (runtime index)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The gpsim twin of `demo_sample/16f887_sfr_overlay_hw.jal`: a
+--    `var bit bits[8] at PORTD` overlay written and read through a RUNTIME
+--    index must hit the real port register.  TRISD is cleared first because
+--    the overlay write is a read-modify-write: a floating input pin would
+--    latch its level into the byte.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_bad 0
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var bit portd_bits[8] at PORTD
+var volatile byte bad = 0
+var byte pin
+
+regression_begin_run()
+
+TRISD = 0
+PORTD = 0
+
+-- runtime-indexed set: bit 5
+pin = 5
+portd_bits[pin] = ON
+if (PORTD & 0x20) == 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+-- runtime-indexed readback
+if portd_bits[5] == 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+-- runtime-indexed clear
+portd_bits[pin] = OFF
+if (PORTD & 0x20) != 0 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+-- const-index set/clear on two bits
+portd_bits[0] = ON
+portd_bits[7] = ON
+if (PORTD & 0x81) != 0x81 then
+   bad = bad + 1
+end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+forever loop
+end loop

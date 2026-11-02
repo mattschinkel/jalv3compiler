@@ -1,0 +1,34 @@
+-- ------------------------------------------------------
+-- Title: PIC18F26K22 compiler regression — optional (shared 32-bit body)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The same `_regression_optional_body.jal` the PIC32/ESP32 suites run, on
+--    the PIC18 back end: the shape is not 32-bit-specific, so the PIC_16
+--    grid gains it too.
+--
+-- @gpsim_validate begin
+-- checkpoint_verify: off
+-- (the body's single checkpoint is not the proof here; `checks` is)
+-- steps: 700000
+-- frequency_hz: auto
+-- expect byte v_checks 14
+-- expect byte v__op_lit0 0
+-- expect byte v__op_lit2 2
+-- expect byte v__op_lit3 3
+-- expect byte v__op_lit4 4
+-- expect byte v__op_litd 4
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f26k22_device
+
+include regression
+
+-- the body's optional open-array default ("tag!") needs heap storage
+const word _string_heap_size = 64
+
+include _regression_optional_body

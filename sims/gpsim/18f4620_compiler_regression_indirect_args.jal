@@ -1,0 +1,24 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — indirect_args (shared 32-bit body)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The same `_regression_indirect_args_body.jal` the PIC32/ESP32 suites run, on
+--    the PIC18 back end: the shape is not 32-bit-specific, so the PIC_16
+--    grid gains it too.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+
+include regression
+
+include _regression_indirect_args_body
