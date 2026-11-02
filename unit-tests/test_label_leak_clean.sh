@@ -68,16 +68,39 @@ else
   fails=$((fails + 1))
 fi
 
-# A clean compile must not print the trace either.
-"$CC" -s "$REPO/demo_lib" -s "$REPO/third_party/jallib/lib" \
-  "$REPO/demo_sample/18f67j50_blink.jal" > "$WORK/out2" 2> "$WORK/err2"
-if grep -q "label leak" "$WORK/err2"; then
-  echo "FAIL: clean compile printed a 'label leak' trace:"
-  sed 's/^/     /' "$WORK/err2"
-  fails=$((fails + 1))
-else
-  echo "ok   clean compile prints no leak trace"
-fi
+# A clean compile must not print the trace either -- on EVERY back end.
+# The 2026-11-02 recurring-fix audit found the 32-bit pseudo-slot dispatch
+# (jal_expr.c / jal_blck.c) leaking its two labels per dispatch site, which
+# the PIC18-only clean check could not see.  Outputs go to $WORK so a gate
+# run never writes .asm/.hex beside the fixtures.
+clean_no_leak() { # name file [extra compiler args...]
+  local name=$1 file=$2 out err rc
+  shift 2
+  out="$WORK/clean_$name.out"
+  err="$WORK/clean_$name.err"
+  "$CC" -s "$REPO/demo_lib" -s "$REPO/third_party/jallib/lib" "$@" \
+    -no-codfile -asm "$WORK/clean_$name.asm" -hex "$WORK/clean_$name.hex" \
+    "$file" >"$out" 2>"$err"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL $name: clean compile exited $rc"
+    tail -4 "$out" | sed 's/^/     /'
+    fails=$((fails + 1))
+  elif grep -q "label leak" "$err"; then
+    echo "FAIL $name: clean compile printed a 'label leak' trace:"
+    head -10 "$err" | sed 's/^/     /'
+    fails=$((fails + 1))
+  else
+    echo "ok   $name: clean compile prints no leak trace"
+  fi
+}
+
+clean_no_leak pic18_blink "$REPO/demo_sample/18f67j50_blink.jal"
+clean_no_leak pic14h_blink "$REPO/demo_sample/16f1825_blink.jal"
+clean_no_leak pic32_slot_rt "$REPO/sims/pic32/32mx270f256b_body_ptr_slot_rt.jal" \
+  -s "$REPO/sims/shared" -s "$REPO/sims"
+clean_no_leak esp32_slot_rt "$REPO/sims/esp32/esp32_body_ptr_slot_rt.jal" \
+  -s "$REPO/sims/shared" -s "$REPO/sims"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then

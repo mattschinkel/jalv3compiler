@@ -27,6 +27,7 @@ doc/html/
 # build artifacts (compile outputs land here from src/)
 src/*/.obj-*/
 src/*/.dep/
+src/*/.dep-*/
 src/*.a
 src/*/*.a
 src/jal/jal_build.h

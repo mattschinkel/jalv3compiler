@@ -20,6 +20,17 @@ L1 runtime suites + compile-pin tests, L2 unit/compare + HEX manifest,
 L3 second QEMU suite + ASan corpus). `run_compile_pin_tests.sh` runs the
 `test_*` pin scripts in this folder.
 
+New pins (2026-11-02, from the recurring-fix coverage audit):
+`test_cli_hex_contract.sh` (CLI termination + atomic HEX install + a
+non-regular target is never replaced; uses a FIFO, not `/dev/null`),
+`test_oom_policy.sh` (`ulimit -v`: one OOM line, exit 1, no signal or
+cascade, no leftover HEX), `test_reserved_internal_names.sh` (reserved
+compiler names and the one-error `_string_heap_size` diagnostic),
+`test_build_deps.sh` (per-flavor header dependency tracking), and
+`test_harness_contract.py` (the test harness's own pass/fail decisions,
+including `--compare` with no baseline).  All are registered in
+`run_compile_pin_tests.sh`.
+
 `test_adversarial_inputs.sh` — shape-pathological inputs (deep nesting,
 huge arrays, thousands of blocks, binary junk) that the mutating fuzzer
 cannot generate. Registered in the L1 pin gate; every entry pins a defect

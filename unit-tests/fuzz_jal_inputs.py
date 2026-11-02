@@ -124,9 +124,33 @@ def mutate(data: bytes, rng: random.Random) -> bytes:
     return bytes(b)
 
 
+class SpawnError(RuntimeError):
+    """The compiler could not be executed at all (not a source result)."""
+
+
+def _spawn(cmd, **kwargs):
+    """subprocess.run with a short retry on transient OSError.
+
+    Under the gate's parallel load this sandbox intermittently returns EACCES
+    for an executable that is present and +x (fix_unit_spawn_error_misclassified
+    records the same flake for the unit runner).  That is an environment
+    event, not a fuzz finding: retry briefly, then raise SpawnError so the
+    harness exits 2 with a clear message instead of a traceback.
+    """
+    last = None
+    for attempt in range(5):
+        try:
+            return subprocess.run(cmd, **kwargs)
+        except OSError as exc:
+            last = exc
+            time.sleep(0.05 * (attempt + 1))
+    raise SpawnError("could not execute %s after 5 attempts: %s"
+                     % (cmd[0], last))
+
+
 def run_one(compiler: str, lib: str, path: str, timeout: float):
     try:
-        r = subprocess.run(
+        r = _spawn(
             [compiler, "-s", lib, "-no-codfile", path],
             capture_output=True, timeout=timeout)
         return r.returncode, (r.stdout or b"").decode(errors="replace") \
@@ -156,7 +180,7 @@ def run_batch(compiler: str, lib: str, paths, list_path: str, timeout: float):
         # diagnostics must stay INTERLEAVED. Capturing them separately and
         # concatenating puts every marker after every diagnostic, which makes
         # every input look like it never finished.
-        r = subprocess.run(
+        r = _spawn(
             [compiler, "-s", lib, "-no-codfile", paths[0]],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=timeout, env=env)
@@ -327,6 +351,10 @@ def main() -> int:
     if not os.path.isfile(args.compiler):
         print(f"error: compiler not found: {args.compiler}", file=sys.stderr)
         return 2
+    if not os.access(args.compiler, os.X_OK):
+        print(f"error: compiler is not executable: {args.compiler}; "
+              "a spawn would fail for every input", file=sys.stderr)
+        return 2
     # A bogus include path makes every seed fail its device include, which
     # reads as "the compiler crashes on mangled input" when it is really the
     # harness running its own typo. Fail loudly instead of fuzzing nothing.
@@ -429,4 +457,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SpawnError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)

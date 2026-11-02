@@ -14,8 +14,9 @@
 #   (library name) but not both. All sources in the directory are
 #   assumed to belong. The result is left in the same directory
 #   as the sources.
-#   Object files go into obj
-#   Dependency files are automatically generated and go into .dep
+#   Object files go into .obj-<arch><flavor>
+#   Dependency files are automatically generated and go into the matching
+#   .dep-<arch><flavor> (per flavor: see DEP_DIR below)
 #
 default: project
 
@@ -123,7 +124,12 @@ JAL2_BIN_STEM := $(if $(filter native,$(ARCH)),original,$(ARCH))$(FLAVOR)
 LIBTAG := $(ARCH)$(FLAVOR)
 OBJ_DIR=.obj-$(LIBTAG)
 
-DEP_DIR=.dep
+# One dep directory PER BUILD FLAVOR.  A shared .dep was overwritten by
+# whichever flavor compiled last, so after an SAN/COV build the default
+# flavor's dep rules named .obj-x86-64-san/x.o and a header edit never
+# rebuilt .obj-x86-64/x.o -- the stale object was linked into the binary.
+# Found 2026-11-02 by the build-deps pin (touch value.h, make: no rebuild).
+DEP_DIR=.dep-$(LIBTAG)
 SRCS=$(wildcard *.c)
 OBJS=$(addprefix $(OBJ_DIR)/, $(SRCS:.c=.o))
 
@@ -140,8 +146,8 @@ $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
 	mkdir -p $(DEP_DIR)
 
-# `make clean` removes .dep; the -MMD write needs it back before the first
-# compile (rebuild-after-clean footgun, hit 2026-10-10)
+# `make clean` removes the flavor's dep directory; the -MMD write needs it
+# back before the first compile (rebuild-after-clean footgun, hit 2026-10-10)
 $(DEP_DIR):
 	mkdir -p $(DEP_DIR)
 
@@ -151,11 +157,12 @@ $(DEP_DIR):
 #
 DEP=$(DEP_DIR)/$(*F)
 # `$(DEP_DIR)` is an ORDER-ONLY prerequisite, not just a rule: the recipe
-# below writes $(DEP)/.d with -MMD, so a build where the object dir
-# exists but .dep was removed (any per-flavor `make clean`, which drops
-# the SHARED .dep) would fail with "opening dependency file .dep/x.d".
-# The $(DEP_DIR) rule alone never fired; hit again 2026-11-01 on a
-# win64 build over a stale .obj-win64.
+# below writes $(DEP)/.d with -MMD, so a build where the object dir exists
+# but its dep directory was removed (any per-flavor `make clean`) would fail
+# with "opening dependency file .dep-.../x.d".  The $(DEP_DIR) rule alone
+# never fired; hit again 2026-11-01 on a win64 build over a stale
+# .obj-win64.  It is per flavor (see DEP_DIR): alternating flavors must not
+# rewrite each other's dependency rules.
 $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR) $(DEP_DIR)
 	#splint -weak -bufferoverflowhigh -pred-bool -cast-fcn-ptr -unrecog -skipisoheaders $<
 	$(CC) -MMD -MF $(DEP).d -c -o $@ $(CFLAGS) $<
@@ -247,5 +254,6 @@ endif
 
 
 clean::
-	-rm -rf $(OBJ_DIR) $(DEP_DIR) 
+	-rm -rf $(OBJ_DIR) $(DEP_DIR)
+	-rm -rf .dep
 

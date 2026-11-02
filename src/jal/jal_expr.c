@@ -530,6 +530,9 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
                     }
                   }
                   pfile_cmd_label_add(pf, l_done);
+                  /* cmds own their references; drop the allocator's */
+                  label_release(l_pseudo);
+                  label_release(l_done);
                   value_release(*pval);
                   *pval = tres;
                   if (tres) {
@@ -541,6 +544,8 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
                   value_release(tkind);
                   value_release(tkind_src);
                   value_release(tres);
+                  label_release(l_pseudo);
+                  label_release(l_done);
                 }
               }
               if (!emitted) {

@@ -13,6 +13,7 @@
 #include <string.h>
 #include <assert.h>
 #include "../libutils/mem.h"
+#include "pf_log.h"
 #include "variable.h"
 #include "vardef.h"
 #include "vardefd.h"
@@ -29,27 +30,32 @@ variable_def_t variable_def_alloc(const char *tag,
   tag_sz = (tag) ? strlen(tag) + 1 : 0;
 
   def = MALLOC(sizeof(*def) + tag_sz);
-  if (def) {
-    variable_def_outstanding++;
-    def->link = 0;
-    if (tag_sz) {
-      def->tag = (char *) (def + 1);
-      memcpy(def + 1, tag, tag_sz);
-    } else {
-      def->tag  = 0;
-    }
-    def->type    = type;
-    def->flags   = flags;
-    def->sz      = sz;
-    def->members = 0;
-
-    def->ugly_hack.prev = 0;
-    def->ugly_hack.next = ugly_hack_head;
-    if (ugly_hack_head) {
-      ugly_hack_head->ugly_hack.prev = def;
-    }
-    ugly_hack_head = def;
+  if (!def) {
+    /* OOM policy: the first allocation failure is fatal.  Returning NULL
+     * here used to make value_constant_get() build a non-const "constant"
+     * and report `constant expression expected` (seen at 7 MB). */
+    pfile_oom_report(0);
+    return 0;
   }
+  variable_def_outstanding++;
+  def->link = 0;
+  if (tag_sz) {
+    def->tag = (char *) (def + 1);
+    memcpy(def + 1, tag, tag_sz);
+  } else {
+    def->tag  = 0;
+  }
+  def->type    = type;
+  def->flags   = flags;
+  def->sz      = sz;
+  def->members = 0;
+
+  def->ugly_hack.prev = 0;
+  def->ugly_hack.next = ugly_hack_head;
+  if (ugly_hack_head) {
+    ugly_hack_head->ugly_hack.prev = def;
+  }
+  ugly_hack_head = def;
   return def;
 }
 
@@ -279,17 +285,19 @@ variable_def_member_t variable_def_member_alloc(const char *tag,
 
   sz = (tag) ? 1 + strlen(tag) : 0;
   mbr = MALLOC(sizeof(*mbr) + sz);
-  if (mbr) {
-    mbr->link = 0;
-    if (sz) {
-      mbr->tag = (char *) (1 + mbr);
-      memcpy(1 + mbr, tag, sz);
-    } else {
-      mbr->tag = 0;
-    }
-    mbr->def = def;
-    mbr->ct  = ct;
+  if (!mbr) {
+    pfile_oom_report(0);
+    return 0;
   }
+  mbr->link = 0;
+  if (sz) {
+    mbr->tag = (char *) (1 + mbr);
+    memcpy(1 + mbr, tag, sz);
+  } else {
+    mbr->tag = 0;
+  }
+  mbr->def = def;
+  mbr->ct  = ct;
   return mbr;
 }
 

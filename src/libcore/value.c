@@ -13,6 +13,7 @@
 #include <string.h>
 #include <assert.h>
 #include "pf_proc.h"
+#include "pf_log.h"
 #include "value.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -189,20 +190,25 @@ value_t value_alloc(variable_t var)
   struct value_ *ptr;
 
   val = value_element_alloc();
-  if (val) {
-    ptr = value_element_seek(val, BOOLEAN_TRUE);
-    ptr->ref_ct    = 1;
-    ptr->id        = ++value_id;
-    ptr->var       = VARIABLE_NONE;
-    ptr->baseofs   = VALUE_NONE;
-    ptr->def       = VARIABLE_DEF_NONE;
-    ptr->flags     = VALUE_FLAG_NONE;
-    ptr->bitofs_delta = 0;
-    ptr->name      = 0;
-
-    value_variable_set(val, var);
-
+  if (!val) {
+    /* A chunk allocation failure is OOM, and the caller cannot be trusted
+     * to notice a NULL value (the `at { ... }` parser reported "constant
+     * expression expected" and carried on at 7 MB).  The policy is fatal
+     * on the FIRST memory failure, so stop here rather than return NULL. */
+    pfile_oom_report(0);
+    return 0;
   }
+  ptr = value_element_seek(val, BOOLEAN_TRUE);
+  ptr->ref_ct    = 1;
+  ptr->id        = ++value_id;
+  ptr->var       = VARIABLE_NONE;
+  ptr->baseofs   = VALUE_NONE;
+  ptr->def       = VARIABLE_DEF_NONE;
+  ptr->flags     = VALUE_FLAG_NONE;
+  ptr->bitofs_delta = 0;
+  ptr->name      = 0;
+
+  value_variable_set(val, var);
   return val;
 }
 

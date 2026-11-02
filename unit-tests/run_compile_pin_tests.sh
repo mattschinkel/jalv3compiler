@@ -97,6 +97,10 @@ run_sh print_shadow_negative      unit-tests/test_print_shadow_negative.sh "$CC"
 run_sh openarray_chunked_pins    unit-tests/test_openarray_chunked_pins.sh "$CC"
 run_sh label_leak_clean            unit-tests/test_label_leak_clean.sh "$CC"
 run_py helper_entry_bsr            unit-tests/test_helper_entry_bsr.py --compiler "$CC"
+# Compiler-owned names are reserved and a malformed _string_heap_size reports
+# ONCE, not as a cascade (fix_reserved_internal_names, the internal-name guard
+# family). The exact error count is part of the contract.
+run_sh reserved_internal_names    unit-tests/test_reserved_internal_names.sh "$CC"
 
 # Malformed input must fail with DIAGNOSTICS, never a signal (SIGABRT/SIGSEGV).
 # The fixture pin covers the two known entries into the p-code builder's
@@ -111,6 +115,10 @@ run_sh malformed_input_clean       unit-tests/test_malformed_input_clean.sh "$CC
 # silently skipped BSS clearing. fixes/fix_bounded_parser_recursion.md,
 # fixes/fix_data_area_map_guards.md.
 run_sh adversarial_inputs          unit-tests/test_adversarial_inputs.sh "$CC"
+# Address-space exhaustion is a clean fatal exit (one line, exit 1, no signal,
+# no half-built-program diagnostics, no leftover HEX): fix_oom_policy +
+# fix_compiler_oom_null_guards. Enforced with ulimit -v on a corpus giant.
+run_sh oom_policy                  unit-tests/test_oom_policy.sh "$CC"
 run_py malformed_input_fuzz        unit-tests/fuzz_jal_inputs.py --compiler "$CC" \
   --inputs 4000 --seed 20261030 --minutes 30 --out-dir tmp/fuzz_gate
 # A4: the SAME sweep through the in-process seam (JAL_MULTI), which compiles a
@@ -125,11 +133,21 @@ run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$C
 run_sh pointer_pseudo_binds        unit-tests/test_pointer_pseudo_binds.sh "$CC"
 run_sh multibank_array_errors      unit-tests/test_multibank_array_errors.sh "$CC"
 run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
+# Header dependency tracking (the mixed-object lesson): a header edit must
+# rebuild the CURRENT flavor's object, and building another flavor must not
+# rewrite the dependency rules. fixes/fix_build_dep_flavor_collision.md
+run_sh build_deps                  unit-tests/test_build_deps.sh
 run_py in_process_units            unit-tests/test_inprocess_units.py --compiler "$CC"
 run_sh task_locals                 unit-tests/test_task_locals.sh "$CC"
 run_movlb
 run_py pic18_v6_access_bank        unit-tests/test_pic18_v6_access_bank.py --compiler "$CC"
 run_py esp32_sfr_bit_alignment    unit-tests/test_esp32_sfr_bit_alignment.py --compiler "$CC"
+# Driver/output contract the corpus and simulators cannot see: CLI requests
+# terminate, HEX install is atomic (a failed compile preserves the previous
+# good image), and a non-regular destination is never renamed over or removed
+# (fix_cli_help_infinite_loop, fix_atomic_hex_rename_install,
+# fix_hex_output_dev_null_guard). Uses a FIFO, never /dev/null.
+run_sh cli_hex_contract           unit-tests/test_cli_hex_contract.sh "$CC"
 
 # PIC32 implementation-defined shapes that QEMU cannot model
 run_py pic32_bootflash_fuses       unit-tests/test_pic32_bootflash_fuses.py --compiler "$CC"
@@ -146,6 +164,11 @@ run_py validate_contract           unit-tests/check_validate_contract.py
 # No NEW validate-block exemption (skip_gpsim / checkpoint_verify: off /
 # allow_compiler_warnings); pinned in unit-tests/validate_exemptions_baseline.txt.
 run_py validate_exemptions         unit-tests/check_validate_exemptions.py
+# The harness's own decision points (crash-without-summary = failure, spawn
+# error vs sample failure, asm-noise normalization, --compare with no
+# baseline exits 2). Every bug in fixes/fix_unittests_*.md was a green harness
+# measuring nothing; this is the self-test that does not need a compiler.
+run_py harness_contract            unit-tests/test_harness_contract.py
 # (test_pic32mx_clock_words.py is its own L1 gate in unit-tests/run_gates.sh.)
 
 echo ""

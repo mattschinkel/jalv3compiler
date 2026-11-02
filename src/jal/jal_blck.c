@@ -1195,11 +1195,18 @@ static void jal_assign_slot_dispatch(jal_assign_ctx_t *ctx)
                     }
                   }
                   pfile_cmd_label_add(pf, lk_skip);
+                  label_release(lk_call);
+                  label_release(lk_skip);
                 }
                 jal_value_release(jv);
               }
             }
             pfile_cmd_label_add(pf, l_done);
+            /* the cmds hold their own label references (cmd_label_set /
+             * cmd_branch_alloc lock); drop the allocator reference or
+             * every runtime-slot dispatch leaks two labels per site */
+            label_release(l_pseudo);
+            label_release(l_done);
             val  = VALUE_NONE;
             idx  = VALUE_NONE;
             /* both paths consumed their expr clones; the
@@ -1207,6 +1214,8 @@ static void jal_assign_slot_dispatch(jal_assign_ctx_t *ctx)
           } else {
             value_release(tkind);
             value_release(tkind_src);
+            label_release(l_pseudo);
+            label_release(l_done);
             pfile_log(pf, PFILE_LOG_ERR,
                 "runtime-indexed access to a pointer array"
                 " with pseudo-bound elements is not supported"

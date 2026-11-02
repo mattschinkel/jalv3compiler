@@ -951,6 +951,13 @@ label_t pfile_label_alloc(pfile_t *pf, const char *label)
 
     lbl = LABEL_NONE;
     tag = pfile_tag_alloc(pf, label);
+    if (!tag) {
+      /* OOM: a NULL tag would reach pfile_block_label_find() and strcmp()
+       * against a NULL name (SIGSEGV at 7.5 MB); route it to the fatal
+       * OOM policy instead of a normal codegen path. */
+      pfile_log_syserr(pf, ENOMEM);
+      return LABEL_NONE;
+    }
     rc = pfile_proc_label_alloc(pf->proc_active, tag, &lbl);
     if (RESULT_EXISTS == rc) {
       pfile_log(pf, PFILE_LOG_ERR, "label exists");
