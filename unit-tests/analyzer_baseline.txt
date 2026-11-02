@@ -1,12 +1,21 @@
-src/jal/jal_proc.c -Wanalyzer-malloc-leak
-src/jal/jal_tokn.c -Wanalyzer-use-of-uninitialized-value
-src/libcore/cmd_brch.c -Wanalyzer-null-dereference
-src/libcore/label.c -Wanalyzer-null-argument
-src/libcore/pf_block.c -Wanalyzer-deref-before-check
-src/libcore/pf_cmd.c -Wanalyzer-null-dereference
-src/libcore/pf_proc.c -Wanalyzer-deref-before-check
-src/libpic32/mips_alloc.c -Wanalyzer-use-of-uninitialized-value
-src/libpic32/mips_op.c -Wanalyzer-malloc-leak
-src/libutils/cod_file.c -Wanalyzer-possible-null-argument
-src/libutils/cod_file.c -Wanalyzer-possible-null-dereference
-src/libutils/mem.c -Wanalyzer-null-argument
+# analyzer baseline -- regenerate with:
+#   unit-tests/run_analyzer.sh --update-baseline
+# format: <src file> <-Wanalyzer-kind> <function, or ->
+# toolchain: cc (Debian 14.2.0-19) 14.2.0
+src/jal/jal_proc.c -Wanalyzer-malloc-leak jal_parse_formal_parameter_list_after_open_paren
+src/jal/jal_proc.c -Wanalyzer-malloc-leak jal_volatile_function_create
+src/jal/jal_tokn.c -Wanalyzer-use-of-uninitialized-value jal_token_get
+src/libcore/cmd_brch.c -Wanalyzer-null-dereference cmd_branch_assigned_used_set
+src/libcore/cmd_brch.c -Wanalyzer-null-dereference cmd_branch_value_accessed
+src/libcore/cmd_brch.c -Wanalyzer-null-dereference cmd_branch_value_remap
+src/libcore/cmd_brch.c -Wanalyzer-null-dereference cmd_branch_variable_accessed
+src/libcore/cmd_brch.c -Wanalyzer-null-dereference cmd_branch_variable_remap
+src/libcore/label.c -Wanalyzer-null-argument label_dump
+src/libcore/pf_block.c -Wanalyzer-deref-before-check pfile_block_next
+src/libcore/pf_cmd.c -Wanalyzer-null-dereference pfile_cmd_proc_inline_param_replacements_get
+src/libcore/pf_proc.c -Wanalyzer-deref-before-check pfile_proc_next
+src/libpic32/mips_alloc.c -Wanalyzer-use-of-uninitialized-value mips_alloc_assign_homes
+src/libpic32/mips_op.c -Wanalyzer-malloc-leak mips_add_fixup
+src/libutils/cod_file.c -Wanalyzer-possible-null-argument uchar_read
+src/libutils/cod_file.c -Wanalyzer-possible-null-dereference COD_directory_read
+src/libutils/mem.c -Wanalyzer-null-argument my_realloc
