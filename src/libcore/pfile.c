@@ -154,6 +154,8 @@ void pfile_str_heap_defer_free(pfile_t *pf)
  * RETURN
  *   RESULT_OK, RESULT_MEMORY, or the back end's pfile_open_fn() result
  */
+static void pfile_oom_handler(void *context);
+
 result_t pfile_open(pfile_t **dst, 
     FILE *f_asm, FILE *f_lst, FILE *f_hex, FILE *f_log, 
     const char *COD_name, flag_t flags, pfile_vectors_t *vectors, 
@@ -174,6 +176,7 @@ result_t pfile_open(pfile_t **dst,
     pf->f_lst = f_lst;
     pf->f_hex = f_hex;
     pf->f_log = f_log;
+    mem_set_oom_handler(pfile_oom_handler, pf);
     pf->COD_name = COD_name;
     pf->COD_dir  = 0;
     if (COD_name) {
@@ -305,6 +308,7 @@ static void pfile_hex_line_flush(pfile_t *pf)
  */
 void pfile_close(pfile_t *pf)
 {
+  mem_set_oom_handler(0, 0);
   COD_directory_free(pf->COD_dir);
   pfile_str_heap_defer_free(pf);
   pf->vectors->pf_cmd_cleanup(pf);
@@ -784,6 +788,18 @@ void pfile_oom_report(pfile_t *pf)
     fflush(stdout);
   }
   exit(EXIT_FAILURE);
+}
+
+/*
+ * mem_alloc()'s handler for the duration of a compile: report through the
+ * compile's own log stream and stop.  Installing this for the whole
+ * pfile_open .. pfile_close window is what makes the OOM policy hold for
+ * EVERY allocation site instead of the handful that check their result.
+ */
+static void
+pfile_oom_handler(void *context)
+{
+  pfile_oom_report((pfile_t *) context);
 }
 
 /*

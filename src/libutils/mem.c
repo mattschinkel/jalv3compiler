@@ -61,6 +61,74 @@ static void my_cleanup(void)
 #endif
 }
 
+/*
+ * Checked-allocation policy for the shipping build (MALLOC/CALLOC/REALLOC
+ * map here; my_* below are the MEMDEBUG variants, which are not compiled
+ * into the gate builds because mem.h undefines MEMDEBUG).
+ *
+ * The handler is installed by pfile_open() for the duration of a compile.
+ * With one installed, an allocation failure can never return NULL to a
+ * caller that would dereference it: it reports once and exits non-zero.
+ * That is deliberate -- a half-built IR has no safe continuation, and the
+ * alternative (per-site checks) is exactly how a NULL deref survived at
+ * 7.5 MB in one build and crashed the CI runner while passing locally.
+ */
+static void (*oom_handler)(void *);
+static void *oom_context;
+
+void
+mem_set_oom_handler(void (*fn)(void *), void *context)
+{
+  oom_handler = fn;
+  oom_context = context;
+}
+
+static void
+mem_oom(void)
+{
+  if (oom_handler) {
+    oom_handler(oom_context);
+  }
+}
+
+void *
+mem_alloc(size_t sz)
+{
+  void *ptr;
+
+  ptr = malloc(sz);
+  if (!ptr && sz) {
+    mem_oom();
+  }
+  return ptr;
+}
+
+void *
+mem_calloc(size_t ct, size_t sz)
+{
+  size_t total;
+  void  *ptr;
+
+  total = ct * sz;
+  ptr   = mem_alloc(total);
+  if (ptr) {
+    memset(ptr, 0, total);
+  }
+  return ptr;
+}
+
+void *
+mem_realloc(void *ptr, size_t sz)
+{
+  void *new_ptr;
+
+  new_ptr = realloc(ptr, sz);
+  if (!new_ptr && sz) {
+    mem_oom();
+  }
+  return new_ptr;
+}
+
 void *my_malloc(size_t sz)
 {
   mem_block_t *blk;
@@ -80,6 +148,9 @@ void *my_malloc(size_t sz)
 #endif
   stats.ct++;
   blk = malloc(sizeof(*blk) + sz);
+  if (!blk) {
+    mem_oom();
+  }
   if (blk) {
     unsigned char *ptr;
     unsigned char  poison[] = {0xde, 0xad, 0xbe, 0xef};
