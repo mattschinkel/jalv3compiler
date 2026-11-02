@@ -1,0 +1,22 @@
+-- Title: stack-depth CFG probe -- tail-call chain p -> q -> r: the fused gotos add no return-stack level
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Pins the PIC hardware-stack-depth walker (src/libpic12/pic_stk.c) on a
+-- synthetic control-flow shape. Compiled by
+-- unit-tests/test_stack_depth_cfg.sh with -s demo_lib;third_party/jallib/lib;sims/shared.
+-- The expected depth was cross-checked against the emitted .asm call nesting.
+
+include regression_16f877_device
+var volatile byte v1
+procedure r() is
+   v1 = 3
+end procedure
+procedure q() is
+   r()
+end procedure
+procedure p() is
+   q()
+end procedure
+p()
+forever loop
+end loop

@@ -137,6 +137,9 @@ run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
 # rebuild the CURRENT flavor's object, and building another flavor must not
 # rewrite the dependency rules. fixes/fix_build_dep_flavor_collision.md
 run_sh build_deps                  unit-tests/test_build_deps.sh
+# Stack-depth walker edge classes: small CFG shapes with an unambiguous depth,
+# plus the at-limit / over-limit diagnostics (fixes/fix_pic_stack_depth_*.md).
+run_sh stack_depth_cfg             unit-tests/test_stack_depth_cfg.sh "$CC"
 run_py in_process_units            unit-tests/test_inprocess_units.py --compiler "$CC"
 run_sh task_locals                 unit-tests/test_task_locals.sh "$CC"
 run_movlb

@@ -1,0 +1,44 @@
+-- Title: stack-depth CFG probe -- chain exactly at the PIC14 8-level limit: clean compile
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Pins the PIC hardware-stack-depth walker (src/libpic12/pic_stk.c) on a
+-- synthetic control-flow shape. Compiled by
+-- unit-tests/test_stack_depth_cfg.sh with -s demo_lib;third_party/jallib/lib;sims/shared.
+-- The expected depth was cross-checked against the emitted .asm call nesting.
+
+include regression_16f877_device
+var volatile byte vv
+procedure p8() is
+   vv = vv + 1
+end procedure
+procedure p7() is
+   p8()
+   vv = vv + 1
+end procedure
+procedure p6() is
+   p7()
+   vv = vv + 1
+end procedure
+procedure p5() is
+   p6()
+   vv = vv + 1
+end procedure
+procedure p4() is
+   p5()
+   vv = vv + 1
+end procedure
+procedure p3() is
+   p4()
+   vv = vv + 1
+end procedure
+procedure p2() is
+   p3()
+   vv = vv + 1
+end procedure
+procedure p1() is
+   p2()
+   vv = vv + 1
+end procedure
+p1()
+forever loop
+end loop

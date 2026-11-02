@@ -1,0 +1,30 @@
+-- Title: stack-depth CFG probe -- linear nesting: main -> p_a -> p_b -> p_c, no branches
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Pins the PIC hardware-stack-depth walker (src/libpic12/pic_stk.c) on a
+-- synthetic control-flow shape. Compiled by
+-- unit-tests/test_stack_depth_cfg.sh with -s demo_lib;third_party/jallib/lib;sims/shared.
+-- The expected depth was cross-checked against the emitted .asm call nesting.
+
+include regression_16f877_device
+
+var volatile byte v1
+var volatile byte v2
+var volatile byte v3
+
+procedure p_c() is
+   v3 = 3
+end procedure
+procedure p_b() is
+   p_c()
+   v2 = 2
+end procedure
+procedure p_a() is
+   p_b()
+   v1 = 1
+end procedure
+
+p_a()
+p_a()
+forever loop
+end loop
