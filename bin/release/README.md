@@ -17,16 +17,17 @@ jALv3 is beta. A versioned jALv3 artifact never goes into `bin/old_versions/`
 
 ## Before placing a release here
 
-The publish sweeps reject files over 2 MB and any embedded build paths. Build
-with `-g` carries absolute paths in its DWARF, so strip first:
+Stripping is a **size courtesy, not a gate** (2026-11-01: embedded build paths
+are accepted in the published tree). A `-g` build is ~4.2/4.8 MB and carries
+absolute paths in its DWARF; the stripped copies are ~950 kB:
 
 ```sh
 cp bin/beta/jalv3-x86-64 bin/release/jalv3-x86-64
 cp bin/beta/jalv3-win64.exe bin/release/jalv3-win64.exe
 strip bin/release/jalv3-x86-64
 x86_64-w64-mingw32-strip bin/release/jalv3-win64.exe
-strings -a bin/release/jalv3-x86-64 | grep -c /home/    # must be 0
 ```
 
-Publishing is `unit-tests/publish_prepare.sh` followed by
-`git push --force origin public:master`; see AGENTS.md.
+Publishing is a plain `git add` / `git commit` / `git push` from `master`;
+`.gitignore` (private by default) is the only thing that decides what ships.
+See AGENTS.md, "Publishing".
