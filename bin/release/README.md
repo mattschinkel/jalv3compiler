@@ -27,7 +27,3 @@ cp bin/beta/jalv3-win64.exe bin/release/jalv3-win64.exe
 strip bin/release/jalv3-x86-64
 x86_64-w64-mingw32-strip bin/release/jalv3-win64.exe
 ```
-
-Publishing is a plain `git add` / `git commit` / `git push` from `master`;
-`.gitignore` (private by default) is the only thing that decides what ships.
-Publishing is a plain `git add` / `git commit` / `git push` from `master`.
