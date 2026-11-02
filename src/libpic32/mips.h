@@ -73,7 +73,6 @@ typedef enum {
 mips_family_t mips_family(pfile_t *pf);
 unsigned long mips_ram_top(pfile_t *pf);
 unsigned long mips_data_max(pfile_t *pf);
-unsigned long mips_stack_reserve(pfile_t *pf);
 unsigned long mips_code_size(pfile_t *pf);
 unsigned long mips_image_end(pfile_t *pf);
 unsigned long mips_ebase_page(pfile_t *pf);
@@ -271,7 +270,6 @@ void       mips_op_consume_branch(pfile_t *pf, cmd_t cmd);
 void       mips_isr_vector_emit(pfile_t *pf);
 void       mips_isr_enable_ie(pfile_t *pf);
 boolean_t  mips_marker_present(pfile_t *pf, const char *name);
-void       mips_marker_ensure(pfile_t *pf, const char *name);
 boolean_t  mips_micromips_enabled(pfile_t *pf);
 void       mips_isa_bind(pfile_t *pf);
 int        mips_isa_is_micromips(void);
@@ -321,7 +319,6 @@ boolean_t  mips_wide_generate(pfile_t *pf, operator_t op, value_t dst,
 boolean_t  mips_op_is_float(value_t dst, value_t v1, value_t v2);
 boolean_t  mips_fpu_hw_enabled(pfile_t *pf);
 void       mips_fpu_enable_cu1(pfile_t *pf);
-boolean_t  mips_float_intrinsics_needed(pfile_t *pf);
 void       mips_float_intrinsics_create(pfile_t *pf);
 void       mips_float_assign_to(pfile_t *pf, value_t dst, value_t src);
 void       mips_float_assign_from(pfile_t *pf, value_t dst, value_t src);

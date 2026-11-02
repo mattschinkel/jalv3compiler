@@ -1648,33 +1648,6 @@ void pic_brtest_out(pfile_t *pf, value_t val1, value_t val2,
   }
 }
 
-unsigned pic_proc_frame_sz_get(pfile_block_t *blk)
-{
-  unsigned   frame_sz;
-  unsigned   subframe_sz_max;
-  variable_t var;
-
-  for (frame_sz = 0, var = pfile_block_variable_list_head(blk);
-       var;
-       var = variable_link_get(var)) {
-    if (variable_is_auto(var)) {
-      frame_sz += variable_sz_get(var);
-    }
-  }
-  subframe_sz_max = 0;
-  for (blk = pfile_block_child_get(blk);
-       blk;
-       blk = pfile_block_sibbling_get(blk)) {
-    unsigned subframe_sz;
-
-    subframe_sz = pic_proc_frame_sz_get(blk);
-    if (subframe_sz > subframe_sz_max) {
-      subframe_sz_max = subframe_sz;
-    }
-  }
-  return frame_sz + subframe_sz_max;
-}
-
 static boolean_t pic_proc_reentrant_guard_needed(pfile_t *pf,
     pfile_proc_t *proc);
 static void pic_reentrancy_scan_reset(void);
@@ -2316,31 +2289,6 @@ void pic_cmd_out(pfile_t *pf, cmd_t *cmd_ptr)
   }
 }
 
-/*
- * NAME
- *   pic_bitstate_changed
- *
- * DESCRIPTION
- *   determine if a bitstate has changed
- *
- * PARAMETERS
- *   old : original state
- *   new : new state
- *
- * RETURN
- *   1 : changed
- *   0 : no change
- *
- * NOTES
- *   a bit has changed if it's not the same as new and it's not
- *   indeterminte
- */
-
-boolean_t pic_bitstate_changed(pic_bitstate_t old, pic_bitstate_t new)
-{
-  return ((old != new)
-      && (PIC_BITSTATE_INDETERMINATE != old));
-}
 
 
 /*
@@ -6498,116 +6446,6 @@ boolean_t pic_code_modifies_pclath(pfile_t *pf, pic_code_t code)
   return rc;
 }
 
-/*
- * return TRUE if the code modifies the <status:z>
- */
-boolean_t pic_code_modifies_z(pic_code_t code)
-{
-  pic_opcode_t op;
-  boolean_t    rc;
-
-  op = pic_code_op_get(code);
-  rc = BOOLEAN_FALSE;
-  switch (op) {
-  case PIC_OPCODE_ORG:
-  case PIC_OPCODE_END:
-  case PIC_OPCODE_NONE:
-  case PIC_OPCODE_RETLW:
-  case PIC_OPCODE_TRIS:
-  case PIC_OPCODE_MULLW:
-  case PIC_OPCODE_SWAPF:
-  case PIC_OPCODE_CPFSEQ:
-  case PIC_OPCODE_CPFSGT:
-  case PIC_OPCODE_CPFSLT:
-  case PIC_OPCODE_MOVWF:
-  case PIC_OPCODE_MULWF:
-  case PIC_OPCODE_SETF:
-  case PIC_OPCODE_TSTFSZ:
-  case PIC_OPCODE_BCF:
-  case PIC_OPCODE_BSF:
-  case PIC_OPCODE_BTFSC:
-  case PIC_OPCODE_BTFSS:
-  case PIC_OPCODE_BTG:
-  case PIC_OPCODE_BC:
-  case PIC_OPCODE_BN:
-  case PIC_OPCODE_BNC:
-  case PIC_OPCODE_BNN:
-  case PIC_OPCODE_BNOV:
-  case PIC_OPCODE_BNZ:
-  case PIC_OPCODE_BOV:
-  case PIC_OPCODE_BZ:
-  case PIC_OPCODE_BRA:
-  case PIC_OPCODE_RCALL:
-  case PIC_OPCODE_CALL:
-  case PIC_OPCODE_GOTO:
-  case PIC_OPCODE_CLRWDT:
-  case PIC_OPCODE_DAW:
-  case PIC_OPCODE_NOP:
-  case PIC_OPCODE_OPTION:
-  case PIC_OPCODE_POP:
-  case PIC_OPCODE_PUSH:
-  case PIC_OPCODE_RESET:
-  case PIC_OPCODE_RETURN:
-  case PIC_OPCODE_RETFIE:
-  case PIC_OPCODE_SLEEP:
-  case PIC_OPCODE_LFSR:
-  case PIC_OPCODE_MOVFF:
-  case PIC_OPCODE_MOVLB:
-  case PIC_OPCODE_MOVLP:
-  case PIC_OPCODE_MOVLP_NOP:
-  case PIC_OPCODE_TBLRD:
-  case PIC_OPCODE_TBLWT:
-  case PIC_OPCODE_DATALO_SET:
-  case PIC_OPCODE_DATALO_CLR:
-  case PIC_OPCODE_DATAHI_SET:
-  case PIC_OPCODE_DATAHI_CLR:
-  case PIC_OPCODE_IRP_SET:
-  case PIC_OPCODE_IRP_CLR:
-  case PIC_OPCODE_BRANCHLO_SET:
-  case PIC_OPCODE_BRANCHLO_CLR:
-  case PIC_OPCODE_BRANCHLO_NOP:
-  case PIC_OPCODE_BRANCHHI_SET:
-  case PIC_OPCODE_BRANCHHI_CLR:
-  case PIC_OPCODE_BRANCHHI_NOP:
-  case PIC_OPCODE_DB:
-    rc = BOOLEAN_FALSE;
-    break;
-  case PIC_OPCODE_ADDLW:
-  case PIC_OPCODE_ANDLW:
-  case PIC_OPCODE_IORLW:
-  case PIC_OPCODE_MOVLW:
-  case PIC_OPCODE_SUBLW:
-  case PIC_OPCODE_XORLW:
-  case PIC_OPCODE_ADDWF:
-  case PIC_OPCODE_ADDWFc:
-  case PIC_OPCODE_ANDWF:
-  case PIC_OPCODE_COMF:
-  case PIC_OPCODE_DECF:
-  case PIC_OPCODE_DCFSNZ:
-  case PIC_OPCODE_DECFSZ:
-  case PIC_OPCODE_INCF:
-  case PIC_OPCODE_INCFSZ:
-  case PIC_OPCODE_INFSNZ:
-  case PIC_OPCODE_IORWF:
-  case PIC_OPCODE_MOVF:
-  case PIC_OPCODE_RLF:
-  case PIC_OPCODE_RLCF:
-  case PIC_OPCODE_RLNCF:
-  case PIC_OPCODE_RRF:
-  case PIC_OPCODE_RRCF:
-  case PIC_OPCODE_RRNCF:
-  case PIC_OPCODE_SUBFWB:
-  case PIC_OPCODE_SUBWF:
-  case PIC_OPCODE_SUBWFB:
-  case PIC_OPCODE_XORWF:
-  case PIC_OPCODE_CLRF:
-  case PIC_OPCODE_NEGF:
-  case PIC_OPCODE_CLRW:
-    rc = BOOLEAN_TRUE;
-    break;
-  }
-  return rc;
-}
 
 
 pic_target_cpu_t pic_target_cpu_get(pfile_t *pf)

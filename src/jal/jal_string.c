@@ -1000,15 +1000,6 @@ value_t jal_string_length_value_get(pfile_t *pf, value_t val)
   return jal_string_handle_index_get(pf, val, JAL_STRING_FIELD_LENGTH);
 }
 
-value_t jal_string_capacity_value_get(pfile_t *pf, value_t val)
-{
-  UNUSED(pf);
-  if (!jal_string_is_dynamic(val)) {
-    return VALUE_NONE;
-  }
-  return jal_string_handle_index_get(pf, val, JAL_STRING_FIELD_CAP);
-}
-
 /* String actual -> open byte-array formal coercion (call arguments).
  * Allocates a temp byte buffer (capacity bounded by the string heap,
  * or 255 when no heap const is visible), copies the string content in

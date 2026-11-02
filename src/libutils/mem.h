@@ -11,33 +11,13 @@
 
 #include <stdlib.h>
 
-#undef  MEMDEBUG
-
 char *my_strdup(const char *src);
 #define STRDUP(x)   my_strdup(x)
-
-#ifdef MEMDEBUG
-
-void *my_malloc(size_t x);
-void *my_calloc(size_t x, size_t y);
-void  my_free(void *ptr);
-void *my_realloc(void *ptr, size_t sz);
-
-#define MALLOC(x)    my_malloc(x)
-#define CALLOC(x,y)  my_calloc(x, y)
-#define FREE(x)      my_free(x)
-#define REALLOC(x,y) my_realloc(x,y)
-
-#else
-
-#include <stdlib.h>
 
 #define MALLOC(x)    mem_alloc(x)
 #define CALLOC(x,y)  mem_calloc((x), (y))
 #define REALLOC(x,y) mem_realloc((x), (y))
 #define FREE(x)      do { if (x) free(x) ; } while (0)
-
-#endif
 
 /*
  * Checked allocation.  Memory exhaustion is an environment failure, not a

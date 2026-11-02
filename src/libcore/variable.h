@@ -157,7 +157,6 @@ void variable_list_remove(varlist_t *lst, variable_t victim);
 variable_t variable_list_find(varlist_t *lst, varfind_cb_t fn, void *arg,
     const void *data);
 void variable_list_reset(varlist_t *lst);
-size_t	variable_list_ct_get(const varlist_t *lst);
 
 /* basic functions */
 variable_t variable_alloc(tag_t tag, variable_def_t def);
@@ -169,7 +168,6 @@ const char     *variable_name_get(const variable_t var);
 unsigned        variable_tag_n_get(const variable_t var);
 
 boolean_t       variable_dflag_test(const variable_t var, flag_t flag);
-flag_t          variable_dflags_get_all(const variable_t var);
 
 boolean_t       variable_flag_test(const variable_t var, flag_t flag);
 void            variable_flag_set(variable_t var, flag_t flag);
@@ -212,7 +210,6 @@ void             variable_const_float_set(const variable_t var, size_t ofs,
 void             variable_data_set(variable_t var, void *x);
 void            *variable_data_get(const variable_t var);
 
-refct_t          variable_refct_get(const variable_t var);
 
 variable_t      variable_link_get(const variable_t var);
 void            variable_link_set(variable_t var, variable_t lnk);
@@ -272,10 +269,8 @@ boolean_t variable_pointer_slot_links_any(const variable_t var);
 variable_t variable_pointer_slot_kind_var_get(const variable_t var);
 void variable_pointer_slot_kind_var_set(const variable_t var,
     variable_t helper);
-variable_t variable_pointer_slot_getcall_var_get(const variable_t var);
 void variable_pointer_slot_getcall_var_set(const variable_t var,
     variable_t helper);
-variable_t variable_pointer_slot_putcall_var_get(const variable_t var);
 void variable_pointer_slot_putcall_var_set(const variable_t var,
     variable_t helper);
 variable_t variable_pointer_slot_puts_var_get(const variable_t var);
@@ -311,8 +306,6 @@ boolean_t     variable_is_temp(const variable_t var);
 boolean_t     variable_is_signed(const variable_t var);
 boolean_t     variable_is_pointer(const variable_t var);
 boolean_t     variable_is_shared(const variable_t var);
-boolean_t     variable_is_function(const variable_t var);
-boolean_t     variable_is_float(const variable_t var);
 
 typedef struct {
   size_t      used;
@@ -330,13 +323,9 @@ void *variable_user_data_get(const variable_t var);
 
 void variable_uses_add(variable_t var, variable_t uses);
 void variable_uses_remove(variable_t var, variable_t uses);
-variable_t variable_uses_get(variable_t var, size_t ix);
-variable_t variable_used_by_get(variable_t var, size_t ix);
-variable_t variable_interfer_get(variable_t var, size_t ix);
 
 int variable_unique_cmp(void *arg, const void *A, const void *B);
 void variable_interference_add(variable_t var1, variable_t var2);
-struct array_ *variable_interference_get(variable_t var);
 
 unsigned variable_id_get(variable_t var);
 

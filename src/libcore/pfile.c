@@ -4620,32 +4620,6 @@ void pfile_write_hex(pfile_t *pf, ulong pc, unsigned char data)
   }
 }
 
-/*
- * NAME
- *   pfile_string_find
- *
- * DESCRIPTION
- *   stub: always returns VALUE_NONE
- *
- * RETURN
- *   VALUE_NONE
- *
- * NOTES
- *   it used to search the lookup tables for a matching substring. That
- *   search is gone, nothing calls it, and the parameters are unused.
- */
-value_t pfile_string_find(pfile_t *pf, size_t sz, const char *ptr)
-{
-  value_t    val;
-
-  UNUSED(pf);
-  UNUSED(sz);
-  UNUSED(ptr);
-
-  val = 0;
-  return val;
-
-}
 
 boolean_t pfile_flag_test(const pfile_t *pf, flag_t flag)
 {
@@ -4770,19 +4744,9 @@ void pfile_debug_sub_set(pfile_t *pf, flag_t sub)
   }
 }
 
-flag_t pfile_debug_sub_get(const pfile_t *pf)
-{
-  return (pf) ? pf->debug_sub : 0;
-}
-
 boolean_t pfile_debug_sub_test(const pfile_t *pf, flag_t bit)
 {
   return (pf) && ((pf->debug_sub & bit) != 0);
-}
-
-label_t pfile_isr_preamble_entry_get(pfile_t *pf)
-{
-  return pf->label_isr_preamble;
 }
 
 void pfile_label_fixup(pfile_t *pf)
@@ -5255,101 +5219,6 @@ void pfile_pos_get(pfile_t *pf, pfile_pos_t *pos)
   }
 }
 
-result_t pfile_value_member_select(pfile_t *pf, value_t val, 
-    const char *tag)
-{
-  variable_def_t        def;
-  variable_def_member_t mbr;
-  size_t                ofs;
-  size_t                bitofs;
-  result_t              rc;
-
-  def    = value_def_get(val);
-  mbr    = variable_def_member_get(def);
-  bitofs = 0;
-  ofs    = 0;
-  if (!tag) {
-    assert(mbr && !variable_def_member_link_get(mbr));
-  } else {
-    while (mbr && strcmp(tag, variable_def_member_tag_get(mbr))) {
-      variable_def_t      mdef;
-
-      mdef = variable_def_member_def_get(mbr);
-      if (variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_BIT)) {
-        bitofs += variable_def_sz_get(mdef);
-      } else {
-        if (bitofs) {
-          ofs += (bitofs + 7) / 8;
-          bitofs = 0;
-        }
-        ofs += variable_def_member_ct_get(mbr)
-          * variable_def_sz_get(mdef);
-      }
-      mbr = variable_def_member_link_get(mbr);
-    }
-  }
-  if (mbr) {
-    value_t tmp;
-    expr_t *stk;
-
-    stk = 0;
-
-    rc = RESULT_OK;
-    if (ofs) {
-      tmp = pfile_constant_get(pf, ofs, VARIABLE_DEF_NONE);
-
-      if (value_baseofs_get(val)) {
-        (void) pfile_expr_push(pf, &stk, tmp, OPERATOR_ADD);
-        (void) pfile_expr_push(pf, &stk, value_baseofs_get(val), OPERATOR_NULL);
-        value_release(tmp);
-        tmp = expr_val_get(stk);
-        value_lock(tmp);
-        expr_free(stk);
-      }
-      value_baseofs_set(val, tmp);
-      value_release(tmp);
-    }
-    value_def_set(val, variable_def_member_def_get(mbr));
-  } else {
-    rc = RESULT_NOT_FOUND;
-  }
-  return rc;
-}
-
-result_t pfile_value_element_select(pfile_t *pf, value_t val, value_t el)
-{
-  variable_def_t        def;
-  result_t              rc;
-
-  def = value_def_get(val);
-  if (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def)) {
-    /* descend in to the next member and adjust */
-    variable_def_member_t mbr;
-    value_t               tmp;
-    expr_t               *stk;
-
-    rc  = RESULT_OK;
-    mbr = variable_def_member_get(def);
-    tmp = pfile_constant_get(pf, variable_def_sz_get(
-          variable_def_member_def_get(mbr)), VARIABLE_DEF_NONE);
-    stk = 0;
-    /* el * tmp [ + previous ] */
-    (void) pfile_expr_push(pf, &stk, tmp, OPERATOR_MUL);
-    if (value_baseofs_get(val)) {
-      (void) pfile_expr_push(pf, &stk, el, OPERATOR_ADD);
-      (void) pfile_expr_push(pf, &stk, value_baseofs_get(val), OPERATOR_NULL);
-    } else {
-      (void) pfile_expr_push(pf, &stk, el, OPERATOR_NULL);
-    }
-    value_baseofs_set(val, expr_val_get(stk));
-    expr_free(stk);
-    value_release(tmp);
-  } else {
-    rc = RESULT_INVALID;
-  }
-  return rc;
-}
-
 tag_t pfile_tag_alloc(pfile_t *pf, const char *name)
 {
   tag_t tag;
@@ -5613,11 +5482,6 @@ void pfile_data_range_add(pfile_t *pf, ulong lo, ulong hi)
   if (hi > pf->data_high) {
     pf->data_high = hi;
   }
-}
-
-ulong pfile_data_low_get(const pfile_t *pf)
-{
-  return (pf) ? pf->data_low : 0;
 }
 
 ulong pfile_data_high_get(const pfile_t *pf)

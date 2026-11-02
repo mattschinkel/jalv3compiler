@@ -168,7 +168,6 @@ ulong pfile_code_location_get(pfile_t *pf);
 
 /* `pragma data` extents (all targets; libpic32 uses the top as RAM end). */
 void  pfile_data_range_add(pfile_t *pf, ulong lo, ulong hi);
-ulong pfile_data_low_get(const pfile_t *pf);
 ulong pfile_data_high_get(const pfile_t *pf);
 
 void pfile_task_ct_set(pfile_t *pf, unsigned task_ct);
@@ -189,7 +188,6 @@ value_t pfile_value_temp_get_from_def(pfile_t *pf, variable_def_t def);
 result_t pfile_value_alloc(pfile_t *pf, pfile_variable_alloc_t which,
     const char *name, variable_def_t def, value_t *dst);
 value_t pfile_value_find(pfile_t *pf, pfile_log_t plog, const char *name);
-value_t pfile_string_find(pfile_t *pf, size_t sz, const char *str);
 
 /* variable manipulation */
 result_t pfile_variable_alloc(pfile_t *pf, pfile_variable_alloc_t which,
@@ -244,7 +242,6 @@ void     pfile_isr_entry_set(pfile_t *pf, label_t lbl);
 label_t  pfile_isr_entry_get(pfile_t *pf);
 boolean_t pfile_isr_entry_active(const pfile_t *pf);
 
-label_t  pfile_isr_preamble_entry_get(pfile_t *pf);
 
 typedef enum pfile_write_ {
   pfile_write_asm, /* out the the `.asm' file */
@@ -281,7 +278,6 @@ boolean_t pfile_runtime_block_test(const pfile_t *pf);
 void      pfile_flag_change(pfile_t *pf, flag_t mask, flag_t set);
 
 void      pfile_debug_sub_set(pfile_t *pf, flag_t sub);
-flag_t    pfile_debug_sub_get(const pfile_t *pf);
 boolean_t pfile_debug_sub_test(const pfile_t *pf, flag_t bit);
 
 pfile_source_t       *pfile_source_get(const pfile_t *pf);

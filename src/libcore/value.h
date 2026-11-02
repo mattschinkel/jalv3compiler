@@ -35,7 +35,6 @@ boolean_t value_is_same(const value_t val1, const value_t val2);
 
 void     value_release(value_t val);
 unsigned value_id_get(const value_t val);
-refct_t  value_ref_ct_get(const value_t val);
 value_t  value_clone(value_t src);
 
 unsigned value_bit_offset_get(const value_t var);
@@ -77,7 +76,6 @@ boolean_t        value_baseofs_const_get(const value_t val,
 float            value_const_float_get(const value_t val);
 void             value_const_float_set(value_t val, float c);
 
-ctr_t          value_assign_ct_get(const value_t var);
 void           value_assign_ct_bump(value_t var, ctr_bump_t dir);
 
 ctr_t          value_use_ct_get(const value_t var);
@@ -109,7 +107,6 @@ void           value_def_set(value_t val, variable_def_t var);
 void value_indirect_set(value_t val);
 void value_indirect_clear(value_t val);
 
-unsigned value_tag_n_get(const value_t val);
 
 pfile_proc_t *value_proc_get(const value_t var);
 label_t       value_label_get(const value_t val);
@@ -121,7 +118,6 @@ boolean_t value_is_single_bit(const value_t val);
 boolean_t value_is_multi_bit(const value_t val);
 boolean_t value_is_lookup(const value_t val);
 boolean_t value_is_temp(const value_t val);
-boolean_t value_is_assigned(const value_t val);
 boolean_t value_is_used(const value_t val);
 boolean_t value_is_universal(const value_t val);
 boolean_t value_is_string(const value_t val);
@@ -147,7 +143,6 @@ value_t value_map_find(const value_map_t *map, value_t val);
 
 value_t value_variable_remap(value_t val, const variable_map_t *map);
 
-value_t value_remap(value_t val, const value_map_t *map);
 
 /*
  * OWNERSHIP CONTRACT

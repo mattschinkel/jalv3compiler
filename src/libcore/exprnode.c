@@ -120,33 +120,6 @@ void expr_node_value_set(expr_node_t node, value_t val)
   }
 }
 
-expr_node_t expr_node_dup(const expr_node_t node)
-{
-  expr_node_t dnode;
-
-  dnode = EXPR_NODE_NONE;
-  if (node) {
-    dnode = expr_node_alloc(node->val);
-    if (dnode) {
-      if (node->children) {
-        size_t ii;
-        size_t ct;
-
-        ct = expr_node_op_array_entry_ct(node->children);
-        for (ii = 0; ii < ct; ii++) {
-          expr_node_op_t nodeop;
-
-          nodeop = *expr_node_op_array_entry_get(node->children, ii);
-          expr_node_child_append(dnode, 
-            expr_node_op_node_get(nodeop),
-            expr_node_op_op_get(nodeop));
-        }
-      }
-    }
-  }
-  return dnode;
-}
-
 expr_node_array_t *expr_node_children_get(const expr_node_t node)
 {
   return (node) ? node->children : EXPR_NODE_ARRAY_NONE;

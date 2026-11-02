@@ -413,18 +413,6 @@ void esp_float_intrinsics_create(pfile_t *pf)
   }
 }
 
-boolean_t esp_float_intrinsics_needed(pfile_t *pf)
-{
-  unsigned i;
-  UNUSED(pf);
-  for (i = 0; i < 6; i++) {
-    if (esp_fh[i].used) {
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
-}
-
 void esp_float_call(pfile_t *pf, unsigned idx)
 {
   label_t    lbl = esp_fh_lbl(pf, idx);

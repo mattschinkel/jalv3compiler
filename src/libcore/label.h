@@ -59,7 +59,6 @@ label_t     label_list_head(const lbllist_t *lst);
 unsigned    label_pc_get(label_t lbl);
 void        label_pc_set(label_t lbl, unsigned pc);
 
-void        label_remove(lbllist_t *lst, label_t lbl);
 
 label_t     label_link_get(label_t lbl);
 

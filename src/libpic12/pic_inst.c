@@ -315,30 +315,6 @@ static void pic_instr_emit_bsr_cache_reset_before_hybrid_incdec(pfile_t *pf,
   }
 }
 
-boolean_t pic_are_variable_databits_different(pfile_t *pf, value_t a, 
-    value_t b)
-{
-  boolean_t rc;
-
-  pic_opcode_t a_lo;
-  pic_opcode_t a_hi;
-  pic_opcode_t b_lo;
-  pic_opcode_t b_hi;
-
-  a_lo = pic_value_datalo_get(pf, a);
-  a_hi = pic_value_datahi_get(pf, a);
-  b_lo = pic_value_datalo_get(pf, b);
-  b_hi = pic_value_datahi_get(pf, b);
-
-  rc = ((PIC_OPCODE_NONE != a_lo) 
-      && (PIC_OPCODE_NONE != b_lo) 
-      && (a_lo != b_lo))
-    || ((PIC_OPCODE_NONE != a_hi)
-      && (PIC_OPCODE_NONE != b_hi)
-      && (a_hi != b_hi));
-  return rc;
-}
-
 /*
  * Classic PIC14: pic_instr_append_f(MOVWF) always runs append_daop (force) so
  * bank bits are set before the file write. picdelay.c already emits a 2-cycle
@@ -832,27 +808,6 @@ pic_code_t pic_instr_append_f_b(pfile_t *pf, pic_opcode_t op, value_t f,
   return code;
 }
 
-pic_code_t pic_instr_append_reg_bn(pfile_t *pf, pic_opcode_t op, 
-    const char *reg, variable_const_t bit)
-{
-  value_t    vreg;
-  pic_code_t code;
-
-  code = PIC_CODE_NONE;
-  vreg = pfile_value_find(pf, PFILE_LOG_ERR, reg);
-  if (vreg) {
-    value_t vflag;
-
-    vflag = pfile_constant_get(pf, bit, VARIABLE_DEF_NONE);
-    if (vflag) {
-      code = pic_instr_append_f_b(pf, op, vreg, 0, vflag);
-      value_release(vflag);
-    }
-    value_release(vreg);
-  }
-  return code;
-}
-
 pic_code_t pic_instr_append_reg_flag(pfile_t *pf, pic_opcode_t op, 
     const char *reg, const char *flag)
 {
@@ -1228,13 +1183,5 @@ boolean_t pic_opcode_is_branch_bit(pic_opcode_t op)
     || (PIC_OPCODE_BRANCHHI_CLR == op)
     || (PIC_OPCODE_BRANCHHI_SET == op)
     || (PIC_OPCODE_BRANCHHI_NOP == op);
-}
-
-boolean_t pic_opcode_is_data_bit(pic_opcode_t op)
-{
-  return (PIC_OPCODE_DATALO_CLR == op)
-    || (PIC_OPCODE_DATALO_SET == op)
-    || (PIC_OPCODE_DATAHI_CLR == op)
-    || (PIC_OPCODE_DATAHI_SET == op);
 }
 

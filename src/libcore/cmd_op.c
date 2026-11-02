@@ -679,17 +679,3 @@ result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one)
   return rc;
 }
 
-boolean_t cmd_op_is_assign(operator_t op, value_t val1, value_t val2)
-{
-  boolean_t rc;
-
-  if (operator_is_unary(op)) {
-    rc = val1 != 0;
-  } else if (operator_is_binary(op)) {
-    rc = (val1 != 0) && (val2 != 0);
-  } else {
-    rc = operator_is_assign(op);
-  }
-  return rc;
-}
-

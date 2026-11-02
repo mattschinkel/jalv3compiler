@@ -72,13 +72,6 @@ pic_code_t pic_code_list_tail_get(pfile_t *pf)
   return pic_code_lst.tail;
 }
 
-unsigned pic_code_list_ct_get(pfile_t *pf)
-{
-  UNUSED(pf);
-
-  return pic_code_lst.ct;
-}
-
 pic_pc_t pic_code_list_pc_next_get(pfile_t *pf)
 {
   pic_opcode_t op_pv;

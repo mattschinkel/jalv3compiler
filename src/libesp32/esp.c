@@ -98,19 +98,6 @@ esp_code_t esp_code_list_head(pfile_t *pf)
   return esp_list_head;
 }
 
-esp_code_t esp_code_list_tail(pfile_t *pf)
-{
-  UNUSED(pf);
-  return esp_list_tail;
-}
-
-void esp_code_list_set_ends(pfile_t *pf, esp_code_t head, esp_code_t tail)
-{
-  UNUSED(pf);
-  esp_list_head = head;
-  esp_list_tail = tail;
-}
-
 void esp_code_list_reset(pfile_t *pf)
 {
   UNUSED(pf);

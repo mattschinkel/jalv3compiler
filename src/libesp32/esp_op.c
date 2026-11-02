@@ -606,19 +606,6 @@ static void esp_emit_call(pfile_t *pf, unsigned idx)
   }
 }
 
-/* call / jump a late-created helper by label name (task intrinsics):
- * the body is emitted after the main code, so the literal is pended in
- * esp_op.call_pend and bound when the helper's label node appears */
-void esp_emit_helper_call(pfile_t *pf, const char *name)
-{
-  label_t lbl = esp_task_helper_label(pf, name);
-
-  esp_emit_pend_l32r(pf, ESP_REG_A0, lbl);
-  (void) esp_code_alloc(ESP_OP_CALLX0, 0, ESP_REG_A0, 0);
-  if (lbl) {
-    label_release(lbl);
-  }
-}
 
 void esp_emit_helper_jmp(pfile_t *pf, const char *name)
 {

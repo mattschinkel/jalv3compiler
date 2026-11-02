@@ -192,15 +192,6 @@ variable_def_t pfile_block_variable_def_find(pfile_block_t *blk, const char *tag
   return def;
 }
 
-result_t pfile_block_variable_add(pfile_block_t *blk,
-    variable_t var)
-{
-  variable_list_append(&blk->var_active, var);
-  blk_var_idx_add(blk, var);
-  return RESULT_OK;
-
-}
-
 result_t pfile_block_variable_alloc(pfile_block_t *blk, tag_t tag,
     variable_def_t def, variable_t master, pfile_t *pf, variable_t *dst)
 {
@@ -351,11 +342,6 @@ pfile_block_t *pfile_block_next(pfile_block_t *blk)
 variable_t pfile_block_variable_list_head(pfile_block_t *blk)
 {
   return variable_list_head(&blk->var_active);
-}
-
-variable_def_t pfile_block_variable_def_head(pfile_block_t *blk)
-{
-  return blk->var_defs;
 }
 
 label_t pfile_block_label_list_head(pfile_block_t *blk)
@@ -539,13 +525,6 @@ cmd_t  pfile_block_cmd_get(pfile_block_t *blk)
 pfile_proc_t *pfile_block_owner_get(const pfile_block_t *blk)
 {
   return (blk) ? blk->owner : PFILE_PROC_NONE;
-}
-
-void pfile_block_owner_set(pfile_block_t *blk, pfile_proc_t *proc)
-{
-  if (blk) {
-    blk->owner = proc;
-  }
 }
 
 ulong  pfile_block_no_get(const pfile_block_t *blk)

@@ -203,11 +203,6 @@ void label_list_reset(lbllist_t *lst, boolean_t report_leaks)
   }
 }
 
-void label_dump(const label_t lbl, FILE *out)
-{
-  fprintf(out, "%s", label_name_get(lbl));
-}
-
 label_t label_list_head(const lbllist_t *lst)
 {
   return lst->head;
@@ -286,37 +281,6 @@ void label_flag_set(label_t lbl,  flag_t flag)
   ptr = label_element_seek(lbl, BOOLEAN_TRUE);
   if (ptr) {
     ptr->flags |= flag;
-  }
-}
-
-void label_remove(lbllist_t *lst, label_t lbl)
-{
-  if (lbl == lst->head) {
-    lst->head = label_next_get(lbl);
-    if (!lst->head) {
-      lst->tail = 0;
-    }
-  } else {
-    label_t el, pv;
-
-    for (pv = 0, el = lst->head; 
-         el && el != lbl; 
-         pv = el, el = label_next_get(el))
-      ;
-    if (el) {
-      label_t next;
-
-      next = label_next_get(el);
-      if (pv) {
-        label_link_set(pv, next);
-      } else {
-        lst->head = next;
-      }
-      if (el == lst->tail) {
-        lst->tail = next;
-      }
-      label_release(lbl);
-    }
   }
 }
 

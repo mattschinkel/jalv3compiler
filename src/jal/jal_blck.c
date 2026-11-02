@@ -24,7 +24,6 @@
 #include "jal_ctrl.h"
 #include "jal_proc.h"
 #include "jal_expr.h"
-#include "jal_prnt.h"
 #include "jal_asm.h"
 #include "jal_incl.h"
 #include "jal_vdef.h"

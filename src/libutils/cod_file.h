@@ -311,7 +311,6 @@ typedef struct COD_directory_ {
 } COD_directory_t;
 
 
-COD_directory_t *COD_directory_read(const char *fname);
 /*
  * take all data and create the file
  */

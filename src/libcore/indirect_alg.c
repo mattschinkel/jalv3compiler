@@ -49,11 +49,6 @@ void ialg_inbox_set(unsigned long base, unsigned limit)
   ialg_inbox_lim  = limit;
 }
 
-unsigned ialg_inbox_limit(void)
-{
-  return ialg_inbox_lim;
-}
-
 variable_def_t ialg_call_fn_def(value_t proc_val)
 {
   variable_def_t        def;

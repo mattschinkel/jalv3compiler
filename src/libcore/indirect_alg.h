@@ -48,7 +48,6 @@ unsigned ialg_max_signature(pfile_t *pf, const ialg_ops_t *ops);
 /* place the inbox (back end assigns the address; base is relative to
  * the target's RAM base, like every other variable base) */
 void     ialg_inbox_set(unsigned long base, unsigned limit);
-unsigned ialg_inbox_limit(void);
 
 /* fn-def unwrap of a call target (deref the pointer wrapper the front
  * end puts around fn defs; FUNCTION defs pass through) */

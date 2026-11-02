@@ -659,22 +659,6 @@ static const struct {
   {MIPS_LABEL_FLOAT_TOINT,    mips_float_toint_create}
 };
 
-boolean_t mips_float_intrinsics_needed(pfile_t *pf)
-{
-  size_t  ii;
-  label_t lbl;
-
-  for (ii = 0; ii < sizeof(mips_float_intrinsics) / sizeof(mips_float_intrinsics[0]);
-       ii++) {
-    lbl = pfile_label_find(pf, PFILE_LOG_NONE, mips_float_intrinsics[ii].tag);
-    if (lbl) {
-      label_release(lbl);
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
-}
-
 void mips_float_intrinsics_create(pfile_t *pf)
 {
   size_t ii;

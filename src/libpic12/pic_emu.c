@@ -815,49 +815,6 @@ variable_const_t pic_emu_value_read(const pic_emu_state_t state,
   return cn;
 }
 
-void pic_emu_value_write(pic_emu_state_t state,
-                   const value_t val, variable_const_t cn,
-                   const pfile_pos_t *fpos)
-{
-  if (VARIABLE_NONE == value_variable_get(val)) {
-    pic_emu_w_set(state, cn);
-  } else {
-    variable_sz_t ii;
-
-    if (value_is_bit(val)) {
-      if (value_is_boolean(val)) {
-        cn = (cn) ? 1 : 0;
-      } else {
-        cn &= ((1UL << value_sz_get(val)) - 1);
-      }
-      cn <<= value_bit_offset_get(val);
-    }
-    for (ii = 0; ii < value_sz_get(val); ii++, cn >>= 8) {
-      pic_emu_data_mem_write(state, fpos, value_base_get(val) + ii, 
-          (uchar) cn);
-    }
-  }
-}
-
-/* determine if a volatile variable was accessed more than once */
-void pic_emu_volatile_check(const pic_emu_state_t state, 
-                   const value_t val)
-{
-  if (value_is_volatile(val)) {
-    variable_base_t base;
-    variable_sz_t   ii;
-
-    base = value_base_get(val);
-    for (ii = 0; ii < value_sz_get(val); ii++, base++) {
-      uchar ch;
-      
-      assert(base < PIC_DATA_MEM_SIZE);
-      ch = state->imem[base];
-      ch = (ch & 0x0f) + (ch >> 4);
-      assert(ch < 2);
-    }
-  }
-}
 
 uchar pic_emu_w_get(const pic_emu_state_t state)
 {
@@ -1542,10 +1499,5 @@ void pic_emu(pfile_t *pf, pic_emu_state_t state)
   if (!pfile_flag_test(pf, PFILE_FLAG_MISC_QUIET)) {
     printf("%u instructions executed\n", pic_emu_instr_ct);
   }
-}
-
-pic_target_cpu_t pic_emu_state_target_get(const pic_emu_state_t state)
-{
-  return (state) ? state->target : PIC_TARGET_CPU_NONE;
 }
 

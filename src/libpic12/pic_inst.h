@@ -62,7 +62,6 @@ pic_optype_t pic_optype_get(pic_opcode_t op);
 const char *pic_opdst_str(pic_opdst_t type);
 
 boolean_t pic_opcode_is_branch_bit(pic_opcode_t op);
-boolean_t pic_opcode_is_data_bit(pic_opcode_t op);
 
 void pic_instr_append_daop(pfile_t *pf, value_t f, pic_opcode_t op,
     boolean_t force, size_t file_ofs);

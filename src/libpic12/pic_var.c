@@ -3502,10 +3502,3 @@ void pic_blist_free(pfile_t *pf)
   }
 }
 
-pic_bank_info_t *pic_bank_info_get(pfile_t *pf)
-{
-  UNUSED(pf);
-
-  return pic_var.data_bank_list;
-}
-

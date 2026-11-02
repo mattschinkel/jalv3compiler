@@ -16,22 +16,9 @@
 
 #define COUNT(x) (sizeof(x)/sizeof((x)[0]))
 
-static uchar uchar_read(FILE *src)
-{
-  return (uchar) fgetc(src);
-}
-
 static void uchar_write(FILE *dst, uchar ch)
 {
   fputc(ch, dst);
-}
-
-static ushort ushort_read(FILE *src)
-{
-  ushort n;
-
-  n =  uchar_read(src);
-  return n | (uchar_read(src) << 8U);
 }
 
 static void ushort_write(FILE *dst, ushort n)
@@ -49,15 +36,6 @@ static void ulong_write(FILE *dst, ulong n)
   uchar_write(dst, (uchar) (n >> 24));
 }
 
-static void string_read(FILE *src, size_t len, uchar *dst)
-{
-  size_t ii;
-
-  for (ii = 0; ii < len; ii++) {
-    dst[ii] = uchar_read(src);
-  }
-}
-
 static void string_write(FILE *dst, size_t len, const uchar *str)
 {
   if (str) {
@@ -69,62 +47,7 @@ static void string_write(FILE *dst, size_t len, const uchar *str)
   }
 }
 
-static uchar uchar_parse(const uchar **buf)
-{
-  uchar ch;
-
-  ch = **buf;
-  (*buf)++;
-  return ch;
-}
-
-static ushort ushort_parse(const uchar **buf)
-{
-  ushort n;
-
-  n = uchar_parse(buf);
-  return n | (uchar_parse(buf) << 8U);
-}
-
-static ulong ulong_parse(const uchar **buf)
-{
-  ulong n;
-
-  n  = uchar_parse(buf);
-  n |= uchar_parse(buf) << 8UL;
-  n |= uchar_parse(buf) << 16UL;
-  n |= uchar_parse(buf) << 24UL;
-  return n;
-}
-
-static void string_parse(const uchar **buf, size_t sz, uchar *dst)
-{
-  while (sz--) {
-    *dst = uchar_parse(buf);
-    dst++;
-  }
-}
-
-static void COD_block_seek(FILE *src, unsigned block)
-{
-  fseek(src, (long) (COD_BLOCK_SIZE * block), SEEK_SET);
-}
-
-static void COD_directory_block_seek(const COD_directory_t *dir, unsigned block)
-{
-  COD_block_seek(dir->io, block + dir->block_start);
-}
-
 #define COD_CODE_MAP_ENTRY_SIZE (4)
-
-static void COD_code_map_entry_read(COD_directory_t *dir, void *ptr)
-{
-  COD_code_map_entry_t *ety;
-
-  ety = ptr;
-  ety->start = ushort_read(dir->io);
-  ety->end   = ushort_read(dir->io);
-}
 
 static void COD_code_map_entry_write(const COD_directory_t *dir,
     const void *ptr)
@@ -138,55 +61,6 @@ static void COD_code_map_entry_write(const COD_directory_t *dir,
   } else {
     ushort_write(dir->io, 0);
     ushort_write(dir->io, 0);
-  }
-}
-
-typedef array_t *(*table_alloc_t)(size_t ct);
-typedef void    *(*table_entry_append_t)(array_t *ary, void *);
-typedef void     (*entry_read_t)(COD_directory_t *dir, void *ety);
-
-static void COD_table_read(
-    COD_directory_t        *dir,        /* clearly                      */
-    size_t                  tbl_offset, /* offset into dir of the table */
-    size_t                  map_start_offset,
-    size_t                  map_end_offset,
-    ushort                  entry_sz,
-    table_alloc_t           table_alloc,
-    table_entry_append_t    table_entry_append,
-    entry_read_t            entry_read)
-{
-  uchar *dir_base;
-  ushort map_start;
-  ushort map_end;
-
-  dir_base  = (uchar *) dir;
-  map_start = *(ushort *) (dir_base + map_start_offset);
-  map_end   = *(ushort *) (dir_base + map_end_offset);
-
-  if (map_start) {
-    array_t *tbl;
-    ushort   block_ct;
-    ushort   ii;
-    ushort   entries_per_block;
-
-    block_ct = map_end + 1 - map_start;
-    entries_per_block = COD_BLOCK_SIZE / entry_sz;
-
-    COD_directory_block_seek(dir, map_start);
-    tbl = table_alloc(block_ct * entries_per_block);
-    for (ii = 0; ii < block_ct; ii++) {
-      ushort   jj;
-
-      for (jj = 0; jj < entries_per_block; jj++) {
-        entry_read(dir, table_entry_append(tbl, 0));
-      }
-      for (jj = 0; 
-           jj < COD_BLOCK_SIZE - (entries_per_block * entry_sz); 
-           jj++) {
-        (void) uchar_read(dir->io);
-      }
-    }
-    *(array_t **) (dir_base + tbl_offset) = tbl;
   }
 }
 
@@ -227,24 +101,7 @@ void COD_table_write(
   }
 }
 
-static size_t COD_symbol_entry_parse(const uchar *buf, COD_symbol_entry_t *ety)
-{
-  string_parse(&buf, sizeof(ety->label), ety->label);
-  ety->type = uchar_parse(&buf);
-  ety->value = ushort_parse(&buf);
-  return 16;
-}
-
 #define COD_SYMBOL_ENTRY_SIZE (16)
-static void COD_symbol_entry_read(COD_directory_t *dir, void *ptr)
-{
-  COD_symbol_entry_t *ety;
-
-  ety = ptr;
-  string_read(dir->io, sizeof(ety->label), ety->label);
-  ety->type  = uchar_read(dir->io);
-  ety->value = ushort_read(dir->io);
-}
 
 static void COD_symbol_entry_write(const COD_directory_t *dir, const void *ptr)
 {
@@ -265,14 +122,6 @@ static void COD_symbol_entry_write(const COD_directory_t *dir, const void *ptr)
 
 #define COD_NAME_ENTRY_SIZE (64)
 
-static void COD_name_entry_read(COD_directory_t *dir, void *ptr)
-{
-  COD_name_entry_t *ety;
-
-  ety = ptr;
-  string_read(dir->io, sizeof(ety->label), ety->label);
-}
-
 static void COD_name_entry_write(const COD_directory_t *dir, const void *ptr)
 {
   const COD_name_entry_t *ety;
@@ -286,16 +135,6 @@ static void COD_name_entry_write(const COD_directory_t *dir, const void *ptr)
 }
 
 #define COD_LINE_SYMBOL_ENTRY_SIZE (6)
-static void COD_line_symbol_entry_read(COD_directory_t *dir, void *ptr)
-{
-  COD_line_symbol_entry_t *ety;
-
-  ety = ptr;
-  ety->file = uchar_read(dir->io);
-  ety->smod = uchar_read(dir->io);
-  ety->line = ushort_read(dir->io);
-  ety->sloc = ushort_read(dir->io);
-}
 
 static void COD_line_symbol_entry_write(const COD_directory_t *dir,
     const void *ptr)
@@ -318,53 +157,12 @@ static void COD_line_symbol_entry_write(const COD_directory_t *dir,
 
 #define COD_LOCAL_VARS_ENTRY_SIZE (16)
 
-static void COD_local_vars_entry_parse(const uchar *buf,
-  COD_local_vars_entry_t *ety)
-{
-  buf += 8; /* skip the `\007__LOCAL' */
-  ety->header.start = ulong_parse(&buf);
-  ety->header.end   = ulong_parse(&buf);
-}
-
 static void COD_local_vars_entry_write(const COD_directory_t *dir, 
     const COD_local_vars_entry_t *ety)
 {
   string_write(dir->io, 8, (uchar *) "\007__LOCAL");
   ulong_write(dir->io, ety->header.start);
   ulong_write(dir->io, ety->header.end);
-}
-
-static void COD_local_vars_table_read(COD_directory_t *dir)
-{
-  if (dir->local_vars_start) {
-    COD_local_vars_entry_t *local_ety;
-    size_t                  ct;
-
-    COD_directory_block_seek(dir, dir->local_vars_start);
-    ct  = COD_BLOCK_SIZE * (dir->local_vars_start + 1 - dir->local_vars_end) 
-          / 16;
-    dir->local_vars_table = COD_local_vars_table_alloc(ct);
-    local_ety = 0;
-    while (ct--) {
-      uchar buffer[16]; /* big enough for one entry */
-
-      string_read(dir->io, sizeof(buffer), buffer);
-      if ((7 == buffer[0]) && (0 == memcmp(buffer + 1, "__LOCAL", 7))) {
-        /* create a new symbol entry */
-        local_ety          = COD_local_vars_table_entry_append(
-            dir->local_vars_table, 0);
-        local_ety->symbols = COD_symbol_table_alloc(16);
-        COD_local_vars_entry_parse(buffer, local_ety);
-      } else if (buffer[0] && local_ety) {
-        /* A symbol entry only makes sense after a __LOCAL header; a
-         * truncated/foreign COD file used to dereference NULL here. */
-        COD_symbol_entry_t     *symbol_ety;
-
-        symbol_ety = COD_symbol_table_entry_append(local_ety->symbols, 0);
-        (void) COD_symbol_entry_parse(buffer, symbol_ety);
-      }
-    }
-  }
 }
 
 void COD_local_vars_table_write(const COD_directory_t *dir)
@@ -412,62 +210,6 @@ static ushort COD_local_vars_table_need_calc(const COD_directory_t *dir)
     n += 1 + COD_symbol_table_entry_ct(ety->symbols);
   }
   return (n + 31) / 32;
-}
-
-static size_t COD_long_symbol_entry_read(COD_directory_t *dir,
-  COD_long_symbol_entry_t *ety)
-{
-  size_t sz;
-
-  ety->name[0] = uchar_read(dir->io);
-  ety->stype0  = 0;
-  ety->stype1  = 0;
-  ety->svalue  = 0;
-  sz = 0;
-  if (ety->name[0]) {
-    size_t ii;
-
-    for (ii = 1; ii <=ety->name[0]; ii++) {
-      ety->name[ii] = uchar_read(dir->io);
-    }
-    ety->stype0 = uchar_read(dir->io);
-    ety->stype1 = uchar_read(dir->io);
-    /*ety->svalue = ulong_read(dir->io);*/
-    ety->svalue  = uchar_read(dir->io) << 24UL;
-    ety->svalue |= uchar_read(dir->io) << 16UL;
-    ety->svalue |= uchar_read(dir->io) <<  8UL;
-    ety->svalue |= uchar_read(dir->io);
-    sz = 6U + 1U + ety->name[0];
-  }
-  return sz;
-}
-
-static void COD_long_symbol_table_read(COD_directory_t *dir)
-{
-  if (dir->long_symbol_start) {
-    size_t sz_total;
-    size_t pos;
-
-    COD_directory_block_seek(dir, dir->long_symbol_start);
-    dir->long_symbol_table = COD_long_symbol_table_alloc(64);
-    sz_total = COD_BLOCK_SIZE 
-               * (dir->long_symbol_end + 1 
-                  - dir->long_symbol_start);
-    pos      = 0;
-    while (pos < sz_total) {
-      COD_long_symbol_entry_t ety;
-      size_t                  sz;
-
-      sz  = COD_long_symbol_entry_read(dir, &ety);
-      if (0 == sz) {
-        pos++;
-      } else {
-        (void) COD_long_symbol_table_entry_append(dir->long_symbol_table, 
-            &ety);
-        pos += sz;
-      }
-    }
-  }
 }
 
 static unsigned COD_long_symbol_table_write_0(FILE *dst,
@@ -545,121 +287,30 @@ static const struct {
   size_t               map_start_offset;
   size_t               map_end_offset;
   ushort               entry_sz;
-  table_alloc_t        table_alloc;
-  table_entry_append_t table_entry_append;
-  entry_read_t         entry_read;
-  /* write specific functions */
   entry_write_t        entry_write;
 } COD_table_endpoints[] = {
   { offsetof(COD_directory_t, symbol_table),
     offsetof(COD_directory_t, symbol_table_start),
     offsetof(COD_directory_t, symbol_table_end),
     COD_SYMBOL_ENTRY_SIZE,
-    COD_symbol_table_alloc,
-    (table_entry_append_t) COD_symbol_table_entry_append,
-    COD_symbol_entry_read,
     COD_symbol_entry_write
   },
   { offsetof(COD_directory_t, name_table),
     offsetof(COD_directory_t, name_table_start),
     offsetof(COD_directory_t, name_table_end),
     COD_NAME_ENTRY_SIZE,
-    COD_name_table_alloc,
-    (table_entry_append_t) COD_name_table_entry_append,
-    COD_name_entry_read,
     COD_name_entry_write},
   { offsetof(COD_directory_t, xref_table),
     offsetof(COD_directory_t, list_table_start),
     offsetof(COD_directory_t, list_table_end),
     COD_LINE_SYMBOL_ENTRY_SIZE,
-    COD_line_symbol_table_alloc,
-    (table_entry_append_t) COD_line_symbol_table_entry_append,
-    COD_line_symbol_entry_read,
     COD_line_symbol_entry_write},
   { offsetof(COD_directory_t, code_map_table),
     offsetof(COD_directory_t, code_map_start),
     offsetof(COD_directory_t, code_map_end),
     COD_CODE_MAP_ENTRY_SIZE,
-    COD_code_map_table_alloc,
-    (table_entry_append_t) COD_code_map_table_entry_append,
-    COD_code_map_entry_read,
     COD_code_map_entry_write},
 };
-
-COD_directory_t *COD_directory_read(const char *fname)
-{
-  size_t           ii;
-  COD_directory_t *dir;
-  FILE            *src;
-
-  dir = malloc(sizeof(*dir));
-  src = fopen(fname, "rb");
-
-  dir->io               = src;
-  dir->block_start       = 0;
-  for (ii = 0; ii < 128; ii++) {
-    dir->index[ii] = ushort_read(src);
-  }
-  string_read(src, sizeof(dir->source), dir->source);
-  string_read(src, sizeof(dir->date), dir->date);
-  dir->time                    = ushort_read(src);
-  string_read(src, sizeof(dir->version), dir->version);
-  string_read(src, sizeof(dir->compiler), dir->compiler);
-  string_read(src, sizeof(dir->notice), dir->notice);
-  dir->symbol_table_start      = ushort_read(src);
-  dir->symbol_table_end        = ushort_read(src);
-  dir->name_table_start        = ushort_read(src);
-  dir->name_table_end          = ushort_read(src);
-  dir->list_table_start        = ushort_read(src);
-  dir->list_table_end          = ushort_read(src);
-  dir->addr_size               = uchar_read(src);
-  dir->high_addr               = ushort_read(src);
-  dir->next_dir                = ushort_read(src);
-  dir->code_map_start          = ushort_read(src);
-  dir->code_map_end            = ushort_read(src);
-  dir->local_vars_start        = ushort_read(src);
-  dir->local_vars_end          = ushort_read(src);
-  dir->COD_type                = ushort_read(src);
-  string_read(src, sizeof(dir->processor), dir->processor);
-  dir->long_symbol_start       = ushort_read(src);
-  dir->long_symbol_end         = ushort_read(src);
-  dir->message_start           = ushort_read(src);
-  dir->message_end             = ushort_read(src);
-  {
-    int xx;
-
-    xx = ushort_read(src);
-    xx = ushort_read(src);
-    xx = ftell(src);
-    xx = xx +1;
-  }
-
-  for (ii = 0; ii < 128; ii++) {
-    if (dir->index[ii]) {
-      dir->code[ii] = malloc(sizeof(*dir->code[ii]));
-      COD_directory_block_seek(dir, dir->index[ii]);
-         if (fread(dir->code[ii], COD_BLOCK_SIZE, 1, dir->io) > 0) {
-            continue;
-        }
-    } else {
-      dir->code[ii] = 0;
-    }
-  }
-  for (ii = 0; ii < COUNT(COD_table_endpoints); ii++) {
-    COD_table_read(dir,
-        COD_table_endpoints[ii].tbl_offset,
-        COD_table_endpoints[ii].map_start_offset,
-        COD_table_endpoints[ii].map_end_offset,
-        COD_table_endpoints[ii].entry_sz,
-        COD_table_endpoints[ii].table_alloc,
-        COD_table_endpoints[ii].table_entry_append,
-        COD_table_endpoints[ii].entry_read);
-  }
-  COD_local_vars_table_read(dir);
-  COD_long_symbol_table_read(dir);
-  fclose(src);
-  return dir;
-}
 
 void COD_directory_free(COD_directory_t *dir)
 {

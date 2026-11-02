@@ -150,7 +150,6 @@ esp_code_t esp_code_label_alloc(void);
 void       esp_code_list_reset(pfile_t *pf);
 void       esp_code_layout(pfile_t *pf);
 esp_code_t esp_code_list_head(pfile_t *pf);
-esp_code_t esp_code_list_tail(pfile_t *pf);
 void       esp_code_list_set_ends(pfile_t *pf, esp_code_t head,
                esp_code_t tail);
 /* entry = first instruction after the pool (image entry point) */
@@ -168,7 +167,6 @@ void       esp_emit_l32r(unsigned reg, esp_code_t lit);
 void       esp_pend_label_lit(pfile_t *pf, label_t lbl, esp_code_t lit);
 void       esp_emit_label_addr(pfile_t *pf, unsigned reg, label_t lbl);
 label_t    esp_task_helper_label(pfile_t *pf, const char *name);
-void       esp_emit_helper_call(pfile_t *pf, const char *name);
 void       esp_emit_helper_jmp(pfile_t *pf, const char *name);
 void       esp_op_helper_bind(label_t lbl, esp_code_t node);
 boolean_t  esp_tasks_used(pfile_t *pf);
@@ -210,7 +208,6 @@ unsigned long  esp_const_pool_base(void);
 
 /* soft-float (esp_float.c) */
 void       esp_float_intrinsics_create(pfile_t *pf);
-boolean_t  esp_float_intrinsics_needed(pfile_t *pf);
 void       esp_float_call(pfile_t *pf, unsigned idx);
 void       esp_float_reset(void);
 

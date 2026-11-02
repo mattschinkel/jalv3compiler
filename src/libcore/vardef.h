@@ -85,7 +85,6 @@ result_t              variable_def_pointer_fold_scalar_pointee_array(
 
 variable_def_member_t variable_def_member_alloc(const char *tag, 
   const variable_def_t def, variable_ct_t ct);
-void                  variable_def_member_free(variable_def_member_t mbr);
 
 variable_def_member_t variable_def_member_link_get(
   const variable_def_member_t mbr);
@@ -107,7 +106,6 @@ boolean_t variable_def_member_is_same(const variable_def_member_t a,
   const variable_def_member_t b);
 
 char variable_def_type_to_ch(variable_def_type_t type);
-const char *variable_def_type_to_str(variable_def_type_t type);
 
 boolean_t variable_def_type_is_number(variable_def_type_t type);
 #endif /* vardef_h__ */

@@ -110,7 +110,6 @@ cmd_t           cmd_prev_get(const cmd_t cmd);
 void            cmd_prev_set(cmd_t cmd, cmd_t prev);
 
 cmd_type_t      cmd_type_get(const cmd_t cmd);
-void            cmd_type_set(cmd_t cmd, cmd_type_t type);
 
 unsigned        cmd_opt_get(const cmd_t cmd);
 void            cmd_opt_set(cmd_t cmd, unsigned opt);

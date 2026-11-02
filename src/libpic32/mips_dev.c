@@ -118,23 +118,6 @@ unsigned long mips_data_max(pfile_t *pf)
   return size - reserve;
 }
 
-/* Stack reserve (bytes) that mips_data_max leaves below ram_top. */
-unsigned long mips_stack_reserve(pfile_t *pf)
-{
-  unsigned long top  = mips_ram_top(pf);
-  unsigned long size = (top > MIPS_RAM_BASE) ? (top - MIPS_RAM_BASE) : 0;
-  unsigned long reserve;
-
-  if (size >= 0x20000UL) {
-    reserve = 0x10000UL;
-  } else {
-    reserve = 0x2000UL;
-  }
-  if (size <= reserve) {
-    reserve = size / 4UL;
-  }
-  return reserve;
-}
 
 /* pragma code size (program flash bytes); 0 when the device file has
  * no `pragma code`.  The generated PIC32 files always carry it. */

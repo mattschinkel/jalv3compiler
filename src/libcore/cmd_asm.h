@@ -30,16 +30,13 @@ cmd_t cmd_asm_alloc(
     value_t n, label_t lbl, flag_t flags, size_t data_sz, uchar *data);
 
 cmd_asm_op_t  cmd_asm_op_get(const cmd_t cmd);
-void          cmd_asm_op_set(cmd_t cmd, cmd_asm_op_t op);
 
 value_t      cmd_asm_val_get(const cmd_t cmd);
 void         cmd_asm_val_set(cmd_t cmd, value_t val);
 
 size_t       cmd_asm_valofs_get(const cmd_t cmd);
-void         cmd_asm_valofs_set(cmd_t cmd, size_t val);
 
 cmd_asm_opdst_t cmd_asm_opdst_get(const cmd_t cmd);
-void            cmd_asm_opdst_set(cmd_t cmd, cmd_asm_opdst_t dst);
 
 value_t      cmd_asm_n_get(const cmd_t cmd);
 void         cmd_asm_n_set(cmd_t cmd, value_t n);

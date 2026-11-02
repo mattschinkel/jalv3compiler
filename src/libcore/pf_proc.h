@@ -53,7 +53,6 @@ variable_def_t pfile_proc_return_def_get(const pfile_proc_t *proc);
 
 size_t         pfile_proc_param_ct_get(const pfile_proc_t *proc);
 value_t        pfile_proc_param_get(const pfile_proc_t *proc, size_t n);
-void           pfile_proc_param_set(pfile_proc_t *proc, size_t n, value_t val);
 
 result_t       pfile_proc_define(pfile_proc_t *proc, variable_def_t def,
     pfile_t *pf);
@@ -75,7 +74,6 @@ result_t       pfile_proc_variable_alloc(pfile_proc_t *proc,
     variable_t *dst);
 variable_t     pfile_proc_variable_find(const pfile_proc_t *proc, 
     const char *name, pfile_block_t **blk);
-variable_t     pfile_proc_variable_get_first(const pfile_proc_t *proc);
 
 value_t pfile_proc_value_temp_get(pfile_proc_t *proc, pfile_t *pf,
   variable_def_type_t type, variable_sz_t sz);
@@ -102,7 +100,6 @@ pfile_proc_t *pfile_proc_next(const pfile_proc_t *proc);
 
 /* the procedure's shared `_temp` variable (VARIABLE_NONE until the first
  * non-boolean temp is allocated) */
-variable_t    pfile_proc_temp_get(const pfile_proc_t *proc);
 
 boolean_t     pfile_proc_flag_test(const pfile_proc_t *proc, flag_t flag);
 void          pfile_proc_flag_set(pfile_proc_t *proc, flag_t flag);

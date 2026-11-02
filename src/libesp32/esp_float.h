@@ -12,7 +12,6 @@
 #include "../libcore/pfile.h"
 
 void       esp_float_intrinsics_create(pfile_t *pf);
-boolean_t  esp_float_intrinsics_needed(pfile_t *pf);
 void       esp_float_call(pfile_t *pf, unsigned idx);
 void       esp_float_reset(void);
 

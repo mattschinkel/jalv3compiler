@@ -378,19 +378,6 @@ boolean_t mips_marker_present(pfile_t *pf, const char *name)
   return BOOLEAN_FALSE;
 }
 
-void mips_marker_ensure(pfile_t *pf, const char *name)
-{
-  label_t lbl;
-
-  lbl = pfile_label_find(pf, PFILE_LOG_NONE, name);
-  if (!lbl) {
-    lbl = pfile_label_alloc(pf, name);
-  }
-  if (lbl) {
-    label_release(lbl);
-  }
-}
-
 boolean_t mips_micromips_enabled(pfile_t *pf)
 {
   return mips_marker_present(pf, MIPS_MICROMIPS_LABEL);

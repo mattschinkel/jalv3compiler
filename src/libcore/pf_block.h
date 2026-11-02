@@ -53,7 +53,6 @@ result_t pfile_block_label_alloc(pfile_block_t *blk, tag_t tag,
 label_t pfile_block_label_find(pfile_block_t *blk, const char *name);
 
 variable_t     pfile_block_variable_list_head(pfile_block_t *blk);
-variable_def_t pfile_block_variable_def_head(pfile_block_t *blk);
 label_t        pfile_block_label_list_head(pfile_block_t *blk);
 
 void pfile_block_variable_fixup(pfile_block_t *blk,
@@ -66,7 +65,6 @@ void   pfile_block_cmd_set(pfile_block_t *blk, cmd_t cmd);
 cmd_t  pfile_block_cmd_get(pfile_block_t *blk);
 
 pfile_proc_t *pfile_block_owner_get(const pfile_block_t *blk);
-void          pfile_block_owner_set(pfile_block_t *blk, pfile_proc_t *proc);
 
 ulong  pfile_block_no_get(const pfile_block_t *blk);
 

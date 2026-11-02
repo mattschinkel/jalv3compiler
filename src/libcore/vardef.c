@@ -301,13 +301,6 @@ variable_def_member_t variable_def_member_alloc(const char *tag,
   return mbr;
 }
 
-void variable_def_member_free(variable_def_member_t mbr)
-{
-  if (mbr) {
-    FREE(mbr);
-  }
-}
-
 
 variable_def_member_t variable_def_member_link_get(
   const variable_def_member_t mbr)
@@ -390,28 +383,6 @@ variable_ct_t variable_def_member_sz_get(const variable_def_member_t mbr)
   return (mbr) ? variable_def_sz_get(mbr->def) : 0;
 }
 
-
-const char *variable_def_type_to_str(variable_def_type_t type)
-{
-  const char *str;
-
-  str = "none";
-  switch (type) {
-    case VARIABLE_DEF_TYPE_NONE:                        break;
-    case VARIABLE_DEF_TYPE_BOOLEAN:  str = "boolean";   break;
-    case VARIABLE_DEF_TYPE_INTEGER:  str = "integer";   break;
-    case VARIABLE_DEF_TYPE_FLOAT:    str = "float";     break;
-    case VARIABLE_DEF_TYPE_POINTER:  str = "pointer";   break;
-    case VARIABLE_DEF_TYPE_REFERENCE:str = "reference"; break;
-    case VARIABLE_DEF_TYPE_FUNCTION: str = "function";  break;
-    case VARIABLE_DEF_TYPE_STRUCTURE:str = "structure"; break;
-    case VARIABLE_DEF_TYPE_UNION:    str = "union";     break;
-    case VARIABLE_DEF_TYPE_ARRAY:    str = "array";     break;
-    case VARIABLE_DEF_TYPE_LABEL:    str = "label";     break;
-    case VARIABLE_DEF_TYPE_VALUE:    str = "value";     break;
-  }
-  return str;
-}
 
 
 variable_def_t variable_def_member_def_get(

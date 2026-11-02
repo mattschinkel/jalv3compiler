@@ -181,19 +181,6 @@ cmd_asm_op_t cmd_asm_op_get(const cmd_t cmd)
       : (cmd_asm_semantics ? cmd_asm_semantics->op_none : (cmd_asm_op_t) 0);
 }
 
-void cmd_asm_op_set(cmd_t cmd, cmd_asm_op_t op)
-{
-  assert(CMD_TYPE_ASM == cmd_type_get(cmd));
-  if (CMD_TYPE_ASM == cmd_type_get(cmd)) {
-    struct cmd_ *ptr;
-
-    ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
-    if (ptr) {
-      ptr->u.op_asm.op = op;
-    }
-  }
-}
-
 value_t cmd_asm_val_get(const cmd_t cmd)
 {
   const struct cmd_ *ptr;
@@ -237,22 +224,6 @@ size_t cmd_asm_valofs_get(const cmd_t cmd)
   return (ptr) ? ptr->u.op_asm.valofs : 0;
 }
 
-void cmd_asm_valofs_set(cmd_t cmd, size_t valofs)
-{
-
-  assert(CMD_TYPE_ASM == cmd_type_get(cmd));
-  if (CMD_TYPE_ASM == cmd_type_get(cmd)) {
-    struct cmd_ *ptr;
-
-    ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
-    if (ptr) {
-      /* if a varaible is used in an assembly statement, mark it both
-       * assigned *and* used */
-      ptr->u.op_asm.valofs = valofs;
-    }
-  }
-}
-
 cmd_asm_opdst_t  cmd_asm_opdst_get(const cmd_t cmd)
 {
   const struct cmd_ *ptr;
@@ -264,19 +235,6 @@ cmd_asm_opdst_t  cmd_asm_opdst_get(const cmd_t cmd)
   return (ptr) ? ptr->u.op_asm.opdst
       : (cmd_asm_semantics ? cmd_asm_semantics->opdst_none
          : (cmd_asm_opdst_t) 0);
-}
-
-void cmd_asm_opdst_set(cmd_t cmd, cmd_asm_opdst_t dst)
-{
-  assert(CMD_TYPE_ASM == cmd_type_get(cmd));
-  if (CMD_TYPE_ASM == cmd_type_get(cmd)) {
-    struct cmd_ *ptr;
-
-    ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
-    if (ptr) {
-      ptr->u.op_asm.opdst = dst;
-    }
-  }
 }
 
 value_t cmd_asm_n_get(const cmd_t cmd)

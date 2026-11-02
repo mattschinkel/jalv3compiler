@@ -29,14 +29,12 @@ void        pf_token_set(pfile_t *pf, const char *token);
 
 result_t pf_token_to_str(pfile_t *pf, pfile_log_t plog, value_t *dst);
 result_t pf_token_to_constant(pfile_t *pf, pfile_log_t plog, value_t *dst);
-result_t pf_token_to_value(pfile_t *pf, pfile_log_t plog, value_t *dst);
 result_t pf_token_to_label(pfile_t *pf, pfile_log_t plog, boolean_t alloc,
     label_t *dst);
 
 boolean_t pf_token_is(pfile_t *pf, pf_token_get_t which, pfile_log_t plog,
   const char *str);
 boolean_t pf_token_is_eof(pfile_t *pf);
-boolean_t pf_token_is_eos(pfile_t *pf);
 
 typedef boolean_t (*pf_token_parse_allow_cb_t)(int ch);
 

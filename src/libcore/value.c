@@ -268,14 +268,6 @@ void value_lock(value_t val)
   }
 }
 
-refct_t value_ref_ct_get(const value_t val)
-{
-  struct value_ *ptr;
-
-  ptr = value_element_seek(val, BOOLEAN_FALSE);
-  return (ptr) ? ptr->ref_ct : 0;
-}
-
 unsigned value_id_get(const value_t val)
 {
   struct value_ *ptr;
@@ -376,26 +368,6 @@ boolean_t value_vflag_test(const value_t val, flag_t flags)
 
   ptr = value_element_seek(val, BOOLEAN_FALSE);
   return (ptr) ? variable_flag_test(ptr->var, flags) : 0;
-}
-
-void value_vflag_set(value_t val, flag_t flags)
-{
-  struct value_ *ptr;
-
-  ptr = value_element_seek(val, BOOLEAN_TRUE);
-  if (ptr) {
-    variable_flag_set(ptr->var, flags);
-  }
-}
-
-void value_vflag_clr(value_t val, flag_t flags)
-{
-  struct value_ *ptr;
-
-  ptr = value_element_seek(val, BOOLEAN_TRUE);
-  if (ptr) {
-    variable_flag_clr(ptr->var, flags);
-  }
 }
 
 flag_t value_flag_get_all(value_t val)
@@ -754,11 +726,6 @@ variable_t value_variable_get(const value_t val)
   return (ptr) ? ptr->var : 0;
 }
 
-ctr_t value_assign_ct_get(const value_t val)
-{
-  return variable_assign_ct_get(value_variable_get(val));
-}
-
 void value_assign_ct_bump(value_t val, ctr_bump_t dir)
 {
   variable_assign_ct_bump(value_variable_get(val), dir);
@@ -862,14 +829,6 @@ boolean_t value_def_is_same(const value_t val1, const value_t val2)
   return variable_def_is_same(var1, var2);
 }
 
-boolean_t value_is_record(const value_t val)
-{
-  variable_def_t def;
-
-  def = value_def_get(val);
-  return (def && variable_def_member_get(def));
-}
-
 boolean_t value_is_function(const value_t val)
 {
   return VARIABLE_DEF_TYPE_FUNCTION == value_type_get(val);
@@ -909,11 +868,6 @@ boolean_t value_is_volatile(const value_t val)
 boolean_t value_is_auto(const value_t val)
 {
   return variable_is_auto(value_variable_get(val));
-}
-
-unsigned value_tag_n_get(const value_t val)
-{
-  return variable_tag_n_get(value_variable_get(val));
 }
 
 unsigned value_bit_offset_get(const value_t val)
@@ -1078,11 +1032,6 @@ void value_flag_clr(value_t val, flag_t flags)
   }
 }
 
-boolean_t value_is_assigned(const value_t val)
-{
-  return variable_is_assigned(value_variable_get(val));
-}
-
 boolean_t value_is_used(const value_t val)
 {
   return variable_is_used(value_variable_get(val));
@@ -1158,14 +1107,5 @@ value_t value_variable_remap(value_t val, const variable_map_t *map)
     }
   }
   return tmp;
-}
-
-value_t value_remap(value_t val, const value_map_t *map)
-{
-  UNUSED(val);
-  UNUSED(map);
-
-  assert(0);
-  return VALUE_NONE;
 }
 

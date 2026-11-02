@@ -502,11 +502,6 @@ boolean_t variable_dflag_test(const variable_t var, flag_t flags)
   return variable_def_flag_test(variable_def_get(var), flags);
 }
 
-flag_t variable_dflags_get_all(const variable_t var)
-{
-  return variable_def_flags_get_all(variable_def_get(var));
-}
-
 void variable_flag_set(variable_t var, flag_t flags)
 {
   struct variable_ *ptr;
@@ -848,14 +843,6 @@ void variable_dump(const variable_t var, FILE *out)
   fputc('}', out);
 }
 
-refct_t variable_refct_get(const variable_t var)
-{
-  struct variable_ *ptr;
-
-  ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  return (ptr) ? ptr->ref_ct : 0;
-}
-
 variable_t variable_link_get(const variable_t var)
 {
   struct variable_ *ptr;
@@ -1076,11 +1063,6 @@ void variable_list_reset(varlist_t *lst)
   }
   lst->tail = 0;
   lst->ct = 0;
-}
-
-size_t variable_list_ct_get(const varlist_t *lst)
-{
-  return (lst) ? lst->ct : 0;
 }
 
 variable_t variable_list_head(varlist_t *lst)
@@ -1476,14 +1458,6 @@ void variable_pointer_slot_kind_var_set(const variable_t var,
   }
 }
 
-variable_t variable_pointer_slot_getcall_var_get(const variable_t var)
-{
-  struct variable_ *ptr;
-
-  ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  return (ptr) ? ptr->ptr_slot_getcall_var : VARIABLE_NONE;
-}
-
 void variable_pointer_slot_getcall_var_set(const variable_t var,
     variable_t helper)
 {
@@ -1493,14 +1467,6 @@ void variable_pointer_slot_getcall_var_set(const variable_t var,
   if (ptr) {
     ptr->ptr_slot_getcall_var = helper;
   }
-}
-
-variable_t variable_pointer_slot_putcall_var_get(const variable_t var)
-{
-  struct variable_ *ptr;
-
-  ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  return (ptr) ? ptr->ptr_slot_putcall_var : VARIABLE_NONE;
 }
 
 void variable_pointer_slot_putcall_var_set(const variable_t var,
@@ -1659,16 +1625,6 @@ void variable_label_set(variable_t var, label_t lbl)
     label_usage_bump(lbl, CTR_BUMP_INCR);
     ptr->lbl = lbl;
   }
-}
-
-boolean_t variable_is_float(const variable_t var)
-{
-  return VARIABLE_DEF_TYPE_FLOAT == variable_type_get(var);
-}
-
-boolean_t variable_is_function(const variable_t var)
-{
-  return VARIABLE_DEF_TYPE_FUNCTION == variable_type_get(var);
 }
 
 boolean_t variable_is_bit(const variable_t var)
@@ -1927,19 +1883,6 @@ static void variable_used_by_remove(variable_t var, variable_t uses)
   }
 }
 
-variable_t variable_used_by_get(variable_t var, size_t ix)
-{
-  struct variable_ *ptr;
-  variable_ref_t   *ref;
-
-  ptr = variable_element_seek(var, BOOLEAN_TRUE);
-  ref = VARIABLE_REF_NONE;
-  if (ptr) {
-    ref = array_get(ptr->used_by, ix);
-  }
-  return (ref) ? ref->var : VARIABLE_NONE;
-}
-
 void variable_uses_add(variable_t var, variable_t uses)
 {
   if ((VARIABLE_NONE != var) && (VARIABLE_NONE != uses)) {
@@ -1964,32 +1907,6 @@ void variable_uses_remove(variable_t var, variable_t uses)
       variable_used_by_remove(uses, var);
     }
   }
-}
-
-variable_t variable_uses_get(variable_t var, size_t ix)
-{
-  struct variable_ *ptr;
-  variable_ref_t   *ref;
-
-  ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  ref = VARIABLE_REF_NONE;
-  if (ptr) {
-    ref = array_get(ptr->uses, ix);
-  }
-  return (ref) ? ref->var : VARIABLE_NONE;
-}
-
-variable_t variable_interfer_get(variable_t var, size_t ix)
-{
-  struct variable_ *ptr;
-  variable_ref_t   *ref;
-
-  ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  ref = VARIABLE_REF_NONE;
-  if (ptr) {
-    ref = array_get(ptr->interference, ix);
-  }
-  return (ref) ? ref->var : VARIABLE_NONE;
 }
 
 int variable_unique_cmp(void *arg, const void *A, const void *B)
@@ -2033,14 +1950,6 @@ void variable_interference_add(variable_t var1, variable_t var2)
         ARRAY_ADD_FLAG_NONE, variable_unique_cmp, 0);
     }
   }
-}
-
-variable_array_t *variable_interference_get(variable_t var)
-{
-  struct variable_ *ptr;
-
-  ptr = variable_element_seek(var, BOOLEAN_FALSE);
-  return (ptr) ? ptr->interference : VARIABLE_ARRAY_NONE;
 }
 
 unsigned variable_id_get(variable_t var)

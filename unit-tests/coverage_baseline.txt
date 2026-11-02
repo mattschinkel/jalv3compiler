@@ -4,10 +4,10 @@
 # mode <all|strideN>  -- the input set this number describes;
 #   a run with a different mode is reported but not compared
 mode all
-overall 81.48 50123
-module  jal        80.91 11148
-module  libcore    80.33 10800
-module  libpic12   80.12 16799
-module  libpic32   86.62 6728
-module  libesp32   88.65 3673
-module  libutils   61.85 975
+overall 82.74 49359
+module  jal        80.96 11141
+module  libcore    82.74 10486
+module  libpic12   80.72 16674
+module  libpic32   86.96 6702
+module  libesp32   89.13 3653
+module  libutils   85.78 703

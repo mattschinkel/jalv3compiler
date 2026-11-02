@@ -241,11 +241,6 @@ variable_t  pfile_proc_variable_find(const pfile_proc_t *proc,
   return var;
 }
 
-variable_t pfile_proc_variable_get_first(const pfile_proc_t *proc)
-{
-  return pfile_block_variable_get_first(proc->block_root);
-}
-
 result_t pfile_proc_label_alloc(pfile_proc_t *proc, tag_t tag, 
   label_t *dst)
 {
@@ -883,11 +878,6 @@ variable_t pfile_proc_frame_get(const pfile_proc_t *proc)
   return proc->frame;
 }
 
-variable_t pfile_proc_temp_get(const pfile_proc_t *proc)
-{
-  return proc->temp;
-}
-
 void pfile_proc_frame_set(pfile_proc_t *proc, variable_base_t base, 
   pfile_t *pf)
 {
@@ -955,15 +945,6 @@ value_t pfile_proc_param_get(const pfile_proc_t *proc, size_t n)
   return (proc && (n < proc->param_ct) && proc->params)
     ? proc->params[n]
     : VALUE_NONE;
-}
-
-void pfile_proc_param_set(pfile_proc_t *proc, size_t n, value_t val)
-{
-  if (proc && (n < proc->param_ct) && proc->params) {
-    value_lock(val);
-    value_release(proc->params[n]);
-    proc->params[n] = val;
-  }
 }
 
 

@@ -43,7 +43,6 @@ void                  expr_node_flag_set(expr_node_t node,
 value_t               expr_node_value_get(const expr_node_t node);
 void                  expr_node_value_set(expr_node_t node, value_t val);
 
-expr_node_t           expr_node_dup(const expr_node_t node);
 
 expr_node_op_array_t *expr_node_children_get(const expr_node_t node);
 void                  expr_node_child_append(expr_node_t node, 

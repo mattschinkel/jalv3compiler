@@ -109,7 +109,6 @@ void     pic_cmd_dump(pfile_t *pf, const cmd_t cmd, boolean_t first);
 void     pic_code_cleanup(pfile_t *pf);
 void     pic_code_emu(pfile_t *pf);
 
-boolean_t pic_bitstate_changed(pic_bitstate_t old, pic_bitstate_t new);
 #define pic_bitstate_fixup(dst, src) \
   if (PIC_BITSTATE_UNKNOWN == dst) {  \
     dst = src;                       \

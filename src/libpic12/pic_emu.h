@@ -42,6 +42,5 @@ void             pic_emu(pfile_t *pf, pic_emu_state_t state);
 pic_code_t       pic_emu_instr(pfile_t *pf,
                     pic_emu_state_t state, const pic_code_t code);
 
-pic_target_cpu_t pic_emu_state_target_get(const pic_emu_state_t state);
 #endif /* pic_emu_h__ */
 

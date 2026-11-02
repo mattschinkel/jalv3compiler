@@ -201,16 +201,6 @@ cmd_type_t cmd_type_get(const cmd_t cmd)
   return (ptr) ? ptr->type : CMD_TYPE_STATEMENT_END;
 }
 
-void       cmd_type_set(cmd_t cmd, cmd_type_t type)
-{
-  struct cmd_ *ptr;
-
-  ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
-  if (ptr) {
-    ptr->type = type;
-  }
-}
-
 unsigned cmd_opt_get(const cmd_t cmd)
 {
   struct cmd_ *ptr;

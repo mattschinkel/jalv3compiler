@@ -27,7 +27,6 @@ void              cmd_opval2_set(cmd_t cmd, value_t val2);
 
 result_t cmd_op_reduction(cmd_t cmd, value_t value_zero, value_t value_one);
 
-boolean_t cmd_op_is_assign(operator_t op, value_t val1, value_t val2);
 
 #endif /* cmd_op_h__ */
 
