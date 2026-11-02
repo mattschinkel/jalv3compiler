@@ -938,6 +938,21 @@ def test_all_samples(
             filename = os.path.basename(jal_file)
             base_name = filename.replace('.jal', '')
             try:
+                # A failed compile must not inherit the previous run's
+                # artifacts. The shadow sample directory is reused across
+                # runs, so a .hex/.asm/.cod left by an older successful
+                # compile would be copied out as if THIS run had produced
+                # it -- which is how a sample that now refuses for RAM
+                # ("the data area is full") kept a HEX entry in the
+                # committed manifest until CI's fresh checkout saw it.
+                for _ext in ("hex", "asm", "cod"):
+                    _stale = os.path.join(
+                        os.path.dirname(jal_file), base_name + "." + _ext)
+                    try:
+                        os.remove(_stale)
+                    except OSError:
+                        pass
+
                 # Run compiler
                 result = subprocess.run(
                     [compiler_path, "-s", lib_path, os.path.abspath(jal_file)],
