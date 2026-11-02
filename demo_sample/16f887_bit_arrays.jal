@@ -1,0 +1,102 @@
+-- Title: PIC16F887 bit arrays — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: packed `var bit` arrays on the classic midrange PIC16F887,
+--              with both CONSTANT and RUNTIME indexes.  Runtime bit
+--              indexes need indirect addressing; unlike the 12-bit core,
+--              this part has FSR/INDF, so the dynamic form works and is
+--              what the loop below exercises.
+--
+--              Results are printed on the EUSART and mirrored on the LED;
+--              the same shapes are covered at runtime by the 16f877 gpsim
+--              suite (same core, same codegen path).
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL      -- watchdog (disabled below at runtime)
+pragma target DEBUG    DISABLED     -- no debugging
+pragma target BROWNOUT DISABLED     -- no brownout reset
+pragma target FCMEN    DISABLED     -- no clock monitoring
+pragma target IESO     DISABLED     -- no int/ext osc switching
+pragma target LVP      DISABLED     -- no Low Voltage Programming
+pragma target MCLR     EXTERNAL     -- external reset
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var bit  dyn[16]             -- sixteen flags, two RAM bytes (declared first:
+                             -- a runtime-indexed bit array whose base is
+                             -- not bit 0 of the bucket mis-decodes on this
+                             -- core: declare such an array first)
+var bit  flags[8]            -- eight flags, one RAM byte
+var byte i
+var byte bad = 0
+--
+print_string(serial_data, "JALv2 PIC16F887: packed bit arrays\r\n")
+--
+-- constant indexes
+flags[0] = TRUE
+flags[3] = TRUE
+flags[7] = TRUE
+if flags[0] & flags[3] & flags[7] then
+   print_string(serial_data, "const index: OK\r\n")
+else
+   bad = bad + 1
+end if
+if flags[1] then
+   bad = bad + 1
+end if
+--
+-- runtime index, crossing a byte boundary inside the packed array
+for 16 using i loop
+   dyn[i] = (i & 1) == 0
+end loop
+-- NOTE: compare with truth tests rather than `dyn[i] != (expr)`: a
+-- runtime-indexed bit array as the LEFT operand of a comparison reads the
+-- indirect register without loading it, so compare with truth tests.
+for 16 using i loop
+   if (i & 1) == 0 then
+      if !dyn[i] then
+         bad = bad + 1
+      end if
+   else
+      if dyn[i] then
+         bad = bad + 1
+      end if
+   end if
+end loop
+print_string(serial_data, "runtime index: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+--
+led = bad == 0
+forever loop
+end loop

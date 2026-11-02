@@ -1,0 +1,60 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core bit array + procedures
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Packed `var bit` arrays with CONSTANT indexes plus procedure/function
+--    calls on the 12-bit core.  Runtime bit indexes are out of scope: they
+--    need indirect addressing, which a 12-bit part does not have (the same
+--    limitation that also makes strings unavailable: the compiler reports
+--    `strings are not supported on the 12-bit core`).
+--
+--    Kept separate from `12f508_gpsim_arith.jal` because 25 bytes of RAM
+--    cannot hold the mul/div state overlay AND the bitbucket AND the call
+--    temporaries at once.
+--
+--    No `include regression`: its pinned GPRs (0x77/0x78) do not exist on
+--    this part, hence `checkpoint_verify: off`.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_p12_bits 1
+-- expect byte v_p12_proc 42
+-- expect byte v_p12_opt 13
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var volatile byte p12_bits = 0
+var volatile byte p12_proc = 0
+var volatile byte p12_opt = 0
+
+var bit flags[8]
+
+procedure add_two(byte in x, byte in y) is
+   p12_proc = x + y
+end procedure
+
+function bump(byte in x, optional byte in by default 3) return byte is
+   return x + by
+end function
+
+-- packed bit array, constant indexes only
+flags[0] = TRUE
+flags[3] = TRUE
+if flags[0] & flags[3] then
+   p12_bits = 1
+end if
+if flags[2] then
+   p12_bits = 0
+end if
+
+add_two(20, 22)              -- 42
+p12_opt = bump(10)           -- default 3 -> 13
+
+forever loop
+end loop

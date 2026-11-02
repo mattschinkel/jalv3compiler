@@ -1,0 +1,58 @@
+-- Title: PIC12F508 bit arrays — 12-bit core feature tour (2 of 3)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: packed `var bit` arrays on the 12-bit core PIC12F508.
+--              Only CONSTANT indexes are exercised: a runtime index needs
+--              indirect addressing (FSR/INDF), which this core does not
+--              have -- the compiler's normal indirect path reports the
+--              resolver error rather than emitting it.  The array is one
+--              byte of the packed bit bucket, so an eight-bit array costs a
+--              single RAM byte on a part that has 25.
+--
+--              The LED shows the result of the membership test, and the
+--              same logic is pinned at runtime by
+--              sims/gpsim/12f508_gpsim_bits_proc.jal.
+--
+
+include 12f508                      -- target PICmicro
+pragma target clock 4_000_000       -- oscillator frequency
+pragma target OSC   INTOSC_NOCLKOUT -- internal oscillator
+pragma target WDT   DISABLED        -- watchdog off
+pragma target MCLR  EXTERNAL        -- external reset
+--
+enable_digital_io()                 -- make all pins digital I/O
+--
+alias led is pin_A0                 -- the LED
+pin_A0_direction = OUTPUT
+--
+var bit flags[8]                    -- eight flags: one RAM byte
+var bit ok                          -- result of the check
+--
+-- initialise a sparse pattern with constant indexes
+flags[0] = TRUE
+flags[3] = TRUE
+flags[6] = TRUE
+--
+-- logic on the packed bits (no runtime index anywhere)
+ok = flags[0] & flags[3]
+if flags[6] & !flags[1] then
+   ok = ok & TRUE
+end if
+--
+-- show the result: LED on when the pattern is what we programmed
+led = ok
+--
+forever loop
+   if ok then
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(100_000)
+   else
+      led = OFF
+   end if
+end loop

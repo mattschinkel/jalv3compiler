@@ -1,0 +1,95 @@
+-- Title: PIC16F887 large array — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: a native RAM array that spans all four RAM banks on the
+--              classic midrange PIC16F887 (256 bytes of the 368 available).
+--              Element access with a runtime index goes through the
+--              compiler's bank/chunk machinery -- the case that the pointer
+--              and array witnesses cover, on a part where the array cannot
+--              live in one bank.
+--
+--              Results are printed on the EUSART and mirrored on the LED.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var byte  arr[256]          -- 256 bytes: spans all four 96-byte banks
+var word  idx
+var word  sum
+var byte  bad = 0
+--
+print_string(serial_data, "JALv2 PIC16F887: 256-byte native array\r\n")
+--
+-- fill: element value = index (truncated to a byte)
+for 256 using idx loop
+   arr[idx] = byte(idx)
+end loop
+--
+-- read back through the same runtime index and checksum it
+sum = 0
+for 256 using idx loop
+   sum = sum + arr[idx]
+end loop
+-- 0 + 1 + ... + 255 = 32640
+print_string(serial_data, "checksum = ")
+print_word_dec(serial_data, sum)
+if sum == 32640 then
+   print_string(serial_data, "  OK\r\n")
+else
+   print_string(serial_data, "  WRONG (want 32640)\r\n")
+   bad = bad + 1
+end if
+--
+-- spot checks at both ends of the array (the bank boundary is at 0x60/0xE0)
+if arr[0] != 0 then
+   bad = bad + 1
+end if
+if arr[255] != 255 then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "large array checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop

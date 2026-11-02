@@ -1,0 +1,46 @@
+-- Title: PIC16F1825 blink — enhanced midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: blink demo for the enhanced-midrange PIC16F1825 (32 MHz
+--              INTOSC+PLL).  The rest of the 16f1825_* tours are the
+--              feature samples for this core; this one is the LED-only
+--              baseline that matches the other cores' blink samples.
+--
+
+include 16f1825                     -- target PICmicro
+--
+-- This program uses the internal oscillator at 8 MHz through the
+-- 4x PLL: 32 MHz (the PLL is software-enabled below).
+pragma target clock 32_000_000      -- oscillator frequency
+--
+pragma target OSC      INTOSC_NOCLKOUT           -- internal oscillator
+pragma target PLLEN    DISABLED                  -- PLL software controlled
+pragma target CLKOUTEN DISABLED                  -- no clock output
+pragma target WDT      DISABLED                  -- watchdog
+pragma target DEBUG    DISABLED                  -- no debugging
+pragma target BROWNOUT DISABLED                  -- no brownout reset
+pragma target FCMEN    DISABLED                  -- no clock monitoring
+pragma target IESO     DISABLED                  -- no int/ext osc switching
+pragma target LVP      ENABLED                   -- low voltage programming
+pragma target MCLR     EXTERNAL                  -- external reset
+--
+OSCCON_SCS = 0                      -- clock selected by fuse OSC
+OSCCON_IRCF = 0b1110                -- internal oscillator to 8 MHz
+OSCCON_SPLLEN = TRUE                -- enable PLL, multiply by 4 -> 32 MHz
+--
+enable_digital_io()                 -- make all pins digital I/O
+_usec_delay(100_000)                -- wait for power to stabilize
+--
+alias led is pin_A0                 -- the board LED
+pin_A0_direction = OUTPUT
+--
+forever loop
+   led = ON
+   _usec_delay(200_000)             -- 200 ms
+   led = OFF
+   _usec_delay(200_000)
+end loop

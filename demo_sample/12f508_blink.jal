@@ -1,0 +1,43 @@
+-- Title: PIC12F508 blink — 12-bit core feature tour (1 of 3)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: blink demo for the 12-bit core PIC12F508 (4 MHz INTOSC).
+--              This is the smallest part the compiler supports: 511 words
+--              of flash, 25 bytes of RAM, 2 hardware stack levels, no
+--              interrupts and no UART.  The board LED on A0 is driven
+--              directly (GPIO is a single port on this part).
+--
+--              The 12-bit core feature tours are deliberately split:
+--                . this blink sample
+--                . 12f508_bit_arrays  -- packed bit arrays, constant indexes
+--                . 12f508_wide_math   -- byte/word/dword arithmetic
+--              Features that CANNOT exist on this core (no FSR/INDF, no
+--              PCLATH, no interrupt) are not offered here: strings report a
+--              compile error, and runtime-indexed arrays/pointers need
+--              indirect addressing.  (Strings, floats and runtime-indexed
+--              arrays report a compile error on this core.)
+--
+
+include 12f508                      -- target PICmicro
+--
+-- This program uses the internal oscillator at 4 MHz.
+pragma target clock 4_000_000       -- oscillator frequency
+pragma target OSC   INTOSC_NOCLKOUT -- internal oscillator
+pragma target WDT   DISABLED        -- watchdog off
+pragma target MCLR  EXTERNAL        -- external reset
+--
+enable_digital_io()                 -- make all pins digital I/O
+--
+alias led is pin_A0                 -- the LED (2 mA LED + 2.2K resistor)
+pin_A0_direction = OUTPUT
+--
+forever loop
+   led = ON
+   _usec_delay(200_000)             -- 200 ms
+   led = OFF
+   _usec_delay(200_000)
+end loop

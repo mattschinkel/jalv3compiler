@@ -1,0 +1,113 @@
+-- Title: PIC16F887 wide math — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: wide integer arithmetic on the classic midrange PIC16F887:
+--              byte, word, dword and qword add / subtract / multiply /
+--              shift, using byte overlays to read the wide results out.
+--              The core is 8-bit; every wide operation is a compiler
+--              sequence over the 14-bit instruction set.
+--
+--              Results are printed on the EUSART and mirrored on the LED.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+const qword K = 0x9E3779B97F4A7C15    -- 64-bit golden-ratio constant
+var qword a
+var qword q
+var dword d
+var word  ww
+var byte  kk
+var byte  bad = 0
+
+procedure print_qhex(byte in v[]) is
+   for 8 using kk loop
+      print_byte_hex(serial_data, v[7 - kk])
+   end loop
+end procedure
+
+var byte aview[8] at a
+var byte qview[8] at q
+--
+print_string(serial_data, "JALv2 PIC16F887: wide integers\r\n")
+--
+-- 64-bit add / subtract
+a = K
+q = a + 0x1111111111111111
+print_string(serial_data, "a + 0x1111111111111111 = 0x")
+print_qhex(qview)
+if q == 0xAF488ACA905B8D26 then
+   print_string(serial_data, "  OK\r\n")
+else
+   bad = bad + 1
+end if
+q = q - a
+if q != 0x1111111111111111 then
+   bad = bad + 1
+end if
+--
+-- 64-bit shift
+q = a << 8
+if byte(q) != 0 then
+   bad = bad + 1
+end if
+--
+-- 32-bit multiply: 1000 * 1000 = 1,000,000
+d = 1000
+d = d * 1000
+if d != 1000000 then
+   bad = bad + 1
+end if
+--
+-- 16-bit modulo: 1000 % 7 = 6
+ww = 1000
+ww = ww % 7
+if ww != 6 then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "wide integer checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop

@@ -1,0 +1,103 @@
+-- Title: PIC16F887 pointers — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: typed data pointers on the classic midrange PIC16F887:
+--              scalar pointer, pointer to array, pointer to a const array
+--              and a pointer passed to a procedure.  All of it rides on
+--              FSR/INDF indirect addressing, which is why it exists on the
+--              14-bit core and not on the 12-bit one.
+--
+--              Results are printed on the EUSART and mirrored on the LED;
+--              the same pointer shapes are covered by the 16f877 gpsim
+--              suite (same core, same codegen path).
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var byte  victim = 0x11
+var byte  arr[4] = {10, 20, 30, 40}
+const byte table[4] = {0xAA, 0xBB, 0xCC, 0xDD}
+var pointer x as var byte            -- pointer to a byte
+var pointer parr as var byte[4]      -- pointer to a byte[4]
+var pointer tarr as const byte[4]    -- pointer to a const byte[4]
+var byte  bad = 0
+--
+print_string(serial_data, "JALv2 PIC16F887: pointers\r\n")
+--
+-- scalar pointer: read and write through it
+x is victim
+if x != 0x11 then
+   bad = bad + 1
+end if
+x = 0x5A
+if victim != 0x5A then
+   bad = bad + 1
+end if
+--
+-- pointer to an array
+parr is arr
+if parr[2] != 30 then
+   bad = bad + 1
+end if
+parr[2] = 99
+if arr[2] != 99 then
+   bad = bad + 1
+end if
+--
+-- pointer to a const table
+tarr is table
+if tarr[3] != 0xDD then
+   bad = bad + 1
+end if
+--
+-- write through the scalar pointer again, then read it back via the variable
+x = 0x7E
+if victim != 0x7E then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "pointer checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop

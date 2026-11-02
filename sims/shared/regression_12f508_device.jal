@@ -1,0 +1,31 @@
+-- Title: PIC12F508 gpsim regression — device defaults (12-bit core)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    First 12-bit-core gpsim bundle: **`include 12f508`** + the internal
+--    oscillator at 4 MHz and the watchdog off, so a long `steps:` run is not
+--    reset by the WDT.
+--
+--    The 12-bit core has no FSR/INDF and no PCLATH, so there is no indirect
+--    addressing and no string runtime: these tests use only direct
+--    file-register access (bit arrays with CONSTANT indexes, byte/word/dword
+--    arithmetic, procedures, delays).  Strings are refused at compile time
+--    (`strings are not supported on the 12-bit core`).
+--
+-- Notes:
+--    **Not** `include regression`: `sims/shared/regression.jal` pins
+--    `_gpsim_regression_flags` at 0x77 and `_check_step` at 0x78, which do
+--    not exist on a 25-byte-RAM part.  Tests using this bundle carry
+--    `checkpoint_verify: off` and their own `expect` lines.
+--    gpsim processor **`p12f508`**.
+--
+--    Include only on **PIC12F508** tests under **`sims/gpsim/12f508_gpsim_*.jal`**.
+
+include 12f508
+
+pragma target clock 4_000_000
+pragma target OSC   INTOSC_NOCLKOUT
+pragma target WDT   DISABLED
+pragma target MCLR  EXTERNAL
+
+enable_digital_io()

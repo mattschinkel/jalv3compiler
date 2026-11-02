@@ -324,6 +324,12 @@ variable_def_t jal_vdef_get(pfile_t *pf, flag_t flags)
   ptr = pf_token_get(pf, PF_TOKEN_CURRENT);
 
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "string")) {
+    /* every string TOKEN declaration passes here -- `var string',
+     * `string[N]', `pointer as string', string formals -- so this is the
+     * declaration-side half of the 12-bit gate (jal_string.c covers the
+     * runtime).  The def is still built: the parse must stay in step, and
+     * the parse-time error alone keeps codegen from running. */
+    jal_string_core_gate(pf);
     vdef = variable_def_alloc("string", VARIABLE_DEF_TYPE_INTEGER,
         VARIABLE_DEF_FLAG_STRING, 1);
   } else {
@@ -2050,7 +2056,7 @@ void jal_parse_var_common(pfile_t *pf,
            * not a heap handle: open byte-count STRING array, sized from
            * the literal by the initializer's array-init path (the sized
            * `const string[N]` form already worked this way) */
-          inf.vdef = jal_string_const_def_alloc();
+          inf.vdef = jal_string_const_def_alloc(pf);
           if (!inf.vdef) {
             if (!pfile_errct_get(pf)) {
               pfile_log_syserr(pf, ENOMEM);

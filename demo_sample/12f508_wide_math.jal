@@ -1,0 +1,83 @@
+-- Title: PIC12F508 wide math — 12-bit core feature tour (3 of 3)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: byte / word / dword arithmetic on the 12-bit core
+--              PIC12F508 -- the same operator set the PIC18 tour uses, on
+--              a part with 25 bytes of RAM and 511 words of flash.  The
+--              multiply/divide helpers need the 5-byte `_pic_state`
+--              overlay, so the tour keeps only a handful of live values and
+--              states its expected results in comments; the LED blinks the
+--              pass/fail bit.
+--
+--              Pinned at runtime by sims/gpsim/12f508_gpsim_arith.jal.
+--
+
+include 12f508                      -- target PICmicro
+pragma target clock 4_000_000       -- oscillator frequency
+pragma target OSC   INTOSC_NOCLKOUT -- internal oscillator
+pragma target WDT   DISABLED        -- watchdog off
+pragma target MCLR  EXTERNAL        -- external reset
+--
+enable_digital_io()                 -- make all pins digital I/O
+--
+alias led is pin_A0                 -- the LED
+pin_A0_direction = OUTPUT
+--
+var byte  b = 37
+var byte  c = 5
+var word  ww = 1000
+var dword d
+var bit   ok
+--
+-- byte arithmetic: 37 * 5 = 185, / 5 = 37, % 5 = 2, 4 << 1 = 8
+ok = TRUE
+b = b * c
+if b != 185 then
+   ok = FALSE
+end if
+b = b / c
+if b != 37 then
+   ok = FALSE
+end if
+b = b % c
+if b != 2 then
+   ok = FALSE
+end if
+b = 4
+b = b << 1
+if b != 8 then
+   ok = FALSE
+end if
+--
+-- word arithmetic: 1000 * 3 = 3000, + 5536 = 8536 = 0x2158
+ww = ww * 3
+ww = ww + 5536
+if byte(ww) != 0x58 then
+   ok = FALSE
+end if
+if byte(ww >> 8) != 0x21 then
+   ok = FALSE
+end if
+--
+-- dword arithmetic: 100000 + 23456 = 123456
+d = 100000
+d = d + 23456
+if d != 123456 then
+   ok = FALSE
+end if
+--
+-- the LED blinks when every check held
+forever loop
+   if ok then
+      led = ON
+      _usec_delay(100_000)
+      led = OFF
+      _usec_delay(100_000)
+   else
+      led = OFF
+   end if
+end loop

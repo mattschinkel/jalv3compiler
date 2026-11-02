@@ -118,6 +118,11 @@ SUITES: dict[str, RegressionSuite] = {
         description="PIC12F1840 compiler regression (sims/gpsim/12f1840_compiler_regression_*.jal)",
         globs=("sims/gpsim/12f1840_compiler_regression_*.jal",),
     ),
+    "12f508": RegressionSuite(
+        id="12f508",
+        description="PIC12F508 12-bit-core gpsim smoke (sims/gpsim/12f508_gpsim_*.jal)",
+        globs=("sims/gpsim/12f508_gpsim_*.jal",),
+    ),
     "16f1825": RegressionSuite(
         id="16f1825",
         description="PIC16F1825 compiler regression (sims/gpsim/16f1825_compiler_regression_*.jal)",
@@ -169,7 +174,7 @@ SUITES: dict[str, RegressionSuite] = {
 }
 
 # Order for --suite all / default (not alphabetical: 4620 first, then other PIC18, PIC14 enhanced, classic 877).
-SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "16f877", "print_shadow", "string_cmp_bank_merge")
+SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "12f508", "16f877", "print_shadow", "string_cmp_bank_merge")
 
 
 def registered_suite_ids_ordered() -> list[str]:

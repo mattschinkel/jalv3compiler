@@ -13,10 +13,15 @@
 #include "../libcore/pfile.h"
 
 boolean_t jal_string_is_dynamic(value_t val);
+/* Report (once per compile) that this target core cannot host strings.
+ * Every string entry point calls it; on a 12-bit core the diagnostic keeps
+ * codegen from running, so the user sees one error instead of a page of
+ * resolver failures. */
+void      jal_string_core_gate(pfile_t *pf);
 boolean_t jal_string_pointer_dynamic_dst_p(value_t val);
 boolean_t jal_string_runtime_ensure(pfile_t *pf);
 variable_def_t jal_string_dynamic_def_alloc(pfile_t *pf);
-variable_def_t jal_string_const_def_alloc(void);
+variable_def_t jal_string_const_def_alloc(pfile_t *pf);
 value_t jal_string_length_value_get(pfile_t *pf, value_t val);
 value_t jal_string_arg_byte_array(pfile_t *pf, value_t src);
 boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src);

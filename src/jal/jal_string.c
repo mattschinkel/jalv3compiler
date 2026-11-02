@@ -19,6 +19,7 @@
 #include "../libcore/variable.h"
 #include "../libcore/value.h"
 #include "../libcore/cmd.h"
+#include "../libpic12/pic.h"
 #include "jal_build.h"
 #include "jal_expr.h"
 #include "jal_string.h"
@@ -44,6 +45,12 @@ typedef struct jal_string_state_ {
   boolean_t           heap_size_reported; /* _string_heap_size complaint
                                            * already issued (see
                                            * jal_string_runtime_ensure) */
+  boolean_t           core_checked;   /* `target_cpu' examined for this
+                                       * compile */
+  boolean_t           core_is_12bit;  /* target is a 12-bit core */
+  boolean_t           core_reported;  /* strings-not-supported diagnostic
+                                       * already issued (see
+                                       * jal_string_core_gate) */
   unsigned            dec_no_shared;
 } jal_string_state_t;
 
@@ -54,6 +61,45 @@ void jal_string_state_reset(void)
 {
   free(jal_string_state.heap_use);
   memset(&jal_string_state, 0, sizeof(jal_string_state));
+}
+
+/*
+ * NAME
+ *   jal_string_core_gate
+ *
+ * DESCRIPTION
+ *   A 12-bit core (PIC10F, PIC12F5xx, PIC16F5x) has neither FSR/INDF nor
+ *   a PCLATH-paged const table, so the string runtime (heap handles, heap
+ *   subscripts, const-table reads) cannot be built for it.  Every string
+ *   entry point reports this once per compile and lets the parse run on:
+ *   the parse-time error keeps codegen from starting, which is what used
+ *   to bury the user under a page of "_irp not found" / "_pclath not
+ *   found" resolver diagnostics.
+ *
+ *   `target_cpu' is the device file's own pragma constant (same lookup
+ *   the back end uses, so a custom device file without it is left alone).
+ *
+ * PARAMETERS
+ *   pf : pfile (the target must already have been included)
+ */
+void jal_string_core_gate(pfile_t *pf)
+{
+  if (!jal_string_state.core_checked) {
+    value_t cpu;
+
+    jal_string_state.core_checked = BOOLEAN_TRUE;
+    cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+    if (VALUE_NONE != cpu) {
+      jal_string_state.core_is_12bit =
+        (PIC_TARGET_CPU_12BIT == (pic_target_cpu_t) value_const_get(cpu));
+      value_release(cpu);
+    }
+  }
+  if (jal_string_state.core_is_12bit && !jal_string_state.core_reported) {
+    jal_string_state.core_reported = BOOLEAN_TRUE;
+    pfile_log(pf, PFILE_LOG_ERR,
+        "strings are not supported on the 12-bit core");
+  }
 }
 
 
@@ -371,11 +417,12 @@ static variable_sz_t jal_string_header_size_get(pfile_t *pf)
  * like `const byte x[] = "..."`, and every const-string consumer
  * (COUNT fold, [i], ==, chains, const-table marshalling) treats it like
  * the already-working sized form `const string[N]`. */
-variable_def_t jal_string_const_def_alloc(void)
+variable_def_t jal_string_const_def_alloc(pfile_t *pf)
 {
   variable_def_t byte_def;
   variable_def_t arr_def;
 
+  jal_string_core_gate(pf);
   byte_def = jal_string_byte_def_alloc(VARIABLE_DEF_FLAG_NONE);
   arr_def = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
       VARIABLE_DEF_FLAG_STRING, 0);
@@ -396,6 +443,7 @@ variable_def_t jal_string_dynamic_def_alloc(pfile_t *pf)
   variable_def_t arr_def;
   variable_sz_t index_sz;
 
+  jal_string_core_gate(pf);
   index_sz = jal_string_current_index_size_get(pf);
   if (!index_sz) {
     return VARIABLE_DEF_NONE;
@@ -915,6 +963,7 @@ static boolean_t jal_string_fixed_runtime_ensure(pfile_t *pf)
 {
   variable_t err;
 
+  jal_string_core_gate(pf);
   err = pfile_variable_find(pf, PFILE_LOG_NONE, JAL_STRING_ERROR_NAME, 0);
   if (err) {
     variable_release(err);
@@ -944,10 +993,10 @@ value_t jal_string_concat_chain_emit(pfile_t *pf, value_t first);
 
 value_t jal_string_length_value_get(pfile_t *pf, value_t val)
 {
-  UNUSED(pf);
   if (!jal_string_is_dynamic(val)) {
     return VALUE_NONE;
   }
+  jal_string_core_gate(pf);
   return jal_string_handle_index_get(pf, val, JAL_STRING_FIELD_LENGTH);
 }
 
@@ -1142,6 +1191,12 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
   variable_def_t heap_def;
   result_t rc;
 
+  jal_string_core_gate(pf);
+  if (jal_string_state.core_is_12bit) {
+    /* the core limitation is the whole story: a missing/!constant
+     * _string_heap_size complaint here would just be noise */
+    return BOOLEAN_FALSE;
+  }
   heap = pfile_variable_find(pf, PFILE_LOG_NONE, JAL_STRING_HEAP_NAME, 0);
   if (heap) {
     variable_release(heap);
@@ -2187,6 +2242,7 @@ value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
       || ((OPERATOR_EQ != op) && (OPERATOR_NE != op))) {
     return VALUE_NONE;
   }
+  jal_string_core_gate(pf);
   right = jal_string_parse_operand(pf);
   if (!right) {
     return VALUE_NONE;
@@ -3614,6 +3670,7 @@ value_t jal_string_concat_chain_emit(pfile_t *pf, value_t first)
   value_t   temp;
   boolean_t ok;
 
+  jal_string_core_gate(pf);
   items = 0;
   lens = 0;
   item_ct = 0;
@@ -3988,6 +4045,7 @@ boolean_t jal_string_assignment_parse_emit(pfile_t *pf, value_t dst)
   if (!jal_string_is_dynamic(dst) && !jal_string_is_fixed(dst)) {
     return BOOLEAN_FALSE;
   }
+  jal_string_core_gate(pf);
   items = 0;
   lens = 0;
   item_ct = 0;
@@ -4087,6 +4145,7 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
   if (!jal_string_is_dynamic(dst)) {
     return BOOLEAN_FALSE;
   }
+  jal_string_core_gate(pf);
   if (jal_string_same_dynamic_storage(dst, src)) {
     return BOOLEAN_TRUE;
   }
@@ -5249,6 +5308,7 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
   unsigned          pad;
   value_t           result;
 
+  jal_string_core_gate(pf);
   result   = VALUE_NONE;
   name = pf_token_get(pf, PF_TOKEN_CURRENT);
   if (!jal_string_cast_from_name(name, &which)) {
@@ -5496,6 +5556,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   boolean_t is_to_array_truncate;
   boolean_t is_heap_compact;
 
+  jal_string_core_gate(pf);
   dst = VALUE_NONE;
   src = VALUE_NONE;
   max = VALUE_NONE;

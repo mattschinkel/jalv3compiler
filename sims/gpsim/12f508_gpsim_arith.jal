@@ -1,0 +1,49 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core byte arithmetic
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Byte multiply / divide / modulo / shift on the 12-bit core, checked at
+--    runtime.  The core has **25 bytes of RAM** total, and the mul/div
+--    helpers alone take a 5-byte `_pic_state` overlay, so this test spends
+--    its few remaining bytes on four result cells and nothing else (the bit
+--    array and procedure coverage lives in `12f508_gpsim_bits_proc.jal`,
+--    which does not link the mul/div helpers).
+--
+--    No `include regression`: its pinned GPRs (0x77/0x78) do not exist on
+--    this part, hence `checkpoint_verify: off`.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_p12_mul 185
+-- expect byte v_p12_div 37
+-- expect byte v_p12_mod 2
+-- expect byte v_p12_shl 8
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var volatile byte p12_mul = 0
+var volatile byte p12_div = 0
+var volatile byte p12_mod = 0
+var volatile byte p12_shl = 0
+
+var byte a = 37
+var byte b = 5
+
+a = a * b            -- 185
+p12_mul = a
+a = a / b            -- 37
+p12_div = a
+a = a % b            -- 2
+p12_mod = a
+a = 4
+a = a << 1           -- 8
+p12_shl = a
+
+forever loop
+end loop

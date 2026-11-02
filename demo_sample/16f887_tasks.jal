@@ -1,0 +1,104 @@
+-- Title: PIC16F887 cooperative tasks — classic midrange (14-bit) tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: the cooperative round-robin scheduler on the classic
+--              midrange PIC16F887: `pragma task`, `task ... end task`,
+--              `_task_start` and `_task_yield`.  Two workers and the main
+--              context interleave; each worker records how many slices it
+--              ran and the checksum is printed on the EUSART.
+--
+--              Task bodies share the starter's stack, so all state lives in
+--              globals (never in task-local variables).
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+pragma task 4                  -- main + three workers
+var volatile byte ta_count = 0
+var volatile byte tb_count = 0
+var volatile byte main_count = 0
+var byte bad = 0
+--
+task worker_a() is
+   ta_count = ta_count + 1
+   print_string(serial_data, "task A slice 1\r\n")
+   _task_yield
+   ta_count = ta_count + 1
+   print_string(serial_data, "task A slice 2\r\n")
+   _task_yield
+   ta_count = ta_count + 1
+   print_string(serial_data, "task A slice 3 (last)\r\n")
+end task
+--
+task worker_b() is
+   tb_count = tb_count + 1
+   print_string(serial_data, "task B slice 1\r\n")
+   _task_yield
+   tb_count = tb_count + 1
+   print_string(serial_data, "task B slice 2 (last)\r\n")
+end task
+--
+print_string(serial_data, "JALv2 PIC16F887: cooperative tasks\r\n")
+_task_start worker_a()
+_task_start worker_b()
+--
+for 3 loop
+   main_count = main_count + 1
+   print_string(serial_data, "main slice ")
+   print_byte_dec(serial_data, main_count)
+   print_crlf(serial_data)
+   _task_yield
+end loop
+--
+print_string(serial_data, "slices A=")
+print_byte_dec(serial_data, ta_count)
+print_string(serial_data, " B=")
+print_byte_dec(serial_data, tb_count)
+print_string(serial_data, " main=")
+print_byte_dec(serial_data, main_count)
+print_crlf(serial_data)
+-- 3 + 2 + 3 slices
+if (ta_count == 3) & (tb_count == 2) & (main_count == 3) then
+   print_string(serial_data, "task checks: OK\r\n")
+else
+   print_string(serial_data, "task checks: FAIL\r\n")
+   bad = bad + 1
+end if
+led = bad == 0
+--
+forever loop
+end loop

@@ -1,0 +1,54 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC12F508 gpsim — 12-bit core word / dword arithmetic
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Wide integers on the 12-bit core: word add/shift with byte extraction
+--    and a dword compare.  Kept away from multiply/divide so the 5-byte
+--    `_pic_state` overlay stays out of the 25-byte RAM budget (that half is
+--    `12f508_gpsim_arith.jal`).
+--
+--    Pins the arithmetic behind `demo_sample/12f508_wide_math.jal`.
+--
+--    No `include regression`: its pinned GPRs (0x77/0x78) do not exist on
+--    this part, hence `checkpoint_verify: off`.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_p12_wlo 88
+-- expect byte v_p12_whi 33
+-- expect byte v_p12_shift 176
+-- expect byte v_p12_dword 1
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_12f508_device
+
+var volatile byte p12_wlo = 0
+var volatile byte p12_whi = 0
+var volatile byte p12_shift = 0
+var volatile byte p12_dword = 0
+
+var word  ww = 1000
+var dword dd
+
+-- 1000 * 3 = 3000 would need the multiply helper; stay with add + shift
+ww = ww + 5536            -- 6536? no: 1000 + 5536 = 6536 (0x1988)
+ww = ww + 2000            -- 8536 = 0x2158
+p12_wlo = byte(ww)        -- 0x58
+p12_whi = byte(ww >> 8)   -- 0x21
+
+ww = ww << 1              -- 17072; low byte 0xb0 = 176
+p12_shift = byte(ww)
+
+dd = 100000
+dd = dd + 23456           -- 123456
+if dd == 123456 then
+   p12_dword = 1
+end if
+
+forever loop
+end loop

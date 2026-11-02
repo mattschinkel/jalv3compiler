@@ -1,0 +1,101 @@
+-- Title: PIC16F887 optional parameters — classic midrange (14-bit) tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: procedures and functions with optional parameters on the
+--              classic midrange PIC16F887: a plain default, a default that
+--              is used and one that is overridden, plus an open-array
+--              default (a byte[] whose length COUNT() can see).
+--
+--              Results are printed on the EUSART and mirrored on the LED.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var byte  bad = 0
+var byte  got = 0
+--
+-- a plain defaulted parameter
+procedure show(optional byte in level default 7) is
+   got = level
+end procedure
+--
+-- a second defaulted parameter, supplied on the second call
+procedure bump(byte in x, optional byte in by default 3) is
+   got = x + by
+end procedure
+--
+-- an open-array default: COUNT() inside the procedure sees its length
+procedure tag(optional byte in txt[] default "jal") is
+   got = byte(COUNT(txt))
+end procedure
+--
+print_string(serial_data, "JALv2 PIC16F887: optional parameters\r\n")
+--
+show()                    -- default 7
+if got != 7 then
+   bad = bad + 1
+end if
+show(4)                   -- supplied
+if got != 4 then
+   bad = bad + 1
+end if
+--
+bump(10)                  -- default 3 -> 13
+if got != 13 then
+   bad = bad + 1
+end if
+bump(10, 5)               -- supplied -> 15
+if got != 15 then
+   bad = bad + 1
+end if
+--
+tag()                     -- "jal" -> 3 characters
+if got != 3 then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "optional parameter checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop

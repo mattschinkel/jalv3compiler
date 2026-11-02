@@ -1,0 +1,43 @@
+-- Title: PIC16F887 blink — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: blink demo for the classic midrange PIC16F887 (8 MHz
+--              INTOSC).  This is the baseline PIC_14 sample: banked RAM,
+--              FSR/INDF indirect addressing and the EUSART all exist here,
+--              which is what the rest of the 16f887_* tours use.
+--
+-- Requires: nothing (LED on D0)
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL      -- watchdog (disabled below at runtime)
+pragma target DEBUG    DISABLED     -- no debugging
+pragma target BROWNOUT DISABLED     -- no brownout reset
+pragma target FCMEN    DISABLED     -- no clock monitoring
+pragma target IESO     DISABLED     -- no int/ext osc switching
+pragma target LVP      DISABLED     -- no Low Voltage Programming
+pragma target MCLR     EXTERNAL     -- external reset
+--
+WDTCON_SWDTEN = OFF                 -- disable WDT
+OSCCON_SCS = 0                      -- select primary oscillator
+OSCCON_IRCF = 0b111                 -- internal oscillator to 8 MHz
+--
+enable_digital_io()                 -- make all pins digital I/O
+_usec_delay(100_000)                -- wait for power to stabilize
+--
+alias led is pin_D0                 -- the board LED
+pin_D0_direction = OUTPUT
+--
+forever loop
+   led = ON
+   _usec_delay(200_000)             -- 200 ms
+   led = OFF
+   _usec_delay(200_000)
+end loop

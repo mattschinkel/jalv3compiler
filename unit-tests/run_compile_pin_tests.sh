@@ -86,6 +86,7 @@ echo "compile-pin gate: compiler=$CC"
 
 # String / parser diagnostics
 run_sh string_error_paths          unit-tests/test_string_error_paths.sh "$CC"
+run_sh pic12_strings               unit-tests/test_pic12_strings.sh "$CC"
 run_sh string_heap_sizing          unit-tests/test_string_heap_sizing.sh "$CC"
 run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$CC"
 run_sh optional_params_negative    unit-tests/test_optional_params_negative.sh "$CC"

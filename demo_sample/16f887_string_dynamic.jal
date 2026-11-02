@@ -1,0 +1,113 @@
+-- Title: PIC16F887 dynamic strings — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: heap-allocated `var string` on the classic midrange
+--              PIC16F887: assignment, COUNT(), concatenation and a
+--              string -> byte-array conversion, printed on the EUSART.
+--              The heap is 64 bytes so the sample stays inside this part's
+--              368 bytes of RAM (the 18F67J50 tour uses 255).
+--
+--              The string runtime needs indirect addressing and a paged
+--              const table, which is exactly what a 12-bit core lacks; the
+--              same program on a PIC12F508 reports
+--              "strings are not supported on the 12-bit core".
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+const word _string_heap_size = 64
+pragma string index byte
+include strings_dynamic
+--
+var string greeting = "hello"
+var string name     = "pic16f887"
+var string joined
+var byte   n
+var byte   buf[10]
+var byte   bad = 0
+--
+print_string(serial_data, "JALv2 PIC16F887: dynamic strings\r\n")
+--
+-- COUNT of an initialised heap string
+n = byte(COUNT(greeting))
+print_string(serial_data, "COUNT(greeting) = ")
+print_byte_dec(serial_data, n)
+print_crlf(serial_data)
+if n != 5 then
+   bad = bad + 1
+end if
+--
+-- assignment then COUNT again
+greeting = "hi there"
+n = byte(COUNT(greeting))
+if n != 8 then
+   bad = bad + 1
+end if
+--
+-- concatenation into a third heap string
+joined = greeting & " " & name
+print_string(serial_data, "joined = ")
+print_string(serial_data, joined)
+print_crlf(serial_data)
+-- "hi there" (8) + 1 + "pic16f887" (9) = 18
+if byte(COUNT(joined)) != 18 then
+   bad = bad + 1
+end if
+--
+-- string -> byte array, then read the bytes back (a value-returning
+-- function must be used in an expression on this compiler; the bare call
+-- form reports "type mismatch")
+if !string_to_array(buf, name) then
+   bad = bad + 1
+end if
+if buf[0] != byte("p") then
+   bad = bad + 1
+end if
+if buf[8] != byte("7") then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "string checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop

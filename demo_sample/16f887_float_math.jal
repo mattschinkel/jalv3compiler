@@ -1,0 +1,115 @@
+-- Title: PIC16F887 float math — classic midrange (14-bit) feature tour
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: IEEE-754 single-precision soft float on the classic
+--              midrange PIC16F887: multiply, divide, an add/subtract
+--              chain and a float -> integer conversion.  There is no FPU
+--              on this part; every operation is a compiler routine.
+--
+--              Results are printed on the EUSART (print_float_exact) and
+--              the pass/fail is mirrored on the LED.
+--
+
+include 16f887                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+pragma target OSC      INTOSC_NOCLKOUT  -- internal oscillator
+pragma target WDT      CONTROL
+pragma target DEBUG    DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+--
+WDTCON_SWDTEN = OFF
+OSCCON_SCS = 0
+OSCCON_IRCF = 0b111
+enable_digital_io()
+_usec_delay(100_000)
+--
+alias led is pin_D0
+pin_D0_direction = OUTPUT
+--
+const serial_hw_baudrate = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+const PRINT_MAX_VAR_SIZE = 4
+include print
+include format
+--
+var float  pi     = 3.14159265
+var float  radius = 2.5
+var float  area
+var float  ratio
+var sdword scaled
+var byte   bad = 0
+
+-- Print a float as a scaled integer (x1000): print_float_exact pulls in a
+-- large decimal-render buffer, and this part's 368 bytes of RAM are needed
+-- by the float routines themselves.
+procedure print_flt_x1000(float in v) is
+   print_sdword_dec(serial_data, sdword(v * 1000.0))
+end procedure
+--
+print_string(serial_data, "JALv2 PIC16F887: float math\r\n")
+--
+-- multiply: pi * r * r ~= 19.6349525
+area = pi * radius * radius
+print_string(serial_data, "area (pi*r*r) x1000 = ")
+print_flt_x1000(area)
+if (area > 19.6) & (area < 19.7) then
+   print_string(serial_data, "  OK\r\n")
+else
+   bad = bad + 1
+end if
+--
+-- divide: r / pi ~= 0.7957746
+ratio = radius / pi
+print_string(serial_data, "radius / pi x1000   = ")
+print_flt_x1000(ratio)
+if (ratio > 0.79) & (ratio < 0.80) then
+   print_string(serial_data, "  OK\r\n")
+else
+   bad = bad + 1
+end if
+--
+-- add/subtract chain: pi - 4.0 + 1.0 ~= 0.1415925
+ratio = pi - 4.0 + 1.0
+print_string(serial_data, "pi - 4 + 1 x1000    = ")
+print_flt_x1000(ratio)
+if (ratio > 0.14) & (ratio < 0.15) then
+   print_string(serial_data, "  OK\r\n")
+else
+   bad = bad + 1
+end if
+--
+-- float -> integer conversion (truncating)
+ratio = pi * 1000.0          -- ~3141.59
+scaled = sdword(ratio)
+print_string(serial_data, "sdword(pi*1000) = ")
+print_sdword_dec(serial_data, scaled)
+print_crlf(serial_data)
+if scaled != 3141 then
+   bad = bad + 1
+end if
+--
+print_string(serial_data, "float checks: ")
+if bad == 0 then
+   print_string(serial_data, "OK")
+else
+   print_string(serial_data, "FAIL")
+end if
+print_crlf(serial_data)
+led = bad == 0
+--
+forever loop
+end loop
