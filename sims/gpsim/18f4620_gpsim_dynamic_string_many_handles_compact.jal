@@ -31,6 +31,7 @@
 -- steps: 5000000
 -- frequency_hz: auto
 -- checkpoint_verify: off
+-- (the test has no checkpoint calls; its result variables are the proof)
 -- expect bit_clear v__bitbucket 0
 -- expect byte v__mh_run_step 2
 -- expect byte v__mh00+1 1

@@ -143,6 +143,9 @@ run_py comment_docs                unit-tests/check_comment_docs.py
 # runtime harness cannot see the difference (18f4620_float_str_battery passed
 # `-n 1` with only `expect v__fb_bad 0` until 2026-11-01).  No build needed.
 run_py validate_contract           unit-tests/check_validate_contract.py
+# No NEW validate-block exemption (skip_gpsim / checkpoint_verify: off /
+# allow_compiler_warnings); pinned in unit-tests/validate_exemptions_baseline.txt.
+run_py validate_exemptions         unit-tests/check_validate_exemptions.py
 # (test_pic32mx_clock_words.py is its own L1 gate in unit-tests/run_gates.sh.)
 
 echo ""

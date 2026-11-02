@@ -13,7 +13,7 @@
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_task_locals.jal
 --
 -- @sim_validate begin
--- duration_s: 8.0
+-- duration_s: 5.0
 -- machine: esp32
 -- expect byte v__check_step 2
 -- expect byte v__tl_a_final 48

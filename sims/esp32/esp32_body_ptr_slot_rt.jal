@@ -10,7 +10,7 @@
 --    element-size fix (pointer slots are 4 bytes here, not the nominal 2).
 --
 -- @sim_validate begin
--- duration_s: 8.0
+-- duration_s: 5.0
 -- machine: esp32
 -- expect byte v__check_step 5
 -- @sim_validate end

@@ -12,6 +12,7 @@
 -- steps: 100000
 -- frequency_hz: auto
 -- checkpoint_verify: off
+-- (no `include regression`: its pinned GPRs do not exist on a 12-bit part)
 -- expect byte v_r_live 7
 -- expect byte v_r_fold 7
 -- @gpsim_validate end

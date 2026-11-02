@@ -17,6 +17,7 @@ include 16f1825                      -- target PICmicro
 -- @gpsim_validate begin
 -- steps: 12000000
 -- checkpoint_verify: off
+-- (the test has no checkpoint calls; its result variables are the proof)
 -- expect byte v_checks 2
 -- @gpsim_validate end
 --

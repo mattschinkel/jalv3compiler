@@ -16,7 +16,7 @@
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_isr.jal
 --
 -- @sim_validate begin
--- duration_s: 8.0
+-- duration_s: 5.0
 -- machine: esp32
 -- expect byte v_tick 1
 -- expect byte v_done 1

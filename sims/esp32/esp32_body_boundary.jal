@@ -15,7 +15,7 @@
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_boundary.jal
 --
 -- @sim_validate begin
--- duration_s: 8.0
+-- duration_s: 5.0
 -- machine: esp32
 -- expect byte v__check_step 12
 -- expect byte v__bd_r_byte_wrap 1

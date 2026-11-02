@@ -14,7 +14,7 @@
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/esp32/esp32_body_wide_muldiv.jal
 --
 -- @sim_validate begin
--- duration_s: 8.0
+-- duration_s: 5.0
 -- machine: esp32
 -- expect byte v__check_step 17
 -- expect byte v__gpsim_wmd_mul 1

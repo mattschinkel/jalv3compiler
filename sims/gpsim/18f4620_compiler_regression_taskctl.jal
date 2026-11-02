@@ -14,6 +14,7 @@
 --
 -- @gpsim_validate begin
 -- checkpoint_verify: off
+-- (the test has no checkpoint calls; its result variables are the proof)
 -- steps: 6000000
 -- frequency_hz: auto
 -- expect byte v__ctl_checks 9

@@ -16,7 +16,7 @@
 --
 -- @sim_validate begin
 -- machine: esp32
--- duration_s: 8.0
+-- duration_s: 5.0
 -- expect byte v__check_step 1
 -- expect byte v__pa_reads 0
 -- @sim_validate end

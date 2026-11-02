@@ -11,7 +11,7 @@
 --    ./bin/jalv3-x86-64 -s 'demo_lib;third_party/jallib/lib;tests' tests/esp32/esp32_body_concat_expr.jal
 --
 -- @sim_validate begin
--- duration_s: 8.0
+-- duration_s: 5.0
 -- machine: esp32
 -- expect byte v__check_step 9
 -- @sim_validate end

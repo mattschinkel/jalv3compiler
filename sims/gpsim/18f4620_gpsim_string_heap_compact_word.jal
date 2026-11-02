@@ -16,6 +16,7 @@
 -- @gpsim_validate begin
 -- allow_compiler_warnings: yes
 -- checkpoint_verify: off
+-- (checkpoints sit inside a loop/conditional; the result variables are the proof)
 -- steps: 400000
 -- frequency_hz: auto
 -- expect bit_clear v__bitbucket 0

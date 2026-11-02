@@ -18,6 +18,7 @@
 -- steps: 200000
 -- frequency_hz: auto
 -- checkpoint_verify: off
+-- (no `include regression`: its pinned GPRs do not exist on a 12-bit part)
 -- expect byte v_p12_wlo 88
 -- expect byte v_p12_whi 33
 -- expect byte v_p12_shift 176

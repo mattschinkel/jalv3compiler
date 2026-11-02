@@ -12,6 +12,7 @@
 -- steps: 40000000
 -- frequency_hz: auto
 -- checkpoint_verify: off
+-- (the test has no checkpoint calls; its result variables are the proof)
 -- Positive completion marker: _fb_res is 90 only after the whole battery
 -- ran clean (90 + _fb_bad on failure).  It is written at the END, so a
 -- stall/reset leaves it 0 and fails; the old `expect v__fb_bad 0` alone was

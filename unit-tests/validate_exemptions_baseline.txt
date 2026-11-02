@@ -1,0 +1,44 @@
+# Pinned validate-block exemptions (see check_validate_exemptions.py).
+# One entry per line: <kind> <path relative to the repo root>.
+# Adding a line is a deliberate decision: the test loses a signal.
+# Remove a line when the exemption is no longer needed.
+allow_compiler_warnings    sims/gpsim/12f1840_compiler_regression_task.jal
+allow_compiler_warnings    sims/gpsim/16f1825_compiler_regression_task.jal
+allow_compiler_warnings    sims/gpsim/16f877_compiler_regression_task.jal
+allow_compiler_warnings    sims/gpsim/16f877_gpsim_minint_fold.jal
+allow_compiler_warnings    sims/gpsim/16f877_gpsim_pointer_record_lookup.jal
+allow_compiler_warnings    sims/gpsim/16f877_gpsim_pointer_rom_proc.jal
+allow_compiler_warnings    sims/gpsim/16f877_gpsim_string_heap_retry_off_fragment_fail.jal
+allow_compiler_warnings    sims/gpsim/16f877_gpsim_string_heap_retry_on_fragment_recover.jal
+allow_compiler_warnings    sims/gpsim/18f26k22_compiler_regression_arrays.jal
+allow_compiler_warnings    sims/gpsim/18f4620_compiler_regression_arrays.jal
+allow_compiler_warnings    sims/gpsim/18f4620_gpsim_dynamic_string_apis.jal
+allow_compiler_warnings    sims/gpsim/18f4620_gpsim_dynamic_string_many_handles_compact.jal
+allow_compiler_warnings    sims/gpsim/18f4620_gpsim_dynstr_diag.jal
+allow_compiler_warnings    sims/gpsim/18f4620_gpsim_numchain_diag.jal
+allow_compiler_warnings    sims/gpsim/18f4620_gpsim_string_heap_compact_word.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_arith.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_bits_proc.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_boundary.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_dead_code.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_defined.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_delay.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_flow.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_optsem.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_types.jal
+checkpoint_verify_off      sims/gpsim/12f508_gpsim_wide.jal
+checkpoint_verify_off      sims/gpsim/12f509_gpsim_core.jal
+checkpoint_verify_off      sims/gpsim/16f1825_gpsim_pointer_elem_bind.jal
+checkpoint_verify_off      sims/gpsim/16f1825_gpsim_string_cmp_bank_merge.jal
+checkpoint_verify_off      sims/gpsim/16f877_gpsim_isr_int0.jal
+checkpoint_verify_off      sims/gpsim/16f877_gpsim_pointer_elem_bind.jal
+checkpoint_verify_off      sims/gpsim/18f26k22_compiler_regression_optional.jal
+checkpoint_verify_off      sims/gpsim/18f4620_compiler_regression_optional.jal
+checkpoint_verify_off      sims/gpsim/18f4620_compiler_regression_taskctl.jal
+checkpoint_verify_off      sims/gpsim/18f4620_float_str_battery.jal
+checkpoint_verify_off      sims/gpsim/18f4620_gpsim_dynamic_string_many_handles_compact.jal
+checkpoint_verify_off      sims/gpsim/18f4620_gpsim_string_heap_compact_word.jal
+skip_gpsim                 sims/gpsim/12f1840_compiler_regression_isr.jal
+skip_gpsim                 sims/gpsim/16f1825_compiler_regression_isr.jal
+skip_gpsim                 sims/gpsim/16f877_compiler_regression_isr.jal
+skip_gpsim                 sims/gpsim/18f4620_compiler_regression_eeprom_github26.jal
