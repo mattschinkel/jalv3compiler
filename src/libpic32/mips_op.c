@@ -2315,28 +2315,56 @@ void mips_isr_enable_ie(pfile_t *pf)
   (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_INTCTL, 0,
       MIPS_REG_T0, 1);
 
-  /* Status &= ~(EXL|ERL); Status |= IE.  ~(2|4) == ~6 == -7.  Both
-   * clears are required for dispatch (QEMU-reg-dumped 2026-10-09:
-   * with either bit still set, a pending request shows in Cause.IP
-   * while nothing dispatches), and this sequence passes the QEMU
-   * single-vector + mvec bodies.  OPEN ITEM (2026-10-09 bench
-   * bisection, single-vector LOADER images on the MZ EF silicon):
-   * this same RMW hung the core before the first user instruction in
-   * every loader variant tried (with/without the EBASE+0x200 vector
-   * block and IFS hygiene), while `ei` alone runs but cannot
-   * dispatch.  Boot-flash (non-loader) images are unaffected on
-   * silicon.  Next step when resumed: a diagnostic build that stores
-   * mfc0 Status to RAM, to see the true pre/post Status on silicon. */
-  (void) mips_code_r_alloc(MIPS_OP_MFC0, MIPS_CP0_STATUS, 0, MIPS_REG_T0, 0);
-  (void) mips_code_alloc(MIPS_OP_ADDIU, MIPS_REG_T1, MIPS_REG_ZERO, -7);
-  (void) mips_code_r_alloc(MIPS_OP_AND, MIPS_REG_T0, MIPS_REG_T0,
-      MIPS_REG_T1, 0);
-  (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0, MIPS_ST_IE);
-  (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_STATUS, 0, MIPS_REG_T0, 0);
-  /* execution hazard barrier: interrupt recognition right after an
-   * mtc0 Status is unpredictable without one (XC32 arms via `ei`,
-   * which carries the barrier implicitly) */
-  (void) mips_code_alloc(MIPS_OP_EHB, 0, 0, 0);
+  if (MIPS_FAMILY_MZ_EF == mips_family(pf)) {
+    /* Status.IM[7:0] must be ZERO when the exception level is
+     * released.  The MZ reset value carries IM1 set (bench read:
+     * 0x10000207); a write that clears EXL|ERL but preserves IM kills
+     * the core instantly -- no exception, no vector fetch, dead until
+     * reset -- which is what made every loader ISR image "dark" from
+     * 2026-10-09 on.  The SAME write with the IM field cleared runs
+     * and dispatches (2026-11-03 bench, LED level + UART: `ra` climbs).
+     * This matches XC32's crt0, which rebuilds Status as
+     * `(old & 0x00580000) | 0x25000000` -- IM cleared -- and
+     * Microchip's EIC examples never program IM at all: with the EIC
+     * present the per-priority mask lives in the EIC's IPLR registers,
+     * so IM is dead state that only bites on the way out of the
+     * exception level.  Keep the unconditional EXL|ERL clear (QEMU
+     * needs both) and add the IM clear. */
+    (void) mips_code_r_alloc(MIPS_OP_MFC0, MIPS_CP0_STATUS, 0,
+        MIPS_REG_T0, 0);
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T1, 0, 0xFFFF);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T1, MIPS_REG_T1,
+        0x00F9);                 /* ~EXL, ~ERL, IM[7:0] = 0 */
+    (void) mips_code_r_alloc(MIPS_OP_AND, MIPS_REG_T0, MIPS_REG_T0,
+        MIPS_REG_T1, 0);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0,
+        MIPS_ST_IE);
+    (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_STATUS, 0,
+        MIPS_REG_T0, 0);
+    /* execution hazard barrier: interrupt recognition right after an
+     * mtc0 Status is unpredictable without one (XC32 arms via `ei`,
+     * which carries the barrier implicitly) */
+    (void) mips_code_alloc(MIPS_OP_EHB, 0, 0, 0);
+  } else {
+    /* Status &= ~(EXL|ERL); Status |= IE.  ~(2|4) == ~6 == -7.  Both
+     * clears are required for dispatch (QEMU-reg-dumped 2026-10-09:
+     * with either bit still set, a pending request shows in Cause.IP
+     * while nothing dispatches), and this sequence passes the QEMU
+     * single-vector + mvec bodies. */
+    (void) mips_code_r_alloc(MIPS_OP_MFC0, MIPS_CP0_STATUS, 0,
+        MIPS_REG_T0, 0);
+    (void) mips_code_alloc(MIPS_OP_ADDIU, MIPS_REG_T1, MIPS_REG_ZERO, -7);
+    (void) mips_code_r_alloc(MIPS_OP_AND, MIPS_REG_T0, MIPS_REG_T0,
+        MIPS_REG_T1, 0);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0,
+        MIPS_ST_IE);
+    (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_STATUS, 0,
+        MIPS_REG_T0, 0);
+    /* execution hazard barrier: interrupt recognition right after an
+     * mtc0 Status is unpredictable without one (XC32 arms via `ei`,
+     * which carries the barrier implicitly) */
+    (void) mips_code_alloc(MIPS_OP_EHB, 0, 0, 0);
+  }
 }
 
 /* Formal is a pointer whose pointee is packed bits (`bit in bits[]` /
