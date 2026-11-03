@@ -1,0 +1,10 @@
+-- negative: pointer copy whose source is not bound yet
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var pointer p as var byte
+var pointer q as var byte
+q is p
+p is v
+forever loop
+end loop

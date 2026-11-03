@@ -219,6 +219,7 @@ struct variable_ {
    * through-accesses on pointer-slot arrays (const element offsets
    * used + runtime-indexed bind count for the element check) */
   ctr_t              ctr_ptr_bound;
+  ctr_t              ctr_ptr_use_before_bind;
   ctr_t              ctr_ptr_slot_rt_bind;
   array_t           *ptr_slot_uses;
   /* per-element pseudo links for pointer-slot arrays: the bound pseudo
@@ -1318,6 +1319,28 @@ boolean_t variable_pointer_bound_p(const variable_t var)
 
   ptr = variable_element_seek(var, BOOLEAN_FALSE);
   return (ptr && ptr->ctr_ptr_bound) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* Parse-order note: this pointer was dereferenced/stored through before any
+ * bind had been parsed in its declaring procedure.  The final must-bind
+ * check decides whether to report it (a later bind makes it a use-before-
+ * bind; no bind at all keeps the existing "never bound" diagnostic). */
+void variable_pointer_use_before_bind_ct_bump(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->ctr_ptr_use_before_bind++;
+  }
+}
+
+ctr_t variable_pointer_use_before_bind_ct_get(const variable_t var)
+{
+  struct variable_ *ptr;
+
+  ptr = variable_element_seek(var, BOOLEAN_FALSE);
+  return ptr ? ptr->ctr_ptr_use_before_bind : 0;
 }
 
 void variable_pointer_slot_use_note(const variable_t var,

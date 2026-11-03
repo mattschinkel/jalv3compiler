@@ -254,6 +254,8 @@ value_t variable_pointer_whereis_target_get(const variable_t ptr_var);
 void variable_pointer_whereis_target_set(variable_t ptr_var, value_t target);
 void      variable_pointer_bound_ct_bump(const variable_t var);
 boolean_t variable_pointer_bound_p(const variable_t var);
+void      variable_pointer_use_before_bind_ct_bump(const variable_t var);
+ctr_t     variable_pointer_use_before_bind_ct_get(const variable_t var);
 void      variable_pointer_slot_use_note(const variable_t var,
     variable_const_t slot_ofs);
 size_t    variable_pointer_slot_use_ct_get(const variable_t var);

@@ -1,0 +1,10 @@
+-- negative: pointer-array element read before any bind
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var byte x
+var pointer slots[2] as var byte
+x = slots[0]
+slots[0] is v
+forever loop
+end loop

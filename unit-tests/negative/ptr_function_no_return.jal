@@ -1,0 +1,6 @@
+-- negative: function pointer signature without a return type
+include 16f1825
+pragma target clock 20_000_000
+var pointer fp as function(byte in)
+forever loop
+end loop

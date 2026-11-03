@@ -20,6 +20,7 @@ checkpoint_verify_off      sims/gpsim/16f1825_gpsim_pointer_elem_bind.jal
 checkpoint_verify_off      sims/gpsim/16f1825_gpsim_string_cmp_bank_merge.jal
 checkpoint_verify_off      sims/gpsim/16f877_gpsim_isr_int0.jal
 checkpoint_verify_off      sims/gpsim/16f877_gpsim_pointer_elem_bind.jal
+checkpoint_verify_off      sims/gpsim/16f877_gpsim_pointer_unbound_slot_guard.jal
 checkpoint_verify_off      sims/gpsim/18f26k22_compiler_regression_optional.jal
 checkpoint_verify_off      sims/gpsim/18f4620_compiler_regression_optional.jal
 checkpoint_verify_off      sims/gpsim/18f4620_compiler_regression_taskctl.jal

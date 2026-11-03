@@ -1143,6 +1143,17 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
               }
             }
           }
+          /* Function-pointer calls only: save the last pointer byte so the
+           * unbound-slot guard can inspect every byte, then restore W.  A
+           * call to a procedure merely flagged INDIRECT has a fixed label,
+           * so guarding it would only add code. */
+          if (indirect_pointer_call) {
+            (void) pic_instr_append_f(pf, PIC_OPCODE_MOVWF, lsb,
+                pic_pointer_size_get(pf) - 1);
+            pic_pointer_value_emit_null_guard(pf, lsb);
+            (void) pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, lsb,
+                pic_pointer_size_get(pf) - 1, PIC_OPDST_W);
+          }
           value_release(val2);
           lbl = pic_label_find(pf, PIC_LABEL_INDIRECT, BOOLEAN_TRUE);
         } else {

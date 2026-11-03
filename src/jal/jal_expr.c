@@ -229,6 +229,52 @@ static boolean_t jal_variable_is_array_of_pointers(variable_t var)
     && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef));
 }
 
+/* Is this variable declared in the procedure currently being parsed?
+ * Restricting the use-before-bind check to the declaring procedure avoids
+ * a false positive for a global pointer bound in main and used in a
+ * procedure whose body is parsed first. */
+static boolean_t jal_variable_in_active_proc(pfile_t *pf, variable_t var)
+{
+  pfile_block_t *blk;
+  pfile_proc_t  *owner;
+
+  blk = (pfile_block_t *) variable_user_data_get(var);
+  owner = blk ? pfile_block_owner_get(blk) : 0;
+  return owner && (owner == pfile_proc_active_get(pf));
+}
+
+/* A straight-line use of a pointer before its first bind: the parse order
+ * is the source order within one procedure, so an unbound slot here is a
+ * guaranteed trap at runtime (the null-slot guard).  Branch-dependent
+ * binds that were already parsed count as bound; this check deliberately
+ * only catches the ordering gap the final must-bind check cannot see. */
+static void jal_pointer_use_before_bind_check(pfile_t *pf, variable_t var,
+    const char *how)
+{
+  variable_def_t def;
+
+  if (!var) {
+    return;
+  }
+  def = variable_def_get(var);
+  if (def && (variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+      || variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+      || variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF))) {
+    return;
+  }
+  if (!variable_is_pointer(var)
+      && !jal_variable_is_array_of_pointers(var)) {
+    return;
+  }
+  if (!jal_variable_in_active_proc(pf, var)) {
+    return;
+  }
+  if (!variable_pointer_bound_p(var)) {
+    (void) how;
+    variable_pointer_use_before_bind_ct_bump(var);
+  }
+}
+
 static boolean_t jal_variable_def_tree_contains_pointer(variable_def_t def)
 {
   variable_def_member_t mbr;
@@ -1189,6 +1235,7 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
            * the pointer-slot-array element check */
           rpv = value_variable_get(val);
           if (rpv) {
+            jal_pointer_use_before_bind_check(pf, rpv, "data");
             variable_use_ct_bump(rpv, CTR_BUMP_INCR);
             if (jal_value_const_baseofs_get(val, &rofs)) {
               variable_pointer_slot_use_note(rpv, rofs);

@@ -1,0 +1,10 @@
+-- negative: straight-line read before the first bind
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var byte x
+var pointer p as var byte
+x = p
+p is v
+forever loop
+end loop

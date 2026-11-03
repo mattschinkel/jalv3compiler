@@ -47,8 +47,14 @@ INC="-s $REPO/demo_lib -s $REPO/third_party/jallib/lib"
 # required, $4 optional expected substring.
 check() {
   local name=$1 file=$2 want_clean=${3:-} want=${4:-} out rc
-  out=$("$CC" $INC -no-codfile "$file" 2>&1)
+  out=$(timeout 30 "$CC" $INC -no-codfile "$file" 2>&1)
   rc=$?
+  if [[ "$rc" -eq 124 ]]; then
+    echo "FAIL $name: compiler hung (timeout)"
+    echo "$out" | tail -4 | sed 's/^/     /'
+    fails=$((fails + 1))
+    return
+  fi
   if [[ "$rc" -ge 128 ]]; then
     echo "FAIL $name: compiler died (rc=$rc, signal $((rc - 128)))"
     echo "$out" | tail -4 | sed 's/^/     /'
@@ -293,6 +299,21 @@ elif [[ "$rc" -ne 0 ]]; then
 else
   echo "ok   --clear over 1024 bytes"
 fi
+
+# A pointer-style record member (`pointer x as var byte`) used to leave the
+# cursor on the bad token: the record loop consumed `end record` as a member
+# name and then printed "variable type expected" until the process was killed
+# (~1.1 million lines in 2 s).  It must instead produce a bounded diagnostic
+# and reach a normal summary.  (Pointer members are not supported.)
+gen "$WORK/record_ptr_member.jal" <<'PY'
+import sys
+open(sys.argv[1], 'w').write(
+    'pragma target clock 4_000_000\ninclude 18f4620\n'
+    'record pr is\n   pointer mp as var byte\nend record\n'
+    'var pr r\nforever loop\nend loop\n')
+PY
+check "record pointer member (parser recovery)" \
+  "$WORK/record_ptr_member.jal" "" "variable type expected"
 
 # --- 4. lexical shapes ------------------------------------------------------
 gen "$WORK/long_ident.jal" <<'PY'

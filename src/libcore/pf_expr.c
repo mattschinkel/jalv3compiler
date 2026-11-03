@@ -693,6 +693,23 @@ static void pfile_value_type_check(pfile_t *pf, operator_t op, value_t dst,
   pfile_value_def_type_check(pf, op, value_def_get(dst), val1, val2);
 }
 
+/* True for a data pointer whose pointee definition is an ARRAY, e.g.
+ * `var pointer pba as var byte[8]`. */
+static boolean_t pfile_value_pointer_to_array(value_t val)
+{
+  variable_def_t        pdef;
+  variable_def_member_t mbr;
+  variable_def_t        pointee;
+
+  if (!val || !value_is_pointer(val)) {
+    return BOOLEAN_FALSE;
+  }
+  pdef = value_def_get(val);
+  mbr  = pdef ? variable_def_member_get(pdef) : 0;
+  pointee = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  return pointee && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(pointee));
+}
+
 void pfile_cmd_op_add_assign(pfile_t *pf, operator_t op,
   value_t *pdst, value_t src)
 {
@@ -755,6 +772,21 @@ void pfile_cmd_op_add_assign(pfile_t *pf, operator_t op,
 
       cmd = cmd_op_alloc(op, dst, src, VALUE_NONE);
       pfile_cmd_add(pf, cmd);
+    } else if ((OPERATOR_ASSIGN == op) && value_is_pointer(dst)
+        && pfile_value_pointer_to_array(dst)
+        && (value_is_number(src)
+            || (VARIABLE_DEF_TYPE_VALUE == value_type_get(src)))) {
+      /* `pba = 1` on a pointer-to-array used to fall through to the generic
+       * pointer-deref arm and emit a hidden bulk fill (8 bytes for byte[8]),
+       * while the same store on the array itself is refused.  Keep the two
+       * forms consistent: use an indexed element store. */
+      if (value_is_number(src)) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "Cannot assign number to array. Use pointer[index] = value instead");
+      } else {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "Cannot assign single value to array. Use pointer[index] = value instead");
+      }
     } else if ((OPERATOR_ASSIGN == op) && value_is_pointer(dst)) {
       /* Handle pointer dereference assignment (pointer = value) */
       cmd_t cmd;

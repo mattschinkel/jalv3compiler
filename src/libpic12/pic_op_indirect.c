@@ -34,6 +34,7 @@ static boolean_t pic_value_is_array_pointer_slot_storage(const value_t val);
 static boolean_t pic_pointer_runtime_null_guard_eligible(variable_t v);
 static void pic_pointer_slot_emit_null_guard(pfile_t *pf, value_t base,
     variable_sz_t slot_offs);
+void pic_pointer_value_emit_null_guard(pfile_t *pf, value_t ptr);
 static boolean_t pic_value_indirect_heap_string_through_pointer(const value_t val);
 static value_t pic_indirect_value_get(value_t val1, value_t val2, value_t val3);
 
@@ -111,6 +112,38 @@ static void pic_pointer_slot_emit_null_guard(pfile_t *pf, value_t base,
   for (jj = 1; jj < psz; jj++) {
     pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, base, slot_offs + jj,
         PIC_OPDST_W);
+  }
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_ok);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_hang);
+  pic_instr_append_label(pf, lbl_hang);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_hang);
+  pic_instr_append_label(pf, lbl_ok);
+  label_release(lbl_hang);
+  label_release(lbl_ok);
+}
+
+/* Runtime null guard for a pointer VALUE held in a scratch slot (the
+ * runtime-index pointer-array element loads its pointer into _pic_pointer
+ * before re-staging FSR).  Without this, an unbound element is dereferenced
+ * as address zero / adjacent RAM; the const-index path already guards the
+ * slot bytes. */
+void pic_pointer_value_emit_null_guard(pfile_t *pf, value_t ptr)
+{
+  label_t       lbl_hang;
+  label_t       lbl_ok;
+  variable_sz_t psz;
+  variable_sz_t jj;
+
+  if (!ptr) {
+    return;
+  }
+  lbl_hang = pfile_label_alloc(pf, 0);
+  lbl_ok   = pfile_label_alloc(pf, 0);
+  psz = pic_pointer_size_get(pf);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptr, 0, PIC_OPDST_W);
+  for (jj = 1; jj < psz; jj++) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_IORWF, ptr, jj, PIC_OPDST_W);
   }
   pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
   pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_ok);
@@ -407,8 +440,11 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
             value_t fsrv;
             value_t ptmp;
             boolean_t wide16;
+            variable_sz_t jj;
+            variable_sz_t psz;
 
             wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+            psz = pic_pointer_size_get(pf);
             indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
             fsrv = pic_fsr_get(pf);
             ptmp = pic_var_pointer_get(pf);
@@ -418,20 +454,23 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
             /* load the slot's own pointer into the SCRATCH (not tmp --
              * tmp maps to the array's own storage and would clobber
              * slot 0) */
-            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
-                PIC_OPDST_W);
-            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, 0);
-            pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
-                PIC_OPDST_F);
-            if (wide16) {
-                /* INCF _fsr0l alone cannot cross a 256-byte boundary */
-                pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
-                    "_status", "_z");
-                pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+            for (jj = 0; jj < psz; jj++) {
+                pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
+                    PIC_OPDST_W);
+                pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, jj);
+                if ((jj + 1) < psz) {
+                    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+                        PIC_OPDST_F);
+                    if (wide16) {
+                        /* INCF _fsr0l alone cannot cross a 256-byte boundary */
+                        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
+                            "_status", "_z");
+                        pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+                    }
+                }
             }
-            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
-                PIC_OPDST_W);
-            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, 1);
+            /* unbound element -> defined trap instead of FSR=0 */
+            pic_pointer_value_emit_null_guard(pf, ptmp);
             /* FSR = the loaded pointer: fsr0l/fsr0h on wide cores,
              * fsr + IRP-latch from bit 8 on the 14-bit core */
             pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 0,

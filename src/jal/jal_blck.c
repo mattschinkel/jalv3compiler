@@ -15,6 +15,7 @@
 #include "../libutils/mem.h"
 #include "../libcore/pf_cmd.h"
 #include "../libcore/pf_proc.h"
+#include "../libcore/pf_block.h"
 #include "../libcore/pf_expr.h"
 #include "../libcore/pf_msg.h"
 #include "../libcore/variable.h"
@@ -30,6 +31,10 @@
 #include "jal_string.h"
 #include "jal_error.h"
 #include "jal_blck.h"
+
+static void jal_blk_pointer_use_before_bind(pfile_t *pf, variable_t var,
+    const char *how);
+
 #if defined(MSDOS) && !defined(__WATCOMC__)
 #include <dir.h>
 #define FILENAME_MAX MAXPATH
@@ -1335,7 +1340,25 @@ static void jal_assign_assign_emit(jal_assign_ctx_t *ctx)
   operator_t assign_op = ctx->assign_op;
   boolean_t  lvalue_subscripted = ctx->lvalue_subscripted;
   char      *ptr_rhs_dup = ctx->ptr_rhs_dup;
+  variable_t slot_array_var;
 
+  /* `slots[0] is pb` asks the back end to store a pointer VALUE into a
+   * pointer-slot element.  The PIC back end cannot lower a baseofs
+   * destination (pic_assign_ptr_to_ptr asserts); refuse it here rather
+   * than abort on user input.  `q is slots[0]` (the reverse direction)
+   * and `slots[0] is pv` (pseudo) remain supported. */
+  if ((OPERATOR_POINTER_ASSIGN == assign_op) && val && expr
+      && value_is_pointer(val) && value_is_pointer(expr)) {
+    slot_array_var = value_variable_get(val);
+    if ((VARIABLE_NONE != slot_array_var)
+        && variable_is_array(slot_array_var)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "cannot bind pointer '%s' into a pointer-array element; "
+          "bind the element to a target variable instead",
+          variable_name_get(slot_array_var));
+      return;
+    }
+  }
   if (assign_op == OPERATOR_POINTER_ASSIGN && val
       && !lvalue_subscripted && !value_is_pointer(val)) {
     /* Folded `var pointer const byte p[N]` can leave `val` as the pointee
@@ -1388,6 +1411,12 @@ static void jal_assign_assign_emit(jal_assign_ctx_t *ctx)
     pfile_pointer_bind_target_note(value_variable_get(expr));
     dvv = value_variable_get(val);
     if (dvv && variable_is_pointer(dvv)) {
+      variable_t srcv;
+
+      srcv = value_variable_get(expr);
+      if (srcv && (srcv != dvv)) {
+        jal_blk_pointer_use_before_bind(pf, srcv, "source");
+      }
       variable_pointer_whereis_target_set(dvv, expr);
       variable_pointer_bound_ct_bump(dvv);
     } else if (dvv
@@ -1521,6 +1550,7 @@ static void jal_assign_assign_emit(jal_assign_ctx_t *ctx)
          * must-bind check (cmd_opdst_set bumps ctr_assign) */
         variable_const_t slot_ofs;
 
+        jal_blk_pointer_use_before_bind(pf, dvv, "store");
         variable_use_ct_bump(dvv, CTR_BUMP_INCR);
         if (jal_value_const_baseofs_get(val, &slot_ofs)) {
           variable_pointer_slot_use_note(dvv, slot_ofs);
@@ -1531,6 +1561,130 @@ static void jal_assign_assign_emit(jal_assign_ctx_t *ctx)
   pfile_cmd_op_add(pf, assign_op, &val, expr, VALUE_NONE);
 
   ctx->val = val;
+}
+
+static boolean_t jal_blk_array_of_pointers(variable_t var)
+{
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        elem;
+
+  if (!var || !variable_is_array(var)) {
+    return BOOLEAN_FALSE;
+  }
+  def = variable_def_get(var);
+  mbr = def ? variable_def_member_get(def) : 0;
+  elem = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  return elem && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(elem));
+}
+
+/* Same intent as the read-side check in jal_expr.c: a store through a
+ * pointer whose first bind has not been parsed yet is a guaranteed
+ * null-slot trap.  Restricted to the declaring procedure to avoid a false
+ * positive for a global bound in main and used in a procedure parsed
+ * earlier. */
+static void jal_blk_pointer_use_before_bind(pfile_t *pf, variable_t var,
+    const char *how)
+{
+  variable_def_t def;
+  pfile_block_t *blk;
+  pfile_proc_t  *owner;
+
+  if (!var) {
+    return;
+  }
+  def = variable_def_get(var);
+  if (def && (variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+      || variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+      || variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF))) {
+    return;
+  }
+  if (!variable_is_pointer(var) && !jal_blk_array_of_pointers(var)) {
+    return;
+  }
+  blk = (pfile_block_t *) variable_user_data_get(var);
+  owner = blk ? pfile_block_owner_get(blk) : 0;
+  if (!owner || (owner != pfile_proc_active_get(pf))) {
+    return;
+  }
+  if (!variable_pointer_bound_p(var)) {
+    (void) how;
+    variable_pointer_use_before_bind_ct_bump(var);
+  }
+}
+
+/* `jal_value_find` turns an undefined called name into a synthetic const
+ * BYTE (with a "not defined" diagnostic of its own) and the legacy statement
+ * path consumed the argument list silently.  Keep that recovery path for the
+ * synthetic scalar; real scalar variables are still rejected as callees. */
+static boolean_t jal_call_is_unresolved_scalar(value_t val)
+{
+  variable_t var;
+
+  var = value_variable_get(val);
+  return var && (VARIABLE_DEF_TYPE_INTEGER == value_type_get(val))
+      && variable_is_const(var);
+}
+
+/* True for a pointer whose pointee definition is a callable signature
+ * (`var pointer p as procedure(...)` / `function(...) return ...`). */
+static boolean_t jal_pointer_is_callable(value_t val)
+{
+  variable_def_t        pdef;
+  variable_def_member_t mbr;
+  variable_def_t        pointee;
+
+  if (!val || (VARIABLE_DEF_TYPE_POINTER != value_type_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  pdef = value_def_get(val);
+  mbr  = pdef ? variable_def_member_get(pdef) : 0;
+  pointee = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  return pointee
+      && (VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(pointee));
+}
+
+/* True for an ARRAY whose elements are callable pointers (`pps[]`). */
+static boolean_t jal_pointer_array_is_callable(value_t val)
+{
+  variable_def_t        adef;
+  variable_def_member_t ambr;
+  variable_def_t        elem;
+
+  if (!val || (VARIABLE_DEF_TYPE_ARRAY != value_type_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  adef = value_def_get(val);
+  ambr = adef ? variable_def_member_get(adef) : 0;
+  elem = ambr ? variable_def_member_def_get(ambr) : VARIABLE_DEF_NONE;
+  if (!elem || (VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(elem))) {
+    return BOOLEAN_FALSE;
+  }
+  ambr = variable_def_member_get(elem);
+  elem = ambr ? variable_def_member_def_get(ambr) : VARIABLE_DEF_NONE;
+  return elem
+      && (VARIABLE_DEF_TYPE_FUNCTION == variable_def_type_get(elem));
+}
+
+/* Consume a balanced argument list for an invalid call, so one bad callee
+ * produces one diagnostic instead of a token cascade.  The current token
+ * is the opening `(`. */
+static void jal_skip_call_args(pfile_t *pf)
+{
+  unsigned depth;
+
+  if (!pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "(")) {
+    return;
+  }
+  depth = 0;
+  do {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "(")) {
+      depth++;
+    } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, ")")) {
+      depth--;
+    }
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } while (depth && !pf_token_is_eof(pf));
 }
 
 /* no '=' and no '(' at the LHS tail: the procedure-pointer and
@@ -1635,15 +1789,43 @@ static boolean_t jal_parse_assign(pfile_t *pf)
         jal_assign_put_shape_parse(&ctx);
       }
       if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "(")) {
-        /* Check if this is a function pointer call */
-        if (ctx.val && value_is_pointer(ctx.val)) {
-          /* This is a function pointer call like my_proc(42) */
-          /* Pass the pointer directly to jal_parse_call and let it handle the dereference */
+        /* Only a function value or a pointer to a function signature is
+         * callable.  A data/array/string pointer, a plain scalar, or a
+         * callable-pointer ARRAY without an index used to fall through to
+         * jal_parse_call(VALUE_NONE): the data-pointer cases emitted an
+         * indirect call to the pointee address, and the scalar/array cases
+         * emitted no call at all. */
+        if (ctx.val && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(ctx.val))) {
           value_release(jal_parse_call(pf, ctx.val, JAL_PARSE_CALL_FLAG_NONE));
-        } else if (!ctx.val) {
-          value_release(jal_parse_call(pf, VALUE_NONE, JAL_PARSE_CALL_FLAG_NONE));
+        } else if (ctx.val && jal_pointer_is_callable(ctx.val)) {
+          value_release(jal_parse_call(pf, ctx.val, JAL_PARSE_CALL_FLAG_NONE));
+        } else if (ctx.val && value_is_pointer(ctx.val)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "expression is not callable: '%s' is a data pointer,"
+              " not a procedure/function pointer",
+              value_name_get(ctx.val));
+          jal_skip_call_args(pf);
+        } else if (ctx.val
+            && (VARIABLE_DEF_TYPE_ARRAY == value_type_get(ctx.val))) {
+          if (jal_pointer_array_is_callable(ctx.val)) {
+            pfile_log(pf, PFILE_LOG_ERR,
+                "procedure pointer array requires an index: %s[index]()",
+                value_name_get(ctx.val));
+          } else {
+            pfile_log(pf, PFILE_LOG_ERR,
+                "expression is not callable: '%s' is an array",
+                value_name_get(ctx.val));
+          }
+          jal_skip_call_args(pf);
+        } else if (ctx.val
+            && (VARIABLE_NONE != value_variable_get(ctx.val))
+            && !jal_call_is_unresolved_scalar(ctx.val)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "expression is not callable: '%s'",
+              value_name_get(ctx.val));
+          jal_skip_call_args(pf);
         } else {
-          /* Regular function call */
+          /* Regular function call resolved without a call_val */
           value_release(jal_parse_call(pf, VALUE_NONE, JAL_PARSE_CALL_FLAG_NONE));
         }
       } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "=")

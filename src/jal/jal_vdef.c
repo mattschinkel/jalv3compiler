@@ -1417,7 +1417,7 @@ static value_t jal_parse_init(pfile_t *pf, variable_def_t def)
  */
 static variable_def_t jal_pointer_parse_paren_body(pfile_t *pf,
   const pfile_pos_t *statement_start,
-  variable_def_t ptr_base)
+  variable_def_t ptr_base, boolean_t require_return)
 {
   variable_def_t proc_def;
   variable_def_t return_def;
@@ -1440,6 +1440,11 @@ static variable_def_t jal_pointer_parse_paren_body(pfile_t *pf,
         return_def = variable_def_flags_change(return_def,
           variable_def_flags_get_all(return_def) | VARIABLE_DEF_FLAG_OUT);
       }
+    }
+    if (require_return && (VARIABLE_DEF_NONE == return_def)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "function pointer requires a return type "
+          "(use 'procedure(...)' for a no-result callable)");
     }
     (void) variable_def_member_insert(proc_def, 0, 0, return_def, 1);
     (void) variable_def_member_add(ptr_base, 0, proc_def, 1);
@@ -1499,6 +1504,11 @@ static variable_def_t jal_pointer_parse_paren_body(pfile_t *pf,
         variable_def_flags_get_all(return_def) | VARIABLE_DEF_FLAG_OUT);
     }
   }
+  if (require_return && (VARIABLE_DEF_NONE == return_def)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "function pointer requires a return type "
+        "(use 'procedure(...)' for a no-result callable)");
+  }
   (void) variable_def_member_insert(proc_def, 0, 0, return_def, 1);
   (void) variable_def_member_add(ptr_base, 0, proc_def, 1);
   while (sig_ct) {
@@ -1528,7 +1538,8 @@ static variable_def_t jal_pointer_parse_pointee_after_as(pfile_t *pf,
       return ptr_base;
     }
     pf_token_get(pf, PF_TOKEN_NEXT);
-    return jal_pointer_parse_paren_body(pf, statement_start, ptr_base);
+    return jal_pointer_parse_paren_body(pf, statement_start, ptr_base,
+        BOOLEAN_FALSE);
   }
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "function")) {
     pf_token_get(pf, PF_TOKEN_NEXT);
@@ -1538,7 +1549,8 @@ static variable_def_t jal_pointer_parse_pointee_after_as(pfile_t *pf,
       return ptr_base;
     }
     pf_token_get(pf, PF_TOKEN_NEXT);
-    return jal_pointer_parse_paren_body(pf, statement_start, ptr_base);
+    return jal_pointer_parse_paren_body(pf, statement_start, ptr_base,
+        BOOLEAN_TRUE);
   }
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "var")
       || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "const")) {
@@ -1563,6 +1575,14 @@ static variable_def_t jal_pointer_parse_pointee_after_as(pfile_t *pf,
     if (elem) {
       variable_def_t pre_fin;
 
+      if (variable_def_flag_test(elem, VARIABLE_DEF_FLAG_BIT)) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "pointer to a bit is not supported; index the bit variable "
+            "directly (bit arrays are passed through 'bit in name[]' formals)");
+      } else if (VARIABLE_DEF_TYPE_STRUCTURE == variable_def_type_get(elem)) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "pointer to a record is not supported");
+      }
       pre_fin = elem;
       elem = jal_pointer_string_pointee_finalize(pf, elem, pointee_const);
       if (!elem) {
@@ -1653,10 +1673,17 @@ static boolean_t jal_parse_dimension(pfile_t *pf, variable_ct_t *ct,
 
       n = jal_parse_expr(pf);
       if (n) {
-        if (!value_is_const(n)) {
+        if (value_is_float(n)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "dimension must be an integer constant (got a float)");
+        } else if (!value_is_const(n)) {
           pfile_log(pf, PFILE_LOG_ERR, "%s", const_msg);
         } else if (value_const_get(n) < 1) {
           pfile_log(pf, PFILE_LOG_ERR, "dimension must be >= 1");
+        } else if ((pfile_pointer_width_get(pf) < 4)
+            && (value_const_get(n) > (variable_const_t) 0xFFFFU)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "dimension is too large for this target's address space");
         } else if (ct) {
           variable_const_t  nv;
           variable_ct_t     du;
@@ -1775,6 +1802,14 @@ static variable_def_t jal_pointer_string_pointee_finalize(pfile_t *pf,
       }
     }
     if (s_dim_ct) {
+      size_t di;
+
+      for (di = 0; di < s_dim_ct; di++) {
+        if (VARIABLE_CT_UNKNOWN == s_dims[di]) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "open dimension '[]' is not valid for a string pointee");
+        }
+      }
       jal_variable_info_init(&s_inf);
       s_inf.vdef = elem;
       s_inf.def_flags = variable_def_flags_get_all(elem);
@@ -1904,6 +1939,11 @@ void jal_parse_var_common(pfile_t *pf,
           pf_token_get(pf, PF_TOKEN_NEXT);
           pointer_name_dim_seen = jal_parse_name_dimension(pf,
               &pointer_name_dim);
+          if (pointer_name_dim_seen
+              && (VARIABLE_CT_UNKNOWN == pointer_name_dim)) {
+            pfile_log(pf, PFILE_LOG_ERR,
+                "pointer-array dimension must be a positive integer");
+          }
           if (pointer_name
               && !pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "as")) {
             pfile_log(pf, PFILE_LOG_ERR,
@@ -2029,6 +2069,10 @@ void jal_parse_var_common(pfile_t *pf,
           }
         }
         dims[dim_ct++] = dim;
+        if (pointer_decl_by_as && (VARIABLE_CT_UNKNOWN == dim)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "open dimension '[]' is not valid for a pointer pointee");
+        }
       }
       if (dim_ct) {
         /* an array */
@@ -2441,7 +2485,16 @@ void jal_parse_record(pfile_t *pf, const pfile_pos_t *start)
           pf_token_get(pf, PF_TOKEN_NEXT);
         }
         if (!jal_token_is_identifier(pf)) {
-          pf_token_get(pf, PF_TOKEN_NEXT);
+          /* Do not swallow `end`/EOF as a member name: doing so moved the
+           * outer loop past its only terminator and made a bad record
+           * member (e.g. `pointer mp as var byte`) print
+           * "variable type expected" until the process was killed. */
+          if (!pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "end")
+              && !pf_token_is_eof(pf)) {
+            pfile_log(pf, PFILE_LOG_ERR, "record member name expected");
+            pf_token_get(pf, PF_TOKEN_NEXT);
+          }
+          break;
         } else {
           char       *tag;
           const char *ptr;
@@ -2478,7 +2531,8 @@ void jal_parse_record(pfile_t *pf, const pfile_pos_t *start)
           FREE(tag);
         }
       } while (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, ","));
-    } while (!pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "end"));
+    } while (!pf_token_is_eof(pf)
+        && !pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "end"));
     if (pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "record")) {
       pf_token_get(pf, PF_TOKEN_NEXT);
     }

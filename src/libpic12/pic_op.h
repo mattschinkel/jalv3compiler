@@ -26,6 +26,11 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
 
 void pic_last_values_reset(void);
 
+/* A pointer VALUE held in a scratch slot is zero -> defined trap (never a
+ * bogus FSR / call through address 0).  Used by runtime-index pointer-slot
+ * loads and indirect calls. */
+void pic_pointer_value_emit_null_guard(pfile_t *pf, value_t ptr);
+
 operator_t pic_relational(pfile_t *pf, operator_t op, value_t dst, 
     value_t val1, value_t val2);
 

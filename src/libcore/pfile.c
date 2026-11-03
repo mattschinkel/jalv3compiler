@@ -3831,14 +3831,18 @@ static void pfile_pointer_must_bind_check(pfile_t *pf, pfile_block_t *blk)
     }
     def = variable_def_get(v);
     if (variable_is_pointer(v)) {
-      if (variable_pointer_bound_p(v)) {
-        continue;
+      if (!variable_pointer_bound_p(v)) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "pointer '%s' is used but never bound "
+            "(use `is` to bind, copy a bound pointer, or pass it as a"
+            " parameter)",
+            variable_name_get(v));
+      } else if (variable_pointer_use_before_bind_ct_get(v)) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "pointer '%s' is used before it is bound "
+            "(use `is` to bind it first)",
+            variable_name_get(v));
       }
-      pfile_log(pf, PFILE_LOG_ERR,
-          "pointer '%s' is used but never bound "
-          "(use `is` to bind, copy a bound pointer, or pass it as a"
-          " parameter)",
-          variable_name_get(v));
     } else if (def && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def))) {
       variable_def_t        mdef;
       variable_def_member_t mbr;
@@ -3851,6 +3855,11 @@ static void pfile_pointer_must_bind_check(pfile_t *pf, pfile_block_t *blk)
           pfile_log(pf, PFILE_LOG_ERR,
               "pointer-array '%s' is used but no element is ever bound"
               " (use `slot[i] is ...`)",
+              variable_name_get(v));
+        } else if (variable_pointer_use_before_bind_ct_get(v)) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "pointer-array '%s' is used before any element is bound "
+              "(use `slot[i] is ...` first)",
               variable_name_get(v));
         } else if (!variable_pointer_slot_rt_bind_ct_get(v)) {
           size_t ii;

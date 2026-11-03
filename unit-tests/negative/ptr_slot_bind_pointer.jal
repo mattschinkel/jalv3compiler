@@ -1,0 +1,10 @@
+-- negative: binding a pointer variable into a pointer-array element
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var pointer p as var byte
+var pointer slots[2] as var byte
+p is v
+slots[0] is p
+forever loop
+end loop

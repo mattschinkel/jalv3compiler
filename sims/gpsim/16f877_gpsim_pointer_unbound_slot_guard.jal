@@ -1,0 +1,38 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — unbound runtime-index pointer-slot guard
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    Only slot 0 is bound; `slots[idx]` with idx=1 must trap in the new
+--    null-slot guard instead of dereferencing the unbound slot's zero
+--    pointer.  The statement after the read must never execute.
+--    checkpoint_verify is off because the guard traps before
+--    regression_checkpoint; the two RAM expectations are the pass condition.
+--
+-- @gpsim_validate begin
+-- steps: 20000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v__gpsim_usg_target 77
+-- expect byte v__gpsim_usg_snap 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var volatile byte _gpsim_usg_target
+var volatile byte _gpsim_usg_snap
+var byte _gpsim_usg_idx
+var pointer _gpsim_usg_slots[2] as var byte
+
+_gpsim_usg_target = 77
+_gpsim_usg_snap = 0
+_gpsim_usg_slots[0] is _gpsim_usg_target
+_gpsim_usg_idx = 1
+_gpsim_usg_snap = _gpsim_usg_slots[_gpsim_usg_idx]
+_gpsim_usg_target = 88
+
+forever loop
+end loop

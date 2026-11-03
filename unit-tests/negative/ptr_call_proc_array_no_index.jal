@@ -1,0 +1,12 @@
+-- negative: procedure-pointer array called without an index
+include 16f1825
+pragma target clock 20_000_000
+var byte v
+var pointer pps[2] as procedure(byte in)
+procedure bump(byte in x) is
+   v = x
+end procedure
+pps[0] is bump
+pps()
+forever loop
+end loop

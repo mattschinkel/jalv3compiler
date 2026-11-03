@@ -1,0 +1,6 @@
+-- negative: pointee dimension beyond the 16-bit address space
+include 16f877
+pragma target clock 20_000_000
+var pointer p as var byte[70000]
+forever loop
+end loop
