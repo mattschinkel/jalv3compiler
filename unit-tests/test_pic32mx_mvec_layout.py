@@ -4,8 +4,10 @@
 
 Pins the 2026-10-22 MX MVEC implementation:
   * 64 x 32-byte stubs at EBASE+0x200 (slot N = EBASE+0x200+N*32);
-  * slot 0 is the QEMU-compatible dispatcher while assigned slots jump
-    to their own handler stubs (both J targets differ from the default);
+  * slot 0 points at the QEMU-compatible dispatcher (identified by its
+    `lui/ori $k0, INTSTAT` prologue, so a layout edit cannot silently
+    retire the check) while assigned slots jump to their own handler
+    stubs (both J targets differ from the default);
   * app code/stubs start at +0x1000 (past the 2 KB table);
   * single-vector MX images are unchanged: the boot redirect at
     EBASE+0x200 still jumps to the code+0x400 stub block.
@@ -152,8 +154,19 @@ def main(argv: list[str] | None = None) -> int:
                 problems.append("slot4 is not a J")
             if slot1 is None:
                 problems.append("unused slot1 is not a J (no default stub?)")
-            if slot0 is not None and slot0 != CODE + 0x1D0:
-                problems.append(f"slot0 target {slot0:#x} is not the dispatcher")
+            if slot0 is not None:
+                # Identify the dispatcher by its PROLOGUE, not by a
+                # hardcoded offset: `lui $k0, 0xBF88` (INTSTAT) + `ori
+                # $k0, $k0, 0x1010`.  An address constant goes stale on
+                # any emission edit that moves the vector block (the
+                # 2026-11-03 handler-entry Cause write moved it 8 bytes
+                # and silently retired this check).
+                disp = PHY + (slot0 - VIR)
+                if (word_at(mem, disp) != 0x3C1ABF88
+                        or word_at(mem, disp + 4) != 0x375A1010):
+                    problems.append(
+                        f"slot0 target {slot0:#x} does not start with the "
+                        f"dispatcher prologue (lui/ori $k0, INTSTAT)")
             if slot4 is not None and slot1 is not None and slot4 == slot1:
                 problems.append("slot4 falls through to the default stub")
             if slot0 is not None and slot1 is not None and slot0 == slot1:

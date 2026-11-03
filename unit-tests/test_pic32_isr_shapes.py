@@ -55,8 +55,10 @@ WRPGPR_SP = "41dd e800"
 WRPGPR_GP = "41dc e000"
 # MZ Status arm: `ori $t1, $t1, 0x00f9` (~EXL, ~ERL, IM[7:0]=0).  MX has
 # no EIC and keeps the plain ~(EXL|ERL) mask, so it must not appear there.
-ARM_CAUSE_IV = "3c08 0080  lui $t0, $zero, 0x80"   # Cause = IV
+ARM_CAUSE_IV = "3c08 0080  lui $t0, $zero, 0x80"   # Cause = IV (arming)
 ARM_CAUSE_IV_MM = "41a8 0080  lui $t0, $zero, 0x80"  # same, 16-bit LUI
+STUB_CAUSE_IV = "3c1a 0080  lui $k0, $zero, 0x80"    # Cause = IV (handler)
+STUB_CAUSE_IV_MM = "41ba 0080  lui $k0, $zero, 0x80" # same, 16-bit LUI
 ARM_MZ_IM_CLEAR = "3529 00f9"
 # microMIPS compresses the same ORI to the 16-bit form.
 ARM_MZ_IM_CLEAR_MM = "5129 00f9"
@@ -113,36 +115,37 @@ def main(argv: list[str] | None = None) -> int:
         ("mz_plain_pfm",
          build_body("32mz1024efh064", "200_000_000", ""),
          True, [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_CAUSE_IV,
-                ARM_MZ_IM_CLEAR], [], []),
+                STUB_CAUSE_IV, ARM_MZ_IM_CLEAR], [], []),
         ("mz_fast_pfm",
          build_body("32mz1024efh064", "200_000_000", "fast"),
          True, [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_CAUSE_IV,
-                ARM_MZ_IM_CLEAR], [], []),
+                STUB_CAUSE_IV, ARM_MZ_IM_CLEAR], [], []),
         ("mz_raw_pfm",
          build_body("32mz1024efh064", "200_000_000", "raw"),
-         True, [ARM_CAUSE_IV, ARM_MZ_IM_CLEAR],
+         True, [ARM_CAUSE_IV, STUB_CAUSE_IV, ARM_MZ_IM_CLEAR],
          [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP], []),
         ("mz_mvec_pfm",
          build_body("32mz1024efh064", "200_000_000", "9"),
-         True, [ARM_CAUSE_IV, ARM_MZ_IM_CLEAR], [PRISS_LO, PRISS_HI], []),
+         True, [ARM_CAUSE_IV, STUB_CAUSE_IV, ARM_MZ_IM_CLEAR],
+         [PRISS_LO, PRISS_HI], []),
         ("mz_plain_micromips",
          build_body("32mz1024efh064", "200_000_000", "", micromips=True),
          False, [], [], ["micromips", "pragma interrupt raw"]),
         ("mz_raw_micromips",
          build_body("32mz1024efh064", "200_000_000", "raw",
                     micromips=True),
-         True, [ARM_CAUSE_IV_MM, ARM_MZ_IM_CLEAR_MM],
+         True, [ARM_CAUSE_IV_MM, STUB_CAUSE_IV_MM, ARM_MZ_IM_CLEAR_MM],
          [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP], []),
         ("mx_plain_pfm",
          build_body("32mx270f256b", "40_000_000", ""),
-         True, [ARM_CAUSE_IV], [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP,
-                    ARM_MZ_IM_CLEAR], []),
+         True, [ARM_CAUSE_IV, STUB_CAUSE_IV],
+         [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_MZ_IM_CLEAR], []),
         ("mx_fast_pfm",
          build_body("32mx270f256b", "40_000_000", "fast"),
          False, [], [], ["not supported", "pragma interrupt raw"]),
         ("mx_mvec_pfm",
          build_body("32mx270f256b", "40_000_000", "1"),
-         True, [ARM_CAUSE_IV], [], []),
+         True, [ARM_CAUSE_IV, STUB_CAUSE_IV], [], []),
     ]
 
     failures = 0

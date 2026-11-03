@@ -1823,6 +1823,17 @@ static void mips_isr_stub_body(pfile_t *pf, label_t isr, boolean_t fast)
   mips_code_t jal;
 
   UNUSED(pf);
+  /* Belt-and-braces: a software-interrupt request left pending in
+   * Cause.IP[1:0] would make the handler re-enter itself forever -- the
+   * body clears the controller flag (IFS), not Cause.  The arming clears
+   * the bits before `EXL` is released, and no generated code sets them
+   * again, so this is defence in depth; it also keeps `Cause.IV` at 1.
+   * ($k0 is compiler-reserved and already clobbered by the MVEC
+   * dispatcher before any stub runs.) */
+  (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_K0, 0,
+      (int) ((MIPS_CAUSE_IV >> 16) & 0xFFFF));
+  (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_CAUSE, 0,
+      MIPS_REG_K0, 0);
   if (!fast) {
     mips_isr_save();
   }
