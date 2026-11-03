@@ -1,0 +1,126 @@
+-- ------------------------------------------------------
+-- Title: PIC32MZ1024EFH064 @sim_validate — interrupt DISPATCH (8 round trips)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Proves the EIC actually delivers to the `pragma interrupt` handler on
+--    the MZ, not just that the image boots.  Each of eight raises is
+--    followed by a wait for the handler to CLEAR the flag, so `hits` can
+--    only reach 8 if every request went:  flag -> controller -> vector ->
+--    handler -> clear -> ERET -> main.  A masked core, a missing or
+--    mis-based vector, or a handler that never returns leaves `hits`
+--    short and the program prints ##MZISR-FAIL## instead of ##MZISR-OK##.
+--
+--    This is also the silicon witness for the same program: the image is
+--    `pragma target image pfm`, so it flashes unchanged on the MZ bench
+--    (100 MHz FRC_SPLL, UART1 RPF0/RPF1 115200) and prints the climbing
+--    `##MZISR## hits=<n> done=<d>` heartbeat.
+--
+--    NOTE on coverage: QEMU's EIC does not model `Status.IM[7:0]`, which is
+--    why the 2026-11-03 "every MZ ISR image is dark" defect passed every
+--    QEMU body.  The silicon-specific half of the guard is the listing pin
+--    in unit-tests/test_pic32_isr_shapes.py (the MZ arm must clear IM);
+--    this body is the runtime half.
+--
+-- @sim_validate begin
+-- duration_s: 2.0
+-- machine: pic32mz-explorer16
+-- uart_contains: ##MZISR-OK##
+-- expect byte v_hits 8
+-- expect byte v_done 1
+-- @sim_validate end
+--
+-- Bench: python3 pic_programmer.py program --board mini32 --file <hex>
+--        python3 jal-private/ftdi_usb_serial.py --seconds 5 --baud 115200
+--
+include 32mz1024efh064                -- target device
+pragma target clock 100_000_000        -- FRC + SPLL, the proven bench clock
+pragma target OSC    FRC_SPLL          -- internal oscillator
+pragma target image pfm                -- app in PFM + compiler boot block
+pragma target WDT   DISABLED
+pragma target DMT   DISABLED
+
+enable_digital_io()
+_usec_delay(100_000)
+
+-- UART1 (bench + QEMU wiring: TX RPF0, RX RPF1)
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_F0
+alias serial_hw_pin_tx_direction is pin_F0_direction
+alias serial_hw_pin_rx is pin_F1
+alias serial_hw_pin_rx_direction is pin_F1_direction
+alias serial_hw_tx_pps is RPF0R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPF1
+include serial_hardware
+serial_hw_init()
+alias serial_data is serial_hw_data
+
+include print
+
+var volatile byte hits = 0            -- handler entries
+var volatile byte done = 0            -- 1 when all eight round trips ran
+
+--------------------------------------------------------------------------------
+-- Description: IRQ0 handler (single vector, SRS path)
+-- Returns: none
+-- Notes: clears IFS0 bit 0 so ERET does not re-enter; the main loop waits
+-- - for that clear before raising the next request.
+--------------------------------------------------------------------------------
+procedure _ct_isr() is
+   pragma interrupt
+
+   IFS0CLR = 1
+   hits = hits + 1
+end procedure
+
+print_string(serial_data, "##MZISR## boot irq0")
+print_crlf(serial_data)
+
+IPC0 = 0x1C                          -- IRQ0: priority 7, subpriority 0
+IEC0SET = 1                          -- enable IRQ0
+
+var word guard = 0
+for 8 loop
+   IFS0SET = 1                       -- raise IRQ0
+   guard = 0
+   while ((IFS0 & 1) == 1) & (guard < 20000) loop
+      guard = guard + 1              -- dispatch must clear the flag
+   end loop
+end loop
+
+if hits == 8 then
+   done = 1
+end if
+
+print_string(serial_data, "##MZISR## hits=")
+print_dword_dec(serial_data, hits)
+print_string(serial_data, " done=")
+print_dword_dec(serial_data, done)
+print_crlf(serial_data)
+
+if done == 1 then
+   print_string(serial_data, "##MZISR-OK##")
+else
+   print_string(serial_data, "##MZISR-FAIL##")
+end if
+print_crlf(serial_data)
+
+--------------------------------------------------------------------------------
+-- Description: heartbeat, so a bench capture start at any time sees a verdict
+-- Returns: none
+--------------------------------------------------------------------------------
+forever loop
+   if done == 1 then
+      print_string(serial_data, "##MZISR-OK##")
+   else
+      print_string(serial_data, "##MZISR-FAIL##")
+   end if
+   print_string(serial_data, " hits=")
+   print_dword_dec(serial_data, hits)
+   print_string(serial_data, " done=")
+   print_dword_dec(serial_data, done)
+   print_crlf(serial_data)
+   _usec_delay(500_000)
+end loop
