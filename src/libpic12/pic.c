@@ -11,6 +11,7 @@
  **
  ************************************************************/
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <assert.h>
 
@@ -637,6 +638,162 @@ static boolean_t pic_branch_use_tail_goto(cmd_branchtype_t brtype,
   return BOOLEAN_TRUE;
 }
 
+/* RUNTIME CHUNK MAP STORE (2026-11-02,
+ * docs/investigations/runtime_chunk_arguments_design_20261102.md).
+ *
+ * A formal's subscripts are emitted against the FORMAL's chunk map, which one
+ * callee body can carry for one actual only; a second chunked actual is
+ * refused (fixes/fix_openarray_formal_chunk_map.md).  The runtime fix hands
+ * the layout to the callee through a descriptor, and the descriptor is
+ * filled here, at the call site, where the layout is known.
+ *
+ * The map (`_chunkmap`) is created by the front end, so it is part of the
+ * image; this fills it with immediate MOVLW/MOVWF pairs (no value staging,
+ * so nothing the caller has staged in W can be disturbed -- the chunk-walk
+ * emitter learned that the hard way) and points `_strarg_map_ptr` at it.
+ *
+ * Layout: [count][base lo, base hi, span]...
+ *
+ * Emitted only for a formal whose subscripts use the runtime walk: that is
+ * decided once, after placement, by
+ * pic_var_openarray_pair_formal_runtime_get(), so a program whose buffers
+ * fit one bank pays nothing. */
+/* find a variable by name across every procedure block (pfile_variable_find
+ * apparently searches a narrower scope: the front-end side-car created as a
+ * LOCAL next to a marshalling buffer is not found from the analysis walk --
+ * found 2026-11-02). */
+static variable_t pic_variable_find_any_scope(pfile_t *pf, const char *name)
+{
+  pfile_proc_t *proc;
+
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    pfile_block_t *blk;
+
+    for (blk = pfile_proc_block_root_get(proc); blk;
+         blk = pfile_block_next(blk)) {
+      variable_t var;
+
+      for (var = pfile_block_variable_list_head(blk); var;
+           var = variable_link_get(var)) {
+        const char *nm;
+
+        nm = variable_name_get(var);
+        if (nm && (0 == strcmp(nm, name))) {
+          return var;
+        }
+      }
+    }
+  }
+  return VARIABLE_NONE;
+}
+
+static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
+{
+  variable_t      av;
+  variable_t      fv;
+  variable_t      mapv;
+  value_t         mapval;
+  variable_ct_t   ct;
+  variable_ct_t   ii;
+  variable_sz_t   sz[PIC_CHUNK_MAP_MAX];
+  variable_base_t base[PIC_CHUNK_MAP_MAX];
+
+  if (!formal || !actual || !value_is_array(actual)) {
+    return;
+  }
+  fv = value_variable_get(formal);
+  if (!fv || !pic_var_openarray_pair_formal_runtime_get(fv)) {
+    /* the callee addresses this formal linearly (or with its baked
+     * layout), so there is nothing to hand over */
+    return;
+  }
+  av = value_variable_get(actual);
+  if (!av || (VARIABLE_NONE == av)) {
+    return;
+  }
+  if (!pic_var_openarray_pair_descriptor_get(av, &mapv)) {
+    /* no runtime map for this actual (a user array, or a program without
+     * any string-argument buffer): the callee cannot walk it, and the
+     * formal would not have been marked runtime */
+    return;
+  }
+  if (!pic_var_openarray_pair_layout_get(av, &ct, sz, base)) {
+    /* single-chunk actual: one entry straight from its placement (the
+     * chunk accessors only answer for a CHUNKED variable -- they returned
+     * 0xFFFF/0 here, found 2026-11-02) */
+    ct = 1;
+    base[0] = value_base_get(actual);
+    if (VARIABLE_BASE_UNKNOWN == base[0]) {
+      base[0] = variable_base_get(av, 0);
+    }
+    sz[0]   = pic_variable_def_storage_need_get(pf, variable_def_get(av), 0);
+  }
+  if (ct > PIC_CHUNK_MAP_MAX) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "the runtime chunk map holds %u chunks but '%s' is split into %u; "
+        "reduce the buffer (e.g. _string_heap_size) so it needs fewer RAM "
+        "bank pieces",
+        (unsigned) PIC_CHUNK_MAP_MAX,
+        variable_name_get(av) ? variable_name_get(av) : "?", (unsigned) ct);
+    return;
+  }
+  /* the map is a front-end global, but it may still be unplaced: give it
+   * an address now (the callee's walk reads it through the pointer) */
+  if (VARIABLE_BASE_UNKNOWN == variable_base_get(mapv, 0)) {
+    if (!pic_variable_late_alloc(pf, mapv)) {
+      return;
+    }
+  }
+  mapval = value_alloc(mapv);
+  if (!mapval) {
+    return;
+  }
+  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) ct);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 0);
+  for (ii = 0; ii < ct; ii++) {
+    size_t ofs;
+
+    ofs = (size_t) (1 + 3 * ii);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+        (unsigned) (base[ii] & 0xFF));
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, ofs);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+        (unsigned) ((base[ii] >> 8) & 0xFF));
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, ofs + 1);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) (sz[ii] & 0xFF));
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, ofs + 2);
+  }
+  /* tell the callee WHICH map is active: a compiler-owned 2-byte pointer,
+   * set right here (per call site) */
+  {
+    variable_t ptr;
+    value_t    ptrval;
+    variable_base_t sbase;
+
+    ptr = pic_variable_find_any_scope(pf, "_strarg_map_ptr");
+    if (ptr && (VARIABLE_NONE != ptr)) {
+      if (VARIABLE_BASE_UNKNOWN == variable_base_get(ptr, 0)) {
+        if (!pic_variable_late_alloc(pf, ptr)) {
+          value_release(mapval);
+          return;
+        }
+      }
+      sbase = variable_base_get(mapv, 0);
+      ptrval = value_alloc(ptr);
+      if (ptrval) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+            (unsigned) (sbase & 0xFF));
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptrval, 0);
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+            (unsigned) ((sbase >> 8) & 0xFF));
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptrval, 1);
+        value_release(ptrval);
+      }
+    }
+  }
+  value_release(mapval);
+}
+
 static boolean_t pic_value_is_dynamic_bit_array_element(value_t val)
 {
   value_t baseofs;
@@ -1041,6 +1198,7 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
         }
       }
     } else {
+
       /* a direct call */
       value_t val;
       value_t *normalized_params;
@@ -1077,6 +1235,7 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
               pic_op(pf, normalized_params && (actual == normalized_params[ii])
                   ? OPERATOR_POINTER_ASSIGN : OPERATOR_ASSIGN,
                   val, actual, VALUE_NONE);
+              pic_chunk_desc_store(pf, val, actual);
             }
           }
         }
@@ -3969,6 +4128,11 @@ void pic_code_preamble(pfile_t *pf)
     lbl_loader = LABEL_NONE;
 
     pic_instr_default_flag_set(pf, PIC_CODE_FLAG_NO_OPTIMIZE);
+    /* register the shared chunk-walk helpers BEFORE the reset-vector
+     * decision: their bodies sit at the top of the image, so the entry must
+     * be a page-jump when any exists (and the bodies must be known before
+     * the procedures below discover the call sites) */
+    pic_chunk_walk_helpers_register(pf);
     lbl_entry = (lbl_pic_preuser)
       ? lbl_pic_preuser
       : lbl_user;
@@ -4022,7 +4186,8 @@ void pic_code_preamble(pfile_t *pf)
       if ((lbl_isr
         || lbl_pic_lookup
         || pfile_flag_test(pf, PFILE_FLAG_BOOT_LONG_START)
-        || pic_intrinsics_exist(pf))) {
+        || pic_intrinsics_exist(pf)
+        || pic_chunk_walk_helpers_exist())) {
         if (!pic_is_16bit(pf)) {
           if (pic_is_14bit_hybrid(pf)) {
             pic_code_t code;
@@ -4139,6 +4304,9 @@ void pic_code_preamble(pfile_t *pf)
     } else {
     }
     pic_intrinsics_create(pf);
+    /* shared chunk-walk helpers (one per chunked variable): emitted after
+     * every call site exists, i.e. at the same point as the intrinsics */
+    pic_chunk_walk_helpers_create(pf);
     if (!pfile_flag_test(pf, PFILE_FLAG_MISC_INTERRUPT_FAST)) {
       pic_instr_append_label(pf, lbl_pic_pre_isr);
       pic_var_isr_entry(pf);
@@ -4159,6 +4327,11 @@ void pic_code_preamble(pfile_t *pf)
 void pic_code_cleanup(pfile_t *pf)
 {
   const pic_backend_t *be = pic_backend_get(pf);
+
+  /* drop the shared chunk-walk helper labels BEFORE pfile_close's label
+   * teardown runs its leak check (they are held by this compiler, not by a
+   * caller) */
+  pic_chunk_walk_state_reset();
 
   if (be) {
     be->code_cleanup(pf);
@@ -6195,8 +6368,22 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
                   && (VARIABLE_DEF_TYPE_ARRAY
                     == variable_def_type_get(
                         variable_def_get(avar)))) {
-                pic_var_openarray_pair_record(avar,
-                    value_variable_get(fval));
+                {
+                  pfile_pos_t call_pos;
+
+                  cmd_pos_get(mark_cmd, &call_pos);
+                  {
+                    /* the runtime map is ONE program-wide buffer, created
+                     * by the front end when the program first coerces a
+                     * heap string to an open-array formal; its presence is
+                     * what lets this actual be walked at run time */
+                    variable_t  desc;
+
+                    desc = pic_variable_find_any_scope(pf, "_chunkmap");
+                    pic_var_openarray_pair_record(avar,
+                        value_variable_get(fval), &call_pos, desc);
+                  }
+                }
               } else {
                 /* non-array formal receiving an array actual (e.g. an
                  * open byte formal fed an array): the formal addresses

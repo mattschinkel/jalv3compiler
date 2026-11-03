@@ -1,0 +1,99 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — `error_hook` library
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Exercises `demo_lib/error_hook.jal`: the library defines `_error_hook`
+--    and the application customises it with the two optional aliases
+--      alias _error_device is cap     (a byte-out device)
+--      alias _error_bit    is flag    (a latched bit)
+--    A growing `&` chain runs the heap out, so the handler must fire, print
+--    "[string heap full]" through the aliased device, set the aliased bit,
+--    and leave `_string_error` cleared (the compiler clears it when the hook
+--    returns).  A second, manual raise covers the non-string branch:
+--    `_error_source = _ERROR_SOURCE_USER` must produce "[user error]".
+--
+--    Byte map of the device buffer:
+--      0  '['      1  's'     18  CR      19  LF      (heap full #1)
+--     20  '['     40  '['     52  CR      53  LF      (user error)
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_done 1
+-- expect bit_clear v_trisa 0
+-- expect bit_set v_lata 0
+-- expect byte v_b0 91
+-- expect byte v_b1 115
+-- expect byte v_b18 13
+-- expect byte v_b40 91
+-- expect byte v_b52 13
+-- expect byte v_capn 54
+-- expect byte v_err_after 0
+-- expect word_le v_strlen 40
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+var byte _cap[64]
+var volatile byte _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+
+const word _string_heap_size = 100
+include print
+
+var volatile byte b0 = 0
+var volatile byte b1 = 0
+var volatile byte b18 = 0
+var volatile byte b40 = 0
+var volatile byte b52 = 0
+var volatile byte capn = 0
+var volatile byte err_after = 99
+var volatile word strlen = 0
+var volatile byte done = 0
+
+-- a REAL pin for the flag: the direction must be configured by the
+-- application (the handler only writes the bit)
+alias led is pin_a0
+pin_a0_direction = output
+led = false
+
+alias _error_device is cap
+alias _error_bit    is led
+include error_hook
+
+var string sa = "AAAAAAAAAA"
+var string sb = "BBBBBBBBBB"
+var string sc
+
+regression_begin_run()
+sc = sc & sa & sb
+sc = sc & sa & sb
+sc = sc & sa & sb                  -- heap full: the handler fires
+sc = sc & sa & sb                  -- and again
+-- manual raise through the hook: the non-string branch
+_error_source = _ERROR_SOURCE_USER
+_error_hook()
+_error_source = 0
+
+b0 = _cap[0]
+b1 = _cap[1]
+b18 = _cap[18]
+b40 = _cap[40]
+b52 = _cap[52]
+capn = _capn
+
+err_after = _string_error
+strlen = COUNT(sc)
+done = 1
+regression_checkpoint()
+regression_pass_led_if_clean()

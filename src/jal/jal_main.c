@@ -37,6 +37,7 @@
 #include "../libpic32/mips_alloc.h"
 #include "../libesp32/esp.h"
 #include "jal_string.h"
+#include "jal_error.h"
 #include "../libesp32/esp32.h"
 #include "../libcore/pfile.h"
 #include "jal_blck.h"
@@ -762,11 +763,13 @@ static void jal_hex_temp_cleanup(void)
 static void jal_reset_between_compiles(void)
 {
   jal_string_state_reset();
+  jal_error_state_reset();
   jal_expr_state_reset();
   jal_block_state_reset();
   pic_stk_reset();
   pic_var_reset();
   pic_state_reset();
+  pic_chunk_walk_state_reset();
   mips_op_state_reset();
   mips_const_state_reset();
   mips_alloc_state_reset();

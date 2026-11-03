@@ -1,0 +1,71 @@
+-- ------------------------------------------------------
+-- Title: Runtime error hook (`_error_hook`)
+-- Author: Matthew Schinkel, Copyright (c) 2026
+-- Compiler: jalv3-x86-64
+--
+-- Defining `procedure _error_hook()` is the whole opt-in: the compiler finds
+-- it by name and calls it wherever a runtime error is raised (string heap
+-- full, string overflow, string invalid), with `_error_source` and
+-- `_string_error` set.  Both cells are cleared when the hook returns
+-- (delivered once, then gone).  Without the hook the program pays nothing.
+--
+-- The heap below is deliberately large: the `&` chain keeps growing
+-- `my_string3`, so after a few passes an append no longer fits and the hook
+-- prints the reason instead of failing silently.
+-- ------------------------------------------------------
+include 16f1825
+pragma target clock    16_000_000
+pragma target OSC      INTOSC_NOCLKOUT
+pragma target PLLEN    DISABLED
+pragma target WDT      DISABLED
+pragma target PWRTE    ENABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target IESO     DISABLED
+pragma target LVP      DISABLED
+pragma target MCLR     EXTERNAL
+enable_digital_io()
+
+const serial_hw_baudrate = 115200
+alias pin_RX_direction is pin_c5_direction
+alias pin_TX_direction is pin_c4_direction
+include serial_hardware
+serial_hw_init()
+alias serial is serial_hw_data
+include print
+include delay
+
+-- define the handler BEFORE the code that can fail
+procedure _error_hook() is
+   var byte err
+   if _error_source == _ERROR_SOURCE_STRING then
+      err = _string_error            -- read ONCE: the read clears the cell
+      if err != _STRING_ERROR_NONE then
+         if err == _STRING_ERROR_HEAP_FULL then
+            print_string(serial, "[heap full]")
+         else
+            print_string(serial, "[string error: ")
+            print_byte_dec(serial, err)
+            print_string(serial, "]")
+         end if
+         print_crlf(serial)
+      end if
+   end if
+end procedure
+
+const word _string_heap_size = 200
+include strings_dynamic
+
+var string my_string1 = "My string" & 1
+var byte two = 2
+var string my_string2 = "My string" & two
+var string my_string3
+
+forever loop
+   -- appends 20 characters per pass until the heap is full, then the hook
+   -- reports it and the text stops growing
+   my_string3 = my_string3 & my_string1 & my_string2
+   print_string(serial, my_string3)
+   print_crlf(serial)
+   delay_1s(1)
+end loop

@@ -152,6 +152,8 @@ boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr)
  * zeroes the module state. The per-PASS resets above run mid-compile and
  * are unrelated. Call while the back end is idle. */
 void pic_state_reset(void);
+/* per-compile state of the shared chunk-walk helper registry */
+void pic_chunk_walk_state_reset(void);
 
 void pic_var_banked_access_reset(void);
 void pic_var_banked_access_bump(variable_t var);

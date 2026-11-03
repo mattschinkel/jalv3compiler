@@ -35,6 +35,10 @@
 #define PIC_LABEL_FLOAT_TOINT    "_pic_float_toint"
 
 void pic_intrinsics_create(pfile_t *pf);
+/* one shared chunk-walk helper per chunked variable (pic_op_fsr.c) */
+void pic_chunk_walk_helpers_create(pfile_t *pf);
+boolean_t pic_chunk_walk_helpers_exist(void);
+void pic_chunk_walk_helpers_register(pfile_t *pf);
 boolean_t pic_intrinsics_exist(pfile_t *pf);
 void pic_multiply_create_fn(pfile_t *pf, label_t lbl,
     value_t mresult, value_t multiplier, value_t multiplicand);

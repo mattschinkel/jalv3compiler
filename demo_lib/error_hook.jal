@@ -1,0 +1,95 @@
+-- ---------------------------------------------------------------------------
+-- Title: Runtime error hook
+-- Copyright (c) 2026, Matthew Schinkel
+-- Released under the ZLIB license (http://www.opensource.org/licenses/zlib-license.html)
+--
+-- Defines `_error_hook()`, the procedure the compiler calls whenever a
+-- runtime error is raised (today: a failed dynamic-string operation).  The
+-- compiler finds it by NAME, so including this library is the whole opt-in;
+-- a program that does not include it is unchanged (the error cells then stay
+-- set so they can be polled).
+--
+-- The textual report covers every error the compiler can raise today:
+--   [string heap full]   the string heap has no room (append/assign failed)
+--   [string overflow]    the result would not fit the destination
+--   [string invalid]     an invalid string operation
+--   [string error: N]    any other code (forward compatibility)
+--   [user error]         the application raised it
+--   [error: N]           a future subsystem (source N) -- forward compatible
+--
+-- The handler can be tailored with two OPTIONAL aliases, defined BEFORE this
+-- include:
+--
+--    alias _error_bit    is <a bit>       -- e.g. an LED: set true on error
+--                                         (configure its direction yourself)
+--    alias _error_device is <a device>    -- e.g. serial_data: print the error
+--
+-- Example:
+--
+--    include print
+--    alias _error_device is serial_data
+--    alias _error_bit    is led
+--    include error_hook
+--
+-- Both are optional and independent; with neither the handler still runs
+-- (the error is consumed) and does nothing.
+--
+-- Cells the handler reads:
+--    _error_source       which subsystem raised it (1 = string)
+--    _string_error       the string code: 0 none, 1 heap full, 2 overflow,
+--                        3 invalid.  READING IT CLEARS IT (consume-on-read),
+--                        so it is read once into `err` below.
+--
+-- The compiler clears `_error_source` and `_string_error` when the handler
+-- returns (delivered once, then gone).  `_error_bit` is NOT cleared: it is a
+-- latched "something went wrong" flag for the application to clear.
+--
+-- Notes:
+--  * include this AFTER the library that provides the device (`print`) and
+--    BEFORE the code that can fail (any `var string` / `&` / string op).
+-- ---------------------------------------------------------------------------
+
+procedure _error_hook() is
+   var byte err
+
+   -- a latched flag for the application (LED, status bit, ...)
+   if defined(_error_bit) then
+      _error_bit = true
+   end if
+
+   -- an optional textual report (one line per error, through the device)
+   if defined(_error_device) then
+      if _error_source == _ERROR_SOURCE_STRING then
+         -- _string_error is consume-on-read: this is the ONLY read
+         err = _string_error
+         if err != _STRING_ERROR_NONE then
+            if err == _STRING_ERROR_HEAP_FULL then
+               print_string(_error_device, "[string heap full]")
+            else
+               if err == _STRING_ERROR_OVERFLOW then
+                  print_string(_error_device, "[string overflow]")
+               else
+                  if err == _STRING_ERROR_INVALID then
+                     print_string(_error_device, "[string invalid]")
+                  else
+                     print_string(_error_device, "[string error: ")
+                     print_byte_dec(_error_device, err)
+                     print_string(_error_device, "]")
+                  end if
+               end if
+            end if
+            print_crlf(_error_device)
+         end if
+      else
+         -- another subsystem, or the application raising through the hook
+         if _error_source == _ERROR_SOURCE_USER then
+            print_string(_error_device, "[user error]")
+         else
+            print_string(_error_device, "[error: ")
+            print_byte_dec(_error_device, _error_source)
+            print_string(_error_device, "]")
+         end if
+         print_crlf(_error_device)
+      end if
+   end if
+end procedure

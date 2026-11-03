@@ -57,7 +57,9 @@ else ifeq ($(ARCH),win64)
    # 64-bit Windows, cross-compiled from Linux (packages:
    # gcc-mingw-w64-x86-64).  Own obj-dir/lib tags via ARCH=win64 so the
    # mingw objects never mix with the Linux build (mixed-object lesson).
-   # Output stem `win64` -> bin/beta/jalv3-win64.exe is the ONLY Windows
+   # Output name: bin/beta/jalv3-x86-64.exe (see JAL2_BIN_STEM below -- the
+   # stem is `x86-64`, the same 64-bit target as the Linux build; only the
+   # toolchain-appended `.exe` distinguishes them). It is the ONLY Windows
    # binary (no duplicate: the old cp-to-x86-64.exe twin was removed
    # 2026-10-30 -- it was a manual copy under the jalv25r9 share name).
    MARCH = -m64
@@ -119,7 +121,11 @@ LFLAGS += $(FLAVORFLAGS)
 export ARCH
 
 # Stems `bin/beta/jalv3-*` (jal only): `native` -> `original` to avoid clashing with gcc `-march=native` and with JAL "native" language features.
-JAL2_BIN_STEM := $(if $(filter native,$(ARCH)),original,$(ARCH))$(FLAVOR)
+# `win64` -> `x86-64`: the cross-build is the same 64-bit target, so the artifact
+# is bin/beta/jalv3-x86-64.exe (the toolchain appends the `.exe`; prefix rules
+# cannot append it because the name is also the make target). ARCH itself stays
+# `win64` so the object/dep/lib tags never mix mingw objects with Linux ones.
+JAL2_BIN_STEM := $(if $(filter native,$(ARCH)),original,$(if $(filter win64,$(ARCH)),x86-64,$(ARCH)))$(FLAVOR)
 
 LIBTAG := $(ARCH)$(FLAVOR)
 OBJ_DIR=.obj-$(LIBTAG)
@@ -192,15 +198,36 @@ $(PROGRAM): $(OBJS) $(LIBS) | $(BIN_DIR)
 $(BIN_DIR):
 	mkdir -p $@
 	
-# The toolchain appends .exe for the win64 cross and Windows-native builds,
-# so clean must remove BOTH spellings.  The old `x86-64Linux -> EXE_RM empty`
-# special case existed because a Linux clean sat beside the published Windows
-# artifact under the SAME name; with builds confined to bin/beta that artifact
-# is bin/beta/jalv3-win64.exe, so the clash (and the carve-out) is gone.
-EXE_RM := $(PROGRAM).exe
+# The toolchain appends `.exe` for the win64 cross and for Windows-native
+# builds, so the REAL artifact name of a Windows build is `$(PROGRAM).exe`
+# and plain `$(PROGRAM)` never exists.  Both flavors now share the
+# `jalv3-x86-64` stem, which brings back the old x86-64/Linux clash in a wider
+# form: bin/beta/jalv3-x86-64 is the LINUX binary, bin/beta/jalv3-x86-64.exe
+# is the published WINDOWS one.  A clean must remove only the spelling its own
+# toolchain produces (the old carve-out keyed on `x86-64Linux`; this one keys
+# on the host + which toolchain appends `.exe`):
+#   Linux host             -> one spelling, chosen by ARCH (the two artifacts
+#                             live side by side and both are tracked)
+#   anything else (Windows native, macOS, unknown host)
+#                          -> remove BOTH, the historical behaviour: there is
+#                             no cross-platform name clash there, so removing a
+#                             non-existent second spelling costs nothing.
+HOST_OS := $(shell uname -s 2>/dev/null)
+ifeq ($(HOST_OS),Linux)
+  ifeq ($(filter win64,$(ARCH)),win64)
+    PROG_RM :=
+    EXE_RM  := $(PROGRAM).exe
+  else
+    PROG_RM := $(PROGRAM)
+    EXE_RM  :=
+  endif
+else
+  PROG_RM := $(PROGRAM)
+  EXE_RM  := $(PROGRAM).exe
+endif
 
 clean::
-	-rm -f $(PROGRAM) $(EXE_RM)
+	-rm -f $(PROG_RM) $(EXE_RM)
 	-rm -rf $(OBJ_DIR)
 	-rm -rf $(DEP_DIR)
 

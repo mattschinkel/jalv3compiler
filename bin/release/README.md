@@ -23,7 +23,7 @@ absolute paths in its DWARF; the stripped copies are ~950 kB:
 
 ```sh
 cp bin/beta/jalv3-x86-64 bin/release/jalv3-x86-64
-cp bin/beta/jalv3-win64.exe bin/release/jalv3-win64.exe
+cp bin/beta/jalv3-x86-64.exe bin/release/jalv3-x86-64.exe
 strip bin/release/jalv3-x86-64
-x86_64-w64-mingw32-strip bin/release/jalv3-win64.exe
+x86_64-w64-mingw32-strip bin/release/jalv3-x86-64.exe
 ```

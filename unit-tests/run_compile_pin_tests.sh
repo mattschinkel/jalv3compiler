@@ -97,6 +97,12 @@ run_sh string_error_paths          unit-tests/test_string_error_paths.sh "$CC"
 run_sh pic12_strings               unit-tests/test_pic12_strings.sh "$CC"
 run_sh string_heap_sizing          unit-tests/test_string_heap_sizing.sh "$CC"
 run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$CC"
+# Open-array formal CHUNK-MAP ambiguity: a formal serving two different
+# multi-bank actuals walks only the first one's chunks (silently read the
+# first string's text); the compiler's `_strargN` buffer is the case the
+# author can act on (fixes/fix_openarray_formal_chunk_map.md).
+run_sh string_arg_chunk_map        unit-tests/test_string_arg_chunk_map.sh "$CC"
+run_sh error_hook                  unit-tests/test_error_hook.sh "$CC"
 run_sh optional_params_negative    unit-tests/test_optional_params_negative.sh "$CC"
 run_sh optional_empty_string       unit-tests/test_optional_empty_string.sh "$CC"
 run_py proc_entry_bsr              unit-tests/test_proc_entry_bsr.py --compiler "$CC"
@@ -138,6 +144,10 @@ run_py malformed_input_fuzz_multi  unit-tests/fuzz_jal_inputs.py --compiler "$CC
 
 # Storage / allocation / target rules
 run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$CC"
+# The bind enforces the pointee signature: a scalar pointee takes a variable
+# of the same signature (or an element / scalar pseudo-variable), never an
+# array or a string.  fixes/fix_pointer_bind_signature.md.
+run_sh pointer_bind_signature      unit-tests/test_pointer_bind_signature.sh "$CC"
 run_sh pointer_pseudo_binds        unit-tests/test_pointer_pseudo_binds.sh "$CC"
 run_sh multibank_array_errors      unit-tests/test_multibank_array_errors.sh "$CC"
 run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"

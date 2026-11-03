@@ -17,6 +17,8 @@
 #include <errno.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
+#include "../libutils/mem.h"
 
 #include "../libcore/pf_proc.h"
 #include "../libcore/pf_expr.h"
@@ -28,6 +30,197 @@
 #include "pic_inst.h"
 #include "pic_op.h"
 #include "pic_op_priv.h"
+
+/* RUNTIME CHUNK WALK (2026-11-02; no chunk-count cap).
+ *
+ * An open-array formal serving several chunked actuals cannot carry a baked
+ * chunk map, so the call site writes the ACTIVE layout into the one
+ * program-wide `_chunkmap` and points `_strarg_map_ptr` at it:
+ *
+ *     [count][base0 lo, base0 hi, span0][base1 lo, base1 hi, span1]...
+ *
+ * This walk loops over that table through the pointer until the index falls
+ * inside a chunk, so the number of chunks is limited only by the heap:
+ *
+ *     FSR0 = table + 1; count = table[0]
+ *   loop: base = INDF++; hi = INDF++; span = INDF++
+ *         if (t < span) goto done          ; t = index inside this chunk
+ *         t -= span; if (--count) loop
+ *   done: FSR0 = base + t                  ; leaves FSR0 at the element
+ */
+static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, value_t idx,
+    size_t offset)
+{
+  value_t ptr;
+  unsigned t_wide;
+  value_t t;
+  value_t cnt;
+  value_t base;
+  value_t span;
+  value_t ind;
+  label_t loop;
+  label_t done;
+
+  long idx_const;
+
+  ptr = pfile_value_find(pf, PFILE_LOG_ERR, "_strarg_map_ptr");
+  if ((VALUE_NONE == ptr) || !value_variable_get(ptr)) {
+    return;
+  }
+  ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+  {
+    variable_t gc;
+    variable_t gb;
+    variable_t gs;
+
+    if (!pic_var_chunk_walk_globals_get(pf, &gc, &gb, &gs)) {
+      return;
+    }
+    /* the baked walk's width rule: a byte index gets the ONE-byte standard
+     * temp (v__pic_temp), which the caller's out-parameter staging reads
+     * back as the in-chunk offset -- asking for 2 bytes returned
+     * _pic_temp+1 instead and the staged value went missing (the
+     * echo3-prints-nothing hang) */
+    if (!idx || value_is_const(idx)) {
+      unsigned long tot;
+
+      tot = offset + (idx ? (unsigned long) value_const_get(idx) : 0UL);
+      t_wide = (tot > 0xFFU) ? 1 : 0;
+      idx_const = (long) tot;
+    } else {
+      t_wide = ((pic_dynamic_index_byte_sz_get(idx) > 1) || (offset > 0xFFU))
+        ? 1 : 0;
+      idx_const = -1;
+    }
+    t    = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, t_wide ? 2 : 1);
+    cnt  = value_alloc(gc);
+    base = value_alloc(gb);
+    span = value_alloc(gs);
+    if (!ind || !t || !cnt || !base || !span) {
+      if (t)    { pic_var_temp_release(pf, t); }
+      if (cnt)  { value_release(cnt); }
+      if (base) { value_release(base); }
+      if (span) { value_release(span); }
+      return;
+    }
+  }
+  loop = pfile_label_alloc(pf, 0);
+  done = pfile_label_alloc(pf, 0);
+
+  /* t = idx + const offset */
+  if (idx_const >= 0) {
+    unsigned long tot;
+
+    tot = (unsigned long) idx_const;
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) (tot & 0xFF));
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
+    if (t_wide) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (unsigned) ((tot >> 8) & 0xFF));
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+    }
+  } else {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
+    if (t_wide) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+    }
+    if (offset) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) (offset & 0xFF));
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
+    }
+  }
+  /* FSR0 = pointer; count = *FSR0++; table walk starts at +1 */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptr, 0, PIC_OPDST_W);
+  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptr, 1, PIC_OPDST_W);
+  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cnt, 0);
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+  /* INCF does not touch C -- it sets Z on wrap, which is the carry out of
+   * the low byte.  Testing C here used whatever the previous instruction
+   * left there, so the table pointer jumped a whole 0x100 page whenever C
+   * happened to be set (found 2026-11-02: `_strarg_map_ptr` 0x0256 walked
+   * as 0x0356, base0 read as garbage, FSR0 ended at an invalid file
+   * register). */
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+
+  pic_instr_append_label(pf, loop);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, base, 0);
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+  /* INCF does not touch C -- it sets Z on wrap, which is the carry out of
+   * the low byte.  Testing C here used whatever the previous instruction
+   * left there, so the table pointer jumped a whole 0x100 page whenever C
+   * happened to be set (found 2026-11-02: `_strarg_map_ptr` 0x0256 walked
+   * as 0x0356, base0 read as garbage, FSR0 ended at an invalid file
+   * register). */
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, base, 1);
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+  /* INCF does not touch C -- it sets Z on wrap, which is the carry out of
+   * the low byte.  Testing C here used whatever the previous instruction
+   * left there, so the table pointer jumped a whole 0x100 page whenever C
+   * happened to be set (found 2026-11-02: `_strarg_map_ptr` 0x0256 walked
+   * as 0x0356, base0 read as garbage, FSR0 ended at an invalid file
+   * register). */
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, span, 0);
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+  /* INCF does not touch C -- it sets Z on wrap, which is the carry out of
+   * the low byte.  Testing C here used whatever the previous instruction
+   * left there, so the table pointer jumped a whole 0x100 page whenever C
+   * happened to be set (found 2026-11-02: `_strarg_map_ptr` 0x0256 walked
+   * as 0x0356, base0 read as garbage, FSR0 ended at an invalid file
+   * register). */
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  /* t < span ? */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_W);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+  /* next chunk: t -= span; if (--count) loop */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_F);
+  pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cnt, 0, PIC_OPDST_F);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, loop);
+
+  pic_instr_append_label(pf, done);
+  /* FSR0 = base + t */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 0, PIC_OPDST_W);
+  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 1, PIC_OPDST_W);
+  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 0, PIC_OPDST_W);
+  pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0l", PIC_OPDST_F);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+  pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+
+  label_release(done);
+  label_release(loop);
+  value_release(span);
+  value_release(base);
+  value_release(cnt);
+  pic_var_temp_release(pf, t);
+}
+
+
+/* runtime-map walk entry for callers outside this TU (the pointer path in
+ * pic_op_indirect.c); `idx` may be VALUE_NONE/const for a constant subscript */
+void pic_fsr_chunk_walk_emit_runtime(pfile_t *pf, value_t idx, size_t offset)
+{
+  pic_fsr_chunk_walk_emit_globals(pf, idx, offset);
+}
 
 /* defined in this TU (prototypes keep definition order free) */
 static void pic_fsr_chunk_walk_emit(pfile_t *pf, variable_t var,
@@ -89,6 +282,10 @@ void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
   variable_t    walk_var;
 
   walk_var = value_variable_get(array_val);
+  if (pic_var_openarray_pair_formal_runtime_get(walk_var)) {
+    pic_fsr_chunk_walk_emit_globals(pf, idx, 0);
+    return;
+  }
   if (!pic_variable_chunks_holed(walk_var)) {
     /* unescaped pointer bind: walk the TARGET's chunks */
     walk_var = pic_var_pointer_bind_walk_target(walk_var);
@@ -169,88 +366,19 @@ void pic_classic_irp_set_from_w(pfile_t *pf)
   pic_var_temp_release(pf, hi);
 }
 
-/* Layer 2: a variable placed across bank holes (non-adjacent chunks).
- * Contiguous multi-node runs (PIC18 bank splits) are still linear. */
-boolean_t pic_variable_chunks_holed(variable_t var)
-{
-  variable_ct_t ct;
-  variable_ct_t ii;
-
-  ct = var ? pic_variable_chunk_ct_get(var) : 0;
-  if (ct <= 1) {
-    return BOOLEAN_FALSE;
-  }
-  for (ii = 1; ii < ct; ii++) {
-    if (pic_variable_chunk_base_get(var, ii)
-        != (variable_base_t) (pic_variable_chunk_base_get(var, ii - 1)
-          + pic_variable_chunk_sz_get(var, ii - 1))) {
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
-}
-
-/* Layer 2: holed linear arrays -- walk the chunk map at run time. The
- * byte offset is copied to a scratch (the walk consumes it: compare,
- * then subtract the chunk size), and each chunk branch computes the
- * element address completely before jumping to done. Chunk sizes are
- * bank-node bounded (< 256), so a byte compare with a high-byte
- * zero-test decides membership; the subtract rides the generic
- * OPERATOR_SUB emitter (carry-correct for wide offsets). Modeled on
- * the dynamic-bit chunk walk (pic_dynamic_bit_ref_addr_setup). */
-static void pic_fsr_chunk_walk_emit(pfile_t *pf, variable_t var,
-    value_t idx, boolean_t hybrid)
-{
-  pic_fsr_chunk_walk_emit_ofs(pf, var, idx, 0, hybrid);
-}
-
-/* offset-aware walk: the scratch t is initialized to idx + offset (the
- * const part folded out of a pointer-view subscript, e.g. p[256 + i]).
- * W-staged values around the caller are NOT touched -- the offset add
- * rides the walk's own scratch (found the hard way: emitting pic_op
- * arithmetic mid-addressing destroyed the staged RHS of the store). */
-void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
-    value_t idx, size_t offset, boolean_t hybrid)
+/* the per-chunk ladder itself: t holds the byte offset (the walk CONSUMES
+ * it: compare, then subtract each chunk's size) and the routine leaves the
+ * element address in FSR0 (14H / 16-bit) or in _fsr with IRP set (classic).
+ * Emitted inline by the offset/rare paths and ONCE per chunked variable by
+ * pic_chunk_walk_helpers_create (the shared form -- see its comment). */
+static void pic_fsr_chunk_ladder(pfile_t *pf, variable_t var, value_t t,
+    boolean_t t_wide, boolean_t hybrid)
 {
   variable_ct_t  ct;
   variable_ct_t  ii;
-  variable_sz_t  idx_sz;
-  unsigned       t_wide;
-  value_t        t;
   label_t        done;
 
   ct = pic_variable_chunk_ct_get(var);
-  idx_sz = pic_dynamic_index_byte_sz_get(idx);
-  t_wide = ((idx_sz > 1) || (offset > 0xFFU)) ? 1 : 0;
-  t = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE,
-      t_wide ? 2 : 1);
-  if (!t) {
-    pfile_log_syserr(pf, ENOMEM);
-    return;
-  }
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
-  if (idx_sz > 1) {
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
-    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
-  } else if (offset > 0xFFU) {
-    pic_instr_append_f(pf, PIC_OPCODE_CLRF, t, 1);
-  }
-  if (offset) {
-    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
-        (unsigned) (offset & 0xFFU));
-    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
-    if ((idx_sz > 1) || (offset > 0xFFU)) {
-      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
-      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
-      if (offset > 0xFFU) {
-        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
-            (unsigned) ((offset >> 8) & 0xFFU));
-        pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
-      }
-    }
-  }
-
   done = pfile_label_alloc(pf, 0);
   for (ii = 0; ii < ct; ii++) {
     variable_sz_t    sz;
@@ -263,7 +391,7 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
     next = LABEL_NONE;
     if (ii + 1 < ct) {
       next = pfile_label_alloc(pf, 0);
-      if (idx_sz > 1) {
+      if (t_wide) {
         /* offset >= 256 cannot be in this (< 256 byte) chunk */
         pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
         pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
@@ -329,6 +457,286 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
   }
   pic_instr_append_label(pf, done);
   label_release(done);
+}
+
+/* ---- SHARED STATIC CHUNK WALK (2026-11-02) ----------------------------
+ *
+ * The chunk map of a holed (multi-bank) array is a compile-time constant, so
+ * the ladder does not belong at every access site.  It used to be inlined
+ * there: ~40 instructions for a two-chunk map, per site, which is what made
+ * a `_string_heap_size` over one RAM bank explode the code -- Rob's 16F1825
+ * program with one `&` chain reached 8334 words against an 8192 limit, and a
+ * minimal concat probe went 3424 -> 7343 words for an 80 -> 100 byte heap.
+ *
+ * One helper per chunked VARIABLE is emitted at the end of codegen (the
+ * intrinsic hook, see pic_chunk_walk_helpers_create); a site becomes
+ *
+ *     MOVF idx,W ; MOVWF _pic_chunk_t [, high byte] ; CALL l__chunkwalk_x
+ *
+ * The index travels in the compiler-owned `_pic_chunk_t` (2 bytes) because
+ * the caller's temp area can already hold a staged value (`device = str[i]`
+ * stages the RHS in _pic_temp -- the older temp-based walk clobbered it).
+ */
+typedef struct pic_chunk_walk_helper_ {
+  variable_t var;
+  label_t    lbl;
+} pic_chunk_walk_helper_t;
+
+static pic_chunk_walk_helper_t *pic_cw_help;
+static size_t                   pic_cw_help_used;
+static size_t                   pic_cw_help_alloc;
+
+void pic_chunk_walk_state_reset(void)
+{
+  size_t ii;
+
+
+  for (ii = 0; ii < pic_cw_help_used; ii++) {
+    label_release(pic_cw_help[ii].lbl);
+  }
+  if (pic_cw_help) {
+    FREE(pic_cw_help);
+  }
+  pic_cw_help       = 0;
+  pic_cw_help_used  = 0;
+  pic_cw_help_alloc = 0;
+}
+
+/* find (or register) the helper label of one chunked variable */
+static label_t pic_chunk_walk_helper_find(pfile_t *pf, variable_t var)
+{
+  const char *vnm;
+  label_t     lbl;
+  char        name[64];
+  size_t      ii;
+
+  for (ii = 0; ii < pic_cw_help_used; ii++) {
+    if (pic_cw_help[ii].var == var) {
+      return pic_cw_help[ii].lbl;
+    }
+  }
+  vnm = variable_name_get(var);
+  if (!vnm || (strlen(vnm) > 40)) {
+    return LABEL_NONE;
+  }
+  sprintf(name, "_pic_chunkwalk_%s_%u", vnm,
+      (unsigned) variable_tag_n_get(var));
+  lbl = pic_label_find(pf, name, BOOLEAN_TRUE);
+  if (!lbl) {
+    return LABEL_NONE;
+  }
+  if (pic_cw_help_used == pic_cw_help_alloc) {
+    size_t                  nsz;
+    pic_chunk_walk_helper_t *tmp;
+
+    nsz = pic_cw_help_alloc ? 2 * pic_cw_help_alloc : 8;
+    tmp = REALLOC(pic_cw_help, nsz * sizeof(*pic_cw_help));
+    if (!tmp) {
+      label_release(lbl);
+      return LABEL_NONE;
+    }
+    pic_cw_help       = tmp;
+    pic_cw_help_alloc = nsz;
+  }
+  pic_cw_help[pic_cw_help_used].var = var;
+  pic_cw_help[pic_cw_help_used].lbl = lbl;
+  pic_cw_help_used++;
+  return lbl;
+}
+
+/* emit the CALL form; returns BOOLEAN_FALSE when the program has no walk
+ * scratch (then the caller falls back to the inline ladder) */
+static boolean_t pic_fsr_chunk_walk_emit_call(pfile_t *pf, variable_t var,
+    value_t idx)
+{
+  variable_t    arg;
+  value_t       argval;
+  label_t       lbl;
+  variable_sz_t idx_sz;
+
+  arg = pic_var_chunk_walk_arg_get();
+  if (!arg || (VARIABLE_NONE == arg)) {
+    return BOOLEAN_FALSE;
+  }
+  lbl = pic_chunk_walk_helper_find(pf, var);
+  if (LABEL_NONE == lbl) {
+    return BOOLEAN_FALSE;
+  }
+  argval = value_alloc(arg);
+  if (!argval) {
+    return BOOLEAN_FALSE;
+  }
+  idx_sz = pic_dynamic_index_byte_sz_get(idx);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, argval, 0);
+  if (idx_sz > 1) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, argval, 1);
+  } else {
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, argval, 1);
+  }
+  pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
+  value_release(argval);
+  return BOOLEAN_TRUE;
+}
+
+/* Register a helper for every holed (multi-bank) variable in the program.
+ *
+ * This runs at the START of the preamble, before the reset-vector decision,
+ * because (a) the helper bodies are emitted at the top of the image like the
+ * intrinsic bodies -- so the entry must be a page-jump when any exists -- and
+ * (b) a body can only be emitted for a helper that is registered, while the
+ * call sites are emitted LATER (the procedures come after the preamble).
+ * Registering from the variable list (not from the call sites) is what makes
+ * the body exist for the final pass: a call site discovered in pass 3 after
+ * the preamble would otherwise emit a CALL to a label with no body. */
+void pic_chunk_walk_helpers_register(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    pfile_block_t *blk;
+
+    for (blk = pfile_proc_block_root_get(proc); blk;
+         blk = pfile_block_next(blk)) {
+      variable_t var;
+
+      for (var = pfile_block_variable_list_head(blk); var;
+           var = variable_link_get(var)) {
+        if (pic_variable_chunks_holed(var)) {
+          (void) pic_chunk_walk_helper_find(pf, var);
+        }
+      }
+    }
+  }
+}
+
+/* does any shared chunk-walk helper exist?  A helper body is emitted at the
+ * top of the image like the intrinsic bodies, so the reset vector needs the
+ * page-jump form whenever one exists (otherwise address 0 becomes a helper
+ * and the program never reaches its entry -- found 2026-11-02) */
+boolean_t pic_chunk_walk_helpers_exist(void)
+{
+  return (pic_cw_help_used != 0) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* emit the helpers that were referenced; called once, at the same point as
+ * the intrinsic bodies (after every call site has been emitted) */
+void pic_chunk_walk_helpers_create(pfile_t *pf)
+{
+  variable_t arg;
+  boolean_t  hybrid;
+  size_t     ii;
+
+  arg = pic_var_chunk_walk_arg_get();
+  if (!arg || (VARIABLE_NONE == arg)) {
+    return;
+  }
+  hybrid = (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  for (ii = 0; ii < pic_cw_help_used; ii++) {
+    value_t tv;
+
+    tv = value_alloc(arg);
+    if (!tv) {
+      return;
+    }
+    pic_instr_append_label(pf, pic_cw_help[ii].lbl);
+    /* the argument is always a 2-byte index here: the caller zeroes the
+     * high byte for a byte-sized index */
+    pic_fsr_chunk_ladder(pf, pic_cw_help[ii].var, tv, BOOLEAN_TRUE, hybrid);
+    pic_instr_append(pf, PIC_OPCODE_RETURN);
+    value_release(tv);
+  }
+}
+
+/* Layer 2: a variable placed across bank holes (non-adjacent chunks).
+ * Contiguous multi-node runs (PIC18 bank splits) are still linear. */
+boolean_t pic_variable_chunks_holed(variable_t var)
+{
+  variable_ct_t ct;
+  variable_ct_t ii;
+
+  ct = var ? pic_variable_chunk_ct_get(var) : 0;
+  if (ct <= 1) {
+    return BOOLEAN_FALSE;
+  }
+  for (ii = 1; ii < ct; ii++) {
+    if (pic_variable_chunk_base_get(var, ii)
+        != (variable_base_t) (pic_variable_chunk_base_get(var, ii - 1)
+          + pic_variable_chunk_sz_get(var, ii - 1))) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* Layer 2: holed linear arrays -- walk the chunk map at run time. The
+ * byte offset is copied to a scratch (the walk consumes it: compare,
+ * then subtract the chunk size), and each chunk branch computes the
+ * element address completely before jumping to done. Chunk sizes are
+ * bank-node bounded (< 256), so a byte compare with a high-byte
+ * zero-test decides membership; the subtract rides the generic
+ * OPERATOR_SUB emitter (carry-correct for wide offsets). Modeled on
+ * the dynamic-bit chunk walk (pic_dynamic_bit_ref_addr_setup). */
+static void pic_fsr_chunk_walk_emit(pfile_t *pf, variable_t var,
+    value_t idx, boolean_t hybrid)
+{
+  pic_fsr_chunk_walk_emit_ofs(pf, var, idx, 0, hybrid);
+}
+
+/* offset-aware walk: the scratch t is initialized to idx + offset (the
+ * const part folded out of a pointer-view subscript, e.g. p[256 + i]).
+ * W-staged values around the caller are NOT touched -- the offset add
+ * rides the walk's own scratch (found the hard way: emitting pic_op
+ * arithmetic mid-addressing destroyed the staged RHS of the store). */
+void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
+    value_t idx, size_t offset, boolean_t hybrid)
+{
+  variable_sz_t  idx_sz;
+  unsigned       t_wide;
+  value_t        t;
+
+  if (pic_var_openarray_pair_formal_runtime_get(var)) {
+    pic_fsr_chunk_walk_emit_globals(pf, idx, offset);
+    return;
+  }
+  if ((0 == offset) && pic_fsr_chunk_walk_emit_call(pf, var, idx)) {
+    return;
+  }
+  idx_sz = pic_dynamic_index_byte_sz_get(idx);
+  t_wide = ((idx_sz > 1) || (offset > 0xFFU)) ? 1 : 0;
+  t = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE,
+      t_wide ? 2 : 1);
+  if (!t) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
+  if (idx_sz > 1) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+  } else if (offset > 0xFFU) {
+    pic_instr_append_f(pf, PIC_OPCODE_CLRF, t, 1);
+  }
+  if (offset) {
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+        (unsigned) (offset & 0xFFU));
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
+    if ((idx_sz > 1) || (offset > 0xFFU)) {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
+      if (offset > 0xFFU) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+            (unsigned) ((offset >> 8) & 0xFFU));
+        pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
+      }
+    }
+  }
+
+  pic_fsr_chunk_ladder(pf, var, t, t_wide ? BOOLEAN_TRUE : BOOLEAN_FALSE,
+      hybrid);
   pic_var_temp_release(pf, t);
 }
 

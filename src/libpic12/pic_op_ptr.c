@@ -172,6 +172,67 @@ void pic_assign_ptr_to_ptr(pfile_t *pf, value_t dst, value_t src)
   value_release(src);
 }
 
+/* Read a byte through an open-array formal whose subscripts use the RUNTIME
+ * chunk map (see docs/investigations/runtime_chunk_arguments_design_20261102.md).
+ *
+ * Such a formal can serve BOTH a ROM const array and a RAM heap-string
+ * marshalling buffer, and the two need different address paths: a ROM actual
+ * is a lookup pointer (MSB bit 7 set) read linearly through PTR_READ, while a
+ * RAM buffer can be split across banks and must be walked through the map the
+ * call site left in `_chunkmap`.  The pointer VALUE is the only thing that
+ * distinguishes them at run time, so test that bit and branch:
+ *
+ *     ptr[msb].7 ?  -> pic_assign_from_ptr()'s linear PTR_READ path
+ *     else          -> walk the map (FSR0 = element), read INDF
+ */
+void pic_assign_from_runtime_formal(pfile_t *pf, value_t dst, value_t src)
+{
+  variable_t var;
+  value_t    ptr;
+  value_t    baseofs;
+  value_t    ind;
+  label_t    lbl_linear;
+  label_t    lbl_done;
+
+  var = value_variable_get(src);
+  /* the walk leaves FSR0 at ONE element; a wider element would need a
+   * per-byte walk, so keep the linear path for it (rare: open-array formals
+   * are byte arrays in every library here) */
+  if (value_byte_sz_get(src) != 1) {
+    pic_assign_from_ptr(pf, dst, src);
+    return;
+  }
+  ptr = value_alloc(var);
+  baseofs = value_baseofs_get(src);
+  if (!ptr) {
+    pic_assign_from_ptr(pf, dst, src);
+    return;
+  }
+  lbl_linear = pfile_label_alloc(pf, 0);
+  lbl_done   = pfile_label_alloc(pf, 0);
+  /* ROM / lookup pointer: MSB bit 7 set (see pic_pointer_read_create) */
+  pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, ptr,
+      (variable_sz_t) (pic_pointer_size_get(pf) - 1), 7);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_linear);
+  /* data pointer: FSR0 = base + index, walked through the runtime map */
+  pic_fsr_chunk_walk_emit_runtime(pf, baseofs, 0);
+  ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+  if (ind) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+    if (!pic_value_is_w(dst)) {
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
+    }
+    value_release(ind);
+  }
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_done);
+  pic_instr_append_label(pf, lbl_linear);
+  pic_assign_from_ptr(pf, dst, src);
+  pic_instr_append_label(pf, lbl_done);
+  label_release(lbl_done);
+  label_release(lbl_linear);
+  value_release(ptr);
+}
+
 /* dst has one or more of the LOOKUP/EEPROM/FLASH bits set */
 void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
 {

@@ -25,7 +25,11 @@
 #include "jal_string.h"
 #include "jal_expr.h"
 
-static variable_def_t jal_pointer_pointee_def_get(const value_t val)
+/* Pointee def of a data pointer (the member def of the pointer's def), or
+ * VARIABLE_DEF_NONE.  Exported because the string layer needs the same
+ * answer: `var pointer p as var string` designates a heap string through
+ * the ADDRESS of its handle (see jal_string_pointer_is). */
+variable_def_t jal_pointer_pointee_def_get(const value_t val)
 {
   variable_def_t        ptr_def;
   variable_def_member_t mbr;
@@ -283,6 +287,43 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
       rc = BOOLEAN_TRUE;
       pf_token_get(pf, PF_TOKEN_NEXT);
       n = jal_parse_expr(pf);
+      /* `var pointer p as var string`: `p[i]` is the i-th CHARACTER of the
+       * string the pointer designates.  Build a handle VIEW -- the pointee
+       * def (the 3-byte handle) plus VALUE_FLAG_POINTER -- and record the
+       * index in baseofs; the string layer then reads the handle FIELDS
+       * through the pointer (`jal_string_subscript_value_is` -> read/write
+       * emit; `jal_string_subscript_split` restores the variable's pointer
+       * def and the handle-view helper re-applies it).  The generic
+       * pointer dereference below must NOT run for this shape: it folds the
+       * value down to the handle's element byte, which both loses the
+       * string and used to read `p + i` -- handle bytes and adjacent RAM --
+       * with no diagnostic.  No static bound: like a direct heap string the
+       * handle's 3-byte array count is not the text capacity. */
+      if (n && jal_string_pointer_is(val)
+          && !jal_value_points_to_callable_function(val)) {
+        variable_def_t pto;
+        value_t        view;
+
+        /* handle VIEW: pointee def (the handle) + the pointer flag, so a
+         * field read is an INDIRECT byte read through the pointer */
+        pto  = jal_pointer_pointee_def_get(val);
+        view = value_clone(val);
+        if (view && pto) {
+          value_def_set(view, pto);
+          value_flag_set(view, VALUE_FLAG_POINTER);
+          jal_val_baseofs_add(pf, view, n);
+          value_release(val);
+          val = view;
+        } else {
+          value_release(view);
+        }
+        value_release(n);
+        *pval = val;
+        if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "]")) {
+          pf_token_get(pf, PF_TOKEN_NEXT);
+        }
+        return rc;
+      }
       if (n) {
         /* n *= sz */
         value_t          tmp;
@@ -564,7 +605,11 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
           }
         }
 
-        dyn_string = jal_string_is_dynamic(val);
+        /* `var pointer p as var string`: the pointee is a 3-byte handle,
+         * NOT text capacity -- like a direct heap string it has no static
+         * bound, so `p[i]` must not be range-checked against it */
+        dyn_string = jal_string_is_dynamic(val)
+          || jal_string_pointer_is(val);
         pointer_callable_slot = BOOLEAN_FALSE;
         array_pointer_slot = BOOLEAN_FALSE;
         bit_array_slot = value_is_array(val)
@@ -1100,6 +1145,20 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
        * so **`p is arr[1]`** (POINTER_ASSIGN RHS) parses as an lvalue, not leaving **`[`** at
        * top level (would become "unexpected token" at EOF). */
       (void) jal_parse_postfix(pf, &val, jvals);
+      /* A character reached through a string POINTER is READ-only: storing
+       * would have to allocate or alias inside the target's heap block via
+       * a descriptor the expression does not own.  Refuse it here, where
+       * the lvalue-ness is known, instead of letting the assignment chain
+       * reinterpret the element (pre-fix it silently stored over the
+       * handle byte; with read support it would have fallen through to a
+       * string assignment and written the RHS as text). */
+      if ((JAL_PARSE_VALUE_TYPE_RVALUE != type) && val
+          && jal_string_pointer_is(val)
+          && (VALUE_NONE != value_baseofs_get(val))) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "cannot assign to a character through a string pointer;"
+            " assign through the string variable");
+      }
       /* RVALUE heap-string subscript: str[i] must read the i-th
        * CHARACTER, not the handle's storage (off/cap/len) -- the normal
        * element view on a heap string would do exactly that. Swap the

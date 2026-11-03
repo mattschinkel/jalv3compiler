@@ -1,0 +1,64 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — pointer-to-string as a byte-array actual
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The call-argument face of `var pointer p as var string`.  An open
+--    byte-array formal (`byte in src[]`, `print_string`'s `byte in
+--    str[]`) is lowered to a POINTER, and the string-actual coercion
+--    (`jal_proc.c` IN-param parse -> `jal_string_arg_byte_array`) was
+--    gated on the ACTUAL's def carrying VARIABLE_DEF_FLAG_STRING -- which
+--    a pointer def never does -- so `print_string(dev, p)` was a bare
+--    "type mismatch" even though `COUNT(p)` and the handle fields were
+--    readable.  The coercion now accepts the pointer shape and marshals
+--    the string it designates (the handle fields are read THROUGH the
+--    pointer), including the hidden count parameter, so COUNT(src) inside
+--    the callee is the string length and not the buffer capacity.
+--
+--    Pre-fix this file does not compile ("type mismatch" at the call).
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_done 1
+-- expect byte v_ptr_len 6
+-- expect byte v_ptr_f 97
+-- expect byte v_ptr_m 99
+-- expect byte v_ptr_l 102
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+const word _string_heap_size = 48
+
+var string s
+var pointer ps as var string
+var volatile byte done = 0
+var volatile byte sink = 0
+var volatile byte ptr_f = 0
+var volatile byte ptr_m = 0
+var volatile byte ptr_l = 0
+var volatile byte ptr_len = 0
+
+-- same formal shape as print_string(device, str[]): the open array LAST,
+-- so the hidden count slot is inserted where the library expects it
+procedure take(byte out dev, byte in src[]) is
+   ptr_f   = src[0]
+   ptr_m   = src[2]
+   ptr_l   = byte(src[COUNT(src) - 1])
+   ptr_len = byte(COUNT(src))
+end procedure
+
+regression_begin_run()
+s = "abcdef"
+ps is s
+take(sink, ps)
+done = 1
+regression_checkpoint()
+regression_pass_led_if_clean()

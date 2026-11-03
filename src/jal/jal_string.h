@@ -18,6 +18,9 @@ boolean_t jal_string_is_dynamic(value_t val);
  * codegen from running, so the user sees one error instead of a page of
  * resolver failures. */
 void      jal_string_core_gate(pfile_t *pf);
+/* create `_string_error` + the error constants without allocating a heap
+ * (used when the user defines `_error_hook`, whose body reads the cell) */
+boolean_t jal_string_error_cell_ensure(pfile_t *pf);
 boolean_t jal_string_pointer_dynamic_dst_p(value_t val);
 boolean_t jal_string_runtime_ensure(pfile_t *pf);
 variable_def_t jal_string_dynamic_def_alloc(pfile_t *pf);
@@ -33,6 +36,9 @@ boolean_t jal_string_subscript_value_is(value_t val);
 value_t   jal_string_subscript_read_emit(pfile_t *pf, value_t elem);
 boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     value_t src);
+/* heap string, directly (`var string s`) or through a data pointer
+ * (`var pointer p as var string`) */
+boolean_t jal_string_pointer_is(value_t val);
 boolean_t jal_string_is_source(value_t val);
 /* Stage a const/fixed string source into a compiler string cell
  * (`_string_chainN`) -- call-argument marshalling for literal actuals

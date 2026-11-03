@@ -242,7 +242,18 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
       variable_t walk_var;
       boolean_t  formal_map;
 
-      formal_map = pic_variable_chunks_holed(value_variable_get(val));
+      formal_map = pic_variable_chunks_holed(value_variable_get(val))
+        || pic_var_openarray_pair_formal_runtime_get(value_variable_get(val));
+      /* a runtime-map formal has no compile-time layout at all, so even a
+       * CONSTANT subscript must walk the map the call site handed over */
+      if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
+          && pic_var_openarray_pair_formal_runtime_get(
+               value_variable_get(val))) {
+        pic_fsr_chunk_walk_emit_runtime(pf, VALUE_NONE,
+            offset + (size_t) value_const_get(baseofs));
+        value_release(tmp);
+        return;
+      }
       if (!formal_map
           && (VALUE_NONE != baseofs) && value_is_const(baseofs)
           && (pic_var_pointer_bind_walk_target(

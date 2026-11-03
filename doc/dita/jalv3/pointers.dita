@@ -42,6 +42,15 @@ VAR POINTER p AS VAR BYTE
 
 p IS value          -- p now points at value</codeblock>
 
+      <p>The target must have the same signature as the pointee: a scalar
+      pointee (<codeph>AS VAR BYTE</codeph>) takes a variable of that type, an
+      element of it, or a scalar pseudo-variable; a pointer-to-array takes an
+      array of that shape; a STRING pointee takes a dynamic or fixed string. A
+      scalar pointee is never bound to a whole array or to a dynamic string: a
+      dynamic string is a handle into the heap, so a <codeph>VAR BYTE</codeph>
+      pointer cannot address its characters -- use <codeph>str[i]</codeph> or
+      a <codeph>VAR STRING</codeph> pointee.</p>
+
       <p>The target may be a variable, an array, an array element, a constant
       array, a compatible pseudo-variable, or another pointer:</p>
 

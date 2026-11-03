@@ -1,0 +1,69 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — `&` initialisers at the recommended heap
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The initialiser shape from Rob's 2026-11-02 report:
+--       var string my_string1 = "My string" & 1
+--       var string my_string2 = "My string" & 2
+--    The report's symptom (heap text shifted to `y string\0` / `My stri\t\t`)
+--    was NOT a defect in the `&` lowering: measured on the pre-fix build at
+--    the heap size the compiler itself recommends, all three strings are
+--    exact.  The two configurations that DID corrupt were
+--      * `_string_heap_size` 100  -> the `_strargN` argument buffers are
+--        multi-bank, so a second string-argument call site read the first
+--        one's chunks (fixes/fix_openarray_formal_chunk_map.md), and
+--      * `_string_heap_size` 48   -> too small for the concat pieces; the
+--        compiler warns "recommend at least 80" and the third string comes
+--        out empty (runtime `_string_error`), which is diagnosed, not silent.
+--    This file pins the correct behaviour at 80 so a future change to the
+--    concat lowering, the heap allocator or the chunk-map work cannot regress
+--    it.  It passes on the pre-fix build by construction (there was no
+--    concat defect); the *corrupting* configurations are pinned by
+--    unit-tests/test_string_arg_chunk_map.sh.
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_done 1
+-- expect byte v_a_len 9
+-- expect byte v_b_len 10
+-- expect byte v_c_len 10
+-- expect byte v_a_last 103
+-- expect byte v_b_last 49
+-- expect byte v_c_last 50
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+-- the size the compiler's own sizing report asks for with these three
+-- strings plus the concat pieces
+const word _string_heap_size = 80
+
+var string a = "My string"
+var string b = "My string" & 1
+var string c = "My string" & 2
+var volatile byte done = 0
+var volatile byte a_len = 0
+var volatile byte b_len = 0
+var volatile byte c_len = 0
+var volatile byte a_last = 0
+var volatile byte b_last = 0
+var volatile byte c_last = 0
+
+regression_begin_run()
+a_len = byte(COUNT(a))
+b_len = byte(COUNT(b))
+c_len = byte(COUNT(c))
+a_last = a[COUNT(a) - 1]
+b_last = b[COUNT(b) - 1]
+c_last = c[COUNT(c) - 1]
+done = 1
+regression_checkpoint()
+regression_pass_led_if_clean()

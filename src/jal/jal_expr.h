@@ -38,6 +38,9 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
 #define JAL_PARSE_POSTFIX_FLAG_STRUCTURE 0x01
 #define JAL_PARSE_POSTFIX_FLAG_SUBSCRIPT  0x02
 
+/* pointee def of a data pointer, or VARIABLE_DEF_NONE */
+variable_def_t jal_pointer_pointee_def_get(const value_t val);
+
 /* add an element offset to a value's baseofs (const fold or runtime ADD) */
 void   jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs);
 

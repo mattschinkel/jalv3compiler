@@ -39,6 +39,11 @@ variable_base_t  pic_stk_base;
 
 typedef struct pic_variable_chunk_map_ {
   variable_t                     var;
+  /* which ACTUAL this map was copied FROM (VARIABLE_NONE = the variable's
+   * own placement).  An open-array formal's map is a copy of one caller's
+   * array; with a second, different caller the map cannot be reinstalled
+   * and the callee would walk the wrong chunks (fix_openarray_formal_chunk_map). */
+  variable_t                     owner;
   variable_ct_t                  ct;
   variable_base_t               *base;
   variable_sz_t                 *sz;
@@ -71,6 +76,20 @@ typedef struct pic_var_ptr_bind_ {
 typedef struct pic_var_openarray_pair_ {
   variable_t actual;
   variable_t formal;
+  boolean_t                   reported;
+  pfile_pos_t                  pos;   /* call site */
+  boolean_t                    pos_valid;
+  /* Layout of the ACTUAL captured at propagation time: the chunk maps are
+   * not visible during call emission (found 2026-11-02 -- ct read 0 at the
+   * call site), so the descriptor stores must read the layout from here. */
+  variable_ct_t                chunk_ct;
+  variable_sz_t                chunk_sz[PIC_CHUNK_MAP_MAX];
+  variable_base_t              chunk_base[PIC_CHUNK_MAP_MAX];
+  variable_t                   descriptor;   /* runtime chunk descriptor
+                                              * side-car, captured while the
+                                              * front-end variable still
+                                              * exists (by emit time it is
+                                              * gone from the registry) */
 } pic_var_openarray_pair_t;
 
 struct pic_var_layout_snap_;
@@ -100,6 +119,20 @@ typedef struct pic_var_state_ {
   size_t                       call_actuals_alloc;
   pic_var_openarray_pair_t    *openarray_pairs;
   size_t                       openarray_pairs_used;
+  /* chunked ACTUAL variables seen during placement: their presence means a
+   * runtime chunk walk may be emitted, so the walk scratch and the map must
+   * be placed before codegen */
+  variable_t                  *chunk_actuals;
+  size_t                       chunk_actuals_used;
+  size_t                       chunk_actuals_alloc;
+  /* compiler-owned walk scratch (chunk count / base / span) for the runtime
+   * chunk walk; never the caller's temp area.  Created on first use. */
+  variable_t                   chunk_g_cnt;    /* walk scratch (never the
+                                                * caller's temp area) */
+  variable_t                   chunk_g_t;      /* shared static walk's
+                                                * index argument (2 bytes) */
+  variable_t                   chunk_g_base;
+  variable_t                   chunk_g_span1;
   size_t                       openarray_pairs_alloc;
   boolean_t                    refused;
   boolean_t                    refused_ptr;
@@ -140,6 +173,7 @@ void pic_var_reset(void)
   pic_var_trials_free();                 /* layout snapshot, if one is held */
   FREE(pic_var.banked_edges);
   FREE(pic_var.ptr_targets);
+  FREE(pic_var.chunk_actuals);
   FREE(pic_var.ptr_binds);
   FREE(pic_var.call_actuals);
   FREE(pic_var.openarray_pairs);
@@ -227,8 +261,9 @@ static void pic_variable_chunk_map_set(pfile_t *pf, variable_t var,
   }
   memcpy(map->base, base, ct * sizeof(*map->base));
   memcpy(map->sz, sz, ct * sizeof(*map->sz));
-  map->var  = var;
-  map->ct   = ct;
+  map->var   = var;
+  map->owner = VARIABLE_NONE;
+  map->ct    = ct;
   map->link = pic_var.chunk_maps;
   pic_var.chunk_maps = map;
 }
@@ -541,7 +576,173 @@ boolean_t pic_var_escapes_to_call(variable_t var)
  * Indirect/reentrant calls cannot be specialized and keep the
  * placement refusal (pic_var_escapes_to_call). */
 
-void pic_var_openarray_pair_record(variable_t actual, variable_t formal)
+/* Descriptor side-car recorded for an actual (see the pair struct).  The
+ * front-end variable is gone from the registry by emit time, so the handle is
+ * captured while the pair is recorded. */
+boolean_t pic_var_openarray_pair_descriptor_get(variable_t actual,
+    variable_t *descriptor)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if (pic_var.openarray_pairs[ii].actual != actual) {
+      continue;
+    }
+    if (pic_var.openarray_pairs[ii].descriptor
+        && (VARIABLE_NONE != pic_var.openarray_pairs[ii].descriptor)) {
+      *descriptor = pic_var.openarray_pairs[ii].descriptor;
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* Compiler-owned walk scratch for the runtime chunk walk.
+ *
+ * The callee body is emitted once but serves any actual, so it walks the map
+ * the call site left in `_chunkmap`; these globals hold the loop state
+ * (remaining chunk count, current base, current span).  Compiler-owned, so
+ * they can never collide with the caller's temp area.  Created on first use
+ * and placed immediately (placement is over by then) so an address exists.
+ *
+ * Nesting: a chunked call made from inside another chunked call overwrites
+ * the map; that is the documented limitation (see the design doc). */
+static variable_t pic_var_chunk_global_create(pfile_t *pf, const char *name,
+    variable_sz_t sz)
+{
+  variable_def_t bdef;
+  variable_def_t adef;
+  variable_t     var;
+  result_t       rc;
+
+  bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, 1);
+  if (!bdef) {
+    return VARIABLE_NONE;
+  }
+  adef = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
+      VARIABLE_DEF_FLAG_NONE, 1);
+  if (!adef) {
+    return VARIABLE_NONE;
+  }
+  variable_def_member_add(adef, 0, bdef, sz);
+  var = VARIABLE_NONE;
+  rc = pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL, name, adef,
+      VARIABLE_NONE, &var);
+  if (RESULT_OK != rc) {
+    pfile_log_syserr(pf, rc);
+    return VARIABLE_NONE;
+  }
+  variable_use_ct_bump(var, CTR_BUMP_INCR);
+  variable_assign_ct_bump(var, CTR_BUMP_INCR);
+  if (!pic_variable_late_alloc(pf, var)) {
+    return VARIABLE_NONE;
+  }
+  return var;
+}
+
+/* run-time walk scratch; created on first use */
+boolean_t pic_var_chunk_walk_globals_get(pfile_t *pf, variable_t *cnt,
+    variable_t *base, variable_t *span)
+{
+  if (!pic_var.chunk_g_cnt) {
+    pic_var.chunk_g_cnt   = pic_var_chunk_global_create(pf,
+        "_pic_chunk_cnt", 1);
+    pic_var.chunk_g_base  = pic_var_chunk_global_create(pf,
+        "_pic_chunk_base", 2);
+    pic_var.chunk_g_span1 = pic_var_chunk_global_create(pf,
+        "_pic_chunk_span1", 1);
+    /* argument of the SHARED static chunk walk (one helper per chunked
+     * variable, see pic_chunk_walk_helpers_create): the index travels
+     * here, never through the caller's temp area */
+    pic_var.chunk_g_t     = pic_var_chunk_global_create(pf,
+        "_pic_chunk_t", 2);
+  }
+  if (!pic_var.chunk_g_cnt || !pic_var.chunk_g_base
+      || !pic_var.chunk_g_span1 || !pic_var.chunk_g_t) {
+    return BOOLEAN_FALSE;
+  }
+  *cnt  = pic_var.chunk_g_cnt;
+  *base = pic_var.chunk_g_base;
+  *span = pic_var.chunk_g_span1;
+  return BOOLEAN_TRUE;
+}
+
+/* The shared static chunk walk's argument (2 bytes), or VARIABLE_NONE when
+ * the program has no chunked variable (nothing was created).  Creation
+ * happens once, at the end of placement -- see pic_var_chunk_descriptors_emit --
+ * so this accessor never re-enters the allocator. */
+variable_t pic_var_chunk_walk_arg_get(void)
+{
+  return pic_var.chunk_g_t;
+}
+
+/* formal-keyed query for the callee-side walk: does this FORMAL receive a
+ * chunked actual whose layout the caller stores at the call site? */
+/* Does this open-array formal need the RUNTIME chunk map?
+ *
+ * Yes only when both hold:
+ *   (a) at least one actual fed to it is multi-bank, so its subscripts must
+ *       walk a chunk layout (a single-bank actual addresses linearly); and
+ *   (b) EVERY actual fed to it carries the runtime map (i.e. it is a
+ *       compiler marshalling buffer `_strargN`), because the callee emits
+ *       one addressing sequence for all call sites -- a site that cannot
+ *       fill the map would leave the previous call's layout in place.
+ *
+ * (b) is what keeps user arrays on the old baked-layout path: this release
+ * only gives heap strings a runtime layout (see the design doc's
+ * follow-up (a)). */
+boolean_t pic_var_openarray_pair_formal_runtime_get(variable_t formal)
+{
+  size_t    ii;
+  boolean_t chunked;
+
+  chunked = BOOLEAN_FALSE;
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if (pic_var.openarray_pairs[ii].formal != formal) {
+      continue;
+    }
+    if (pic_var.openarray_pairs[ii].chunk_ct >= 2) {
+      chunked = BOOLEAN_TRUE;
+    }
+    if (!pic_var.openarray_pairs[ii].descriptor
+        || (VARIABLE_NONE == pic_var.openarray_pairs[ii].descriptor)) {
+      return BOOLEAN_FALSE;
+    }
+  }
+  return chunked;
+}
+
+/* Layout captured for an actual at propagation time (see the pair struct).
+ * Returns BOOLEAN_TRUE when the actual was chunked with 2..4 chunks and the
+ * layout is available; the call-site descriptor store uses it because the
+ * chunk maps themselves are not reachable from the emitter. */
+boolean_t pic_var_openarray_pair_layout_get(variable_t actual,
+    variable_ct_t *ct, variable_sz_t *sz, variable_base_t *base)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if (pic_var.openarray_pairs[ii].actual != actual) {
+      continue;
+    }
+    if ((pic_var.openarray_pairs[ii].chunk_ct >= 1)
+        && (pic_var.openarray_pairs[ii].chunk_ct <= PIC_CHUNK_MAP_MAX)) {
+      variable_ct_t cix;
+
+      *ct = pic_var.openarray_pairs[ii].chunk_ct;
+      for (cix = 0; cix < *ct; cix++) {
+        sz[cix]   = pic_var.openarray_pairs[ii].chunk_sz[cix];
+        base[cix] = pic_var.openarray_pairs[ii].chunk_base[cix];
+      }
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
+    const pfile_pos_t *pos, variable_t descriptor)
 {
   size_t ii;
 
@@ -569,8 +770,17 @@ void pic_var_openarray_pair_record(variable_t actual, variable_t formal)
     pic_var.openarray_pairs       = tmp;
     pic_var.openarray_pairs_alloc = resize;
   }
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].actual = actual;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].formal = formal;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].actual   = actual;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].formal   = formal;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].reported = BOOLEAN_FALSE;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos_valid = BOOLEAN_FALSE;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].descriptor =
+      descriptor;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].chunk_ct = 0;
+  if (pos) {
+    pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos       = *pos;
+    pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos_valid = BOOLEAN_TRUE;
+  }
   pic_var.openarray_pairs_used++;
 }
 
@@ -586,7 +796,25 @@ static void pic_variable_chunk_map_copy(pfile_t *pf, variable_t src,
   }
   for (map = pic_var.chunk_maps; map; map = map->link) {
     if (map->var == src) {
+      /* AMBIGUOUS FORMAL (2026-11-02): the callee body is emitted once and
+       * its subscripts key off the FORMAL's chunk map, so a formal that
+       * serves two different multi-bank actuals can only walk one of them.
+       * The second call then reads the first actual's memory -- silently:
+       * a second `print_string(dev, <heap string>)` printed the first
+       * string's text (found on Rob's 16F1825 program, where a
+       * `_string_heap_size` over one bank makes the `_strargN`
+       * marshalling buffer multi-bank).  Refuse instead of mis-addressing;
+       * the trigger is one axis the author controls (buffer size), so the
+       * message names it. */
       pic_variable_chunk_map_set(pf, dst, map->ct, map->base, map->sz);
+      {
+        pic_variable_chunk_map_t *copied;
+
+        copied = pic_variable_chunk_map_find(dst);
+        if (copied) {
+          copied->owner = src;
+        }
+      }
       return;
     }
   }
@@ -596,6 +824,125 @@ static void pic_variable_chunk_map_copy(pfile_t *pf, variable_t src,
  * transitively along the pair graph (a formal re-passed to another
  * open-array formal carries the copied map onward). The graph is tiny;
  * iterate to a fixpoint, bounded by the edge count. */
+/* RUNTIME CHUNK ARGUMENTS (2026-11-02, docs/investigations/
+ * runtime_chunk_arguments_design_20261102.md).
+ *
+ * An open-array formal's subscripts used to be emitted against the FORMAL's
+ * chunk map, which one callee body can only carry for one actual -- a second
+ * chunked actual read the first one's memory (fixes/
+ * fix_openarray_formal_chunk_map.md).  A formal that receives compiler
+ * marshalling buffers now walks the layout the CALL SITE wrote to
+ * `_chunkmap`; this module records every chunked actual seen during
+ * placement so (a) the pair's layout is refreshed from the FINAL placement
+ * and (b) the map / pointer / walk scratch have addresses before codegen. */
+
+static void pic_var_chunk_actual_note(pfile_t *pf, variable_t var)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.chunk_actuals_used; ii++) {
+    if (pic_var.chunk_actuals[ii] == var) {
+      return;
+    }
+  }
+  if (pic_var.chunk_actuals_used == pic_var.chunk_actuals_alloc) {
+    size_t resize;
+    void  *tmp;
+
+    resize = pic_var.chunk_actuals_alloc
+      ? 2 * pic_var.chunk_actuals_alloc : 16;
+    tmp = REALLOC(pic_var.chunk_actuals, resize * sizeof(variable_t));
+    if (!tmp) {
+      return;
+    }
+    pic_var.chunk_actuals       = tmp;
+    pic_var.chunk_actuals_alloc = resize;
+  }
+  pic_var.chunk_actuals[pic_var.chunk_actuals_used++] = var;
+  (void) pf;
+}
+
+/* called once, right after placement: refresh the captured layouts and make
+ * sure the runtime map, its pointer and the walk scratch have addresses */
+static void pic_var_chunk_descriptors_emit(pfile_t *pf)
+{
+  /* refresh every pair's captured layout from the FINAL placement: the
+   * capture runs inside the placement rounds, and later rounds can move a
+   * buffer (found 2026-11-02: a stale base1 sent the second-chunk read 18
+   * bytes off) */
+  {
+    size_t pi;
+
+    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+      pic_variable_chunk_map_t *m;
+
+      m = pic_variable_chunk_map_find(pic_var.openarray_pairs[pi].actual);
+      if (m && (m->ct >= 1) && (m->ct <= PIC_CHUNK_MAP_MAX)) {
+        variable_ct_t cix;
+
+        pic_var.openarray_pairs[pi].chunk_ct = m->ct;
+        for (cix = 0; cix < m->ct; cix++) {
+          pic_var.openarray_pairs[pi].chunk_sz[cix]   = m->sz[cix];
+          pic_var.openarray_pairs[pi].chunk_base[cix] = m->base[cix];
+        }
+      }
+    }
+  }
+  /* create the layout globals here, not during codegen: creating (and
+   * placing) a variable mid-emit re-entered the allocator (a pass-3 hang
+   * on Rob's full program, found 2026-11-02) */
+  {
+    boolean_t need;
+    pfile_proc_t *proc;
+
+    /* the walk scratch is needed when a formal walks the runtime map AND
+     * when any variable got a holed (multi-bank) chunk map -- the latter
+     * drives the SHARED static walk, which replaced the per-site ladder */
+    need = (pic_var.chunk_actuals_used != 0) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+    for (proc = pfile_proc_root_get(pf); !need && proc;
+         proc = pfile_proc_next(proc)) {
+      pfile_block_t *blk;
+
+      for (blk = pfile_proc_block_root_get(proc); !need && blk;
+           blk = pfile_block_next(blk)) {
+        variable_t var;
+
+        for (var = pfile_block_variable_list_head(blk); var;
+             var = variable_link_get(var)) {
+          if (pic_variable_chunk_ct_get(var) > 1) {
+            need = BOOLEAN_TRUE;
+            break;
+          }
+        }
+      }
+    }
+    if (need) {
+      variable_t gc;
+      variable_t gb;
+      variable_t gs;
+      value_t    ptr;
+
+      (void) pic_var_chunk_walk_globals_get(pf, &gc, &gb, &gs);
+    /* the callee reads this pointer and is emitted before the call sites, so
+     * it must have an address by now (found 2026-11-02: MOVLB 0xFFFF) */
+    ptr = pfile_value_find(pf, PFILE_LOG_NONE, "_strarg_map_ptr");
+    if (ptr && (VALUE_NONE != ptr) && value_variable_get(ptr)
+        && (VARIABLE_BASE_UNKNOWN == variable_base_get(
+              value_variable_get(ptr), 0))) {
+      (void) pic_variable_late_alloc(pf, value_variable_get(ptr));
+    }
+    /* the map itself is read through that pointer in the callee, so it too
+     * needs an address before the callee body is emitted */
+    ptr = pfile_value_find(pf, PFILE_LOG_NONE, "_chunkmap");
+    if (ptr && (VALUE_NONE != ptr) && value_variable_get(ptr)
+        && (VARIABLE_BASE_UNKNOWN == variable_base_get(
+              value_variable_get(ptr), 0))) {
+      (void) pic_variable_late_alloc(pf, value_variable_get(ptr));
+      }
+    }
+  }
+}
+
 static void pic_var_chunk_map_propagate(pfile_t *pf, variable_t var)
 {
   size_t    ii;
@@ -612,6 +959,21 @@ static void pic_var_chunk_map_propagate(pfile_t *pf, variable_t var)
 
       src = pic_var.openarray_pairs[ii].actual;
       dst = pic_var.openarray_pairs[ii].formal;
+      if (src != dst) {
+        pic_variable_chunk_map_t *smap;
+
+        pic_var_chunk_actual_note(pf, src);
+        smap = pic_variable_chunk_map_find(src);
+        if (smap && (smap->ct >= 2) && (smap->ct <= PIC_CHUNK_MAP_MAX)) {
+          variable_ct_t cix;
+
+          pic_var.openarray_pairs[ii].chunk_ct = smap->ct;
+          for (cix = 0; cix < smap->ct; cix++) {
+            pic_var.openarray_pairs[ii].chunk_sz[cix]   = smap->sz[cix];
+            pic_var.openarray_pairs[ii].chunk_base[cix] = smap->base[cix];
+          }
+        }
+      }
       if ((src != dst)
           && pic_variable_chunk_map_find(src)
           && !pic_variable_chunk_map_find(dst)) {
@@ -3448,6 +3810,11 @@ void pic_variable_alloc(pfile_t *pf)
     pic_variable_alloc_no_reuse(pf);
   }
   pic_variable_shared_set(pf);
+  /* RUNTIME CHUNK ARGUMENTS (2026-11-02): refresh each pair's captured
+   * layout from the FINAL placement (later rounds can move a buffer) and
+   * give the runtime map / its pointer an address before any callee body is
+   * emitted.  See docs/investigations/runtime_chunk_arguments_design_20261102.md. */
+  pic_var_chunk_descriptors_emit(pf);
   pfile_log(pf, PFILE_LOG_DEBUG, PIC_MSG_DBG_DATA_USED, pic_blist_max);
 }
 

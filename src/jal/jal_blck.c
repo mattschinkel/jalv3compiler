@@ -28,6 +28,7 @@
 #include "jal_incl.h"
 #include "jal_vdef.h"
 #include "jal_string.h"
+#include "jal_error.h"
 #include "jal_blck.h"
 #if defined(MSDOS) && !defined(__WATCOMC__)
 #include <dir.h>
@@ -257,9 +258,6 @@ static boolean_t jal_pointer_assign_type_is_compatible(value_t dst, value_t src)
     return jal_pointer_signature_def_is_same(pointee_def, src_def);
   }
   if (value_is_array(src) || jal_string_is_dynamic(src)) {
-    variable_def_member_t src_mbr;
-    variable_def_t        src_member_def;
-
     if (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(pointee_def)) {
       /* `var string` / `var string[N]` rhs may not satisfy `value_is_array`
        * while still carrying the same `variable_def` as the pointer pointee;
@@ -269,11 +267,15 @@ static boolean_t jal_pointer_assign_type_is_compatible(value_t dst, value_t src)
       }
       return jal_pointer_signature_def_is_same(pointee_def, src_def);
     }
-    src_mbr = variable_def_member_get(src_def);
-    src_member_def = src_mbr ? variable_def_member_def_get(src_mbr)
-        : VARIABLE_DEF_NONE;
-    return src_member_def
-        && jal_pointer_signature_def_is_same(pointee_def, src_member_def);
+    /* An array or string RHS binds only to an ARRAY pointee: the bind
+     * stores the target's address, so a scalar pointee (`as var byte`)
+     * needs a variable of the same signature behind that address.
+     * Comparing the pointee with the source's ELEMENT instead used to
+     * accept `var pointer p as var byte` bound to a `var string`: the
+     * emitter stored the dynamic string's handle address, so a read
+     * returned a handle byte and `p = p + 1` overwrote it. A payload
+     * address is not stable either -- the heap may move it. */
+    return BOOLEAN_FALSE;
   }
   return jal_pointer_signature_def_is_same(pointee_def, src_def);
 }
@@ -1907,6 +1909,11 @@ void jal_source_process(pfile_t *pf)
   pfile_user_entry_set(pf, lbl);
   pfile_cmd_label_add(pf, lbl);
   label_release(lbl);
+  /* runtime error hook: reset the per-compile counters and create the
+   * user-visible error constants (compile-time equates, no storage).  Done
+   * HERE, where the main block exists: a GLOBAL allocated before it is
+   * invisible to the parser. */
+  jal_error_program_start(pf);
   jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NO_BLOCK);
   if (!pf_token_is_eof(pf)) {
     pfile_log(pf, PFILE_LOG_ERR, "unexpected token: %s",
@@ -1971,6 +1978,8 @@ void jal_file_process(pfile_t *pf, char *pre_inc)
   /* end-of-parse diagnostics over the complete program (Option A:
    * string heap sizing recommendation) */
   jal_string_heap_sizing_report(pf);
+  /* `_error_hook` defined too late: some raise sites will not call it */
+  jal_error_program_end(pf);
 }
 
 void jal_block_start_show(pfile_t *pf, const char *tag, 

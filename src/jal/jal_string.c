@@ -20,9 +20,11 @@
 #include "../libcore/value.h"
 #include "../libcore/cmd.h"
 #include "../libpic12/pic.h"
+#include "../libpic12/pic_var.h"
 #include "jal_build.h"
 #include "jal_expr.h"
 #include "jal_string.h"
+#include "jal_error.h"
 #include "jal_tokn.h"
 
 typedef struct jal_str_heap_use_ {
@@ -103,18 +105,18 @@ void jal_string_core_gate(pfile_t *pf)
 }
 
 
-#define JAL_STRING_HEAP_NAME      "_string_heap"
-#define JAL_STRING_FREE_HEAD_NAME "_string_free_head"
-#define JAL_STRING_ERROR_NAME     "_string_error"
+#define _STRING_HEAP_NAME      "_string_heap"
+#define _STRING_FREE_HEAD_NAME "_string_free_head"
+#define _STRING_ERROR_NAME     "_string_error"
 
-#define JAL_STRING_ERROR_NONE      0
-#define JAL_STRING_ERROR_HEAP_FULL 1
-#define JAL_STRING_ERROR_OVERFLOW  2
-#define JAL_STRING_ERROR_INVALID   3
+#define _STRING_ERROR_NONE      0
+#define _STRING_ERROR_HEAP_FULL 1
+#define _STRING_ERROR_OVERFLOW  2
+#define _STRING_ERROR_INVALID   3
 
-#define JAL_STRING_INDEX_AUTO  0
-#define JAL_STRING_INDEX_BYTE  1
-#define JAL_STRING_INDEX_WORD  2
+#define _STRING_INDEX_AUTO  0
+#define _STRING_INDEX_BYTE  1
+#define _STRING_INDEX_WORD  2
 
 /*
  * p-file assigns can warn when the compiler lowers wide max/index temps into
@@ -144,9 +146,9 @@ static void jal_string_silent_truncate_end(pfile_t *pf)
   }
 }
 
-#define JAL_STRING_FIELD_OFFSET 0
-#define JAL_STRING_FIELD_LENGTH 1
-#define JAL_STRING_FIELD_CAP    2
+#define _STRING_FIELD_OFFSET 0
+#define _STRING_FIELD_LENGTH 1
+#define _STRING_FIELD_CAP    2
 
 /* `string_heap_compact` work: one row per registered dynamic `var string`
  * (see `pfile_dynstr_reg_ct_get`), 4 fields per row (old_off, bsz, new_off,
@@ -172,9 +174,9 @@ static variable_def_t jal_string_index_def_alloc(pfile_t *pf, flag_t flags)
 static variable_const_t jal_string_index_max(variable_sz_t index_sz)
 {
   switch (index_sz) {
-    case JAL_STRING_INDEX_BYTE:
+    case _STRING_INDEX_BYTE:
       return 255;
-    case JAL_STRING_INDEX_WORD:
+    case _STRING_INDEX_WORD:
       return 65535;
     default:
       return 0;
@@ -360,34 +362,34 @@ static variable_sz_t jal_string_index_size_get(pfile_t *pf,
   variable_const_t requested;
   variable_sz_t index_sz;
 
-  requested = JAL_STRING_INDEX_AUTO;
+  requested = _STRING_INDEX_AUTO;
   index_val = jal_string_pragma_const_get(pf, "_string_index_size");
   if (index_val) {
     requested = value_const_get(index_val);
     value_release(index_val);
   }
-  if (JAL_STRING_INDEX_AUTO == requested) {
-    if (heap_sz <= jal_string_index_max(JAL_STRING_INDEX_BYTE)) {
-      index_sz = JAL_STRING_INDEX_BYTE;
-    } else if (heap_sz <= jal_string_index_max(JAL_STRING_INDEX_WORD)) {
-      index_sz = JAL_STRING_INDEX_WORD;
+  if (_STRING_INDEX_AUTO == requested) {
+    if (heap_sz <= jal_string_index_max(_STRING_INDEX_BYTE)) {
+      index_sz = _STRING_INDEX_BYTE;
+    } else if (heap_sz <= jal_string_index_max(_STRING_INDEX_WORD)) {
+      index_sz = _STRING_INDEX_WORD;
     } else {
       pfile_log(pf, PFILE_LOG_ERR,
           "dynamic string heap is currently limited to 65535 bytes");
-      index_sz = JAL_STRING_INDEX_AUTO;
+      index_sz = _STRING_INDEX_AUTO;
     }
-  } else if ((JAL_STRING_INDEX_BYTE == requested)
-      || (JAL_STRING_INDEX_WORD == requested)) {
+  } else if ((_STRING_INDEX_BYTE == requested)
+      || (_STRING_INDEX_WORD == requested)) {
     index_sz = (variable_sz_t) requested;
   } else {
     pfile_log(pf, PFILE_LOG_ERR,
         "pragma string index must be auto, byte, or word");
-    index_sz = JAL_STRING_INDEX_AUTO;
+    index_sz = _STRING_INDEX_AUTO;
   }
   if (index_sz && (heap_sz > jal_string_index_max(index_sz))) {
     pfile_log(pf, PFILE_LOG_ERR,
         "_string_heap_size does not fit pragma string index");
-    index_sz = JAL_STRING_INDEX_AUTO;
+    index_sz = _STRING_INDEX_AUTO;
   }
   return index_sz;
 }
@@ -497,6 +499,42 @@ boolean_t jal_string_is_dynamic(value_t val)
       VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC);
 }
 
+/* A data pointer that designates a heap string: `var pointer p as var string`.
+ * The pointer holds the ADDRESS of the handle; the payload lives in
+ * `_string_heap`.  Read-only string contexts accept it like the string it
+ * designates -- the handle FIELD accesses already do, because `jal_string_array_elem_get`
+ * dereferences.  Two shapes reach here: the plain pointer value (def is the
+ * pointer def, the handle is behind the member) and a subscript view
+ * (def is already the handle, VALUE_FLAG_POINTER marks the indirect read). */
+boolean_t jal_string_pointer_is(value_t val)
+{
+  variable_def_t        def;
+  variable_def_member_t mbr;
+
+  if (!val) {
+    return BOOLEAN_FALSE;
+  }
+  def = value_def_get(val);
+  if (!def) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_flag_test(val, VALUE_FLAG_POINTER)
+      && variable_def_flag_test(def,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    return BOOLEAN_TRUE;
+  }
+  if (VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(def)) {
+    return BOOLEAN_FALSE;
+  }
+  mbr = variable_def_member_get(def);
+  if (!mbr || variable_def_member_link_get(mbr)) {
+    return BOOLEAN_FALSE;
+  }
+  return variable_def_flag_test(variable_def_member_def_get(mbr),
+      VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
 static value_t jal_string_const_get(pfile_t *pf, variable_const_t n)
 {
   return pfile_constant_get(pf, n, VARIABLE_DEF_NONE);
@@ -579,7 +617,7 @@ static value_t jal_string_max_index_coerce(pfile_t *pf, value_t max)
   if (msz < 2U) {
     return max;
   }
-  if (JAL_STRING_INDEX_BYTE != jal_string_current_index_size_get(pf)) {
+  if (_STRING_INDEX_BYTE != jal_string_current_index_size_get(pf)) {
     return max;
   }
   n = value_const_get(max);
@@ -626,11 +664,11 @@ void jal_string_error_rvalue_consumed(pfile_t *pf, int is_rvalue, value_t *pval)
     return;
   }
   nm = value_name_get(v);
-  if (!nm || (0 != strcmp(nm, JAL_STRING_ERROR_NAME))
+  if (!nm || (0 != strcmp(nm, _STRING_ERROR_NAME))
       || value_baseofs_get(v)) {
     return;
   }
-  lval = pfile_value_find(pf, PFILE_LOG_NONE, JAL_STRING_ERROR_NAME);
+  lval = pfile_value_find(pf, PFILE_LOG_NONE, _STRING_ERROR_NAME);
   if (!lval) {
     return;
   }
@@ -648,7 +686,7 @@ void jal_string_error_rvalue_consumed(pfile_t *pf, int is_rvalue, value_t *pval)
   temp = pfile_value_temp_get_from_def(pf, vdef);
   pfile_cmd_op_add_assign(pf, OPERATOR_ASSIGN, &temp, v);
   value_release(v);
-  z = pfile_constant_get(pf, JAL_STRING_ERROR_NONE, value_def_get(lval));
+  z = pfile_constant_get(pf, _STRING_ERROR_NONE, value_def_get(lval));
   pfile_cmd_op_add_assign(pf, OPERATOR_ASSIGN, &lval, z);
   value_release(z);
   value_release(lval);
@@ -700,7 +738,7 @@ static value_t jal_string_heap_elem_get(pfile_t *pf, value_t ofs)
   value_t heap;
   value_t elem;
 
-  heap = jal_string_named_value_get(pf, JAL_STRING_HEAP_NAME);
+  heap = jal_string_named_value_get(pf, _STRING_HEAP_NAME);
   elem = heap ? jal_string_array_elem_get(heap, ofs) : VALUE_NONE;
   value_release(heap);
   return elem;
@@ -788,7 +826,7 @@ static void jal_string_index_store_emit(pfile_t *pf, value_t base,
 
 static value_t jal_string_heap_value_get(pfile_t *pf)
 {
-  return jal_string_named_value_get(pf, JAL_STRING_HEAP_NAME);
+  return jal_string_named_value_get(pf, _STRING_HEAP_NAME);
 }
 
 static value_t jal_string_heap_index_get(pfile_t *pf, value_t ofs)
@@ -813,6 +851,33 @@ static void jal_string_heap_index_set(pfile_t *pf, value_t ofs, value_t val)
   value_release(heap);
 }
 
+/* Handle VIEW of a string pointer: the pointer's pointee def (the handle)
+ * with the pointer flag set, so a field offset becomes an INDIRECT byte read
+ * THROUGH the pointer.  Returns `val` itself when nothing is needed. */
+static value_t jal_string_handle_view_get(value_t val)
+{
+  value_t        view;
+  variable_def_t pto;
+
+  if (!val || !jal_string_pointer_is(val)) {
+    return val;
+  }
+  if (VARIABLE_DEF_TYPE_POINTER != value_type_get(val)) {
+    return val;
+  }
+  pto = jal_pointer_pointee_def_get(val);
+  if (!pto) {
+    return val;
+  }
+  view = value_clone(val);
+  if (!view) {
+    return val;
+  }
+  value_def_set(view, pto);
+  value_flag_set(view, VALUE_FLAG_POINTER);
+  return view;
+}
+
 static value_t jal_string_handle_field_ofs_get(pfile_t *pf,
     variable_const_t field)
 {
@@ -825,10 +890,15 @@ static value_t jal_string_handle_index_get(pfile_t *pf, value_t str,
 {
   value_t ofs;
   value_t val;
+  value_t view;
 
+  view = jal_string_handle_view_get(str);
   ofs = jal_string_handle_field_ofs_get(pf, field);
-  val = jal_string_index_load_emit(pf, str, ofs);
+  val = jal_string_index_load_emit(pf, view, ofs);
   value_release(ofs);
+  if (view != str) {
+    value_release(view);
+  }
   return val;
 }
 
@@ -836,10 +906,15 @@ static void jal_string_handle_index_set(pfile_t *pf, value_t str,
     variable_const_t field, value_t val)
 {
   value_t ofs;
+  value_t view;
 
+  view = jal_string_handle_view_get(str);
   ofs = jal_string_handle_field_ofs_get(pf, field);
-  jal_string_index_store_emit(pf, str, ofs, val);
+  jal_string_index_store_emit(pf, view, ofs, val);
   value_release(ofs);
+  if (view != str) {
+    value_release(view);
+  }
 }
 
 /* Zero every handle field of a freshly declared dynamic string. Used by
@@ -854,9 +929,9 @@ void jal_string_handle_zero_emit(pfile_t *pf, value_t str)
 
   zero = jal_string_index_const_get(pf, 0);
   if (zero) {
-    jal_string_handle_index_set(pf, str, JAL_STRING_FIELD_OFFSET, zero);
-    jal_string_handle_index_set(pf, str, JAL_STRING_FIELD_LENGTH, zero);
-    jal_string_handle_index_set(pf, str, JAL_STRING_FIELD_CAP, zero);
+    jal_string_handle_index_set(pf, str, _STRING_FIELD_OFFSET, zero);
+    jal_string_handle_index_set(pf, str, _STRING_FIELD_LENGTH, zero);
+    jal_string_handle_index_set(pf, str, _STRING_FIELD_CAP, zero);
     value_release(zero);
   }
 }
@@ -964,23 +1039,36 @@ static boolean_t jal_string_fixed_runtime_ensure(pfile_t *pf)
   variable_t err;
 
   jal_string_core_gate(pf);
-  err = pfile_variable_find(pf, PFILE_LOG_NONE, JAL_STRING_ERROR_NAME, 0);
+  err = pfile_variable_find(pf, PFILE_LOG_NONE, _STRING_ERROR_NAME, 0);
   if (err) {
     variable_release(err);
     return BOOLEAN_TRUE;
   }
   /* fixed strings need no heap: only the shared error byte and the
    * symbolic error constants */
-  return jal_string_global_byte_alloc(pf, JAL_STRING_ERROR_NAME,
-           VARIABLE_DEF_FLAG_NONE, JAL_STRING_ERROR_NONE)
+  return jal_string_global_byte_alloc(pf, _STRING_ERROR_NAME,
+           VARIABLE_DEF_FLAG_NONE, _STRING_ERROR_NONE)
+      && jal_string_global_const_alloc(pf, "_string_error_none",
+           _STRING_ERROR_NONE)
+      && jal_string_global_const_alloc(pf, "_string_error_heap_full",
+           _STRING_ERROR_HEAP_FULL)
+      && jal_string_global_const_alloc(pf, "_string_error_overflow",
+           _STRING_ERROR_OVERFLOW)
+      && jal_string_global_const_alloc(pf, "_string_error_invalid",
+           _STRING_ERROR_INVALID)
       && jal_string_global_const_alloc(pf, "string_error_none",
-           JAL_STRING_ERROR_NONE)
+           _STRING_ERROR_NONE)
       && jal_string_global_const_alloc(pf, "string_error_heap_full",
-           JAL_STRING_ERROR_HEAP_FULL)
+           _STRING_ERROR_HEAP_FULL)
       && jal_string_global_const_alloc(pf, "string_error_overflow",
-           JAL_STRING_ERROR_OVERFLOW)
+           _STRING_ERROR_OVERFLOW)
       && jal_string_global_const_alloc(pf, "string_error_invalid",
-           JAL_STRING_ERROR_INVALID);
+           _STRING_ERROR_INVALID);
+}
+
+boolean_t jal_string_error_cell_ensure(pfile_t *pf)
+{
+  return jal_string_fixed_runtime_ensure(pf);
 }
 
 static value_t jal_string_parse_operand(pfile_t *pf);
@@ -993,11 +1081,11 @@ value_t jal_string_concat_chain_emit(pfile_t *pf, value_t first);
 
 value_t jal_string_length_value_get(pfile_t *pf, value_t val)
 {
-  if (!jal_string_is_dynamic(val)) {
+  if (!jal_string_is_dynamic(val) && !jal_string_pointer_is(val)) {
     return VALUE_NONE;
   }
   jal_string_core_gate(pf);
-  return jal_string_handle_index_get(pf, val, JAL_STRING_FIELD_LENGTH);
+  return jal_string_handle_index_get(pf, val, _STRING_FIELD_LENGTH);
 }
 
 /* String actual -> open byte-array formal coercion (call arguments).
@@ -1008,6 +1096,62 @@ value_t jal_string_length_value_get(pfile_t *pf, value_t val)
  * jal_string_length_value_get for the hidden count parameter (the
  * buffer capacity would over-report). Returns VALUE_NONE when val is
  * not a string. */
+/* One program-wide runtime chunk map (see jal_string_arg_byte_array).
+ *
+ * The map is [count][base lo, base hi, span]... and every call site that
+ * passes a heap string to an open-array formal fills in the layout of ITS
+ * marshalling buffer, so the callee's dynamic subscript can walk it.  The
+ * pointer tells the callee where the map is; it exists so the walk has a
+ * stable operand if the map is ever made per-call (it costs 2 bytes).
+ *
+ * Both are created on the first string-argument coercion and are GLOBAL:
+ * one map serves the whole program.  `pfile_value_find` first, so a second
+ * compile in the same process does not create duplicates.
+ */
+static boolean_t jal_string_chunk_sym_alloc(pfile_t *pf, const char *name,
+    size_t sz)
+{
+  variable_def_t bdef;
+  variable_def_t adef;
+  value_t        val;
+  result_t       rc;
+
+  if (pfile_value_find(pf, PFILE_LOG_NONE, name)) {
+    return BOOLEAN_TRUE;
+  }
+  bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, 1);
+  adef = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
+      VARIABLE_DEF_FLAG_NONE, 1);
+  if (!bdef || !adef) {
+    return BOOLEAN_FALSE;
+  }
+  variable_def_member_add(adef, 0, bdef, sz);
+  val = VALUE_NONE;
+  rc = pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL, name, adef, &val);
+  if (RESULT_OK != rc) {
+    pfile_log_syserr(pf, rc);
+    return BOOLEAN_FALSE;
+  }
+  /* keep it alive: the back end fills/reads it long after the front end
+   * drops unreferenced variables (found 2026-11-02: the name lookup at
+   * emit time returned NONE).  Not released on purpose -- the value arena
+   * is compile scoped and frees it at pfile_close. */
+  if (value_variable_get(val)
+      && (VARIABLE_NONE != value_variable_get(val))) {
+    variable_use_ct_bump(value_variable_get(val), CTR_BUMP_INCR);
+    variable_assign_ct_bump(value_variable_get(val), CTR_BUMP_INCR);
+  }
+  return BOOLEAN_TRUE;
+}
+
+static boolean_t jal_string_chunk_map_create(pfile_t *pf)
+{
+  return jal_string_chunk_sym_alloc(pf, "_chunkmap",
+        (size_t) (1 + 3 * PIC_CHUNK_MAP_MAX))
+    && jal_string_chunk_sym_alloc(pf, "_strarg_map_ptr", 2);
+}
+
 value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
 {
   variable_def_t bdef;
@@ -1016,8 +1160,9 @@ value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
   value_t        cap_val;
   value_t        res;
 
-  /* only heap strings coerce; const literals already work as arrays */
-  if (!jal_string_is_dynamic(src)) {
+  /* only heap strings coerce (directly or through a string pointer);
+   * const literals already work as arrays */
+  if (!jal_string_is_dynamic(src) && !jal_string_pointer_is(src)) {
     return VALUE_NONE;
   }
   cap_val = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
@@ -1058,6 +1203,29 @@ value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
     if (RESULT_OK != rc) {
       pfile_log_syserr(pf, rc);
       return VALUE_NONE;
+    }
+    /* RUNTIME CHUNK MAP (2026-11-02, see
+     * docs/investigations/runtime_chunk_arguments_design_20261102.md):
+     * a marshalling buffer can be larger than one RAM bank, and one callee
+     * body must serve every call site, so the callee's chunk layout is not
+     * a compile-time constant -- the call site writes the ACTIVE layout to
+     * this one program-wide map and points `_strarg_map_ptr` at it.
+     *
+     * Layout (interleaved, walked by pic_fsr_chunk_walk_emit_globals):
+     *   [count][base0 lo, base0 hi, span0][base1 lo, ...]...
+     *
+     * Both variables are created HERE, in the front end, because a variable
+     * created after the emit snapshot never reaches the image (no equate).
+     * ONE map serves every call site: the walk runs inside the callee, and a
+     * call can only be made from a site that has already finished walking
+     * (nested chunked calls are the documented limitation -- the inner call
+     * overwrites the map before the outer body resumes).
+     *
+     * Size: 1 + 3 * 8 chunks (25 bytes).  A marshalling buffer is split by
+     * RAM bank nodes; 8 is more chunks than any banked layout observed and
+     * the call-site store refuses (with a diagnostic) beyond it. */
+    if (!jal_string_chunk_map_create(pf)) {
+      pfile_log_syserr(pf, ENOMEM);
     }
   }
   res = jal_string_to_array_emit(pf, buf, src, VALUE_NONE,
@@ -1157,14 +1325,14 @@ static void jal_string_runtime_heap_fresh_bootstrap_emit(pfile_t *pf,
   value_release(val);
   value_release(ofs);
 
-  ofs = jal_string_named_value_get(pf, JAL_STRING_FREE_HEAD_NAME);
+  ofs = jal_string_named_value_get(pf, _STRING_FREE_HEAD_NAME);
   val = jal_string_const_get(pf, 0);
   jal_string_assign_value(pf, ofs, val);
   value_release(val);
   value_release(ofs);
 
-  ofs = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  val = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
+  ofs = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  val = jal_string_const_get(pf, _STRING_ERROR_NONE);
   jal_string_assign_value(pf, ofs, val);
   value_release(val);
   value_release(ofs);
@@ -1188,7 +1356,7 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
      * _string_heap_size complaint here would just be noise */
     return BOOLEAN_FALSE;
   }
-  heap = pfile_variable_find(pf, PFILE_LOG_NONE, JAL_STRING_HEAP_NAME, 0);
+  heap = pfile_variable_find(pf, PFILE_LOG_NONE, _STRING_HEAP_NAME, 0);
   if (heap) {
     variable_release(heap);
     return BOOLEAN_TRUE;
@@ -1220,7 +1388,7 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
     return BOOLEAN_FALSE;
   }
   /* JAL string runtime uses at most word-sized heap indices; keep in sync
-   * with `jal_string_index_max(JAL_STRING_INDEX_WORD)`. */
+   * with `jal_string_index_max(_STRING_INDEX_WORD)`. */
   if (heap_sz > 65535U) {
     pfile_log(pf, PFILE_LOG_ERR,
         "dynamic string heap is currently limited to 65535 bytes");
@@ -1245,25 +1413,25 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
   }
   heap = VARIABLE_NONE;
   rc = pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL,
-      JAL_STRING_HEAP_NAME, heap_def, VARIABLE_NONE, &heap);
+      _STRING_HEAP_NAME, heap_def, VARIABLE_NONE, &heap);
   if (RESULT_OK != rc) {
     pfile_log_syserr(pf, rc);
     return BOOLEAN_FALSE;
   }
   variable_release(heap);
 
-  if (!jal_string_global_index_alloc(pf, JAL_STRING_FREE_HEAD_NAME,
+  if (!jal_string_global_index_alloc(pf, _STRING_FREE_HEAD_NAME,
       VARIABLE_DEF_FLAG_NONE, 0)
-      || !jal_string_global_byte_alloc(pf, JAL_STRING_ERROR_NAME,
-        VARIABLE_DEF_FLAG_NONE, JAL_STRING_ERROR_NONE)
-      || !jal_string_global_const_alloc(pf, "string_error_none",
-        JAL_STRING_ERROR_NONE)
-      || !jal_string_global_const_alloc(pf, "string_error_heap_full",
-        JAL_STRING_ERROR_HEAP_FULL)
-      || !jal_string_global_const_alloc(pf, "string_error_overflow",
-        JAL_STRING_ERROR_OVERFLOW)
-      || !jal_string_global_const_alloc(pf, "string_error_invalid",
-        JAL_STRING_ERROR_INVALID)) {
+      || !jal_string_global_byte_alloc(pf, _STRING_ERROR_NAME,
+        VARIABLE_DEF_FLAG_NONE, _STRING_ERROR_NONE)
+      || !jal_string_global_const_alloc(pf, "_string_error_none",
+        _STRING_ERROR_NONE)
+      || !jal_string_global_const_alloc(pf, "_string_error_heap_full",
+        _STRING_ERROR_HEAP_FULL)
+      || !jal_string_global_const_alloc(pf, "_string_error_overflow",
+        _STRING_ERROR_OVERFLOW)
+      || !jal_string_global_const_alloc(pf, "_string_error_invalid",
+        _STRING_ERROR_INVALID)) {
     return BOOLEAN_FALSE;
   }
   jal_string_runtime_heap_fresh_bootstrap_emit(pf, heap_sz, index_sz, header_sz,
@@ -1307,11 +1475,11 @@ static value_t jal_string_source_byte_get(pfile_t *pf, value_t src,
 {
   value_t src_byte;
 
-  if (jal_string_is_dynamic(src)) {
+  if (jal_string_is_dynamic(src) || jal_string_pointer_is(src)) {
     value_t src_off;
     value_t src_payload;
 
-    src_off = jal_string_handle_index_get(pf, src, JAL_STRING_FIELD_OFFSET);
+    src_off = jal_string_handle_index_get(pf, src, _STRING_FIELD_OFFSET);
     src_payload = jal_string_add_const(pf, src_off,
         jal_string_header_size_get(pf));
     value_release(src_off);
@@ -1349,7 +1517,7 @@ static void jal_string_copy_at_emit(pfile_t *pf, value_t dst, value_t src,
   src_byte = VALUE_NONE;
   dst_byte = VALUE_NONE;
   dst_payload = VALUE_NONE;
-  dst_off = jal_string_handle_index_get(pf, dst, JAL_STRING_FIELD_OFFSET);
+  dst_off = jal_string_handle_index_get(pf, dst, _STRING_FIELD_OFFSET);
 
   {
     value_t zero;
@@ -1445,12 +1613,16 @@ boolean_t jal_string_subscript_value_is(value_t val)
 {
   variable_t var;
 
-  var = val ? value_variable_get(val) : VARIABLE_NONE;
-  return (var && (VARIABLE_NONE != var)
+  if (!val || (VALUE_NONE == value_baseofs_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  var = value_variable_get(val);
+  if (var && (VARIABLE_NONE != var)
       && variable_def_flag_test(variable_def_get(var),
-           VARIABLE_DEF_FLAG_STRING_DYNAMIC)
-      && (VALUE_NONE != value_baseofs_get(val)))
-    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+           VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    return BOOLEAN_TRUE;
+  }
+  return jal_string_pointer_is(val);
 }
 
 /* base string value of a subscripted element view (drops the index,
@@ -1494,7 +1666,7 @@ value_t jal_string_subscript_read_emit(pfile_t *pf, value_t elem)
       || !jal_string_subscript_split(pf, elem, &base, &idx)) {
     return VALUE_NONE;
   }
-  off = jal_string_handle_index_get(pf, base, JAL_STRING_FIELD_OFFSET);
+  off = jal_string_handle_index_get(pf, base, _STRING_FIELD_OFFSET);
   byte = jal_string_heap_payload_byte_get(pf, off, idx);
   value_release(off);
   value_release(idx);
@@ -1524,7 +1696,7 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     pfile_log(pf, PFILE_LOG_ERR,
         "string element assignment requires a byte value");
   } else {
-    off = jal_string_handle_index_get(pf, base, JAL_STRING_FIELD_OFFSET);
+    off = jal_string_handle_index_get(pf, base, _STRING_FIELD_OFFSET);
     hdr = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
     value_release(off);
     ofs = jal_string_binary_emit(pf, OPERATOR_ADD, hdr, idx);
@@ -1555,7 +1727,7 @@ static void jal_string_copy_heap_at_emit(pfile_t *pf, value_t dst,
   idx = jal_string_temp_index_get(pf);
   one = jal_string_const_get(pf, 1);
   zero = jal_string_const_get(pf, 0);
-  dst_off = jal_string_handle_index_get(pf, dst, JAL_STRING_FIELD_OFFSET);
+  dst_off = jal_string_handle_index_get(pf, dst, _STRING_FIELD_OFFSET);
   src_byte = VALUE_NONE;
   dst_byte = VALUE_NONE;
   dst_payload = VALUE_NONE;
@@ -1696,7 +1868,7 @@ static void jal_string_free_old_block_emit(pfile_t *pf, value_t old_off,
   jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, old_cap, 0,
       CMD_BRANCHCOND_TRUE, done_lbl);
 
-  free_head = jal_string_named_value_get(pf, JAL_STRING_FREE_HEAD_NAME);
+  free_head = jal_string_named_value_get(pf, _STRING_FREE_HEAD_NAME);
   prev = jal_string_temp_index_get(pf);
   cur = jal_string_temp_index_get(pf);
   cur_next = jal_string_temp_index_get(pf);
@@ -1831,17 +2003,17 @@ static void jal_string_clear_emit(pfile_t *pf, value_t dst)
   old_off = jal_string_temp_index_get(pf);
   old_cap = jal_string_temp_index_get(pf);
   old_off_lval = jal_string_handle_index_get(pf, dst,
-      JAL_STRING_FIELD_OFFSET);
+      _STRING_FIELD_OFFSET);
   old_cap_lval = jal_string_handle_index_get(pf, dst,
-      JAL_STRING_FIELD_CAP);
+      _STRING_FIELD_CAP);
   zero = jal_string_const_get(pf, 0);
 
   jal_string_assign_value(pf, old_off, old_off_lval);
   jal_string_assign_value(pf, old_cap, old_cap_lval);
   jal_string_free_old_block_emit(pf, old_off, old_cap);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_OFFSET, zero);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, zero);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_CAP, zero);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_OFFSET, zero);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, zero);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_CAP, zero);
 
   value_release(zero);
   value_release(old_cap_lval);
@@ -1945,7 +2117,7 @@ static void jal_string_allocate_emit_ex(pfile_t *pf, value_t dst, value_t len,
   unlink_lbl = pfile_label_alloc(pf, 0);
   scan_fail_lbl = pfile_label_alloc(pf, 0);
   compact_fail_lbl = pfile_label_alloc(pf, 0);
-  free_head = jal_string_named_value_get(pf, JAL_STRING_FREE_HEAD_NAME);
+  free_head = jal_string_named_value_get(pf, _STRING_FREE_HEAD_NAME);
   prev = jal_string_temp_index_get(pf);
   cur = jal_string_temp_index_get(pf);
   old_next = jal_string_temp_index_get(pf);
@@ -1958,9 +2130,9 @@ static void jal_string_allocate_emit_ex(pfile_t *pf, value_t dst, value_t len,
   old_off = jal_string_temp_index_get(pf);
   old_cap = jal_string_temp_index_get(pf);
   old_off_lval = jal_string_handle_index_get(pf, dst,
-      JAL_STRING_FIELD_OFFSET);
+      _STRING_FIELD_OFFSET);
   old_cap_lval = jal_string_handle_index_get(pf, dst,
-      JAL_STRING_FIELD_CAP);
+      _STRING_FIELD_CAP);
   jal_string_assign_value(pf, old_off, old_off_lval);
   jal_string_assign_value(pf, old_cap, old_cap_lval);
   value_release(old_cap_lval);
@@ -2137,10 +2309,10 @@ static void jal_string_allocate_emit_ex(pfile_t *pf, value_t dst, value_t len,
     label_release(prev_is_head_lbl);
   }
 
-  dst_off = jal_string_handle_field_ofs_get(pf, JAL_STRING_FIELD_OFFSET);
-  dst_cap = jal_string_handle_field_ofs_get(pf, JAL_STRING_FIELD_CAP);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_OFFSET, cur);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_CAP, alloc_cap);
+  dst_off = jal_string_handle_field_ofs_get(pf, _STRING_FIELD_OFFSET);
+  dst_cap = jal_string_handle_field_ofs_get(pf, _STRING_FIELD_CAP);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_OFFSET, cur);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_CAP, alloc_cap);
   if (free_old) {
     jal_string_free_old_block_emit(pf, old_off, old_cap);
   } else {
@@ -2204,7 +2376,7 @@ static value_t jal_string_source_length_snapshot_get(pfile_t *pf, value_t src)
   value_t len;
   value_t snap;
 
-  if (jal_string_is_dynamic(src)) {
+  if (jal_string_is_dynamic(src) || jal_string_pointer_is(src)) {
     len = jal_string_length_value_get(pf, src);
   } else {
     len = jal_string_index_const_get(pf, value_ct_get(src));
@@ -2400,9 +2572,9 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
   done_lbl = pfile_label_alloc(pf, 0);
   total_len = jal_string_temp_index_get(pf);
   offset = jal_string_temp_index_get(pf);
-  err = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  zero = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
-  heap_full = jal_string_const_get(pf, JAL_STRING_ERROR_HEAP_FULL);
+  err = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  zero = jal_string_const_get(pf, _STRING_ERROR_NONE);
+  heap_full = jal_string_const_get(pf, _STRING_ERROR_HEAP_FULL);
   old_off = VALUE_NONE;
   old_cap = VALUE_NONE;
 
@@ -2474,7 +2646,7 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
     for (jj = 0; jj < item_ct; jj++) {
       pfile_cmd_op_add(pf, OPERATOR_ADD, &len_store, len_store, lens[jj]);
     }
-    jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, len_store);
+    jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, len_store);
     value_release(len_store);
   }
   jal_string_assign_value(pf, offset, zero);
@@ -2503,7 +2675,8 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
 
   pfile_cmd_label_add(pf, fail_lbl);
-  jal_string_assign_value(pf, err, heap_full);
+  jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_HEAP_FULL);
   pfile_cmd_label_add(pf, done_lbl);
 
   value_release(old_cap);
@@ -2617,7 +2790,7 @@ static value_t jal_string_const_int_text(pfile_t *pf, variable_const_t cn,
     unsigned neg, variable_sz_t sz, unsigned base, unsigned width);
 static value_t jal_string_jal_proc_call_value_get(pfile_t *pf,
     const char *tag);
-#define JAL_STRING_FLTBUF_NAME_SZ 24
+#define _STRING_FLTBUF_NAME_SZ 24
 
 /* stage 2d v2: runtime float operand -> CALL _string_float_str(f, buf)
  * (strings_dynamic' battery-validated renderer). Mirrors
@@ -2633,7 +2806,7 @@ static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
     value_t *len_out, value_t v)
 {
   static unsigned  flt_no;
-  char             name[JAL_STRING_FLTBUF_NAME_SZ];
+  char             name[_STRING_FLTBUF_NAME_SZ];
   variable_def_t   byte_def;
   variable_def_t   arr_def;
   variable_t       scratch_var;
@@ -2815,7 +2988,7 @@ static value_t jal_string_chain_item_resolve(pfile_t *pf, value_t item,
   return item;
 }
 
-#define JAL_STRING_CHAIN_NAME_SZ 24
+#define _STRING_CHAIN_NAME_SZ 24
 
 /* One compiler-generated heap-string cell per chain site (`_string_chainN`,
  * like `_cstrN`): the chain result must keep its STRING def flags (the
@@ -2825,7 +2998,7 @@ static value_t jal_string_chain_item_resolve(pfile_t *pf, value_t item,
 static value_t jal_string_chain_var_get(pfile_t *pf)
 {
   static unsigned chain_no;
-  char            name[JAL_STRING_CHAIN_NAME_SZ];
+  char            name[_STRING_CHAIN_NAME_SZ];
   variable_def_t  vdef;
   variable_t      var;
   value_t         val;
@@ -2853,7 +3026,7 @@ static value_t jal_string_chain_var_get(pfile_t *pf)
 
 /* ---- stage 2a/2b: integer operands in `&` chains -------------------- */
 
-#define JAL_STRING_NUMBUF_NAME_SZ 24
+#define _STRING_NUMBUF_NAME_SZ 24
 
 /* worst-case decimal digits (3/byte covers byte..oword) + sign + slack */
 static unsigned jal_string_num_dig_max(variable_sz_t sz)
@@ -2867,7 +3040,7 @@ static unsigned jal_string_num_dig_max(variable_sz_t sz)
 static value_t jal_string_number_const_source_emit(pfile_t *pf,
     variable_const_t cn, unsigned neg)
 {
-  char            name[JAL_STRING_NUMBUF_NAME_SZ];
+  char            name[_STRING_NUMBUF_NAME_SZ];
   char            digits[44];
   unsigned        ndig;
   unsigned        ii;
@@ -3148,7 +3321,7 @@ static value_t jal_string_number_source_emit_ex(pfile_t *pf, value_t v,
     value_t *len_out, unsigned base, unsigned pad)
 {
   static unsigned   num_no;
-  char              name[JAL_STRING_NUMBUF_NAME_SZ];
+  char              name[_STRING_NUMBUF_NAME_SZ];
   variable_def_t    def;
   variable_def_t    udef;
   variable_sz_t     sz;
@@ -3903,16 +4076,17 @@ static void jal_string_fixed_assignment_emit(pfile_t *pf, value_t dst,
   ok_lbl = pfile_label_alloc(pf, 0);
   len  = jal_string_fixed_operand_len_emit(pf, src);
   cap  = jal_string_index_const_get(pf, value_ct_get(dst));
-  err  = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  zero = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
-  overflow = jal_string_const_get(pf, JAL_STRING_ERROR_OVERFLOW);
+  err  = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  zero = jal_string_const_get(pf, _STRING_ERROR_NONE);
+  overflow = jal_string_const_get(pf, _STRING_ERROR_OVERFLOW);
 
   jal_string_assign_value(pf, err, zero);
   if (value_is_const(len)) {
     /* compile-time fit decision: no runtime guard (avoids folded always-true
      * compare); constant overflow reports without copying */
     if (value_const_get(len) > (variable_const_t) value_const_get(cap)) {
-      jal_string_assign_value(pf, err, overflow);
+      jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_OVERFLOW);
       value_release(len);
       len = cap;
       cap = VALUE_NONE;
@@ -3920,7 +4094,8 @@ static void jal_string_fixed_assignment_emit(pfile_t *pf, value_t dst,
   } else {
     jal_string_branch_if_value_cmp(pf, OPERATOR_LE, len, cap,
         CMD_BRANCHCOND_TRUE, ok_lbl);
-    jal_string_assign_value(pf, err, overflow);
+    jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_OVERFLOW);
     jal_string_assign_value(pf, len, cap);
     pfile_cmd_label_add(pf, ok_lbl);
   }
@@ -3967,9 +4142,9 @@ static void jal_string_fixed_concat_emit(pfile_t *pf, value_t dst,
   total  = jal_string_temp_index_get(pf);
   offset = jal_string_temp_index_get(pf);
   cap  = jal_string_index_const_get(pf, value_ct_get(dst));
-  err  = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  zero = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
-  overflow = jal_string_const_get(pf, JAL_STRING_ERROR_OVERFLOW);
+  err  = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  zero = jal_string_const_get(pf, _STRING_ERROR_NONE);
+  overflow = jal_string_const_get(pf, _STRING_ERROR_OVERFLOW);
   zero_const = jal_string_const_get(pf, 0);
 
   jal_string_assign_value(pf, err, zero);
@@ -3988,14 +4163,16 @@ static void jal_string_fixed_concat_emit(pfile_t *pf, value_t dst,
     /* compile-time total: static fit decision (no folded always-true
      * compare); constant overflow reports and leaves dst unchanged */
     if (total_const > (variable_const_t) value_const_get(cap)) {
-      jal_string_assign_value(pf, err, overflow);
+      jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_OVERFLOW);
       pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
           done_lbl, VALUE_NONE, VALUE_NONE, 0);
     }
   } else {
     jal_string_branch_if_value_cmp(pf, OPERATOR_LE, total, cap,
         CMD_BRANCHCOND_TRUE, fits_lbl);
-    jal_string_assign_value(pf, err, overflow);
+    jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_OVERFLOW);
     pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
         done_lbl, VALUE_NONE, VALUE_NONE, 0);
   }
@@ -4168,12 +4345,12 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
   copy_lbl = pfile_label_alloc(pf, 0);
   clear_lbl = pfile_label_alloc(pf, 0);
   done_lbl = pfile_label_alloc(pf, 0);
-  err = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  zero = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
-  heap_full = jal_string_const_get(pf, JAL_STRING_ERROR_HEAP_FULL);
+  err = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  zero = jal_string_const_get(pf, _STRING_ERROR_NONE);
+  heap_full = jal_string_const_get(pf, _STRING_ERROR_HEAP_FULL);
 
   jal_string_assign_value(pf, err, zero);
-  dst_cap = jal_string_handle_index_get(pf, dst, JAL_STRING_FIELD_CAP);
+  dst_cap = jal_string_handle_index_get(pf, dst, _STRING_FIELD_CAP);
 
   jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, len, 0,
       CMD_BRANCHCOND_TRUE, clear_lbl);
@@ -4182,7 +4359,7 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
   jal_string_allocate_emit(pf, dst, len, fail_lbl, copy_lbl);
 
   pfile_cmd_label_add(pf, copy_lbl);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, len);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, len);
   jal_string_copy_emit(pf, dst, src, len);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
@@ -4193,7 +4370,8 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
 
   pfile_cmd_label_add(pf, fail_lbl);
-  jal_string_assign_value(pf, err, heap_full);
+  jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_HEAP_FULL);
   pfile_cmd_label_add(pf, done_lbl);
 
   value_release(dst_cap);
@@ -4228,11 +4406,11 @@ static void jal_string_dynamic_copy_len_emit(pfile_t *pf, value_t dst,
   copy_lbl = pfile_label_alloc(pf, 0);
   clear_lbl = pfile_label_alloc(pf, 0);
   done_lbl = pfile_label_alloc(pf, 0);
-  dst_cap = jal_string_handle_index_get(pf, dst, JAL_STRING_FIELD_CAP);
-  err = update_error ? jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME)
+  dst_cap = jal_string_handle_index_get(pf, dst, _STRING_FIELD_CAP);
+  err = update_error ? jal_string_named_value_get(pf, _STRING_ERROR_NAME)
     : VALUE_NONE;
-  zero = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
-  heap_full = jal_string_const_get(pf, JAL_STRING_ERROR_HEAP_FULL);
+  zero = jal_string_const_get(pf, _STRING_ERROR_NONE);
+  heap_full = jal_string_const_get(pf, _STRING_ERROR_HEAP_FULL);
 
   if (err) {
     jal_string_assign_value(pf, err, zero);
@@ -4244,7 +4422,7 @@ static void jal_string_dynamic_copy_len_emit(pfile_t *pf, value_t dst,
   jal_string_allocate_emit(pf, dst, len, fail_lbl, copy_lbl);
 
   pfile_cmd_label_add(pf, copy_lbl);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, len);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, len);
   jal_string_copy_emit(pf, dst, src, len);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
@@ -4257,7 +4435,8 @@ static void jal_string_dynamic_copy_len_emit(pfile_t *pf, value_t dst,
   pfile_cmd_label_add(pf, fail_lbl);
   jal_string_bool_assign(pf, result, BOOLEAN_FALSE);
   if (err) {
-    jal_string_assign_value(pf, err, heap_full);
+    jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_HEAP_FULL);
   }
   pfile_cmd_label_add(pf, done_lbl);
 
@@ -4290,7 +4469,7 @@ static value_t jal_string_truncate_emit(pfile_t *pf, value_t dst, value_t max)
   jal_string_bool_assign(pf, result, BOOLEAN_FALSE);
   jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, max, 0,
       CMD_BRANCHCOND_TRUE, clear_lbl);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, max);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, max);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
       keep_lbl, VALUE_NONE, VALUE_NONE, 0);
   pfile_cmd_label_add(pf, clear_lbl);
@@ -4532,8 +4711,8 @@ static boolean_t jal_string_assignment_string_from_array_lib_call_emit(
   value_lock(src);
   parms[3] = src;
 
-  err = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  zero = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
+  err = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  zero = jal_string_const_get(pf, _STRING_ERROR_NONE);
   jal_string_assign_value(pf, err, zero);
 
   call_val = jal_string_jal_proc_call_value_get(pf, "string_from_array");
@@ -4746,7 +4925,7 @@ static value_t jal_string_append_truncate_emit(pfile_t *pf, value_t dst,
   idx_sz = jal_string_current_index_size_get(pf);
   dst_len = jal_string_length_value_get(pf, dst);
   src_len = jal_string_source_length_snapshot_get(pf, src);
-  dst_cap = jal_string_handle_index_get(pf, dst, JAL_STRING_FIELD_CAP);
+  dst_cap = jal_string_handle_index_get(pf, dst, _STRING_FIELD_CAP);
   if (work_sz > idx_sz) {
     w = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_INTEGER, work_sz);
     jal_string_assign_value(pf, w, dst_len);
@@ -4801,7 +4980,7 @@ static value_t jal_string_append_truncate_emit(pfile_t *pf, value_t dst,
       alloc_copy_lbl, BOOLEAN_FALSE, &old_off, &old_cap);
 
   pfile_cmd_label_add(pf, alloc_copy_lbl);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, copy_len);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, copy_len);
   jal_string_copy_heap_at_emit(pf, dst, old_off, dst_len, zero);
   if (src_is_dst) {
     jal_string_copy_heap_at_emit(pf, dst, old_off, second_len, dst_len);
@@ -4813,13 +4992,13 @@ static value_t jal_string_append_truncate_emit(pfile_t *pf, value_t dst,
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
 
   pfile_cmd_label_add(pf, append_in_place_lbl);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, copy_len);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, copy_len);
   jal_string_copy_at_emit(pf, dst, src, second_len, dst_len);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
 
   pfile_cmd_label_add(pf, shorten_lbl);
-  jal_string_handle_index_set(pf, dst, JAL_STRING_FIELD_LENGTH, copy_len);
+  jal_string_handle_index_set(pf, dst, _STRING_FIELD_LENGTH, copy_len);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
       done_lbl, VALUE_NONE, VALUE_NONE, 0);
 
@@ -4857,9 +5036,9 @@ static value_t jal_string_append_emit(pfile_t *pf, value_t dst, value_t src)
   value_t heap_full;
   label_t done_lbl;
 
-  err = jal_string_named_value_get(pf, JAL_STRING_ERROR_NAME);
-  none = jal_string_const_get(pf, JAL_STRING_ERROR_NONE);
-  heap_full = jal_string_const_get(pf, JAL_STRING_ERROR_HEAP_FULL);
+  err = jal_string_named_value_get(pf, _STRING_ERROR_NAME);
+  none = jal_string_const_get(pf, _STRING_ERROR_NONE);
+  heap_full = jal_string_const_get(pf, _STRING_ERROR_HEAP_FULL);
   dst_len = jal_string_length_value_get(pf, dst);
   src_len = jal_string_source_length_snapshot_get(pf, src);
   max = jal_string_temp_index_get(pf);
@@ -4870,7 +5049,8 @@ static value_t jal_string_append_emit(pfile_t *pf, value_t dst, value_t src)
   done_lbl = pfile_label_alloc(pf, 0);
   jal_string_branch_if_const_cmp(pf, OPERATOR_NE, result, 0,
       CMD_BRANCHCOND_TRUE, done_lbl);
-  jal_string_assign_value(pf, err, heap_full);
+  jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+      _STRING_ERROR_HEAP_FULL);
   jal_string_bool_assign(pf, result, BOOLEAN_FALSE);
   pfile_cmd_label_add(pf, done_lbl);
   label_release(done_lbl);
@@ -4943,20 +5123,20 @@ static boolean_t jal_string_builtin_sep_get(pfile_t *pf, const char *sep)
  * found no definitions or uses of these names. */
 
 typedef enum jal_string_cast_e {
-  JAL_STRING_CAST_STRING,
-  JAL_STRING_CAST_HEX,
-  JAL_STRING_CAST_BIN
+  _STRING_CAST_STRING,
+  _STRING_CAST_HEX,
+  _STRING_CAST_BIN
 } jal_string_cast_t;
 
 static boolean_t jal_string_cast_from_name(const char *nm,
     jal_string_cast_t *which)
 {
   if (!strcmp(nm, "string")) {
-    *which = JAL_STRING_CAST_STRING;
+    *which = _STRING_CAST_STRING;
   } else if (!strcmp(nm, "hex")) {
-    *which = JAL_STRING_CAST_HEX;
+    *which = _STRING_CAST_HEX;
   } else if (!strcmp(nm, "bin")) {
-    *which = JAL_STRING_CAST_BIN;
+    *which = _STRING_CAST_BIN;
   } else {
     return BOOLEAN_FALSE;
   }
@@ -4986,7 +5166,7 @@ static value_t jal_string_text_const(pfile_t *pf, const char *pfx,
     const char *txt, unsigned len)
 {
   static unsigned txt_no;
-  char            name[JAL_STRING_NUMBUF_NAME_SZ];
+  char            name[_STRING_NUMBUF_NAME_SZ];
   variable_def_t  byte_def;
   variable_def_t  arr_def;
   variable_t      var;
@@ -5135,7 +5315,7 @@ static value_t jal_string_cast_runtime_result(pfile_t *pf, value_t operand,
  * hex/dec/bin render each element unrolled through the generalized
  * number machinery (pad raised to the element's natural width, exactly
  * the stage-1 const semantics) and concat-emit appends all items. */
-#define JAL_STRING_CAST_ARRAY_MAX 16
+#define _STRING_CAST_ARRAY_MAX 16
 
 /* value consumes: operand */
 static value_t jal_string_cast_runtime_array(pfile_t *pf, value_t operand,
@@ -5164,12 +5344,12 @@ static value_t jal_string_cast_runtime_array(pfile_t *pf, value_t operand,
   /* the per-element unroll limit applies to hex/bin/dec; the STRING
    * cast is ONE verbatim source (no unroll), so byte buffers of any
    * size work -- same capability as the bare `s & arr` chain form */
-  if ((JAL_STRING_CAST_STRING != which)
-      && (ct > JAL_STRING_CAST_ARRAY_MAX)) {
+  if ((_STRING_CAST_STRING != which)
+      && (ct > _STRING_CAST_ARRAY_MAX)) {
     pfile_log(pf, PFILE_LOG_ERR,
         "cast: runtime array operand limited to %u elements "
         "(constant arrays fold without limit)",
-        (unsigned) JAL_STRING_CAST_ARRAY_MAX);
+        (unsigned) _STRING_CAST_ARRAY_MAX);
     value_release(operand);
     return VALUE_NONE;
   }
@@ -5188,7 +5368,7 @@ static value_t jal_string_cast_runtime_array(pfile_t *pf, value_t operand,
     value_release(operand);
     return VALUE_NONE;
   }
-  if (JAL_STRING_CAST_STRING == which) {
+  if (_STRING_CAST_STRING == which) {
     /* bytes-as-text: a STRING-flagged dup of the array def makes the
      * whole array a single chain source (length = element count) */
     variable_def_t sdef;
@@ -5234,8 +5414,8 @@ static value_t jal_string_cast_runtime_array(pfile_t *pf, value_t operand,
     unsigned natural;
     unsigned pad_e;
 
-    base = (JAL_STRING_CAST_HEX == which) ? 16U
-      : ((JAL_STRING_CAST_BIN == which) ? 2U : 10U);
+    base = (_STRING_CAST_HEX == which) ? 16U
+      : ((_STRING_CAST_BIN == which) ? 2U : 10U);
     natural = (16U == base) ? (2U * (unsigned) esz)
       : ((2U == base) ? (8U * (unsigned) esz) : 1U);
     pad_e = (pad > natural) ? pad : natural;
@@ -5350,7 +5530,7 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
   }
 
   /* string(s) on a string-typed operand is the identity */
-  if ((JAL_STRING_CAST_STRING == which)
+  if ((_STRING_CAST_STRING == which)
       && jal_string_is_source(operand)
       && !value_is_array(operand)) {
     result = operand;
@@ -5388,7 +5568,7 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
         FREE(save);
         return VALUE_NONE;
       }
-      if (JAL_STRING_CAST_STRING == which) {
+      if (_STRING_CAST_STRING == which) {
         if (inner
           && (VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(inner))
           && (1 == variable_def_sz_get(inner))
@@ -5432,7 +5612,7 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
         esz = variable_def_sz_get(inner);
         ev = 0;
         memcpy(&ev, data + ((size_t) ii * esz), esz);
-        eb = (JAL_STRING_CAST_HEX == which) ? 16U : 2U;
+        eb = (_STRING_CAST_HEX == which) ? 16U : 2U;
         {
           char           one[40];
           unsigned       od;
@@ -5470,8 +5650,8 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
     if (VARIABLE_DEF_TYPE_FLOAT == value_type_get(operand)) {
       value_t rc;
 
-      if ((JAL_STRING_CAST_HEX == which)
-        || (JAL_STRING_CAST_BIN == which)) {
+      if ((_STRING_CAST_HEX == which)
+        || (_STRING_CAST_BIN == which)) {
         pfile_log(pf, PFILE_LOG_ERR,
             "%s(...) of a float is not supported", save);
         value_release(operand);
@@ -5502,8 +5682,8 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
       value_t rc;
       unsigned base;
 
-      base = (JAL_STRING_CAST_HEX == which) ? 16U : 2U;
-      rc = (JAL_STRING_CAST_STRING == which)
+      base = (_STRING_CAST_HEX == which) ? 16U : 2U;
+      rc = (_STRING_CAST_STRING == which)
         ? jal_string_number_const_source_emit(pf, cn, neg)
         : jal_string_const_int_text(pf, cn, neg, sz, base, pad);
       value_release(operand);
@@ -5524,8 +5704,8 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
   {
     unsigned base;
 
-    base = (JAL_STRING_CAST_HEX == which) ? 16U
-      : ((JAL_STRING_CAST_BIN == which) ? 2U : 10U);
+    base = (_STRING_CAST_HEX == which) ? 16U
+      : ((_STRING_CAST_BIN == which) ? 2U : 10U);
     result = jal_string_cast_runtime_result(pf, operand, base, pad);
     FREE(save);
     return result;
@@ -6176,7 +6356,7 @@ static void jal_str_cpt_free_tail_emit(pfile_t *pf, value_t endu,
   value_release(fzer);
   value_release(o1);
   value_release(o2);
-  fhv  = jal_string_named_value_get(pf, JAL_STRING_FREE_HEAD_NAME);
+  fhv  = jal_string_named_value_get(pf, _STRING_FREE_HEAD_NAME);
   t3  = endu;
   value_lock(t3);
   jal_string_assign_value(pf, fhv, t3);
@@ -6187,7 +6367,7 @@ static void jal_str_cpt_free_tail_emit(pfile_t *pf, value_t endu,
   pfile_cmd_label_add(pf, lsmall);
   /* frem, c4: c4 was released in C right after the branch-compare emit. */
   fnon  = jal_string_index_const_get(pf, fmax);
-  fhv  = jal_string_named_value_get(pf, JAL_STRING_FREE_HEAD_NAME);
+  fhv  = jal_string_named_value_get(pf, _STRING_FREE_HEAD_NAME);
   jal_string_assign_value(pf, fhv, fnon);
   value_release(fnon);
   value_release(fhv);
@@ -6227,7 +6407,7 @@ static void jal_str_cpt_reg_patch_one_emit(pfile_t *pf, value_t w, value_t n,
       VALUE_NONE, VALUE_NONE, 0U);
   pfile_cmd_label_add(pf, lset);
   nnewv = jal_str_cpt_wk_get(pf, w, kk, 2U);
-  jal_string_handle_index_set(pf, h, JAL_STRING_FIELD_OFFSET, nnewv);
+  jal_string_handle_index_set(pf, h, _STRING_FIELD_OFFSET, nnewv);
   value_release(nnewv);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE, ldone,
       VALUE_NONE, VALUE_NONE, 0U);
@@ -6350,10 +6530,10 @@ static void jal_string_heap_compact_fill_bld(pfile_t *pf, value_t res)
       pfile_log_syserr(pf, ENOMEM);
       goto str_cpt_err2;
     }
-    capu = jal_string_handle_index_get(pf, h, JAL_STRING_FIELD_CAP);
+    capu = jal_string_handle_index_get(pf, h, _STRING_FIELD_CAP);
     jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, capu, 0U, CMD_BRANCHCOND_TRUE,
         skipr);
-    ofu  = jal_string_handle_index_get(pf, h, JAL_STRING_FIELD_OFFSET);
+    ofu  = jal_string_handle_index_get(pf, h, _STRING_FIELD_OFFSET);
     hdrb = jal_string_index_const_get(pf, jal_string_header_size_get(pf));
     bszc = jal_string_binary_emit(pf, OPERATOR_ADD, capu, hdrb);
     value_release(capu);

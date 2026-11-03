@@ -1,0 +1,137 @@
+-- Title: PIC32MX270F256B multi-vector interrupt (MVEC) silicon proof
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Proves MVEC (per-vector interrupt entry) on real silicon, which the
+--    QEMU suite cannot: QEMU's VEIC always enters EBASE+0x200 (slot 0) and
+--    the compiler puts a dispatcher there, so the simulator never takes the
+--    per-vector path.  This program sets INTCON.MVEC itself, so the CPU
+--    enters EBASE+0x200 + 32*IRC on the board.
+--
+--    IRQ0 (core timer vector, priority 7) and IRQ4 (Timer1 vector,
+--    priority 1) are both enabled.  The LOW-priority handler is entered
+--    first from main and raises IRQ0 from inside itself; IRQ0 must then
+--    PREEMPT it (7 > 1) and record that it did.  So one run proves:
+--      - MVEC bit accepted and the per-vector table is reachable (both ISRs
+--        run; with a wrong table the CPU would fetch garbage and nothing
+--        would print),
+--      - priority preemption between two vectors works,
+--      - the ISR returns cleanly and the main loop keeps running (it prints
+--        the verdict afterwards).
+--
+--    Output over UART1 (115200 8N1, TX RB3) on the mx270 bench board:
+--      ##MVEC## boot
+--      ##MVEC## intcon=4096 a=1 b=1 pre=1
+--      ##MVEC-OK##
+--
+-- Notes:
+--    Bench board: PIC32MX270F256B, 40 MHz FRC_SPLL, LED RB14 (unused here).
+--    Flash with: python3 pic_programmer.py program --board mx270_bench \
+--                --file demo_sample/32mx270f256b_mvec_silicon.hex
+--    Capture with: python3 jal-private/ftdi_usb_serial.py --seconds 5
+--
+-- -----------------------------------------------------------------------------
+include 32mx270f256b                -- target device (PIC32MX1/2, MIPS32 M4K)
+pragma target clock 40_000_000      -- oscillator frequency
+pragma target OSC    FRC_SPLL       -- internal 8 MHz FRC through the system PLL (/2 x20 /2)
+pragma target image pfm             -- 3 KB boot flash: PFM app + boot block
+pragma target WDT   DISABLED        -- watchdog
+--
+enable_digital_io()                 -- all pins digital (RB14 has an analog function)
+_usec_delay(100_000)                -- wait for power to stabilize
+--
+-- UART1 wiring for PPS PIC32 parts (bench board: TX RB3, RX RB2)
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_B3
+alias serial_hw_pin_tx_direction is pin_B3_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB3R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+--
+include serial_hardware
+serial_hw_init()
+alias serial_data is serial_hw_data
+--
+include print
+--
+var volatile byte mvec_a = 0        -- IRQ0 entries (high priority)
+var volatile byte mvec_b = 0        -- IRQ4 completions (low priority)
+var volatile byte mvec_pre = 0      -- 1 when IRQ0 preempted IRQ4
+var volatile byte mvec_in_low = 0   -- 1 while the IRQ4 handler is running
+--
+procedure mvec_isr0() is
+   pragma interrupt 0                -- core timer vector
+
+   IFS0CLR = 1                       -- clear IRQ0 (CT)
+   mvec_a = mvec_a + 1
+   if mvec_in_low == 1 then
+      mvec_pre = 1                   -- we preempted the low-priority ISR
+   end if
+end procedure
+--
+procedure mvec_isr4() is
+   pragma interrupt 4                -- Timer1 vector
+
+   IFS0CLR = 0x10                    -- clear IRQ4 (T1)
+   mvec_in_low = 1
+   IFS0SET = 1                       -- raise IRQ0 from inside IRQ4
+   _usec_delay(20)                   -- give the high-priority ISR time to run
+   mvec_in_low = 2
+   mvec_b = mvec_b + 1               -- reaching here means we returned
+end procedure
+--
+print_string(serial_data, "##MVEC## boot")
+print_crlf(serial_data)
+--
+-- multi-vector mode: per-vector entry at EBASE + 0x200 + 32*IRC.
+-- IRQ0 = priority 7 (IPC0 bits 2-4), IRQ4 = priority 1 (IPC1 bits 2-4).
+INTCON = 0x1000                      -- MVEC (bit 12); everything else 0
+IPC0 = 0x1C                          -- IRQ0: priority 7, subpriority 0
+IPC1 = 0x04                          -- IRQ4: priority 1, subpriority 0
+IEC0SET = 0x11                       -- enable IRQ0 + IRQ4
+IFS0SET = 0x10                       -- raise IRQ4 only (IRQ0 raised from its handler)
+--
+var word mvec_guard = 0
+while (mvec_b == 0) & (mvec_guard < 20000) loop
+   mvec_guard = mvec_guard + 1
+end loop
+--
+print_string(serial_data, "##MVEC## intcon=")
+print_dword_dec(serial_data, INTCON)
+print_string(serial_data, " a=")
+print_dword_dec(serial_data, mvec_a)
+print_string(serial_data, " b=")
+print_dword_dec(serial_data, mvec_b)
+print_string(serial_data, " pre=")
+print_dword_dec(serial_data, mvec_pre)
+print_crlf(serial_data)
+--
+if (mvec_a != 0) & (mvec_b != 0) & (mvec_pre != 0) then
+   if (INTCON & 0x1000) == 0x1000 then
+      print_string(serial_data, "##MVEC-OK##")
+   else
+      print_string(serial_data, "##MVEC-FAIL bit##")
+   end if
+else
+   print_string(serial_data, "##MVEC-FAIL isr##")
+end if
+print_crlf(serial_data)
+--
+-- heartbeat: repeat the verdict so a capture can start at any time
+forever loop
+   print_string(serial_data, "##MVEC## intcon=")
+   print_dword_dec(serial_data, INTCON)
+   print_string(serial_data, " a=")
+   print_dword_dec(serial_data, mvec_a)
+   print_string(serial_data, " b=")
+   print_dword_dec(serial_data, mvec_b)
+   print_string(serial_data, " pre=")
+   print_dword_dec(serial_data, mvec_pre)
+   print_crlf(serial_data)
+   _usec_delay(500_000)
+end loop

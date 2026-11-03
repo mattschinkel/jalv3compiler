@@ -901,6 +901,17 @@ void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
           | VARIABLE_FLAG_PTR_FLASH))) {
     pic_assign_to_ptr(pf, dst, src);
   } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
+      && pic_var_openarray_pair_formal_runtime_get(
+           value_variable_get(src))
+      && (variable_flags_get_all(value_variable_get(src))
+        & (VARIABLE_FLAG_PTR_LOOKUP
+          | VARIABLE_FLAG_PTR_EEPROM
+          | VARIABLE_FLAG_PTR_FLASH))) {
+    /* open-array formal addressed through the runtime chunk map: the value
+     * may be a RAM buffer split across banks (walk) or a ROM const array
+     * (linear lookup read) -- decide from the pointer at run time */
+    pic_assign_from_runtime_formal(pf, dst, src);
+  } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
       && /*value_flag_test(src, VALUE_FLAG_INDIRECT) && */
       (variable_flags_get_all(value_variable_get(src))
         & (VARIABLE_FLAG_PTR_LOOKUP

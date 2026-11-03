@@ -1,0 +1,47 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — print_string(device, pointer-to-string)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The end-to-end shape from the 2026-11-02 report:
+--    `print_string(serial, svalue)` with `var pointer svalue as var
+--    string` -- the library's own `byte in str[]` formal, not a local
+--    test procedure.  `print_string` walks the formal with
+--    `device = str[i]`, so the last byte written is the last character of
+--    the string; a device variable stands in for the UART (the gpsim
+--    harness has no UART capture on classic cores), which pins the
+--    marshalled CONTENT and the hidden count without needing a serial
+--    port.
+--
+--    Pre-fix this does not compile ("type mismatch" at the call).
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_done 1
+-- expect byte v_dev 102
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+include print
+
+const word _string_heap_size = 48
+
+var string s
+var pointer ps as var string
+var volatile byte dev = 0
+var volatile byte done = 0
+
+regression_begin_run()
+s = "abcdef"
+ps is s
+print_string(dev, ps)
+done = 1
+regression_checkpoint()
+regression_pass_led_if_clean()

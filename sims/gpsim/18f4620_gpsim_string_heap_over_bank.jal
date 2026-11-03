@@ -1,0 +1,117 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim witness — string heap larger than one RAM bank
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Rob's 2026-11-02 report: with `const word _string_heap_size = 300`
+--    (more than one 16F1825 RAM bank) `print_string` printed the FIRST
+--    heap string's text for every later one (`My stri\t\t`, `My string\0`).
+--    Root cause: `print_string(dev, <heap string>)` marshals the text into
+--    a compiler `_strargN` buffer, the callee is emitted ONCE, and its
+--    subscript used the FORMAL's chunk map -- which was copied from the
+--    first call site's actual, so every later call addressed the first
+--    buffer's chunks (fixes/fix_openarray_formal_chunk_map.md).
+--
+--    The fix hands the ACTIVE layout to the callee at run time: the call
+--    site fills `_chunkmap` with [count][base lo,hi,span]... and points
+--    `_strarg_map_ptr` at it; the callee's dynamic subscript walks it.
+--
+--    This witness exercises the shapes that matter together:
+--      * a const ROM byte array and a var RAM byte array fed to the SAME
+--        open-array formal (they need different address paths: ROM goes
+--        through the lookup read, RAM walks the map),
+--      * three heap strings, two built with `&`,
+--      * a `var pointer ... as var string` printed through print_string,
+--      * every call site in one run, each with its own buffer layout.
+--    This is the PIC18 twin of the 16F1825 case: a 300-byte heap spans
+--    several 256-byte banks on the 18F4620, so the marshalling buffers are
+--    multi-bank there too.  Pre-fix the second heap string printed the first
+--    one's text; with the refusal build this file did not compile at all.
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_done 1
+-- expect word_le v_n 101
+-- expect byte v_b0 67
+-- expect byte v_b28 86
+-- expect byte v_b54 77
+-- expect byte v_b64 10
+-- expect byte v_b65 77
+-- expect byte v_b77 77
+-- expect byte v_b89 77
+-- expect byte v_b100 10
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var byte _cap[220]
+var volatile word _capn = 0
+procedure cap'put(byte in x) is
+   _cap[_capn] = x
+   _capn = _capn + 1
+end procedure
+procedure put_crlf() is
+   _cap[_capn] = 13
+   _capn = _capn + 1
+   _cap[_capn] = 10
+   _capn = _capn + 1
+end procedure
+
+const word _string_heap_size = 300
+include print
+
+const byte okc_string[] = "Const string that does it."
+var byte okv_string[] = "Var string that does it."
+var string my_string = "My string"
+var string my_string1 = "My string" & 1
+var byte two = 2
+var string my_string2 = "My string" & two
+var pointer svalue as var string
+
+var volatile byte done = 0
+var volatile word n = 0
+var volatile byte b0 = 0
+var volatile byte b28 = 0
+var volatile byte b54 = 0
+var volatile byte b64 = 0
+var volatile byte b65 = 0
+var volatile byte b77 = 0
+var volatile byte b89 = 0
+var volatile byte b100 = 0
+
+regression_begin_run()
+
+_capn = 0
+print_string(cap, okc_string)
+put_crlf()
+print_string(cap, okv_string)
+put_crlf()
+print_string(cap, my_string)
+put_crlf()
+print_string(cap, my_string1)
+put_crlf()
+print_string(cap, my_string2)
+put_crlf()
+svalue is my_string2
+print_string(cap, svalue)
+put_crlf()
+
+n   = _capn
+b0  = _cap[0]
+b28 = _cap[28]
+b54  = _cap[54]
+b64  = _cap[64]
+b65  = _cap[65]
+b77  = _cap[77]
+b89  = _cap[89]
+b100 = _cap[100]
+done = 1
+regression_checkpoint()
+regression_pass_led_if_clean()

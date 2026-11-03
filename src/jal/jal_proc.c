@@ -27,6 +27,7 @@
 #include "jal_expr.h"
 #include "jal_proc.h"
 #include "jal_string.h"
+#include "jal_error.h"
 
 /* ===================== optional parameters (2026-10-07) =====================
  * `procedure p(byte in x, optional word in y default 500) is ...`
@@ -990,6 +991,11 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
     }
 
     label_flag_set(pfile_proc_label_get(proc), LABEL_FLAG_DEFINED);
+    /* the user's runtime error hook: its body reads _error_source and
+     * _string_error, so those cells must exist before it is parsed */
+    if (0 == strcmp(pfile_proc_tag_get(proc), JAL_ERROR_HOOK_NAME)) {
+      jal_error_hook_prepare(pf);
+    }
     /*pfile_emit_enter_cmd(pf);*/
     jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NO_BLOCK);
     etype = "???";
@@ -1473,13 +1479,16 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
     }
   }
   /* String actual into an open byte-array formal (e.g.
-   * print_string(serial, s) with `var string s`): marshal the
-   * CONTENT -- copy it into a temp byte buffer, and remember
-   * the runtime length for the hidden count parameter (the
-   * buffer capacity would over-report). */
+   * print_string(serial, s) with `var string s`, or through a
+   * `var pointer p as var string`): marshal the CONTENT -- copy it into a
+   * temp byte buffer, and remember the runtime length for the hidden count
+   * parameter (the buffer capacity would over-report).  The pointer shape
+   * marshals the string it DESIGNATES: the coercion reads the handle
+   * fields through the pointer (`jal_string_pointer_is`). */
   if (val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
-      && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)) {
+      && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+          || jal_string_pointer_is(val))) {
     value_t sbuf = jal_string_arg_byte_array(pf, val);
 
     if (sbuf) {

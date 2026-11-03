@@ -1,0 +1,61 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — pointer-to-string subscript
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var pointer ps as var string` holds the ADDRESS of a heap
+--    string's 3-byte handle (offset / length / capacity); the payload
+--    lives in `_string_heap`.  The subscript path accepted the shape
+--    (`jal_data_pointer_pointee_is_array` sees the handle's array def)
+--    but the heap-string rewrite in `jal_parse_subscript`'s rvalue
+--    hook (`jal_string_subscript_value_is`) tests the ACTUAL's def for
+--    STRING_DYNAMIC -- which a pointer def never carries -- so the
+--    access fell through to the plain element view and read
+--    `ps + index`, i.e. handle bytes and neighbouring RAM, with no
+--    diagnostic.  `COUNT(ps)` worked all along because the handle
+--    field load goes through `value_dereference`.
+--
+--    Expectations: "abcdef" read through the pointer is a/b/f and
+--    `COUNT(ps)` is 6.  Pre-fix this file COMPILES and returns the
+--    handle bytes (offset/length/capacity and adjacent RAM), so the
+--    content checks are what pin the defect -- a compile-only check
+--    would have passed.
+--
+-- @gpsim_validate begin
+-- steps: 3000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_done 1
+-- expect byte v_n 6
+-- expect byte v_c0 97
+-- expect byte v_c1 98
+-- expect byte v_c5 102
+-- @gpsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+const word _string_heap_size = 48
+
+var string s
+var pointer ps as var string
+var volatile byte done = 0
+var volatile byte n = 0
+var volatile byte c0 = 0
+var volatile byte c1 = 0
+var volatile byte c5 = 0
+
+regression_begin_run()
+s = "abcdef"
+ps is s
+c0 = ps[0]
+c1 = ps[1]
+c5 = ps[5]
+n = COUNT(ps)
+done = 1
+regression_checkpoint()
+regression_pass_led_if_clean()
