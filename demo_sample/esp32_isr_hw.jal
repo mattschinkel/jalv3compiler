@@ -1,0 +1,112 @@
+-- Title: ESP32 hardware interrupt sample (TIMG0 alarm -> CPU int 1)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Generic interrupt demo for the ESP32 (Xtensa LX6).  A TIMG0 T0
+--    alarm is routed through the interrupt matrix into CPU interrupt 1
+--    (level 1); the compiler's `pragma interrupt` handler owns the
+--    single user-exception vector.  The handler clears the source with
+--    its W1C register and bumps a counter; main waits for the hit and
+--    prints the shared probe tokens on UART0 at 115200:
+--
+--        ##ISR## boot irq0
+--        ##ISR## hits=1
+--        ##ISR-OK## hits=1            (heartbeat, repeats)
+--
+--    The PIC32 twins are demo_sample/32mx270f256b_isr_hw.jal and
+--    sims/pic32/32mz1024efh064_isr_dispatch.jal (also the QEMU gate);
+--    the PIC18 twin is demo_sample/18f67j50_isr_hw.jal.  The QEMU
+--    body for this path is sims/esp32/esp32_body_isr_dual.jal.
+--
+-- Notes:
+--    Board: ESP32 (240 MHz, UART0 = the USB-serial console).
+--    Flash: python3 pic_programmer.py ... (see bench/boards.json: esptool,
+--           write-flash 0x1000 <hex>) -- the compiler's HEX is already
+--           addressed at 0x1000.
+--
+-- -----------------------------------------------------------------------------
+include esp32_xtensa_lx6
+
+pragma target clock 240_000_000
+pragma target OSC      PLL
+
+include esp32_clock
+esp32_clock_init()
+
+include esp32_serial_hw
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+include print
+
+-- TIMG0 T0 (base 0x3FF5F000): load/alarm/status/clear
+var volatile dword g0_t0config  at 0x3FF5F000
+var volatile dword g0_t0loadlo  at 0x3FF5F004
+var volatile dword g0_t0load    at 0x3FF5F00C
+var volatile dword g0_t0alarmlo at 0x3FF5F010
+var volatile dword g0_t0int_ena at 0x3FF5F098
+var volatile dword g0_t0int_st  at 0x3FF5F0A0
+var volatile dword g0_t0int_clr at 0x3FF5F0A4
+-- interrupt-matrix map: source 14 (TG0_T0_LEVEL) -> CPU int 1
+var volatile dword g0_map       at 0x3FF0013C
+
+var volatile byte hits = 0
+var volatile byte done = 0
+
+--------------------------------------------------------------------------------
+-- Description: single vector handler for the TIMG0 T0 alarm
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: W1C clear both deasserts the level and identifies the source.
+--------------------------------------------------------------------------------
+procedure _t0_isr() is
+   pragma interrupt
+
+   if g0_t0int_st != 0 then
+      g0_t0int_clr = 1
+      hits = hits + 1
+   end if
+end procedure
+
+print_string(serial_data, "##ISR## boot irq0")
+print_crlf(serial_data)
+
+g0_map = 1                           -- route source 14 to CPU int 1
+-- arm the alarm: short count, level-triggered, auto-reload off
+g0_t0loadlo = 20
+g0_t0load = 20
+g0_t0alarmlo = 20
+g0_t0int_ena = 1
+g0_t0config = 0x80000000 | 0x40000000 | (1 << 11) | (1 << 10) | (20 << 13)
+
+var word guard = 0
+while (hits == 0) & (guard < 60000) loop
+   guard = guard + 1
+end loop
+
+if hits >= 1 then
+   done = 1
+end if
+
+print_string(serial_data, "##ISR## hits=")
+print_dword_dec(serial_data, hits)
+print_string(serial_data, " done=")
+print_dword_dec(serial_data, done)
+print_crlf(serial_data)
+
+forever loop
+   if done == 1 then
+      print_string(serial_data, "##ISR-OK##")
+   else
+      print_string(serial_data, "##ISR-FAIL##")
+   end if
+   print_string(serial_data, " hits=")
+   print_dword_dec(serial_data, hits)
+   print_string(serial_data, " done=")
+   print_dword_dec(serial_data, done)
+   print_crlf(serial_data)
+   _usec_delay(500_000)
+end loop

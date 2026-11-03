@@ -1,0 +1,101 @@
+-- Title: PIC32MX270F256B hardware interrupt sample (own-boot, single vector)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Generic interrupt demo for the PIC32MX270F256B bench board.  One
+--    `pragma interrupt` handler owns IRQ0; main raises the flag eight
+--    times, and after each raise waits for the handler to clear it.  So
+--    `hits` reaches 8 only if every request went flag -> controller ->
+--    vector -> handler -> clear -> ERET -> main.
+--
+--    Output (UART1, 115200, TX RB3 / RX RB2) uses the shared probe
+--    tokens so the same capture script works on every architecture:
+--        ##ISR## boot irq0
+--        ##ISR## hits=8 done=1
+--        ##ISR-OK## hits=8 done=1        (heartbeat, repeats)
+--
+--    The MZ twin is sims/pic32/32mz1024efh064_isr_dispatch.jal (also
+--    the QEMU gate); the PIC18 twin is demo_sample/18f67j50_isr_hw.jal;
+--    the ESP32 twin is demo_sample/esp32_isr_hw.jal.
+--
+-- Notes:
+--    Board: mx270_bench (PIC32MX270F256B, 40 MHz FRC_SPLL, PK3).
+--    Flash:  python3 pic_programmer.py program --board mx270_bench --file <hex>
+--    Capture: python3 jal-private/ftdi_usb_serial.py --seconds 5 --baud 115200
+--
+-- -----------------------------------------------------------------------------
+include 32mx270f256b                 -- target device (MIPS32 M4K)
+pragma target clock 40_000_000
+pragma target OSC    FRC_SPLL
+pragma target image pfm              -- 3 KB boot flash: PFM app + boot block
+pragma target WDT   DISABLED
+--
+enable_digital_io()
+_usec_delay(100_000)
+--
+-- UART1 (bench wiring: TX RB3, RX RB2)
+const serial_hw_baudrate = 115_200
+alias serial_hw_pin_tx is pin_B3
+alias serial_hw_pin_tx_direction is pin_B3_direction
+alias serial_hw_pin_rx is pin_B2
+alias serial_hw_pin_rx_direction is pin_B2_direction
+alias serial_hw_tx_pps is RPB3R
+const serial_hw_rx_pps = PPS_IN_U1RX_RPB2
+include serial_hardware
+serial_hw_init()
+alias serial_data is serial_hw_data
+--
+include print
+--
+var volatile byte hits = 0
+var volatile byte done = 0
+--
+procedure _ct_isr() is
+   pragma interrupt                  -- single vector, SRS path
+
+   IFS0CLR = 1                       -- clear IRQ0
+   hits = hits + 1
+end procedure
+--
+print_string(serial_data, "##ISR## boot irq0")
+print_crlf(serial_data)
+--
+IPC0 = 0x1C                          -- IRQ0: priority 7, subpriority 0
+IEC0SET = 1                          -- enable IRQ0
+--
+var word guard = 0
+for 8 loop
+   IFS0SET = 1                       -- raise IRQ0
+   guard = 0
+   while ((IFS0 & 1) == 1) & (guard < 20000) loop
+      guard = guard + 1              -- dispatch must clear the flag
+   end loop
+end loop
+--
+if hits == 8 then
+   done = 1
+end if
+--
+print_string(serial_data, "##ISR## hits=")
+print_dword_dec(serial_data, hits)
+print_string(serial_data, " done=")
+print_dword_dec(serial_data, done)
+print_crlf(serial_data)
+--
+forever loop
+   if done == 1 then
+      print_string(serial_data, "##ISR-OK##")
+   else
+      print_string(serial_data, "##ISR-FAIL##")
+   end if
+   print_string(serial_data, " hits=")
+   print_dword_dec(serial_data, hits)
+   print_string(serial_data, " done=")
+   print_dword_dec(serial_data, done)
+   print_crlf(serial_data)
+   _usec_delay(500_000)
+end loop

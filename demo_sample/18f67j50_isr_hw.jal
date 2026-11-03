@@ -12,7 +12,9 @@
 --              its own flag.  This is the 16-bit-core counterpart of
 --              16f887_isr_hw / the 16f877 INT0 witness.
 --
---              Results are printed on UART1 and mirrored on the LED.
+--              Results are printed on UART1 with the shared probe tokens
+--              (##ISR## hits=<n> bad=<b> heartbeat, ##ISR-OK## /
+--              ##ISR-FAIL## verdict) and mirrored on the LED.
 --
 
 include 18f67j50
@@ -50,6 +52,7 @@ include format
 --
 var volatile byte edges = 0
 var byte bad = 0
+var byte serviced = 0
 
 procedure int0_handler() is
    pragma interrupt
@@ -82,6 +85,8 @@ for 3 loop
    _usec_delay(1000)
    if edges != 1 then
       bad = bad + 1
+   else
+      serviced = serviced + 1
    end if
    edges = 0
    INTCON_GIEH = off
@@ -89,14 +94,30 @@ for 3 loop
    INTCON_INT0IE = off
 end loop
 --
-print_string(serial_data, "interrupt checks: ")
-if bad == 0 then
-   print_string(serial_data, "OK")
+if (bad == 0) & (serviced == 3) then
+   led1 = on
 else
-   print_string(serial_data, "FAIL")
+   led1 = off
 end if
+--
+-- Shared probe tokens (same on every architecture): the verdict line and
+-- a heartbeat that repeats, so a capture started at any time sees one.
+print_string(serial_data, "##ISR## hits=")
+print_dword_dec(serial_data, serviced)
+print_string(serial_data, " bad=")
+print_dword_dec(serial_data, bad)
 print_crlf(serial_data)
-led1 = bad == 0
 --
 forever loop
+   if (bad == 0) & (serviced == 3) then
+      print_string(serial_data, "##ISR-OK##")
+   else
+      print_string(serial_data, "##ISR-FAIL##")
+   end if
+   print_string(serial_data, " hits=")
+   print_dword_dec(serial_data, serviced)
+   print_string(serial_data, " bad=")
+   print_dword_dec(serial_data, bad)
+   print_crlf(serial_data)
+   _usec_delay(500_000)
 end loop

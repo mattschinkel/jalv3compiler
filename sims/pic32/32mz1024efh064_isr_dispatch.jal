@@ -11,12 +11,12 @@
 --    only reach 8 if every request went:  flag -> controller -> vector ->
 --    handler -> clear -> ERET -> main.  A masked core, a missing or
 --    mis-based vector, or a handler that never returns leaves `hits`
---    short and the program prints ##MZISR-FAIL## instead of ##MZISR-OK##.
+--    short and the program prints ##ISR-FAIL## instead of ##ISR-OK##.
 --
 --    This is also the silicon witness for the same program: the image is
 --    `pragma target image pfm`, so it flashes unchanged on the MZ bench
 --    (100 MHz FRC_SPLL, UART1 RPF0/RPF1 115200) and prints the climbing
---    `##MZISR## hits=<n> done=<d>` heartbeat.
+--    `##ISR## hits=<n> done=<d>` heartbeat.
 --
 --    NOTE on coverage: QEMU's EIC does not model `Status.IM[7:0]`, which is
 --    why the 2026-11-03 "every MZ ISR image is dark" defect passed every
@@ -27,7 +27,7 @@
 -- @sim_validate begin
 -- duration_s: 2.0
 -- machine: pic32mz-explorer16
--- uart_contains: ##MZISR-OK##
+-- uart_contains: ##ISR-OK##
 -- expect byte v_hits 8
 -- expect byte v_done 1
 -- @sim_validate end
@@ -75,7 +75,7 @@ procedure _ct_isr() is
    hits = hits + 1
 end procedure
 
-print_string(serial_data, "##MZISR## boot irq0")
+print_string(serial_data, "##ISR## boot irq0")
 print_crlf(serial_data)
 
 IPC0 = 0x1C                          -- IRQ0: priority 7, subpriority 0
@@ -94,16 +94,16 @@ if hits == 8 then
    done = 1
 end if
 
-print_string(serial_data, "##MZISR## hits=")
+print_string(serial_data, "##ISR## hits=")
 print_dword_dec(serial_data, hits)
 print_string(serial_data, " done=")
 print_dword_dec(serial_data, done)
 print_crlf(serial_data)
 
 if done == 1 then
-   print_string(serial_data, "##MZISR-OK##")
+   print_string(serial_data, "##ISR-OK##")
 else
-   print_string(serial_data, "##MZISR-FAIL##")
+   print_string(serial_data, "##ISR-FAIL##")
 end if
 print_crlf(serial_data)
 
@@ -113,9 +113,9 @@ print_crlf(serial_data)
 --------------------------------------------------------------------------------
 forever loop
    if done == 1 then
-      print_string(serial_data, "##MZISR-OK##")
+      print_string(serial_data, "##ISR-OK##")
    else
-      print_string(serial_data, "##MZISR-FAIL##")
+      print_string(serial_data, "##ISR-FAIL##")
    end if
    print_string(serial_data, " hits=")
    print_dword_dec(serial_data, hits)
