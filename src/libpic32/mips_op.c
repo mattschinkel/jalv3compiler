@@ -2301,8 +2301,17 @@ void mips_isr_enable_ie(pfile_t *pf)
       MIPS_REG_T1, 0);
   (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_CAUSE, 0,
       MIPS_REG_T0, 0);
+  /* Vector SPACING must match the table the back end emits.  MZ
+   * (EVIC/OFFx): XC32's 0x20 (VS=1) -- proven 2026-10-17.  MX (64 x
+   * 32-BYTE table at EBASE+0x200): VS must be 0.  With 0x20 on MX the
+   * core fetched 64 bytes past every stub, so IRQ4..63 entered a
+   * neighbour slot and never reached their handler -- "flags pending,
+   * INTSTAT.SRIPL nonzero, nothing dispatches", which looked exactly
+   * like a masked core on the 2026-11-02 bench (silicon, MX270:
+   * IntCtl=0 -> IRQ0 and IRQ4 both dispatch). */
   (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_ZERO,
-      (int) MIPS_INTCTL_VS1);
+      (MIPS_FAMILY_MX1 == mips_family(pf)) ? 0
+                                           : (int) MIPS_INTCTL_VS1);
   (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_INTCTL, 0,
       MIPS_REG_T0, 1);
 

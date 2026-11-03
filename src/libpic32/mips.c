@@ -918,6 +918,13 @@ static void mips_loader_boot_init_emit(pfile_t *pf)
 
     (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0,
         (int) ((intcon >> 16) & 0xFFFF));
+    /* the LOW half of the address is part of it, not of the value: MX's
+     * INTCON is 0xBF881000, so the old `sw ...,0(t0)` wrote 0xBF880000
+     * (MZ's 0xBF810000 got away with it -- zero low half). */
+    if (intcon & 0xFFFFUL) {
+      (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0,
+          (int) (intcon & 0xFFFFUL));
+    }
     (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T1, MIPS_REG_ZERO,
         (int) intcon_val);
     (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
