@@ -83,6 +83,43 @@ EOF
 expect_one_error "task slot table" "$WORK/r_task.jal" \
   "'_task_list' is reserved for the compiler"
 
+# ------------------------------------- reserved string-runtime objects
+cat >"$WORK/r_sheap.jal" <<'EOF'
+include 16f877
+var byte _string_heap
+forever loop
+end loop
+EOF
+expect_one_error "string heap storage" "$WORK/r_sheap.jal" \
+  "'_string_heap' is reserved for the compiler"
+
+cat >"$WORK/r_sfree.jal" <<'EOF'
+include 16f877
+var byte _string_free_head
+forever loop
+end loop
+EOF
+expect_one_error "string free-list head" "$WORK/r_sfree.jal" \
+  "'_string_free_head' is reserved for the compiler"
+
+cat >"$WORK/r_chunkmap.jal" <<'EOF'
+include 16f877
+var byte _chunkmap
+forever loop
+end loop
+EOF
+expect_one_error "chunk map" "$WORK/r_chunkmap.jal" \
+  "'_chunkmap' is reserved for the compiler"
+
+cat >"$WORK/r_strarg.jal" <<'EOF'
+include 16f877
+var byte _strarg_map_ptr
+forever loop
+end loop
+EOF
+expect_one_error "chunk-map pointer" "$WORK/r_strarg.jal" \
+  "'_strarg_map_ptr' is reserved for the compiler"
+
 # --------------------------------------------------------- reserved prefixes
 cat >"$WORK/r_fixarg.jal" <<'EOF'
 include 16f877
@@ -92,6 +129,42 @@ end loop
 EOF
 expect_one_error "marshalling buffer prefix" "$WORK/r_fixarg.jal" \
   "uses the compiler-reserved prefix '_string_fixarg'"
+
+cat >"$WORK/r_chain.jal" <<'EOF'
+include 16f877
+var byte _string_chain7
+forever loop
+end loop
+EOF
+expect_one_error "chain cell prefix" "$WORK/r_chain.jal" \
+  "uses the compiler-reserved prefix '_string_chain'"
+
+cat >"$WORK/r_flt.jal" <<'EOF'
+include 16f877
+var byte _string_flt0
+forever loop
+end loop
+EOF
+expect_one_error "float buffer prefix" "$WORK/r_flt.jal" \
+  "uses the compiler-reserved prefix '_string_flt'"
+
+cat >"$WORK/r_dec.jal" <<'EOF'
+include 16f877
+var byte _string_dec0
+forever loop
+end loop
+EOF
+expect_one_error "decimal text prefix" "$WORK/r_dec.jal" \
+  "uses the compiler-reserved prefix '_string_dec'"
+
+cat >"$WORK/r_num.jal" <<'EOF'
+include 16f877
+var byte _string_num0
+forever loop
+end loop
+EOF
+expect_one_error "integer scratch prefix" "$WORK/r_num.jal" \
+  "uses the compiler-reserved prefix '_string_num'"
 
 cat >"$WORK/r_bss.jal" <<'EOF'
 include 16f877

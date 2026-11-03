@@ -1061,6 +1061,24 @@ void pfile_cmd_op_add(pfile_t *pf,
       }
       return;
     }
+    /* Equality with a string operand is only meaningful against another
+     * string, which the front end routes to jal_string_relation_parse_emit
+     * before it reaches this generic operator.  Anything that still has a
+     * STRING flag here (e.g. `5 == s`, `5 == "ab"`) is a number-vs-string
+     * comparison; allowing it compared the handle bytes with the number. */
+    if (((OPERATOR_EQ == op) || (OPERATOR_NE == op))
+        && ((value_is_array(val1) && value_is_string(val1))
+          || (value_is_array(val2) && value_is_string(val2)))) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "cannot compare a string with a non-string value");
+      if (pdst) {
+        if (*pdst) {
+          value_release(*pdst);
+        }
+        *pdst = pfile_constant_get(pf, 0, 0);
+      }
+      return;
+    }
     value_lock(val1);
     value_lock(val2);
 

@@ -333,6 +333,21 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
       rc = BOOLEAN_TRUE;
       pf_token_get(pf, PF_TOKEN_NEXT);
       n = jal_parse_expr(pf);
+      if (n) {
+        /* A subscript is an integer.  One-character literals keep their
+         * char-code meaning (string_fix turns them into a scalar), but a
+         * dynamic/fixed/const string or a string pointer used as an index
+         * was silently compared/added as its handle bytes. */
+        if (!pfile_expr_string_fix(pf, n)
+            || jal_string_is_source(n) || jal_string_pointer_is(n)) {
+          if (jal_string_is_source(n) || jal_string_pointer_is(n)) {
+            pfile_log(pf, PFILE_LOG_ERR,
+                "string value cannot be used as a subscript");
+          }
+          value_release(n);
+          n = pfile_constant_get(pf, 0, VARIABLE_DEF_NONE);
+        }
+      }
       /* `var pointer p as var string`: `p[i]` is the i-th CHARACTER of the
        * string the pointer designates.  Build a handle VIEW -- the pointee
        * def (the 3-byte handle) plus VALUE_FLAG_POINTER -- and record the

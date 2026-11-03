@@ -47,6 +47,10 @@ typedef struct jal_string_state_ {
   boolean_t           heap_size_reported; /* _string_heap_size complaint
                                            * already issued (see
                                            * jal_string_runtime_ensure) */
+  boolean_t           heap_size_invalid;  /* _string_heap_size failed the
+                                           * declaration-time type/range
+                                           * check; suppress follow-on
+                                           * "heap missing" diagnostics */
   boolean_t           core_checked;   /* `target_cpu' examined for this
                                        * compile */
   boolean_t           core_is_12bit;  /* target is a 12-bit core */
@@ -276,7 +280,8 @@ void jal_string_heap_sizing_report(pfile_t *pf)
   variable_sz_t    index_sz;
   size_t           ii;
 
-  if (!jal_string_state.heap_use_used || jal_string_state.heap_use_runtime) {
+  if (!jal_string_state.heap_use_used || jal_string_state.heap_use_runtime
+      || jal_string_state.heap_size_invalid) {
     return;
   }
   if (pfile_errct_get(pf)) {
@@ -335,10 +340,88 @@ void jal_string_heap_sizing_report(pfile_t *pf)
   }
 }
 
+/*
+ * Declaration-time validation of `_string_heap_size`.
+ *
+ * The constant is stored in its declared type, so a later
+ * `value_const_get` cannot see an out-of-range initializer: `const word
+ * _string_heap_size = 65599` is already 63 by the time the heap is built.
+ * Validate the initializer here, before it is truncated, and tell the
+ * heap builder not to add a second "heap missing" diagnostic.
+ */
+boolean_t jal_string_heap_size_const_check(pfile_t *pf, const char *name,
+    variable_def_t def, value_t expr)
+{
+  variable_def_type_t type;
+  variable_const_t    n;
+  variable_sz_t       sz;
+
+  if (!name || strcmp(name, "_string_heap_size")) {
+    return BOOLEAN_TRUE;
+  }
+  if (!expr || !value_is_const(expr)) {
+    return BOOLEAN_TRUE; /* the constant-expected path already spoke */
+  }
+  if (jal_string_state.heap_size_invalid) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_is_float(expr)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "_string_heap_size must be a constant integer "
+        "(declare it as: const word _string_heap_size = <bytes>)");
+    jal_string_state.heap_size_reported = BOOLEAN_TRUE;
+    jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
+    return BOOLEAN_FALSE;
+  }
+  type = value_type_get(expr);
+  if (VARIABLE_DEF_TYPE_INTEGER != type) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "_string_heap_size must be a constant integer "
+        "(declare it as: const word _string_heap_size = <bytes>)");
+    jal_string_state.heap_size_reported = BOOLEAN_TRUE;
+    jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
+    return BOOLEAN_FALSE;
+  }
+  n = value_const_get(expr);
+  if (value_is_signed(expr)
+      && variable_const_is_negative(n, VARIABLE_CONST_BIT_CT)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "_string_heap_size must not be negative");
+    jal_string_state.heap_size_reported = BOOLEAN_TRUE;
+    jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
+    return BOOLEAN_FALSE;
+  }
+  if (n > 65535U) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "dynamic string heap is currently limited to 65535 bytes");
+    jal_string_state.heap_size_reported = BOOLEAN_TRUE;
+    jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
+    return BOOLEAN_FALSE;
+  }
+  sz = def ? variable_def_sz_get(def) : 0;
+  if (sz && (sz < 16U)) {
+    variable_const_t max;
+
+    max = variable_const_mask_get((unsigned) sz * 8U);
+    if (n > max) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "_string_heap_size value does not fit its declared constant type");
+      jal_string_state.heap_size_reported = BOOLEAN_TRUE;
+      jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
+      return BOOLEAN_FALSE;
+    }
+  }
+  return BOOLEAN_TRUE;
+}
+
 static value_t jal_string_pragma_const_get(pfile_t *pf, const char *name)
 {
   value_t val;
 
+  if (jal_string_state.heap_size_invalid
+      && (0 == strcmp(name, "_string_heap_size"))) {
+    return VALUE_NONE;
+  }
   val = pfile_value_find(pf, PFILE_LOG_NONE, name);
   if (val && !value_is_const(val)) {
     if (0 != strcmp(name, "_string_heap_size")) {
@@ -720,6 +803,13 @@ static value_t jal_string_array_elem_get(value_t arr, value_t ofs)
 {
   value_t elem;
 
+  if (!arr || (!value_is_array(arr) && !value_is_pointer(arr)
+      && !value_flag_test(arr, VALUE_FLAG_POINTER))) {
+    /* Callers classify their operands, but an internal mismatch must not
+     * become a value_dereference assertion on user source.  Open-array
+     * formals arrive as pointers, so pointer values stay legal here. */
+    return VALUE_NONE;
+  }
   elem = value_clone(arr);
   if (elem) {
     value_baseofs_set(elem, ofs);
@@ -942,6 +1032,23 @@ boolean_t jal_string_is_source(value_t val)
       || (val && value_is_array(val) && value_is_string(val));
 }
 
+/* A `"x"` literal is a const, one-byte STRING array.  In a numeric context
+ * it keeps the long-standing char-code meaning, while `const string c =
+ * "x"` / `string[1]` still denote strings -- distinguish the lexer's
+ * generated `_cstrN` name from a user declaration. */
+boolean_t jal_string_char_literal_is(value_t val)
+{
+  const char *name;
+
+  if (!val || !value_is_const(val) || !value_is_array(val)
+      || !value_is_string(val) || (1U != value_ct_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  name = value_name_get(val);
+  return (name && (0 == strncmp(name, "_cstr", 5))) ? BOOLEAN_TRUE
+      : BOOLEAN_FALSE;
+}
+
 /* Stage a const/fixed string SOURCE into a compiler string cell (the
  * `_string_chainN` global machinery) -- jal_parse_call uses this to
  * marshal literal actuals into DYNAMIC-string formals (a raw literal's
@@ -1114,9 +1221,24 @@ static boolean_t jal_string_chunk_sym_alloc(pfile_t *pf, const char *name,
   variable_def_t bdef;
   variable_def_t adef;
   value_t        val;
+  value_t        found;
   result_t       rc;
 
-  if (pfile_value_find(pf, PFILE_LOG_NONE, name)) {
+  found = pfile_value_find(pf, PFILE_LOG_NONE, name);
+  if (found) {
+    variable_def_t        d;
+    variable_def_member_t m;
+
+    d = value_def_get(found);
+    m = d ? variable_def_member_get(d) : (variable_def_member_t) 0;
+    if (!d || (VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(d))
+        || !m || (variable_def_member_ct_get(m) < (variable_ct_t) sz)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "'%s' is reserved for the compiler (wrong type or width)", name);
+      value_release(found);
+      return BOOLEAN_FALSE;
+    }
+    value_release(found);
     return BOOLEAN_TRUE;
   }
   bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
@@ -1225,7 +1347,8 @@ value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
      * RAM bank nodes; 8 is more chunks than any banked layout observed and
      * the call-site store refuses (with a diagnostic) beyond it. */
     if (!jal_string_chunk_map_create(pf)) {
-      pfile_log_syserr(pf, ENOMEM);
+      /* the scratch allocator logged the specific problem; do not report
+       * a spurious out-of-memory here (RC values are not errno) */
     }
   }
   res = jal_string_to_array_emit(pf, buf, src, VALUE_NONE,
@@ -1243,6 +1366,13 @@ static boolean_t jal_string_global_byte_alloc(pfile_t *pf, const char *name,
 
   var = pfile_variable_find(pf, PFILE_LOG_NONE, name, 0);
   if (var) {
+    if (variable_is_array(var) || (1U != variable_sz_get(var))
+        || (VARIABLE_DEF_TYPE_INTEGER != variable_type_get(var))) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "'%s' is reserved for the compiler (wrong type or width)", name);
+      variable_release(var);
+      return BOOLEAN_FALSE;
+    }
     variable_release(var);
     return BOOLEAN_TRUE;
   }
@@ -1272,6 +1402,17 @@ static boolean_t jal_string_global_index_alloc(pfile_t *pf, const char *name,
 
   var = pfile_variable_find(pf, PFILE_LOG_NONE, name, 0);
   if (var) {
+    variable_sz_t want;
+
+    want = jal_string_current_index_size_get(pf);
+    if (variable_is_array(var)
+        || (VARIABLE_DEF_TYPE_INTEGER != variable_type_get(var))
+        || (want && (want != variable_sz_get(var)))) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "'%s' is reserved for the compiler (wrong type or width)", name);
+      variable_release(var);
+      return BOOLEAN_FALSE;
+    }
     variable_release(var);
     return BOOLEAN_TRUE;
   }
@@ -1356,8 +1497,18 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
      * _string_heap_size complaint here would just be noise */
     return BOOLEAN_FALSE;
   }
+  if (jal_string_state.heap_size_invalid) {
+    /* the declaration-time check already explained the problem */
+    return BOOLEAN_FALSE;
+  }
   heap = pfile_variable_find(pf, PFILE_LOG_NONE, _STRING_HEAP_NAME, 0);
   if (heap) {
+    if (!variable_is_array(heap)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "'%s' is reserved for the compiler", _STRING_HEAP_NAME);
+      variable_release(heap);
+      return BOOLEAN_FALSE;
+    }
     variable_release(heap);
     return BOOLEAN_TRUE;
   }
@@ -1369,9 +1520,12 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
       pfile_log(pf, PFILE_LOG_ERR,
           "dynamic string storage requires const word _string_heap_size = <bytes>");
     }
-    return BOOLEAN_FALSE;
-  }
-  if (!value_is_const(heap_sz_val)) {
+    /* Error recovery: build the smallest valid heap so the library's
+     * `var string` formals and bodies still PARSE.  The error above keeps
+     * codegen from running; without this the same omission buried the one
+     * useful diagnostic under ~26 "not found" lines from strings_dynamic. */
+    heap_sz = 4;
+  } else if (!value_is_const(heap_sz_val)) {
     if (!jal_string_state.heap_size_reported) {
       jal_string_state.heap_size_reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
@@ -1380,9 +1534,10 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
     }
     value_release(heap_sz_val);
     return BOOLEAN_FALSE;
+  } else {
+    heap_sz = value_const_get(heap_sz_val);
+    value_release(heap_sz_val);
   }
-  heap_sz = value_const_get(heap_sz_val);
-  value_release(heap_sz_val);
   index_sz = jal_string_index_size_get(pf, heap_sz);
   if (!index_sz) {
     return BOOLEAN_FALSE;
@@ -1475,6 +1630,13 @@ static value_t jal_string_source_byte_get(pfile_t *pf, value_t src,
 {
   value_t src_byte;
 
+  if (!src
+      || (!jal_string_is_dynamic(src) && !jal_string_pointer_is(src)
+        && !value_is_array(src) && !value_is_pointer(src)
+        && !value_flag_test(src, VALUE_FLAG_POINTER))) {
+    pfile_log(pf, PFILE_LOG_ERR, "string value expected");
+    return jal_string_const_get(pf, 0);
+  }
   if (jal_string_is_dynamic(src) || jal_string_pointer_is(src)) {
     value_t src_off;
     value_t src_payload;
@@ -2410,6 +2572,37 @@ value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
   if (!right) {
     return VALUE_NONE;
   }
+  /* A one-character literal is a char code in a numeric comparison:
+   * `"a" == c` must keep working (and must not reach the byte walker).
+   * When the other operand IS a string source the literal is treated as
+   * a string and the normal string comparison below runs. */
+  if (jal_string_char_literal_is(left) && jal_string_is_numeric_value(right)) {
+    value_t cval;
+    value_t cmp_result;
+
+    cval = value_clone(left);
+    cmp_result = VALUE_NONE;
+    if (cval && pfile_expr_string_fix(pf, cval)) {
+      pfile_cmd_op_add(pf, op, &cmp_result, cval, right);
+      value_release(cval);
+      value_release(right);
+      return cmp_result;
+    }
+    value_release(cval);
+    value_release(right);
+    return VALUE_NONE;
+  }
+  /* `parse_operand` also accepts numeric values because `&` chains render
+   * them (stage 2a/2b).  A RELATION has no such coercion: `s == 5` used to
+   * reach the byte walker with a scalar and assert in value_dereference.
+   * Byte arrays are still valid string sources; scalar numbers are not. */
+  if (!jal_string_is_source(right) && !jal_string_pointer_is(right)
+      && !value_is_array(right)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "cannot compare a string with a non-string value");
+    value_release(right);
+    return VALUE_NONE;
+  }
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "&")) {
     /* `greeting == "a" & name` — the comparison operand is a chain;
      * evaluate it into a heap cell first (the chain takes ownership
@@ -2801,7 +2994,6 @@ static value_t jal_string_jal_proc_call_value_get(pfile_t *pf,
  * back). The chain item is the buffer; len_out is the return temp --
  * the same (array, runtime length) shape the number machinery
  * produces. The parms array is owned by the emitted cmd. */
-/* value consumes: v */
 static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
     value_t *len_out, value_t v)
 {
@@ -2815,7 +3007,6 @@ static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
   value_t          scratch;
 
   if (!jal_string_runtime_ensure(pf)) {
-    value_release(v);
     return VALUE_NONE;
   }
   sprintf(name, "_string_flt%u", flt_no);
@@ -2831,7 +3022,6 @@ static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
     if (arr_def) {
       variable_def_free(arr_def);
     }
-    value_release(v);
     return VALUE_NONE;
   }
   if ((RESULT_OK != variable_def_member_add(arr_def, 0, byte_def, 48U))
@@ -2839,7 +3029,6 @@ static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
           PFILE_VARIABLE_ALLOC_GLOBAL, name, arr_def, VARIABLE_NONE,
           &scratch_var))) {
     variable_def_free(arr_def);
-    value_release(v);
     return VALUE_NONE;
   }
   scratch = value_alloc(scratch_var);
@@ -2852,14 +3041,12 @@ static value_t jal_string_float_runtime_source_emit(pfile_t *pf,
           "(include strings_dynamic)");
     }
     value_release(scratch);
-    value_release(v);
     return VALUE_NONE;
   }
   parms = CALLOC(3U, sizeof(*parms));
   if (!parms) {
     pfile_log_syserr(pf, ENOMEM);
     value_release(scratch);
-    value_release(v);
     return VALUE_NONE;
   }
   parms[0] = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_INTEGER, 1);
@@ -2932,7 +3119,7 @@ static value_t jal_string_array_chain_source(pfile_t *pf, value_t item,
       value_release(item);
       return VALUE_NONE;
     }
-    rc = jal_string_text_const(pf, "chain", data, (unsigned) ct);
+    rc = jal_string_text_const(pf, "arrchain", data, (unsigned) ct);
     value_release(item);
     item = rc;
   } else {
@@ -3003,12 +3190,21 @@ static value_t jal_string_chain_var_get(pfile_t *pf)
   variable_t      var;
   value_t         val;
 
-  sprintf(name, "_string_chain%u", chain_no);
-  chain_no++;
-  val = pfile_value_find(pf, PFILE_LOG_NONE, name);
-  if (val) {
-    return val;
-  }
+  val = VALUE_NONE;
+  do {
+    if (val) {
+      value_release(val);
+      val = VALUE_NONE;
+    }
+    sprintf(name, "_string_chain%u", chain_no);
+    chain_no++;
+    val = pfile_value_find(pf, PFILE_LOG_NONE, name);
+    if (val && jal_string_is_dynamic(val)) {
+      return val;
+    }
+    /* a non-dynamic symbol with this suffix (const chain text or a stale
+     * name) must not be used as a mutable handle; try the next number */
+  } while (val);
   vdef = jal_string_dynamic_def_alloc(pf);
   if (!vdef) {
     return VALUE_NONE;
@@ -5712,6 +5908,31 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
   }
 }
 
+/* `max_len` of the truncating helpers must be an integer.  One-character
+ * literals keep their documented char-code meaning (string_fix turns them
+ * into a scalar); dynamic/fixed/const strings, multi-character literals,
+ * floats and pointers are not lengths and used to be passed through as
+ * the index operand. */
+static boolean_t jal_string_builtin_max_ok(pfile_t *pf, value_t max)
+{
+  variable_def_t      def;
+  variable_def_type_t type;
+
+  if (!max) {
+    return BOOLEAN_FALSE;
+  }
+  (void) pfile_expr_string_fix(pf, max);
+  def = value_def_get(max);
+  type = def ? variable_def_type_get(def) : VARIABLE_DEF_TYPE_NONE;
+  if ((VARIABLE_DEF_TYPE_INTEGER != type)
+      && (VARIABLE_DEF_TYPE_BOOLEAN != type)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "integer expression expected for max_len");
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
 value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
 {
   value_t dst;
@@ -5802,7 +6023,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   }
   if (is_truncate) {
     max = jal_parse_expr(pf);
-    if (!max) {
+    if (!max || !jal_string_builtin_max_ok(pf, max)) {
       goto done;
     }
     {
@@ -5848,7 +6069,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
       goto done;
     }
     max = jal_parse_expr(pf);
-    if (!max) {
+    if (!max || !jal_string_builtin_max_ok(pf, max)) {
       goto done;
     }
     {

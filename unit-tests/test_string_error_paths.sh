@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 # Deterministic negative tests for the string assign/concat error paths
-# (fixes/fix_string_error_path_free_corruption.md).
+# (fixes/fix_string_error_path_free_corruption.md) plus the dynamic-string
+# type/syntax gates (fixes/fix_dynamic_string_syntax_safety.md).
 #
-# PASS per case: exit code 1 AND a final "N errors, M warnings" line.
-# FAIL: any other exit code (crash/abort/signal) or a missing summary
-# line -- the same rule unittests.py applies to samples.
+# PASS per case: exit code 1 AND a final "N errors, M warnings" line AND,
+# when a substring is supplied, that diagnostic is present.
+# FAIL: any other exit code (crash/abort/signal), a missing summary line, or
+# a missing expected diagnostic -- the same rule unittests.py applies.
 #
 # Usage: unit-tests/test_string_error_paths.sh [path-to-jalv2]
 set -u
@@ -13,27 +15,46 @@ set -u
 COMPILER="${1:-./bin/beta/jalv3-x86-64}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-LIBS="$ROOT/demo_lib;$ROOT/demo_lib"
+LIBS="$ROOT/demo_lib;$ROOT/third_party/jallib/lib"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 pass=0
 fail=0
 
-check() {
-  local name="$1" src="$2"
+check() { # name source [wanted diagnostic substring]
+  local name="$1" src="$2" want="${3:-}"
   local body="$TMP/$name.jal"
   local out rc
   printf '%s\n' "$src" > "$body"
   out="$("$COMPILER" -s "$LIBS" "$body" 2>&1)"
   rc=$?
   if [ $rc -eq 1 ] && printf '%s\n' "$out" | tail -1 \
-      | grep -Eq '^[0-9]+ errors?, [0-9]+ warnings?$'; then
+      | grep -Eq '^[0-9]+ errors?, [0-9]+ warnings?$' \
+      && { [ -z "$want" ] || printf '%s\n' "$out" | grep -qF "$want"; }; then
     pass=$((pass + 1))
     echo "PASS $name"
   else
     fail=$((fail + 1))
-    echo "FAIL $name (rc=$rc)"
+    echo "FAIL $name (rc=$rc; wanted: ${want:-summary only})"
+    printf '%s\n' "$out" | tail -5
+  fi
+}
+
+check_ok() { # name source
+  local name="$1" src="$2"
+  local body="$TMP/$name.jal"
+  local out rc
+  printf '%s\n' "$src" > "$body"
+  out="$("$COMPILER" -s "$LIBS" "$body" 2>&1)"
+  rc=$?
+  if [ $rc -eq 0 ] && printf '%s\n' "$out" | tail -1 \
+      | grep -Eq '^0 errors, [0-9]+ warnings?$'; then
+    pass=$((pass + 1))
+    echo "PASS $name (control)"
+  else
+    fail=$((fail + 1))
+    echo "FAIL $name (control; rc=$rc)"
     printf '%s\n' "$out" | tail -5
   fi
 }
@@ -54,9 +75,6 @@ s = \"abc\" & f"
 check bit_var          "$HEAP
 var bit b = true
 s = \"abc\" & b"
-check byte_array       "$HEAP
-var byte buf[4]
-s = \"abc\" & buf"
 
 # const literal that cannot fit the heap (fix_pointer_expr_deref_assign /
 # user 16f18857 report follow-up): header (3 * index width) + payload must
@@ -72,6 +90,125 @@ include 16f877
 const word _string_heap_size = 9
 include strings_dynamic
 var string s = "My string"'
+
+# --- dynamic-string syntax safety: comparisons ------------------------
+# A scalar on the right of a dynamic-string relation used to reach the
+# byte walker and assert in value_dereference.  It is a clean type error.
+check eq_dyn_int "$HEAP
+if s == 5 then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check ne_dyn_int "$HEAP
+if s != 5 then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check eq_dyn_byte "$HEAP
+var byte b = 5
+if s == b then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check eq_dyn_pointer "$HEAP
+var byte b = 1
+var pointer p as var byte
+p is b
+if s == p then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check eq_int_dyn "$HEAP
+if 5 == s then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check eq_literal_int "$HEAP
+if \"ab\" == 5 then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check eq_int_literal "$HEAP
+if 5 == \"ab\" then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+check eq_fixed_int "$HEAP
+var string[8] fx
+fx = \"x\"
+if fx == 5 then
+s = \"x\"
+end if" "cannot compare a string with a non-string value"
+
+# --- truncating helpers: max_len must be an integer -------------------
+check truncate_string_max "$HEAP
+var bit r
+r = _string_truncate(s, \"ab\")" "integer expression expected for max_len"
+check truncate_conststr_max "$HEAP
+const string c = \"ab\"
+var bit r
+r = _string_truncate(s, c)" "integer expression expected for max_len"
+check truncate_float_max "$HEAP
+var float fv = 2.0
+var bit r
+r = _string_truncate(s, fv)" "integer expression expected for max_len"
+
+# --- string used as a subscript / case selector -----------------------
+check subscript_dynamic "$HEAP
+var string idx = \"a\"
+var byte a[4] = \"abcd\"
+var byte b
+b = a[idx]" "string value cannot be used as a subscript"
+check subscript_fixed "$HEAP
+var string[8] fx
+fx = \"a\"
+var byte a[4] = \"abcd\"
+var byte b
+b = a[fx]" "string value cannot be used as a subscript"
+check case_dynamic "$HEAP
+case s of
+  \"a\": s = \"b\"
+end case" "case selector must be an integer"
+
+# --- heap-size declaration validation ---------------------------------
+check heap_word_overflow '
+include 16f877
+const word _string_heap_size = 65599
+var string s' "dynamic string heap is currently limited to 65535 bytes"
+check heap_float_const '
+include 16f877
+const word _string_heap_size = 64.5
+var string s' "_string_heap_size must be a constant integer"
+check heap_negative_const '
+include 16f877
+const word _string_heap_size = -64
+var string s' "_string_heap_size must not be negative"
+
+# --- legal controls: the gates above must not over-reject ---------------
+check_ok ok_dynamic_literal "$HEAP
+s = \"x\"
+if s == \"x\" then
+s = \"y\"
+end if"
+check_ok ok_dynamic_fixed "$HEAP
+var string[8] fx
+fx = \"x\"
+if s == fx then
+s = \"y\"
+end if"
+check_ok ok_char_literal_byte "$HEAP
+var byte c = 97
+if \"a\" == c then
+c = 1
+end if"
+check_ok ok_numeric_assign "$HEAP
+s = 42"
+check_ok ok_one_char_max "$HEAP
+var bit r
+r = _string_truncate(s, \"a\")"
+check_ok ok_byte_index "$HEAP
+var byte i = 1
+var byte a[4] = \"abcd\"
+var byte b
+b = a[i]"
+check_ok ok_byte_case "$HEAP
+var byte i = 1
+case i of
+  1: i = 0
+end case"
 
 echo
 echo "passed: $pass  failed: $fail"

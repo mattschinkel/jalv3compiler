@@ -21,6 +21,7 @@
 #include "jal_file.h"
 #include "jal_ctrl.h"
 #include "jal_tokn.h"
+#include "jal_string.h"
 
 /*
  * NAME
@@ -698,6 +699,11 @@ void jal_parse_case(pfile_t *pf, const pfile_pos_t *statement_start)
   consts_used.data  = 0;
   expr = jal_parse_expr(pf);
   pfile_expr_string_fix(pf, expr);
+  if (expr && (jal_string_is_source(expr) || jal_string_pointer_is(expr))) {
+    pfile_log(pf, PFILE_LOG_ERR, "case selector must be an integer");
+    value_release(expr);
+    expr = pfile_constant_get(pf, 0, VARIABLE_DEF_NONE);
+  }
   if (value_is_bit(expr)) {
     /* this resulted in a bit expression, let's go ahead
      * and assign it to an appropriately sized byte*2

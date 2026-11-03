@@ -18,6 +18,12 @@ boolean_t jal_string_is_dynamic(value_t val);
  * codegen from running, so the user sees one error instead of a page of
  * resolver failures. */
 void      jal_string_core_gate(pfile_t *pf);
+/* Validate a `const _string_heap_size = ...` initializer BEFORE it is
+ * stored in its declared type (a word constant would already be truncated
+ * to 16 bits, hiding 65599 -> 63). Returns FALSE after one diagnostic and
+ * marks the heap unusable for the rest of the compile. */
+boolean_t jal_string_heap_size_const_check(pfile_t *pf, const char *name,
+    variable_def_t def, value_t expr);
 /* create `_string_error` + the error constants without allocating a heap
  * (used when the user defines `_error_hook`, whose body reads the cell) */
 boolean_t jal_string_error_cell_ensure(pfile_t *pf);
@@ -40,6 +46,9 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
  * (`var pointer p as var string`) */
 boolean_t jal_string_pointer_is(value_t val);
 boolean_t jal_string_is_source(value_t val);
+/* a lexer-generated one-character string literal (`_cstrN`): a char code
+ * in numeric contexts, a string when compared with another string */
+boolean_t jal_string_char_literal_is(value_t val);
 /* Stage a const/fixed string source into a compiler string cell
  * (`_string_chainN`) -- call-argument marshalling for literal actuals
  * into dynamic-string formals. Returns the assigned cell or
