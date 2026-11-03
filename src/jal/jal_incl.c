@@ -330,12 +330,18 @@ static void jal_parse_pragma_target_page(pfile_t *pf)
   jal_pragma_variable_assign(pf, "target_page_size");
 }
 
-/* Legacy `pragma string heap <expr>` — ignored (no diagnostic). Heap arena size
- * is only `const word _string_heap_size = <bytes>` in user source. */
-static void jal_parse_pragma_string_heap(pfile_t *pf)
+/* `pragma string heap <expr>` was REMOVED: the arena size is only
+ * `const word _string_heap_size = <bytes>` in user source.  The name stays as
+ * a tombstone so old code gets one actionable diagnostic instead of the
+ * generic "unexpected token" cascade; the expression is absorbed to keep the
+ * parse in step. */
+static void jal_parse_pragma_string_heap_removed(pfile_t *pf)
 {
   value_t cexpr;
 
+  pfile_log(pf, PFILE_LOG_ERR,
+      "pragma string heap was removed -- declare "
+      "`const word _string_heap_size = <bytes>` instead");
   cexpr = jal_parse_expr(pf);
   value_release(cexpr);
 }
@@ -1744,7 +1750,8 @@ static const pragma_word_t pragma_fpu[] = {
 };
 
 static const pragma_word_t pragma_string[] = {
-  DEFINE_FN("heap", jal_parse_pragma_string_heap, PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN("heap", jal_parse_pragma_string_heap_removed,
+    PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN("index", jal_parse_pragma_string_index, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN("alloc", jal_parse_pragma_string_alloc, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN("retry", jal_parse_pragma_string_retry, PRAGMA_WORD_FLAG_ABSORB),

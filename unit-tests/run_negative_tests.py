@@ -57,6 +57,9 @@ TABLE = [
      ["cannot cast a string to a numeric type"]),
     ("const_to_out.jal",
      ["type mismatch"]),
+    ("pragma_string_heap_removed.jal",
+     ["pragma string heap was removed",
+      "const word _string_heap_size = <bytes>"]),
     ("string_heap_missing.jal",
      ["dynamic string storage requires const word _string_heap_size"]),
     # pointer-signature enforcement (recovered from the retired

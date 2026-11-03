@@ -1,0 +1,8 @@
+-- negative: `pragma string heap N` was removed -- the arena size is only
+-- `const word _string_heap_size = <bytes>` in user source
+include 16f1825
+pragma target clock 20_000_000
+pragma string heap 200
+var string s
+forever loop
+end loop
