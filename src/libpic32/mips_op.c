@@ -2293,12 +2293,14 @@ void mips_isr_enable_ie(pfile_t *pf)
    * it MVEC requests are never presented and single-vector delivery
    * wedges the core outright.  QEMU ignores both (it dispatches
    * regardless), so the QEMU suites are unaffected. */
-  (void) mips_code_r_alloc(MIPS_OP_MFC0, MIPS_CP0_CAUSE, 0,
-      MIPS_REG_T0, 0);
-  (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T1, 0,
+  /* Cause = IV exactly (a WRITE, not a read-modify-write): at power-on
+   * the core leaves a software-interrupt request pending in
+   * Cause.IP[1:0], and the old RMW preserved it.  With EXL released the
+   * core delivers it immediately, the vector handler clears only IFS0
+   * and returns, the request re-fires -- a livelock with no output.
+   * XC32's crt0 writes Cause = 0x00800000 for exactly this reason. */
+  (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0,
       (int) ((MIPS_CAUSE_IV >> 16) & 0xFFFF));
-  (void) mips_code_r_alloc(MIPS_OP_OR, MIPS_REG_T0, MIPS_REG_T0,
-      MIPS_REG_T1, 0);
   (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_CAUSE, 0,
       MIPS_REG_T0, 0);
   /* Vector SPACING must match the table the back end emits.  MZ

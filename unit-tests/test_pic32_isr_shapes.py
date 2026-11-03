@@ -19,12 +19,14 @@ Pins the 2026-10-17 PIC32 ISR work, which QEMU cannot fully model:
 * PIC32MX (fix_pic32mx270f256b_support.md) has no PRISS/shadow sets:
   plain interrupts use software save/restore, `fast` is rejected, and
   numbered/MVEC interrupts are rejected.
-* fixes/fix_pic32_mz_isr_state_clear.md -- the MZ arming must clear
-  Status.IM[7:0] in the same write that clears EXL|ERL (a write that
-  keeps the reset IM1 bit wedges the core at the exception-level exit
-  on silicon; every MZ ISR image was dark).  Pinned as the LUI 0xFFFF /
-  ORI 0x00F9 mask; MX must NOT carry it (it has no EIC and its own
-  arming works).
+* fixes/fix_pic32_mz_isr_state_clear.md -- the arming must not inherit
+  stale exception state.  Two emissions are pinned: `Cause = IV` (a
+  WRITE, so a software-interrupt request latched at power-on is cleared
+  -- a read-modify-write preserved it and the released core delivered it
+  forever, dark) and, on MZ only, clearing Status.IM[7:0] in the write
+  that clears EXL|ERL (a preserved IM1 wedges the machine at the
+  exception-level exit).  Both are XC32's crt0 shape.  MX has no EIC and
+  keeps its own arm mask, so the MZ mask must NOT appear there.
 
 Usage:  python3 unit-tests/test_pic32_isr_shapes.py [--compiler PATH]
 Exit:   0 = all PASS, 1 = failure.
@@ -53,6 +55,8 @@ WRPGPR_SP = "41dd e800"
 WRPGPR_GP = "41dc e000"
 # MZ Status arm: `ori $t1, $t1, 0x00f9` (~EXL, ~ERL, IM[7:0]=0).  MX has
 # no EIC and keeps the plain ~(EXL|ERL) mask, so it must not appear there.
+ARM_CAUSE_IV = "3c08 0080  lui $t0, $zero, 0x80"   # Cause = IV
+ARM_CAUSE_IV_MM = "41a8 0080  lui $t0, $zero, 0x80"  # same, 16-bit LUI
 ARM_MZ_IM_CLEAR = "3529 00f9"
 # microMIPS compresses the same ORI to the 16-bit form.
 ARM_MZ_IM_CLEAR_MM = "5129 00f9"
@@ -108,37 +112,37 @@ def main(argv: list[str] | None = None) -> int:
     cases = [
         ("mz_plain_pfm",
          build_body("32mz1024efh064", "200_000_000", ""),
-         True, [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_MZ_IM_CLEAR],
-         [], []),
+         True, [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_CAUSE_IV,
+                ARM_MZ_IM_CLEAR], [], []),
         ("mz_fast_pfm",
          build_body("32mz1024efh064", "200_000_000", "fast"),
-         True, [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_MZ_IM_CLEAR],
-         [], []),
+         True, [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP, ARM_CAUSE_IV,
+                ARM_MZ_IM_CLEAR], [], []),
         ("mz_raw_pfm",
          build_body("32mz1024efh064", "200_000_000", "raw"),
-         True, [ARM_MZ_IM_CLEAR],
+         True, [ARM_CAUSE_IV, ARM_MZ_IM_CLEAR],
          [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP], []),
         ("mz_mvec_pfm",
          build_body("32mz1024efh064", "200_000_000", "9"),
-         True, [ARM_MZ_IM_CLEAR], [PRISS_LO, PRISS_HI], []),
+         True, [ARM_CAUSE_IV, ARM_MZ_IM_CLEAR], [PRISS_LO, PRISS_HI], []),
         ("mz_plain_micromips",
          build_body("32mz1024efh064", "200_000_000", "", micromips=True),
          False, [], [], ["micromips", "pragma interrupt raw"]),
         ("mz_raw_micromips",
          build_body("32mz1024efh064", "200_000_000", "raw",
                     micromips=True),
-         True, [ARM_MZ_IM_CLEAR_MM],
+         True, [ARM_CAUSE_IV_MM, ARM_MZ_IM_CLEAR_MM],
          [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP], []),
         ("mx_plain_pfm",
          build_body("32mx270f256b", "40_000_000", ""),
-         True, [], [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP,
+         True, [ARM_CAUSE_IV], [PRISS_LO, PRISS_HI, WRPGPR_SP, WRPGPR_GP,
                     ARM_MZ_IM_CLEAR], []),
         ("mx_fast_pfm",
          build_body("32mx270f256b", "40_000_000", "fast"),
          False, [], [], ["not supported", "pragma interrupt raw"]),
         ("mx_mvec_pfm",
          build_body("32mx270f256b", "40_000_000", "1"),
-         True, [], [], []),
+         True, [ARM_CAUSE_IV], [], []),
     ]
 
     failures = 0
