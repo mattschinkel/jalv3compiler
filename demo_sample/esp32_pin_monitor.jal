@@ -1,0 +1,106 @@
+-- Title: ESP32 pin monitor (edge-counting reporter on GPIO23)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Turns an ESP32 into a machine-readable logic probe: GPIO23 is sampled
+--    in a tight loop, level transitions are counted, and the result is
+--    reported on UART0 at 115200 about ten times a second as
+--
+--        S<level> e=<edges>\r\n
+--
+--    e.g. `S1 e=6186`.  `<level>` is the *current* pin level (1 = high) and
+--    `<edges>` is the number of transitions since reset, so a reader can
+--    prove both "the line is where I think it is" and "it actually moved"
+--    (an edge count is a liveness proof a level alone cannot give).
+--    On the bench this is the MZ LED monitor: ESP32 GPIO23 is wired to the
+--    PIC32MZ RE1 (pin 61) with a common GND, and the count then tracks a
+--    blinking LED the way a scope's counter would.
+--
+--    The first line is `##PINMON## gpio23` so a capture identifies itself;
+--    everything after it is the repeating record above.
+--
+-- Notes:
+--    - Sampling is a POLLING loop, not an interrupt: an ESP32 executes it
+--      tens of millions of times a second, so any pulse wider than ~100 ns
+--      is seen.  Narrower glitches need a GPIO edge interrupt instead.
+--    - GPIO23 is configured explicitly: IO_MUX MCU_SEL=2 (GPIO function),
+--      FUN_IE=1 (input enable) and FUN_WPU=1 (pull-up), then
+--      GPIO_ENABLE bit 23 = 0.  Without the IO_MUX write the pin can read
+--      as a constant 0 whatever drives it.  The pull-up makes an
+--      unconnected pin read 1 instead of picking up noise.
+--    - Direction sense on this device file is GPIO_ENABLE's: TRUE = output,
+--      FALSE = input (the opposite of jallib's TRIS-sense constants).
+--    - Flash (bench): esptool.py --chip esp32 --port <tty> --baud 115200
+--      --no-stub write_flash 0x1000 <hex>   (the compiler's HEX is
+--      addressed at 0x1000; the stub uploader fails on this CP2102 rig).
+--    - Read (bench): python3 tmp/cp2102_read.py 5 115200  (raw USB, no
+--      DTR/RTS: touching them reboots the board and restarts the count).
+--
+-- -----------------------------------------------------------------------------
+include esp32_xtensa_lx6
+
+pragma target clock 240_000_000
+pragma target OSC      PLL
+
+include esp32_clock
+esp32_clock_init()
+
+include esp32_serial_hw
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+include print
+
+-- GPIO23 = plain digital input:
+--   MCU_SEL = 2 (GPIO function), FUN_IE = 1 (input enable),
+--   FUN_WPU = 1 (pull-up so a floating pin reads 1, not noise)
+const dword IO_MUX_FUN_WPU = 1 << 8
+const dword IO_MUX_FUN_IE  = 1 << 9
+const dword IO_MUX_MCU_SEL_GPIO = 2 << 12
+IO_MUX_GPIO23 = IO_MUX_MCU_SEL_GPIO | IO_MUX_FUN_IE | IO_MUX_FUN_WPU
+pin_23_direction = FALSE             -- GPIO_ENABLE: FALSE = input
+
+-- reports per second knob: the polling loop is a few instructions, so this
+-- spin budget lands near 10 Hz at 240 MHz (measured on the bench:
+--   1e6 spins = 3.2 reports/s, 5e6 = 0.64/s, so 320e3 = ~10/s)
+const dword report_spins = 320_000
+
+var dword edges = 0
+var byte level = 0
+var byte prev = 0
+var dword spin = 0
+
+-- seed the level so the first sample is not counted as an edge
+if pin_23 then
+   prev = 1
+else
+   prev = 0
+end if
+
+print_string(serial_data, "##PINMON## gpio23")
+print_crlf(serial_data)
+
+forever loop
+   if pin_23 then
+      level = 1
+   else
+      level = 0
+   end if
+   if level != prev then
+      prev = level
+      edges = edges + 1
+   end if
+
+   spin = spin + 1
+   if spin >= report_spins then
+      spin = 0
+      print_string(serial_data, "S")
+      print_dword_dec(serial_data, level)
+      print_string(serial_data, " e=")
+      print_dword_dec(serial_data, edges)
+      print_crlf(serial_data)
+   end if
+end loop
