@@ -1,0 +1,124 @@
+-- Title: ESP32 GPIO-source interrupt sample (GPIO23 edge -> CPU int 1)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Interrupts from a GPIO pin, end to end: GPIO23 gets an ANY-EDGE
+--    interrupt in the GPIO peripheral, the GPIO interrupt source (ETS
+--    source 22) is routed through the interrupt matrix into CPU interrupt
+--    1, and a plain `pragma interrupt` handler (level 1, the only level
+--    this compiler supports on the ESP32) clears the pin's status and
+--    counts.  The main line waits for five hits and prints the verdict on
+--    UART0 at 115200:
+--
+--        ##GPIOISR## boot
+--        ##GPIOISR-OK## hits=<n>
+--        ##GPIOISR## hits=<n>            (heartbeat, repeats)
+--
+--    This is the pin-source interrupt the 2026-09-26 coverage list had
+--    open for every 32-bit target.  QEMU cannot gate it: its ESP32 model
+--    does not generate GPIO input interrupts from software, so the proof
+--    is on silicon -- drive the pin from any square wave (on this bench
+--    GPIO23 is wired to the PIC32MZ RE1, which the Timer1 witness toggles
+--    at ~47 Hz).
+--
+-- Notes:
+--    - GPIO23 is configured explicitly: IO_MUX MCU_SEL=2 (GPIO function),
+--      FUN_IE=1 (input enable), FUN_WPU=1 (pull-up), then
+--      GPIO_PIN23_INT_ENA = any-edge, GPIO_STATUS_W1TC clears the stale
+--      flag BEFORE the pin interrupt is enabled.
+--    - The matrix map register for a source S is 0x3FF00104 + 4*S; the
+--      ESP32's GPIO source is ETS_GPIO_INTR_SOURCE (22) -> 0x3FF0015C.
+--    - Flash (bench): esptool.py --chip esp32 --port <tty> --baud 115200
+--      --no-stub write_flash 0x1000 <hex>; read with
+--      python3 tmp/cp2102_read.py 5 115200.
+--
+-- -----------------------------------------------------------------------------
+include esp32_xtensa_lx6
+
+pragma target clock 240_000_000
+pragma target OSC      PLL
+
+include esp32_clock
+esp32_clock_init()
+
+include esp32_serial_hw
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+include print
+
+-- GPIO23 as a plain digital input (see the pin-monitor sample):
+-- MCU_SEL = 2 (GPIO function), FUN_IE = 1 (input enable), FUN_WPU = 1
+const dword IO_MUX_FUN_WPU = 1 << 8
+const dword IO_MUX_FUN_IE  = 1 << 9
+const dword IO_MUX_MCU_SEL_GPIO = 2 << 12
+IO_MUX_GPIO23 = IO_MUX_MCU_SEL_GPIO | IO_MUX_FUN_IE | IO_MUX_FUN_WPU
+pin_23_direction = FALSE             -- GPIO_ENABLE: FALSE = input
+
+-- interrupt matrix: one map register per source, 0x3FF00104 + 4*source
+var volatile dword gpio_map at 0x3FF0015C   -- ETS_GPIO_INTR_SOURCE = 22
+-- GPIO_PIN23 (0x3FF440E4): bits 9:7 INT_TYPE, bits 17:13 INT_ENA
+var volatile dword gpio_pin23_cfg at 0x3FF440E4
+
+var volatile dword hits = 0
+
+--------------------------------------------------------------------------------
+-- Description: GPIO23 edge handler
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: GPIO_STATUS_W1TC clears this pin's latched edge (W1C) -- without
+-- - it the level/edge line stays asserted and the handler re-enters
+-- - forever.  Then bump the counter the main line waits on.
+--------------------------------------------------------------------------------
+procedure _gpio_isr() is
+   pragma interrupt
+
+   GPIO_STATUS_W1TC = 1 << 23
+   hits = hits + 1
+end procedure
+
+print_string(serial_data, "##GPIOISR## boot")
+print_crlf(serial_data)
+
+GPIO_STATUS_W1TC = 1 << 23           -- clear any stale edge first
+-- Plain word RMW of GPIO_PIN23 (bits 9:7 INT_TYPE, bits 17:13 INT_ENA):
+-- the device file also offers GPIO_PINn_INT_TYPE_MASK / _INT_ENA_MASK
+-- bit-fields, but their emitted code truncates the value (a `bit*3`
+-- field at bit 7 came out as a 2-bit `extui`), so the raw register write
+-- is the reliable form here.
+gpio_pin23_cfg = (gpio_pin23_cfg & 0xFFFFFC7F) | 0x00000180  -- ANY_EDGE
+gpio_map = 1                          -- GPIO source -> CPU interrupt 1
+gpio_pin23_cfg = (gpio_pin23_cfg & 0xFFFC1FFF) | 0x0003E000  -- INT_ENA
+
+var dword guard = 0
+while (hits < 5) & (guard < 4000000) loop
+   guard = guard + 1
+end loop
+
+if hits >= 5 then
+   print_string(serial_data, "##GPIOISR-OK## hits=")
+else
+   print_string(serial_data, "##GPIOISR-FAIL## hits=")
+end if
+print_dword_dec(serial_data, hits)
+print_crlf(serial_data)
+
+forever loop
+   print_string(serial_data, "##GPIOISR## hits=")
+   print_dword_dec(serial_data, hits)
+   print_string(serial_data, " pin=")
+   print_dword_dec(serial_data, pin_23)
+   print_string(serial_data, " st=")
+   print_dword_dec(serial_data, (GPIO_STATUS >> 23) & 1)
+   print_string(serial_data, " ena=")
+   print_dword_dec(serial_data, (gpio_pin23_cfg >> 13) & 0x1F)
+   print_string(serial_data, " typ=")
+   print_dword_dec(serial_data, (gpio_pin23_cfg >> 7) & 7)
+   print_string(serial_data, " map=")
+   print_dword_dec(serial_data, gpio_map)
+   print_crlf(serial_data)
+   _usec_delay(500_000)
+end loop
