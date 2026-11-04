@@ -67,6 +67,23 @@ function string_append(string in out dst, string in src) return bit is
 end function
 
 --------------------------------------------------------------------------------
+-- Description: Concatenate two dynamic strings into dst (delegates to `&`).
+-- Parameters:
+-- - dst - destination dynamic string (in out)
+-- - a   - left operand
+-- - b   - right operand
+-- Returns:
+-- - bit - TRUE
+-- Notes: Outlined -- a two-operand `dst = a & b` of dynamic strings is lowered
+--   to one CALL of this body (the concat path is emitted once).  Longer
+--   chains and fixed/literal operands keep the inline path.
+--------------------------------------------------------------------------------
+function string_concat(string in out dst, string in a, string in b) return bit is
+   dst = a & b
+   return TRUE
+end function
+
+--------------------------------------------------------------------------------
 -- Description: Append with maximum resulting length (delegates to builtin).
 -- Parameters:
 -- - dst     - destination dynamic string (in out)

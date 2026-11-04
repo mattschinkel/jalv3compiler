@@ -1,0 +1,80 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - two-operand dynamic-string concat (outlined body)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `d = a & b` with two DYNAMIC strings is lowered to one CALL of the
+--    outlined `string_concat` forwarder (one shared body in flash).  This
+--    witness runs every face of the lowering:
+--      * two dynamic operands            -> outlined call
+--      * same again on a fresh destination -> second call site
+--      * a literal operand               -> stays inline
+--      * a three-operand chain           -> stays inline
+--    and checks the resulting text / COUNT() each time.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 4
+-- expect byte v__cat_ab 1
+-- expect byte v__cat_ab2 1
+-- expect byte v__cat_lit 1
+-- expect byte v__cat_chain 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var volatile byte _cat_ab = 0
+var volatile byte _cat_ab2 = 0
+var volatile byte _cat_lit = 0
+var volatile byte _cat_chain = 0
+
+var string _cat_a
+var string _cat_b
+var string _cat_d
+var string _cat_e
+var string _cat_f
+var string _cat_g
+
+procedure _cat_run() is
+   regression_begin_run()
+
+   _cat_a = "abc"
+   _cat_b = "def"
+   _cat_d = _cat_a & _cat_b
+   if (_cat_d == "abcdef") & (COUNT(_cat_d) == 6) then
+      _cat_ab = 1
+   end if
+   regression_checkpoint()
+
+   _cat_e = _cat_a & _cat_b
+   if (_cat_e == "abcdef") & (COUNT(_cat_e) == 6) then
+      _cat_ab2 = 1
+   end if
+   regression_checkpoint()
+
+   _cat_f = _cat_a & "XY"
+   if (_cat_f == "abcXY") & (COUNT(_cat_f) == 5) then
+      _cat_lit = 1
+   end if
+   regression_checkpoint()
+
+   _cat_g = _cat_a & _cat_b & _cat_a
+   if (_cat_g == "abcdefabc") & (COUNT(_cat_g) == 9) then
+      _cat_chain = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_cat_run()
+forever loop end loop

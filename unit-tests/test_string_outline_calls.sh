@@ -127,6 +127,46 @@ else
 fi
 
 # ---------------------------------------------------------------- 5
+# Two-operand dynamic concat is outlined too; the literal-operand and
+# three-operand sites must stay inline (only the three dynamic sites call).
+cat="$TMP/concat.jal"
+{
+  echo 'include 16f1825'
+  echo 'pragma target clock 32_000_000'
+  echo 'const word _string_heap_size = 100'
+  echo 'pragma string index byte'
+  echo 'include strings_dynamic'
+  echo 'var string a'
+  echo 'var string b'
+  echo 'var string d1'
+  echo 'var string d2'
+  echo 'var string d3'
+  echo 'var string e1'
+  echo 'var string e2'
+  echo 'var word k = 0'
+  echo 'a = "abc"'
+  echo 'b = "def"'
+  echo 'd1 = a & b'
+  echo 'd2 = a & b'
+  echo 'd3 = a & b'
+  echo 'e1 = a & "XY"'
+  echo 'e2 = a & b & a'
+  echo 'k = COUNT(d1) + COUNT(d2) + COUNT(d3) + COUNT(e1) + COUNT(e2)'
+} > "$cat"
+compile concat "$cat"
+if [ "$RC" -eq 0 ]; then
+  labels="$(grep -c '^l_string_concat$' "$ASM")"
+  calls="$(grep -c '^[[:space:]]*call[[:space:]][[:space:]]*l_string_concat$' "$ASM")"
+  if [ "$labels" -eq 1 ] && [ "$calls" -eq 3 ]; then
+    ok "one shared concat body, three calls (literal/chain inline)"
+  else
+    bad "one shared concat body, three calls" "(labels=$labels calls=$calls)"
+  fi
+else
+  bad "concat compiles" "(rc=$RC)"
+fi
+
+# ---------------------------------------------------------------- 6
 internal="$TMP/internal.jal"
 {
   echo 'include 16f1825'

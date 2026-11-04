@@ -2770,6 +2770,74 @@ static boolean_t jal_string_same_dynamic_storage(value_t dst, value_t src)
   return BOOLEAN_FALSE;
 }
 
+/* True while the p-code being emitted is the body of the named forwarder.
+ * A forwarder body spells its operation in source (`dst = a & b`), so the
+ * outline hook must not fire there (it would call the body from inside
+ * itself) and the heap-sizing note must not be recorded against the
+ * formals. */
+static boolean_t jal_string_forwarder_body_p(pfile_t *pf, const char *tag)
+{
+  pfile_proc_t *proc;
+  const char   *ptag;
+
+  proc = pfile_proc_active_get(pf);
+  ptag = proc ? pfile_proc_tag_get(proc) : 0;
+  return (ptag && tag && (0 == strcmp(ptag, tag))) ? BOOLEAN_TRUE
+    : BOOLEAN_FALSE;
+}
+
+/* Option A heap-sizing diagnostic for a concat site: recover each operand's
+ * static length (const len value, const source count, or a dynamic source's
+ * propagated table bound).  Any operand without one skips the report; the
+ * outlined site has no runtime total of its own (the shared body carries it),
+ * so it sets the same skip flag the inline path's runtime total would. */
+static void jal_string_concat_heap_note(pfile_t *pf, value_t dst,
+    value_t *items, value_t *lens, size_t item_ct, value_t total_len)
+{
+  variable_const_t static_total;
+  boolean_t        all_const;
+  size_t           ii;
+
+  all_const = (item_ct > 0);
+  static_total = 0;
+  for (ii = 0; ii < item_ct; ii++) {
+    if (value_is_const(lens[ii])) {
+      static_total += value_const_get(lens[ii]);
+    } else if (value_is_const(items[ii]) && value_is_array(items[ii])) {
+      /* const source (literal, const number render): exact static count --
+       * a NON-const non-dynamic array is runtime scratch (rendered number
+       * buffer) whose capacity is not a length */
+      static_total += value_ct_get(items[ii]);
+    } else {
+      variable_t ivar;
+      size_t     jj;
+
+      ivar = value_variable_get(items[ii]);
+      for (jj = 0; ivar && (jj < jal_string_state.heap_use_used); jj++) {
+        if (jal_string_state.heap_use[jj].var == ivar) {
+          static_total += jal_string_state.heap_use[jj].max_len;
+          break;
+        }
+      }
+      if (jj == jal_string_state.heap_use_used) {
+        all_const = BOOLEAN_FALSE;
+        break;
+      }
+    }
+  }
+  if (all_const) {
+    value_t cv;
+
+    cv = jal_string_const_get(pf, static_total);
+    jal_string_heap_use_note(dst, cv);
+    value_release(cv);
+  } else if (VALUE_NONE != total_len) {
+    jal_string_heap_use_note(dst, total_len);
+  } else {
+    jal_string_state.heap_use_runtime = BOOLEAN_TRUE;
+  }
+}
+
 static void jal_string_concat_emit(pfile_t *pf, value_t dst,
     value_t *items, value_t *lens, size_t item_ct)
 {
@@ -2808,51 +2876,8 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
     pfile_cmd_op_add(pf, OPERATOR_ADD, &total_len, total_len, lens[ii]);
   }
 
-  /* Option A heap-sizing diagnostic: the pcode total rides runtime ADDs
-   * and snapshot temps even when every operand is statically sized --
-   * recover each operand's static length here (const len value, const
-   * source count, or a dynamic source's propagated table bound); any
-   * operand without one skips the report */
-  {
-    variable_const_t static_total;
-    boolean_t        all_const;
-
-    all_const = (item_ct > 0);
-    static_total = 0;
-    for (ii = 0; ii < item_ct; ii++) {
-      if (value_is_const(lens[ii])) {
-        static_total += value_const_get(lens[ii]);
-      } else if (value_is_const(items[ii]) && value_is_array(items[ii])) {
-        /* const source (literal, const number render): exact static
-         * count -- a NON-const non-dynamic array is a runtime scratch
-         * (rendered number buffer) whose capacity is not a length */
-        static_total += value_ct_get(items[ii]);
-      } else {
-        variable_t ivar;
-        size_t     jj;
-
-        ivar = value_variable_get(items[ii]);
-        for (jj = 0; ivar && (jj < jal_string_state.heap_use_used); jj++) {
-          if (jal_string_state.heap_use[jj].var == ivar) {
-            static_total += jal_string_state.heap_use[jj].max_len;
-            break;
-          }
-        }
-        if (jj == jal_string_state.heap_use_used) {
-          all_const = BOOLEAN_FALSE;
-          break;
-        }
-      }
-    }
-    if (all_const) {
-      value_t cv;
-
-      cv = jal_string_const_get(pf, static_total);
-      jal_string_heap_use_note(dst, cv);
-      value_release(cv);
-    } else {
-      jal_string_heap_use_note(dst, total_len);
-    }
+  if (!jal_string_forwarder_body_p(pf, "string_concat")) {
+    jal_string_concat_heap_note(pf, dst, items, lens, item_ct, total_len);
   }
 
   jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, total_len, 0,
@@ -3493,6 +3518,117 @@ static value_t jal_string_jal_proc_call_value_get(pfile_t *pf, const char *tag)
   val = value_alloc(func_var);
   variable_release(func_var);
   return val;
+}
+
+/*
+ * NAME
+ *   jal_string_concat_outline_emit
+ *
+ * DESCRIPTION
+ *   Lower a two-operand dynamic concat (`dst = a & b`) to one CALL of the
+ *   outlined `string_concat` forwarder, so the concat copy path is emitted
+ *   once instead of at every site.
+ *
+ * PARAMETERS
+ *   pf      : pfile handle
+ *   dst     : destination (already parsed)
+ *   items   : operand values
+ *   lens    : operand lengths (parallel to items)
+ *   item_ct : operand count
+ *
+ * RETURN
+ *   TRUE when the call was emitted; FALSE when the site must stay inline
+ *   (longer chain, fixed/literal/pointer operand, operand aliasing dst, no
+ *   forwarder, forwarder body itself).
+ */
+static boolean_t jal_string_concat_outline_emit(pfile_t *pf, value_t dst,
+    value_t *items, value_t *lens, size_t item_ct)
+{
+  pfile_proc_t          *proc;
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        rdef;
+  variable_def_t        ddef;
+  size_t                param_ct;
+  size_t                ii;
+  value_t              *parms;
+  value_t               call_val;
+  value_t               result;
+
+  if ((2U != item_ct) || !dst) {
+    return BOOLEAN_FALSE;
+  }
+  if (jal_string_forwarder_body_p(pf, "string_concat")) {
+    return BOOLEAN_FALSE;
+  }
+  if (!jal_string_is_dynamic(dst) || jal_string_pointer_is(dst)) {
+    return BOOLEAN_FALSE;
+  }
+  for (ii = 0; ii < item_ct; ii++) {
+    if (!jal_string_is_dynamic(items[ii]) || jal_string_pointer_is(items[ii])
+        || jal_string_same_dynamic_storage(dst, items[ii])) {
+      return BOOLEAN_FALSE;
+    }
+  }
+  proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_concat");
+  if (!proc) {
+    proc = jal_string_proc_find_deep(pf->proc_root, "string_concat");
+  }
+  if (!proc) {
+    return BOOLEAN_FALSE;
+  }
+  def = pfile_proc_def_get(proc);
+  param_ct = 0;
+  for (mbr = variable_def_member_get(def); mbr;
+       mbr = variable_def_member_link_get(mbr)) {
+    param_ct++;
+  }
+  if (4U != param_ct) {
+    return BOOLEAN_FALSE;
+  }
+  mbr = variable_def_member_get(def);
+  rdef = variable_def_member_def_get(mbr);
+  mbr = mbr ? variable_def_member_link_get(mbr) : 0;
+  ddef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  if (!rdef || !variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_OUT)
+      || !ddef
+      || !variable_def_flag_test(ddef,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    return BOOLEAN_FALSE;
+  }
+  parms = CALLOC(4U, sizeof(*parms));
+  if (!parms) {
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  result = pfile_value_temp_get_from_def(pf, rdef);
+  if (!result) {
+    FREE(parms);
+    return BOOLEAN_FALSE;
+  }
+  parms[0] = result;
+  value_lock(dst);
+  parms[1] = dst;
+  value_lock(items[0]);
+  parms[2] = items[0];
+  value_lock(items[1]);
+  parms[3] = items[1];
+
+  /* the note belongs to the call site: the shared body only sees formals */
+  jal_string_concat_heap_note(pf, dst, items, lens, item_ct, VALUE_NONE);
+
+  call_val = jal_string_jal_proc_call_value_get(pf, "string_concat");
+  if (!call_val) {
+    value_release(items[1]);
+    value_release(items[0]);
+    value_release(dst);
+    value_release(result);
+    FREE(parms);
+    return BOOLEAN_FALSE;
+  }
+  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_CALL, CMD_BRANCHCOND_NONE,
+      LABEL_NONE, VALUE_NONE, call_val, parms);
+  return BOOLEAN_TRUE;
 }
 
 
@@ -4506,7 +4642,9 @@ boolean_t jal_string_assignment_parse_emit(pfile_t *pf, value_t dst)
         jal_string_fixed_assignment_emit(pf, dst, items[0]);
       }
     } else if (saw_concat) {
-      jal_string_concat_emit(pf, dst, items, lens, item_ct);
+      if (!jal_string_concat_outline_emit(pf, dst, items, lens, item_ct)) {
+        jal_string_concat_emit(pf, dst, items, lens, item_ct);
+      }
     } else {
       jal_string_assignment_emit(pf, dst, items[0]);
     }
