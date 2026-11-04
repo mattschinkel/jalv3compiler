@@ -37,8 +37,9 @@
 -- Cells the handler reads:
 --    _error_source       which subsystem raised it (1 = string)
 --    _string_error       the string code: 0 none, 1 heap full, 2 overflow,
---                        3 invalid, 4 range (a character store through a
---                        string pointer past the block CAP -- `p[i] = c`).
+--                        3 invalid, 4 range (a character store past
+--                        COUNT(s) -- `s[i] = c` / `p[i] = c`; a write AT
+--                        COUNT appends instead).
 --                        READING IT CLEARS IT (consume-on-read), so it is
 --                        read once into `err` below.
 --

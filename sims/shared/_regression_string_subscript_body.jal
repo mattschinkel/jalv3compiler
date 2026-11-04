@@ -9,11 +9,11 @@
 --    CHARACTER (payload through the handle), const and runtime
 --    indices, char-literal writes, COUNT unchanged by writes.
 --    A `var pointer p as var string` gives the same character access on
---    every target, with one difference: the pointer form is BOUNDS-CHECKED
---    against the block CAP at run time (out of range sets
---    `_string_error = _string_error_range` and writes nothing), because the
---    pointer can designate any string and an overrun would corrupt the next
---    heap block.  The direct `str[i] = c` form stays unchecked.
+--    every target.  The rules for BOTH forms (direct and through a pointer):
+--    a write below COUNT stores in place, a write at COUNT appends one
+--    character (the string grows and COUNT follows), and a write past COUNT
+--    is refused with `_string_error = _string_error_range` (nothing written).
+--    A failed append reports `_string_error_heap_full` and leaves the text.
 --
 -- Notes:
 --    Wrapped by the ESP32, PIC32 and PIC18 sim bodies.
@@ -31,12 +31,13 @@ var byte _ss_b
 
 --------------------------------------------------------------------------------
 -- a string FORMAL is a copy-in/copy-out dynamic string: a pointer to it must
--- read the formal's handle and the CAP bound must apply there too
+-- read the formal's handle, append through it, and refuse past-the-end
 procedure _ss_poke(string in out d) is
    var pointer lp as var string
    lp is d
-   lp[1] = "Z"
-   lp[11] = "Q"                       -- CAP 11: refused, error left for the caller
+   lp[1] = "Z"                        -- in place
+   lp[3] = "W"                        -- append at COUNT
+   lp[9] = "Q"                        -- past the end: refused, left for the caller
 end procedure
 
 --------------------------------------------------------------------------------
@@ -108,27 +109,32 @@ procedure _run() is
    end if
    regression_checkpoint()                       -- 6
 
-   -- CAP bound: `_ss_s` was allocated for 11 bytes, so index 11 is refused
-   -- (nothing written, `_string_error_range`), and an index in CAP but past
-   -- LEN is allowed without changing COUNT.  An explicitly empty string
-   -- (CAP 0) refuses even index 0, and a wide index never wraps into range.
+   -- APPEND at COUNT(s): a write at the end grows the string by one and
+   -- COUNT follows.  Past the end (not at it) is refused with the range code
+   -- and leaves the text alone; a wide index cannot wrap into range.
    _ss_p[11] = "Q"
-   if _string_error != _STRING_ERROR_RANGE then
+   _ss_i = 12
+   _ss_p[_ss_i] = "!"
+   if COUNT(_ss_s) != 13 then
       _check_failed = true
    end if
    if _ss_s[10] != "d" then
       _check_failed = true
    end if
-   _ss_s = "12345"
-   _ss_s = "12"
-   _ss_p[4] = "Z"
-   if COUNT(_ss_s) != 2 then
+   if _ss_s[11] != "Q" then
       _check_failed = true
    end if
-   if _ss_s[4] != "Z" then
+   if _ss_s[12] != "!" then
       _check_failed = true
    end if
    if _string_error != _STRING_ERROR_NONE then
+      _check_failed = true
+   end if
+   _ss_p[14] = "X"                               -- one past the end: refused
+   if _string_error != _STRING_ERROR_RANGE then
+      _check_failed = true
+   end if
+   if COUNT(_ss_s) != 13 then
       _check_failed = true
    end if
    _ss_wi = 300
@@ -136,25 +142,34 @@ procedure _run() is
    if _string_error != _STRING_ERROR_RANGE then
       _check_failed = true
    end if
+   regression_checkpoint()                       -- 7
+
+   -- an explicitly empty string gets its first character by append
    _ss_t = ""
    _ss_pe is _ss_t
    _ss_pe[0] = "A"
-   if _string_error != _STRING_ERROR_RANGE then
+   if COUNT(_ss_t) != 1 then
       _check_failed = true
    end if
-   if COUNT(_ss_t) != 0 then
+   if _ss_t[0] != "A" then
       _check_failed = true
    end if
-   regression_checkpoint()                       -- 7
+   if _string_error != _STRING_ERROR_NONE then
+      _check_failed = true
+   end if
 
-   -- string formal: the pointer sees the formal's handle, the CAP bound
-   -- applies inside the callee, and the payload write survives copy-back
+   -- string formal: the pointer sees the formal's handle, the append
+   -- survives copy-back, and a past-the-end write inside the callee is
+   -- refused
    _ss_s = "abc"
    _ss_poke(_ss_s)
    if _ss_s[1] != "Z" then
       _check_failed = true
    end if
-   if COUNT(_ss_s) != 3 then
+   if _ss_s[3] != "W" then
+      _check_failed = true
+   end if
+   if COUNT(_ss_s) != 4 then
       _check_failed = true
    end if
    if _string_error != _STRING_ERROR_RANGE then

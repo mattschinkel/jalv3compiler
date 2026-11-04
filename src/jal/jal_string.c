@@ -1756,6 +1756,26 @@ value_t jal_string_subscript_read_emit(pfile_t *pf, value_t elem)
   return byte;
 }
 
+/* the grow helpers below are defined later in this file; the element store is
+ * their only forward user */
+static void jal_string_copy_heap_at_emit(pfile_t *pf, value_t dst,
+    value_t src_off, value_t len, value_t dst_start);
+static void jal_string_free_old_block_emit(pfile_t *pf, value_t old_off,
+    value_t old_cap);
+static void jal_string_allocate_emit_ex(pfile_t *pf, value_t dst, value_t len,
+    label_t fail_lbl, label_t have_storage_lbl, boolean_t free_old,
+    value_t *old_off_keep, value_t *old_cap_keep);
+
+/*
+ * str[i] = c on a heap string -- direct `s[i]` or through a string pointer:
+ *   i <  COUNT(s)   store in place; COUNT unchanged
+ *   i == COUNT(s)   APPEND: grow the block by one and store the character
+ *   i >  COUNT(s)   refused: COUNT unchanged, `_string_error = range`
+ * The append is the same grow the `&` operator uses (allocate the new block
+ * while the old one is still live, copy, free), so its peak heap use is
+ * old + new; an allocation failure leaves the string untouched and reports
+ * `_string_error_heap_full`.  No gap is ever filled: only the end grows.
+ */
 boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     value_t src)
 {
@@ -1764,10 +1784,17 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
   value_t   off;
   value_t   ofs;
   value_t   hdr;
-  value_t   cap;
-  label_t   ok_lbl;
+  value_t   len;
+  value_t   one;
+  value_t   need;
+  value_t   zero;
+  value_t   old_off;
+  value_t   old_cap;
+  label_t   fast_lbl;
+  label_t   append_lbl;
+  label_t   have_lbl;
+  label_t   alloc_fail_lbl;
   label_t   done_lbl;
-  boolean_t through_ptr;
 
   if (!src || !jal_string_subscript_value_is(dst)
       || value_is_bit(src)
@@ -1778,43 +1805,79 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
       || !jal_string_subscript_split(pf, dst, &base, &idx)) {
     return BOOLEAN_FALSE;
   }
-  /* A character written through a string pointer can designate ANY heap
-   * string (the block may have been reallocated or the pointer rebound), so
-   * this form is bounds-checked against the handle's CAP at run time: an
-   * index at or past CAP would corrupt the next heap block.  The direct
-   * `s[i] = c` form keeps the historical unchecked rule (like arrays); this
-   * one reports `_string_error = _string_error_range` and leaves the text
-   * unchanged instead. */
-  through_ptr = jal_string_pointer_is(dst);
   if (1 != value_byte_sz_get(src)) {
     pfile_log(pf, PFILE_LOG_ERR,
         "string element assignment requires a byte value");
   } else {
+    len  = jal_string_handle_index_get(pf, base, _STRING_FIELD_LENGTH);
+    one  = jal_string_const_get(pf, 1);
+    fast_lbl = pfile_label_alloc(pf, 0);
+    append_lbl = pfile_label_alloc(pf, 0);
+    have_lbl = pfile_label_alloc(pf, 0);
+    alloc_fail_lbl = pfile_label_alloc(pf, 0);
+    done_lbl = pfile_label_alloc(pf, 0);
+
     off = jal_string_handle_index_get(pf, base, _STRING_FIELD_OFFSET);
     hdr = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
     value_release(off);
     ofs = jal_string_binary_emit(pf, OPERATOR_ADD, hdr, idx);
     value_release(hdr);
-    if (through_ptr) {
-      cap = jal_string_handle_index_get(pf, base, _STRING_FIELD_CAP);
-      ok_lbl = pfile_label_alloc(pf, 0);
-      done_lbl = pfile_label_alloc(pf, 0);
-      jal_string_branch_if_value_cmp(pf, OPERATOR_LT, idx, cap,
-          CMD_BRANCHCOND_TRUE, ok_lbl);
-      jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
-          _STRING_ERROR_RANGE);
-      pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
-          done_lbl, VALUE_NONE, VALUE_NONE, 0);
-      pfile_cmd_label_add(pf, ok_lbl);
-      jal_string_heap_index_set(pf, ofs, src);
-      pfile_cmd_label_add(pf, done_lbl);
-      label_release(done_lbl);
-      label_release(ok_lbl);
-      value_release(cap);
-    } else {
-      jal_string_heap_index_set(pf, ofs, src);
-    }
+
+    jal_string_branch_if_value_cmp(pf, OPERATOR_LT, idx, len,
+        CMD_BRANCHCOND_TRUE, fast_lbl);
+    jal_string_branch_if_value_cmp(pf, OPERATOR_EQ, idx, len,
+        CMD_BRANCHCOND_TRUE, append_lbl);
+    /* past the end (but not at it): refused, the text is unchanged */
+    jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+        _STRING_ERROR_RANGE);
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        done_lbl, VALUE_NONE, VALUE_NONE, 0);
+
+    pfile_cmd_label_add(pf, fast_lbl);
+    jal_string_heap_index_set(pf, ofs, src);
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        done_lbl, VALUE_NONE, VALUE_NONE, 0);
     value_release(ofs);
+
+    /* append: one more byte at the end (COUNT(s) itself) */
+    pfile_cmd_label_add(pf, append_lbl);
+    need = jal_string_binary_emit(pf, OPERATOR_ADD, len, one);
+    zero = jal_string_const_get(pf, 0);
+    old_off = VALUE_NONE;
+    old_cap = VALUE_NONE;
+    jal_string_allocate_emit_ex(pf, base, need, alloc_fail_lbl, have_lbl,
+        BOOLEAN_FALSE, &old_off, &old_cap);
+    pfile_cmd_label_add(pf, have_lbl);
+    jal_string_handle_index_set(pf, base, _STRING_FIELD_LENGTH, need);
+    jal_string_copy_heap_at_emit(pf, base, old_off, len, zero);
+    jal_string_free_old_block_emit(pf, old_off, old_cap);
+    value_release(old_cap);
+    value_release(old_off);
+    value_release(zero);
+    /* the block may have moved: re-read the handle's offset */
+    off = jal_string_handle_index_get(pf, base, _STRING_FIELD_OFFSET);
+    hdr = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
+    value_release(off);
+    ofs = jal_string_binary_emit(pf, OPERATOR_ADD, hdr, idx);
+    value_release(hdr);
+    jal_string_heap_index_set(pf, ofs, src);
+    value_release(ofs);
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        done_lbl, VALUE_NONE, VALUE_NONE, 0);
+
+    pfile_cmd_label_add(pf, alloc_fail_lbl);
+    jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+        _STRING_ERROR_HEAP_FULL);
+
+    pfile_cmd_label_add(pf, done_lbl);
+    label_release(done_lbl);
+    label_release(alloc_fail_lbl);
+    label_release(have_lbl);
+    label_release(append_lbl);
+    label_release(fast_lbl);
+    value_release(one);
+    value_release(need);
+    value_release(len);
   }
   value_release(idx);
   value_release(base);
