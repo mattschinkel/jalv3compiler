@@ -30,6 +30,16 @@ var byte _ss_i
 var byte _ss_b
 
 --------------------------------------------------------------------------------
+-- a string FORMAL is a copy-in/copy-out dynamic string: a pointer to it must
+-- read the formal's handle and the CAP bound must apply there too
+procedure _ss_poke(string in out d) is
+   var pointer lp as var string
+   lp is d
+   lp[1] = "Z"
+   lp[11] = "Q"                       -- CAP 11: refused, error left for the caller
+end procedure
+
+--------------------------------------------------------------------------------
 procedure _run() is
    regression_begin_run()
 
@@ -136,6 +146,21 @@ procedure _run() is
       _check_failed = true
    end if
    regression_checkpoint()                       -- 7
+
+   -- string formal: the pointer sees the formal's handle, the CAP bound
+   -- applies inside the callee, and the payload write survives copy-back
+   _ss_s = "abc"
+   _ss_poke(_ss_s)
+   if _ss_s[1] != "Z" then
+      _check_failed = true
+   end if
+   if COUNT(_ss_s) != 3 then
+      _check_failed = true
+   end if
+   if _string_error != _STRING_ERROR_RANGE then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 8
 end procedure
 
 _run()
