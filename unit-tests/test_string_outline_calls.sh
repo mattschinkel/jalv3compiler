@@ -167,6 +167,43 @@ else
 fi
 
 # ---------------------------------------------------------------- 6
+# Dynamic-to-dynamic assignment is outlined; a pointer source stays inline.
+asg="$TMP/assign.jal"
+{
+  echo 'include 16f1825'
+  echo 'pragma target clock 32_000_000'
+  echo 'const word _string_heap_size = 100'
+  echo 'pragma string index byte'
+  echo 'include strings_dynamic'
+  echo 'var string a'
+  echo 'var string d1'
+  echo 'var string d2'
+  echo 'var string d3'
+  echo 'var string d4'
+  echo 'var pointer p as var string'
+  echo 'var word k = 0'
+  echo 'a = "abc"'
+  echo 'd1 = a'
+  echo 'd2 = a'
+  echo 'd3 = a'
+  echo 'p is a'
+  echo 'd4 = p'
+  echo 'k = COUNT(a) + COUNT(d1) + COUNT(d2) + COUNT(d3) + COUNT(d4)'
+} > "$asg"
+compile assign "$asg"
+if [ "$RC" -eq 0 ]; then
+  labels="$(grep -c '^l_string_assign$' "$ASM")"
+  calls="$(grep -c '^[[:space:]]*call[[:space:]][[:space:]]*l_string_assign$' "$ASM")"
+  if [ "$labels" -eq 1 ] && [ "$calls" -eq 3 ]; then
+    ok "one shared assign body, three calls (pointer inline)"
+  else
+    bad "one shared assign body, three calls" "(labels=$labels calls=$calls)"
+  fi
+else
+  bad "assign compiles" "(rc=$RC)"
+fi
+
+# ---------------------------------------------------------------- 7
 internal="$TMP/internal.jal"
 {
   echo 'include 16f1825'

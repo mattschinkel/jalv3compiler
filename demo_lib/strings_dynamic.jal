@@ -67,6 +67,22 @@ function string_append(string in out dst, string in src) return bit is
 end function
 
 --------------------------------------------------------------------------------
+-- Description: Copy one dynamic string into another (delegates to `=`).
+-- Parameters:
+-- - dst - destination dynamic string (in out)
+-- - src - source dynamic string
+-- Returns:
+-- - bit - TRUE
+-- Notes: Outlined -- `dst = src` with two dynamic strings is lowered to one
+--   CALL of this body.  A fixed/literal source, a pointer operand or a
+--   self assignment keeps the inline path.
+--------------------------------------------------------------------------------
+function string_assign(string in out dst, string in src) return bit is
+   dst = src
+   return TRUE
+end function
+
+--------------------------------------------------------------------------------
 -- Description: Concatenate two dynamic strings into dst (delegates to `&`).
 -- Parameters:
 -- - dst - destination dynamic string (in out)

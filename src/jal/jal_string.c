@@ -3632,6 +3632,108 @@ static boolean_t jal_string_concat_outline_emit(pfile_t *pf, value_t dst,
 }
 
 
+
+/*
+ * NAME
+ *   jal_string_assign_outline_emit
+ *
+ * DESCRIPTION
+ *   Lower a dynamic `dst = src` (both plain heap strings) to one CALL of the
+ *   outlined `string_assign` forwarder, so the assign path is emitted once
+ *   instead of at every site.
+ *
+ * PARAMETERS
+ *   pf  : pfile handle
+ *   dst : destination (already parsed)
+ *   src : source value
+ *
+ * RETURN
+ *   TRUE when the call was emitted; FALSE when the site must stay inline
+ *   (fixed/literal source, pointer destination or source, self assignment,
+ *   no forwarder, forwarder body itself).
+ */
+static boolean_t jal_string_assign_outline_emit(pfile_t *pf, value_t dst,
+    value_t src)
+{
+  pfile_proc_t          *proc;
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        rdef;
+  variable_def_t        ddef;
+  size_t                param_ct;
+  value_t              *parms;
+  value_t               call_val;
+  value_t               result;
+
+  if (!dst || !src) {
+    return BOOLEAN_FALSE;
+  }
+  if (jal_string_forwarder_body_p(pf, "string_assign")) {
+    return BOOLEAN_FALSE;
+  }
+  if (!jal_string_is_dynamic(dst) || jal_string_pointer_is(dst)
+      || !jal_string_is_dynamic(src) || jal_string_pointer_is(src)
+      || jal_string_same_dynamic_storage(dst, src)) {
+    return BOOLEAN_FALSE;
+  }
+  proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_assign");
+  if (!proc) {
+    proc = jal_string_proc_find_deep(pf->proc_root, "string_assign");
+  }
+  if (!proc) {
+    return BOOLEAN_FALSE;
+  }
+  def = pfile_proc_def_get(proc);
+  param_ct = 0;
+  for (mbr = variable_def_member_get(def); mbr;
+       mbr = variable_def_member_link_get(mbr)) {
+    param_ct++;
+  }
+  if (3U != param_ct) {
+    return BOOLEAN_FALSE;
+  }
+  mbr = variable_def_member_get(def);
+  rdef = variable_def_member_def_get(mbr);
+  mbr = mbr ? variable_def_member_link_get(mbr) : 0;
+  ddef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  if (!rdef || !variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_OUT)
+      || !ddef
+      || !variable_def_flag_test(ddef,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    return BOOLEAN_FALSE;
+  }
+  parms = CALLOC(3U, sizeof(*parms));
+  if (!parms) {
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  result = pfile_value_temp_get_from_def(pf, rdef);
+  if (!result) {
+    FREE(parms);
+    return BOOLEAN_FALSE;
+  }
+  parms[0] = result;
+  value_lock(dst);
+  parms[1] = dst;
+  value_lock(src);
+  parms[2] = src;
+
+  /* the sizing note belongs to the call site: the body only sees formals */
+  jal_string_heap_use_copy_note(pf, dst, src);
+
+  call_val = jal_string_jal_proc_call_value_get(pf, "string_assign");
+  if (!call_val) {
+    value_release(src);
+    value_release(dst);
+    value_release(result);
+    FREE(parms);
+    return BOOLEAN_FALSE;
+  }
+  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_CALL, CMD_BRANCHCOND_NONE,
+      LABEL_NONE, VALUE_NONE, call_val, parms);
+  return BOOLEAN_TRUE;
+}
+
 /* unnamed byte-array scratch variable (`_string_numN`) */
 static boolean_t jal_string_num_scratch_emit(pfile_t *pf, const char *name,
     variable_ct_t ct, value_t *val)
@@ -4645,7 +4747,7 @@ boolean_t jal_string_assignment_parse_emit(pfile_t *pf, value_t dst)
       if (!jal_string_concat_outline_emit(pf, dst, items, lens, item_ct)) {
         jal_string_concat_emit(pf, dst, items, lens, item_ct);
       }
-    } else {
+    } else if (!jal_string_assign_outline_emit(pf, dst, items[0])) {
       jal_string_assignment_emit(pf, dst, items[0]);
     }
   }
@@ -4695,11 +4797,17 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
     len = jal_string_length_value_get(pf, src);
     /* Option A heap-sizing diagnostic: a copy of a string whose static
      * max is known propagates the bound to dst; an unknown-length
-     * source skips the report (agreed semantics) */
-    jal_string_heap_use_copy_note(pf, dst, src);
+     * source skips the report (agreed semantics).  The shared body's
+     * operands are formals, so it skips the note -- the call site
+     * records it. */
+    if (!jal_string_forwarder_body_p(pf, "string_assign")) {
+      jal_string_heap_use_copy_note(pf, dst, src);
+    }
   } else {
     len = jal_string_index_const_get(pf, value_ct_get(src));
-    jal_string_heap_use_note(dst, len);
+    if (!jal_string_forwarder_body_p(pf, "string_assign")) {
+      jal_string_heap_use_note(dst, len);
+    }
   }
 
   /* ROM (A): the outlined literal assign must be offered AFTER the heap-use

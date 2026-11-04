@@ -1,0 +1,80 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - dynamic-string assign (outlined body)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `dst = src` with two DYNAMIC strings is lowered to one CALL of the
+--    outlined `string_assign` forwarder (one shared body in flash).  Checks:
+--      * outlined assign copies the text (and COUNT)
+--      * a second call site (fresh destination) does the same
+--      * re-assigning the source leaves the copy untouched (deep copy)
+--      * `dst = <pointer to string>` keeps the inline path
+--      * `s = s` (self assignment) is a no-op
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 4
+-- expect byte v__asg_one 1
+-- expect byte v__asg_two 1
+-- expect byte v__asg_deep 1
+-- expect byte v__asg_ptr 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var volatile byte _asg_one = 0
+var volatile byte _asg_two = 0
+var volatile byte _asg_deep = 0
+var volatile byte _asg_ptr = 0
+
+var string _asg_a
+var string _asg_b
+var string _asg_c
+var string _asg_d
+var string _asg_e
+var pointer _asg_p as var string
+
+procedure _asg_run() is
+   regression_begin_run()
+
+   _asg_a = "abc"
+   _asg_b = _asg_a
+   if (_asg_b == "abc") & (COUNT(_asg_b) == 3) then
+      _asg_one = 1
+   end if
+   regression_checkpoint()
+
+   _asg_c = _asg_a
+   if (_asg_c == "abc") & (COUNT(_asg_c) == 3) then
+      _asg_two = 1
+   end if
+   regression_checkpoint()
+
+   _asg_a = "xyz"
+   if (_asg_b == "abc") & (_asg_c == "abc") & (_asg_a == "xyz") then
+      _asg_deep = 1
+   end if
+   regression_checkpoint()
+
+   _asg_p is _asg_a
+   _asg_d = _asg_p
+   _asg_e = _asg_e
+   if (_asg_d == "xyz") & (COUNT(_asg_e) == 0) then
+      _asg_ptr = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_asg_run()
+forever loop end loop
