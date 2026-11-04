@@ -3734,6 +3734,131 @@ static boolean_t jal_string_assign_outline_emit(pfile_t *pf, value_t dst,
   return BOOLEAN_TRUE;
 }
 
+
+/*
+ * NAME
+ *   jal_string_store_outline_emit
+ *
+ * DESCRIPTION
+ *   Lower a heap-string character store `dst[i] = ch` (plain string target,
+ *   byte value) to one CALL of the outlined `string_put` forwarder, so the
+ *   store/append path is emitted once instead of at every site.
+ *
+ * PARAMETERS
+ *   pf  : pfile handle
+ *   dst : the subscript lvalue (`s[i]`)
+ *   src : the character value
+ *
+ * RETURN
+ *   TRUE when the call was emitted; FALSE when the site must stay inline
+ *   (not a heap-string subscript, non-byte value, pointer target, no
+ *   forwarder, forwarder body itself).
+ */
+boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
+{
+  pfile_proc_t          *proc;
+  variable_def_t        def;
+  variable_def_t        rdef;
+  variable_def_t        ddef;
+  variable_def_member_t mbr;
+  size_t                param_ct;
+  value_t              *parms;
+  value_t               call_val;
+  value_t               result;
+  value_t               base;
+  value_t               idx;
+
+  if (!dst || !src || !jal_string_subscript_value_is(dst)) {
+    return BOOLEAN_FALSE;
+  }
+  if (value_is_bit(src) || (value_is_string(src) && !value_is_const(src))
+      || (1 != value_byte_sz_get(src))) {
+    return BOOLEAN_FALSE;
+  }
+  if (jal_string_forwarder_body_p(pf, "string_put")) {
+    return BOOLEAN_FALSE;
+  }
+  if (!jal_string_subscript_split(pf, dst, &base, &idx)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!jal_string_is_dynamic(base) || jal_string_pointer_is(base)) {
+    value_release(idx);
+    value_release(base);
+    return BOOLEAN_FALSE;
+  }
+  proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_put");
+  if (!proc) {
+    proc = jal_string_proc_find_deep(pf->proc_root, "string_put");
+  }
+  if (!proc) {
+    value_release(idx);
+    value_release(base);
+    return BOOLEAN_FALSE;
+  }
+  def = pfile_proc_def_get(proc);
+  param_ct = 0;
+  for (mbr = variable_def_member_get(def); mbr;
+       mbr = variable_def_member_link_get(mbr)) {
+    param_ct++;
+  }
+  if (4U != param_ct) {
+    value_release(idx);
+    value_release(base);
+    return BOOLEAN_FALSE;
+  }
+  mbr = variable_def_member_get(def);
+  rdef = variable_def_member_def_get(mbr);
+  mbr = mbr ? variable_def_member_link_get(mbr) : 0;
+  ddef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  if (!rdef || !variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_OUT)
+      || !ddef
+      || !variable_def_flag_test(ddef,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    value_release(idx);
+    value_release(base);
+    return BOOLEAN_FALSE;
+  }
+  parms = CALLOC(4U, sizeof(*parms));
+  if (!parms) {
+    pfile_log_syserr(pf, ENOMEM);
+    value_release(idx);
+    value_release(base);
+    return BOOLEAN_FALSE;
+  }
+  result = pfile_value_temp_get_from_def(pf, rdef);
+  if (!result) {
+    FREE(parms);
+    value_release(idx);
+    value_release(base);
+    return BOOLEAN_FALSE;
+  }
+  parms[0] = result;
+  value_lock(base);
+  parms[1] = base;
+  value_lock(idx);
+  parms[2] = idx;
+  value_lock(src);
+  parms[3] = src;
+
+  call_val = jal_string_jal_proc_call_value_get(pf, "string_put");
+  if (!call_val) {
+    /* release both the call's locks and the split's own references */
+    value_release(src);
+    value_release(idx);
+    value_release(idx);
+    value_release(base);
+    value_release(base);
+    value_release(result);
+    FREE(parms);
+    return BOOLEAN_FALSE;
+  }
+  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_CALL, CMD_BRANCHCOND_NONE,
+      LABEL_NONE, VALUE_NONE, call_val, parms);
+  value_release(idx);
+  value_release(base);
+  return BOOLEAN_TRUE;
+}
+
 /* unnamed byte-array scratch variable (`_string_numN`) */
 static boolean_t jal_string_num_scratch_emit(pfile_t *pf, const char *name,
     variable_ct_t ct, value_t *val)

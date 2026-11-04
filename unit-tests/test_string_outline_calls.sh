@@ -204,6 +204,47 @@ else
 fi
 
 # ---------------------------------------------------------------- 7
+# Plain-string character stores are outlined; a pointer target stays inline.
+put="$TMP/store.jal"
+{
+  echo 'include 16f1825'
+  echo 'pragma target clock 32_000_000'
+  echo 'const word _string_heap_size = 100'
+  echo 'pragma string index byte'
+  echo 'include strings_dynamic'
+  echo 'var string a'
+  echo 'var string d1'
+  echo 'var string d2'
+  echo 'var string d3'
+  echo 'var string d4'
+  echo 'var pointer p as var string'
+  echo 'var word k = 0'
+  echo 'a = "abcdef"'
+  echo 'd1 = "abcdef"'
+  echo 'd2 = "abcdef"'
+  echo 'd3 = "abcdef"'
+  echo 'd4 = "abcdef"'
+  echo 'd1[0] = "z"'
+  echo 'd2[0] = "z"'
+  echo 'd3[0] = "z"'
+  echo 'p is d4'
+  echo 'p[0] = "q"'
+  echo 'k = COUNT(a) + COUNT(d1) + COUNT(d2) + COUNT(d3) + COUNT(d4)'
+} > "$put"
+compile store "$put"
+if [ "$RC" -eq 0 ]; then
+  labels="$(grep -c '^l_string_put$' "$ASM")"
+  calls="$(grep -c '^[[:space:]]*call[[:space:]][[:space:]]*l_string_put$' "$ASM")"
+  if [ "$labels" -eq 1 ] && [ "$calls" -eq 3 ]; then
+    ok "one shared store body, three calls (pointer inline)"
+  else
+    bad "one shared store body, three calls" "(labels=$labels calls=$calls)"
+  fi
+else
+  bad "store compiles" "(rc=$RC)"
+fi
+
+# ---------------------------------------------------------------- 8
 internal="$TMP/internal.jal"
 {
   echo 'include 16f1825'

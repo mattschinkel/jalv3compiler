@@ -859,7 +859,8 @@ static void jal_assign_rhs_refusals(jal_assign_ctx_t *ctx)
   operator_t assign_op = ctx->assign_op;
 
   if ((assign_op == OPERATOR_ASSIGN)
-      && jal_string_subscript_write_emit(pf, val, expr)) {
+      && (jal_string_store_outline_emit(pf, val, expr)
+        || jal_string_subscript_write_emit(pf, val, expr))) {
     value_release(expr);
     expr = VALUE_NONE;
     value_release(val);

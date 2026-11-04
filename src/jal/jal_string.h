@@ -40,6 +40,8 @@ boolean_t jal_string_is_fixed(value_t val);
 /* heap-string subscripts: str[i] reads/writes the i-th CHARACTER */
 boolean_t jal_string_subscript_value_is(value_t val);
 value_t   jal_string_subscript_read_emit(pfile_t *pf, value_t elem);
+boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst,
+    value_t src);
 boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     value_t src);
 /* heap string, directly (`var string s`) or through a data pointer

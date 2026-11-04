@@ -1,0 +1,66 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - heap-string character store (outlined body)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `s[i] = c` on a plain heap string is lowered to one CALL of the outlined
+--    `string_put` forwarder (one shared body in flash).  Checks in-place
+--    stores, the COUNT(s) end-append rule and a store through a string
+--    pointer (which keeps the inline path).
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__put_inplace 1
+-- expect byte v__put_append 1
+-- expect byte v__put_ptr 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var volatile byte _put_inplace = 0
+var volatile byte _put_append = 0
+var volatile byte _put_ptr = 0
+
+var string _put_s
+var pointer _put_p as var string
+
+procedure _put_run() is
+   regression_begin_run()
+
+   _put_s = "abcdef"
+   _put_s[0] = "z"
+   _put_s[5] = "Z"
+   if (_put_s == "zbcdeZ") & (COUNT(_put_s) == 6) then
+      _put_inplace = 1
+   end if
+   regression_checkpoint()
+
+   _put_s[COUNT(_put_s)] = "!"
+   _put_s[COUNT(_put_s)] = "?"
+   if (_put_s == "zbcdeZ!?") & (COUNT(_put_s) == 8) then
+      _put_append = 1
+   end if
+   regression_checkpoint()
+
+   _put_p is _put_s
+   _put_p[1] = "Y"
+   if (_put_s == "zYcdeZ!?") & (COUNT(_put_s) == 8) then
+      _put_ptr = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_put_run()
+forever loop end loop

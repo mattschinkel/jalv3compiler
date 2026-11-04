@@ -67,6 +67,23 @@ function string_append(string in out dst, string in src) return bit is
 end function
 
 --------------------------------------------------------------------------------
+-- Description: Store one character at an index (delegates to `s[i] = ch`).
+-- Parameters:
+-- - dst - destination dynamic string (in out)
+-- - idx - element index (0-based; `idx == COUNT(dst)` appends one character)
+-- - ch  - character value
+-- Returns:
+-- - bit - TRUE
+-- Notes: Outlined -- a plain-string `dst[idx] = ch` is lowered to one CALL of
+--   this body (the COUNT-growth/append path is emitted once).  A pointer
+--   target keeps the inline path.
+--------------------------------------------------------------------------------
+function string_put(string in out dst, word in idx, byte in ch) return bit is
+   dst[idx] = ch
+   return TRUE
+end function
+
+--------------------------------------------------------------------------------
 -- Description: Copy one dynamic string into another (delegates to `=`).
 -- Parameters:
 -- - dst - destination dynamic string (in out)
