@@ -186,6 +186,21 @@ include 16f877
 const word _string_heap_size = -64
 var string s' "_string_heap_size must not be negative"
 
+# --- to_array destination writability ---------------------------------
+# The outlined forwarder writes through an `in` byte-array formal, so the
+# call machinery would bind actuals an `out` formal refuses.  A const/ROM
+# destination must keep its diagnostic: the outline falls back to the
+# inline path, which reports `assign to constant`.
+check to_array_const_dst '
+include 16f877
+const word _string_heap_size = 64
+include strings_dynamic
+const byte rom[4] = {1, 2, 3, 4}
+var string s
+var bit r
+s = "ab"
+r = string_to_array(rom, s)' "assign to constant"
+
 # --- legal controls: the gates above must not over-reject ---------------
 check_ok ok_dynamic_literal "$HEAP
 s = \"x\"
@@ -213,6 +228,15 @@ var byte i = 1
 var byte a[4] = \"abcd\"
 var byte b
 b = a[i]"
+check_ok ok_to_array_writable '
+include 16f877
+const word _string_heap_size = 64
+include strings_dynamic
+var string s
+var byte b[4]
+var bit r
+s = "ab"
+r = string_to_array(b, s)'
 check_ok ok_byte_case "$HEAP
 var byte i = 1
 case i of

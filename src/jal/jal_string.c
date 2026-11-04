@@ -6395,6 +6395,8 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
   boolean_t             is_truncate;
   boolean_t             is_from_array;
   boolean_t             is_from_array_truncate;
+  boolean_t             is_to_array;
+  boolean_t             is_to_array_truncate;
 
   result = VALUE_NONE;
   len = VALUE_NONE;
@@ -6407,12 +6409,30 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
   is_truncate = (0 == strcmp(name, "string_truncate"));
   is_from_array = (0 == strcmp(name, "string_from_array"));
   is_from_array_truncate = (0 == strcmp(name, "string_from_array_truncate"));
+  is_to_array = (0 == strcmp(name, "string_to_array"));
+  is_to_array_truncate = (0 == strcmp(name, "string_to_array_truncate"));
   if (!is_append && !is_append_truncate && !is_truncate
-      && !is_from_array && !is_from_array_truncate) {
-    /* `string_to_array*` takes `byte out dst_array[]`, which the call
-     * machinery cannot bind to a fixed array; `string_heap_compact`
-     * outlines through its own path above. */
+      && !is_from_array && !is_from_array_truncate
+      && !is_to_array && !is_to_array_truncate) {
+    /* `string_heap_compact` outlines through its own path above. */
     return VALUE_NONE;
+  }
+  if (is_to_array || is_to_array_truncate) {
+    /* the wrapper writes through an `in` byte-array formal; a literal or
+     * fixed string source would be marshalled through a chain cell, which
+     * the inline builtin never needed */
+    if (!jal_string_is_dynamic(src) || jal_string_pointer_is(src)) {
+      return VALUE_NONE;
+    }
+    /* the `in` direction lets the call machinery bind actuals an `out`
+     * formal would refuse (a const/ROM array).  Never outline those:
+     * falling back to the inline path keeps its `assign to constant`
+     * diagnostic (the call itself would silently store to ROM). */
+    if (value_is_const(dst) || value_is_lookup(dst)
+        || (value_vflag_test(dst, VARIABLE_FLAG_READ)
+            && !value_vflag_test(dst, VARIABLE_FLAG_WRITE))) {
+      return VALUE_NONE;
+    }
   }
   if (is_append || is_append_truncate) {
     /* A fixed/literal source would be marshalled through a heap cell at the
@@ -6444,8 +6464,12 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
     want_ct = 3U;          /* return, dst, max_len           */
   } else if (is_from_array) {
     want_ct = 4U;          /* return, dst, count, array      */
-  } else {
+  } else if (is_from_array_truncate) {
     want_ct = 5U;          /* return, dst, count, array, max */
+  } else if (is_to_array) {
+    want_ct = 4U;          /* return, count, array, src      */
+  } else {
+    want_ct = 5U;          /* return, count, array, src, max */
   }
   if (param_ct != want_ct) {
     return VALUE_NONE;
@@ -6456,8 +6480,31 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
   ddef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
   mbr = mbr ? variable_def_member_link_get(mbr) : 0;
   sdef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
-  if (!rdef || !variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_OUT)
-      || !ddef
+  if (!rdef || !variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_OUT)) {
+    return VALUE_NONE;
+  }
+  if (is_to_array || is_to_array_truncate) {
+    /* member 1 is the hidden array count, member 2 the array pointer and
+     * member 3 the source string */
+    variable_def_t adef;
+    variable_def_t sdef2;
+
+    if (!ddef
+        || (VARIABLE_DEF_TYPE_INTEGER != variable_def_type_get(ddef))) {
+      return VALUE_NONE;
+    }
+    /* mbr is member 2 (the array pointer); the source is member 3 */
+    adef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+    mbr = mbr ? variable_def_member_link_get(mbr) : 0;
+    sdef2 = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+    if (!adef
+        || (VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(adef))
+        || !sdef2
+        || !variable_def_flag_test(sdef2,
+             VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+      return VALUE_NONE;
+    }
+  } else if (!ddef
       || !variable_def_flag_test(ddef,
            VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
     return VALUE_NONE;
@@ -6476,9 +6523,27 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
     return VALUE_NONE;
   }
   parms[0] = result;
-  value_lock(dst);
-  parms[1] = dst;
-  if (is_append || is_append_truncate) {
+  if (is_to_array || is_to_array_truncate) {
+    /* dst is the byte array: its element count is the formal's hidden
+     * count slot, then the array pointer, then the source string */
+    len = jal_string_byte_array_byte_length_get(pf, dst);
+    if (!len) {
+      value_release(result);
+      FREE(parms);
+      return VALUE_NONE;
+    }
+    parms[1] = len;
+    value_lock(dst);
+    parms[2] = dst;
+    value_lock(src);
+    parms[3] = src;
+    if (is_to_array_truncate) {
+      value_lock(max);
+      parms[4] = max;
+    }
+  } else if (is_append || is_append_truncate) {
+    value_lock(dst);
+    parms[1] = dst;
     value_lock(src);
     parms[2] = src;
     if (is_append_truncate) {
@@ -6486,9 +6551,13 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
       parms[3] = max;
     }
   } else if (is_truncate) {
+    value_lock(dst);
+    parms[1] = dst;
     value_lock(max);
     parms[2] = max;
   } else {
+    value_lock(dst);
+    parms[1] = dst;
     len = jal_string_byte_array_byte_length_get(pf, src);
     if (!len) {
       value_release(dst);
@@ -6689,7 +6758,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
    * the inline path when the forwarder is missing or an actual cannot be
    * handed over unchanged (see jal_string_forwarder_call_emit).
    */
-  if (!is_to_array && !is_to_array_truncate) {
+  {
     value_t outlined;
 
     outlined = jal_string_forwarder_call_emit(pf, name_buf, dst, src, max);

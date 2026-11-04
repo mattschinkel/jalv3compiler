@@ -1,0 +1,66 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - string -> byte array (outlined body)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `string_to_array(dst, src)` on a dynamic string is lowered to one CALL of
+--    the outlined `string_to_array` forwarder (one shared body in flash; the
+--    wrapper writes through an `in` byte-array formal).  Checks the full copy,
+--    the truncating variant (returns FALSE, prefix written) and an oversized
+--    source into a small array (prefix + FALSE).
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__toa_full 1
+-- expect byte v__toa_trunc 1
+-- expect byte v__toa_smallok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var volatile byte _toa_full = 0
+var volatile byte _toa_trunc = 0
+var volatile byte _toa_smallok = 0
+
+var string _toa_s
+var byte _toa_buf[8]
+var byte _toa_small[4]
+var bit _toa_ok
+
+procedure _toa_run() is
+   regression_begin_run()
+
+   _toa_s = "abcdef"
+   _toa_ok = string_to_array(_toa_buf, _toa_s)
+   if _toa_ok & (_toa_buf[0] == "a") & (_toa_buf[5] == "f") & (COUNT(_toa_s) == 6) then
+      _toa_full = 1
+   end if
+   regression_checkpoint()
+
+   _toa_ok = string_to_array_truncate(_toa_buf, _toa_s, 3)
+   if (_toa_ok == FALSE) & (_toa_buf[0] == "a") & (_toa_buf[2] == "c") then
+      _toa_trunc = 1
+   end if
+   regression_checkpoint()
+
+   _toa_ok = string_to_array(_toa_small, _toa_s)
+   if (_toa_ok == FALSE) & (_toa_small[0] == "a") & (_toa_small[3] == "d") then
+      _toa_smallok = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_toa_run()
+forever loop end loop

@@ -245,6 +245,41 @@ else
 fi
 
 # ---------------------------------------------------------------- 8
+# string_to_array outlines too (the wrapper writes through an `in` formal;
+# a fixed array actual binds to it).
+toa="$TMP/toarray.jal"
+{
+  echo 'include 16f1825'
+  echo 'pragma target clock 32_000_000'
+  echo 'const word _string_heap_size = 100'
+  echo 'pragma string index byte'
+  echo 'include strings_dynamic'
+  echo 'var string a'
+  echo 'var byte b1[8]'
+  echo 'var byte b2[8]'
+  echo 'var byte b3[8]'
+  echo 'var bit r'
+  echo 'var word k = 0'
+  echo 'a = "abcdef"'
+  echo 'r = string_to_array(b1, a)'
+  echo 'r = string_to_array(b2, a)'
+  echo 'r = string_to_array(b3, a)'
+  echo 'k = COUNT(a) + b1[0] + b2[0] + b3[0]'
+} > "$toa"
+compile toarray "$toa"
+if [ "$RC" -eq 0 ]; then
+  labels="$(grep -c '^l_string_to_array$' "$ASM")"
+  calls="$(grep -c '^[[:space:]]*call[[:space:]][[:space:]]*l_string_to_array$' "$ASM")"
+  if [ "$labels" -eq 1 ] && [ "$calls" -eq 3 ]; then
+    ok "one shared to_array body, three calls"
+  else
+    bad "one shared to_array body, three calls" "(labels=$labels calls=$calls)"
+  fi
+else
+  bad "to_array compiles" "(rc=$RC)"
+fi
+
+# ---------------------------------------------------------------- 9
 internal="$TMP/internal.jal"
 {
   echo 'include 16f1825'

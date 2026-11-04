@@ -38,8 +38,8 @@
 -- function string_truncate(string in out dst, word in max_len) return bit
 -- function string_from_array(string in out dst, byte in src_array[]) return bit
 -- function string_from_array_truncate(string in out dst, byte in src_array[], word in max_len) return bit
--- function string_to_array(byte out dst_array[], string in src) return bit
--- function string_to_array_truncate(byte out dst_array[], string in src, word in max_len) return bit
+-- function string_to_array(byte in dst_array[], string in src) return bit
+-- function string_to_array_truncate(byte in dst_array[], string in src, word in max_len) return bit
 -- function string_heap_compact() return bit
 --
 -- Truncating helpers return FALSE when bytes are dropped. They do not set
@@ -179,7 +179,7 @@ end function
 -- - bit - result from _string_to_array
 -- Notes: Outlined — single ROM body.
 --------------------------------------------------------------------------------
-function string_to_array(byte out dst_array[], string in src) return bit is
+function string_to_array(byte in dst_array[], string in src) return bit is
    return _string_to_array(dst_array, src)
 end function
 
@@ -193,7 +193,7 @@ end function
 -- - bit - result from _string_to_array_truncate
 -- Notes: Outlined; returns FALSE if truncated.
 --------------------------------------------------------------------------------
-function string_to_array_truncate(byte out dst_array[], string in src, word in max_len) return bit is
+function string_to_array_truncate(byte in dst_array[], string in src, word in max_len) return bit is
    return _string_to_array_truncate(dst_array, src, max_len)
 end function
 
