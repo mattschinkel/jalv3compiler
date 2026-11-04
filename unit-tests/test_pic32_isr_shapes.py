@@ -72,7 +72,8 @@ ARM_MZ_IM_CLEAR_MM = "5129 00f9"
 
 
 def build_body(device: str, clock: str, interrupt: str,
-               micromips: bool = False, image_pfm: bool = True) -> str:
+               micromips: bool = False, image_pfm: bool = True,
+               mvec_table: bool = False) -> str:
     lines = [f"include {device}",
              f"pragma target clock {clock}",
              "pragma target OSC FRC_SPLL"]
@@ -80,6 +81,10 @@ def build_body(device: str, clock: str, interrupt: str,
         lines.append("pragma target image pfm")
     if micromips:
         lines.append("pragma isa micromips")
+    if mvec_table:
+        # MVEC with a table but the handler on the DEFAULT (vec0) slot:
+        # exercises the _mips_mvec_default stub, a separate emission path
+        lines.append("pragma interrupt mvec")
     lines += [
         "var volatile byte ra = 0",
         "procedure _probe_isr() is",
@@ -162,6 +167,15 @@ def main(argv: list[str] | None = None) -> int:
          build_body("32mz1024efh064", "200_000_000", "raw",
                     image_pfm=False),
          False, [], [], ["boot-flash", "pragma target image pfm"]),
+        # MVEC with a table and the handler on the default (vec0) slot --
+        # a separate stub-emission path that must carry the same clears
+        ("mz_mvec_default",
+         build_body("32mz1024efh064", "200_000_000", "0",
+                    mvec_table=True),
+         True, [ARM_CAUSE_IV, STUB_CAUSE_IV, ARM_MZ_IM_CLEAR], [], []),
+        ("mx_mvec_default",
+         build_body("32mx270f256b", "40_000_000", "0", mvec_table=True),
+         True, [ARM_CAUSE_IV, STUB_CAUSE_IV], [ARM_MZ_IM_CLEAR], []),
         # ... while a boot-flash program with NO interrupt still builds
         ("mz_no_isr_bootflash",
          "include 32mz1024efh064\n"
