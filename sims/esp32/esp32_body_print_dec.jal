@@ -1,0 +1,107 @@
+-- @sim_validate begin
+-- machine: esp32
+-- duration_s: 8.0
+-- icount: 6
+-- uart_contains: b0=0 b9=9 b255=255 w65535=65535 w32768=32768 d0=0 d999999999=999999999 d1e9=1000000000 d1234567890=1234567890 d7fffffff=2147483647 d80000000=2147483648 d8003e180=2147737984 dFFFFFFFF=4294967295 sdn1=-1 sdn123456=-123456 sdnmax=-2147483647 swn12345=-12345 sbn1=-1
+-- expect byte v_ok 1
+-- @sim_validate end
+include regression_esp32_device
+include regression_esp32
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+esp32_clock_init()
+include esp32_serial_hw
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+include print
+var volatile byte ok = 0
+var byte bv = 0
+var word wv = 0
+var dword dv = 0
+var sbyte sbv = 0
+var sword swv = 0
+var sdword sdv = 0
+
+-- One line with every case, so a single uart_contains pins the exact
+-- digits across all four widths (the expected text is generated from
+-- the same values, not typed by hand).
+bv = 0
+print_string(serial_data, "b0=")
+print_byte_dec(serial_data, bv)
+print_string(serial_data, " ")
+bv = 9
+print_string(serial_data, "b9=")
+print_byte_dec(serial_data, bv)
+print_string(serial_data, " ")
+bv = 255
+print_string(serial_data, "b255=")
+print_byte_dec(serial_data, bv)
+print_string(serial_data, " ")
+wv = 0xFFFF
+print_string(serial_data, "w65535=")
+print_word_dec(serial_data, wv)
+print_string(serial_data, " ")
+wv = 0x8000
+print_string(serial_data, "w32768=")
+print_word_dec(serial_data, wv)
+print_string(serial_data, " ")
+dv = 0
+print_string(serial_data, "d0=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 999999999
+print_string(serial_data, "d999999999=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 1000000000
+print_string(serial_data, "d1e9=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 1234567890
+print_string(serial_data, "d1234567890=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 0x7FFFFFFF
+print_string(serial_data, "d7fffffff=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 0x80000000
+print_string(serial_data, "d80000000=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 0x8003E180
+print_string(serial_data, "d8003e180=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+dv = 0xFFFFFFFF
+print_string(serial_data, "dFFFFFFFF=")
+print_dword_dec(serial_data, dv)
+print_string(serial_data, " ")
+sdv = -1
+print_string(serial_data, "sdn1=")
+print_sdword_dec(serial_data, sdv)
+print_string(serial_data, " ")
+sdv = -123456
+print_string(serial_data, "sdn123456=")
+print_sdword_dec(serial_data, sdv)
+print_string(serial_data, " ")
+sdv = -2147483647
+print_string(serial_data, "sdnmax=")
+print_sdword_dec(serial_data, sdv)
+print_string(serial_data, " ")
+swv = -12345
+print_string(serial_data, "swn12345=")
+print_sword_dec(serial_data, swv)
+print_string(serial_data, " ")
+sbv = -1
+print_string(serial_data, "sbn1=")
+print_sbyte_dec(serial_data, sbv)
+print_string(serial_data, " ")
+print_crlf(serial_data)
+ok = 1
+print_string(serial_data, "DEC-OK")
+print_crlf(serial_data)
+forever loop
+end loop
