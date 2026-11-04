@@ -50,3 +50,13 @@ echo "" >> $DST
 echo "#ifndef JALV2_STRING_HEAP_COMPACT_CALL" >> $DST
 echo "#define JALV2_STRING_HEAP_COMPACT_CALL 1" >> $DST
 echo "#endif" >> $DST
+# Optional: public `string_append` / `string_truncate` / `string_from_array` … →
+# machine CALL to the outlined strings_dynamic forwarder (one shared body in
+# ROM instead of the full builtin expansion at every call site).  Falls back to
+# the inline builtin when the wrapper is absent or a fixed/literal source would
+# have to be marshalled through a heap cell.
+# Opt-out: EXTRA_CFLAGS=-DJALV2_STRING_OUTLINE_CALLS=0
+echo "" >> $DST
+echo "#ifndef JALV2_STRING_OUTLINE_CALLS" >> $DST
+echo "#define JALV2_STRING_OUTLINE_CALLS 1" >> $DST
+echo "#endif" >> $DST

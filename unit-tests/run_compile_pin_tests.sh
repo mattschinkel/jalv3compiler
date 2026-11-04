@@ -94,6 +94,10 @@ echo "compile-pin gate: compiler=$CC"
 
 # String / parser diagnostics
 run_sh string_error_paths          unit-tests/test_string_error_paths.sh "$CC"
+# Public `string_*` helper calls are outlined through the strings_dynamic
+# forwarder (one shared body, ~21 words/site) instead of expanding the whole
+# builtin body (~740 words/site). fixes/fix_string_outline_calls.md.
+run_sh string_outline_calls         unit-tests/test_string_outline_calls.sh "$CC"
 run_sh pic12_strings               unit-tests/test_pic12_strings.sh "$CC"
 run_sh string_heap_sizing          unit-tests/test_string_heap_sizing.sh "$CC"
 run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$CC"

@@ -1,0 +1,44 @@
+-- ------------------------------------------------------
+-- Title: dynamic-string helper calls are outlined (ROM size pin)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Twelve `string_append` call sites on a 16F1825.  Expanded inline the
+--    builtin body is ~740 words per site, so this image cannot fit 8192
+--    words (pre-fix: "PIC image too big!").  Outlined through the
+--    strings_dynamic forwarder it is one shared body plus ~21 words per
+--    call and fits easily.  unit-tests/test_string_outline_calls.sh pins
+--    the structure (one `l_string_append`, twelve calls) and the marginal
+--    cost.
+--
+-- ------------------------------------------------------
+
+include 16f1825
+pragma target clock 32_000_000
+const word _string_heap_size = 100
+pragma string index byte
+include strings_dynamic
+
+var string a
+var string b
+var bit r
+
+a = "x"
+b = "y"
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+r = string_append(a, b)
+
+forever loop
+end loop

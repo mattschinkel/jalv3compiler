@@ -17,17 +17,22 @@
 --   in **`src/jal/jal_string.c`**).
 -- - **Canonical builtin token**: **`_string_*`** (one underscore before the public
 --   name). **`string_*`** here are normal JAL **`function`** entries.
--- - **`string_append`**, **`string_heap_compact`**, and the other **`string_*`**
---   wrappers are **not** **`pragma inline`**: each JAL **`call`** hits one shared
---   forwarder body that delegates to **`_string_*`** builtins (PIC18 ROM **B/C**).
---   **`string_heap_compact()`** is still parsed as a **compiler builtin** (deferred
---   pcode expand), so Phase-B compact logic is **not** a separate machine **`call`**
---   block in **`-asm`** the way a normal outlined JAL procedure is — see
--- § Broader ROM plan.
---   **`string_from_array`**, **`string_from_array_truncate`**,
---   **`string_to_array`**, and **`string_to_array_truncate`** are the same pattern;
---   the compiler accepts open-array formals for the byte-array
---   operand of these builtins.
+-- - **`string_append`**, **`string_append_truncate`**, **`string_truncate`**,
+--   **`string_from_array`**, **`string_from_array_truncate`** and
+--   **`string_heap_compact`** are outlined: a public call emits ONE machine
+--   **`call`** to the shared forwarder body (the body expands the builtin
+--   once), instead of duplicating the builtin at every call site
+--   (`jal_string_forwarder_call_emit`; opt out with
+--   `-DJALV2_STRING_OUTLINE_CALLS=0`).  The compiler decides per call site and
+--   keeps the inline builtin when the forwarder is absent, the formal list does
+--   not match, or an actual cannot be handed over unchanged (a fixed/literal
+--   append source, `s = ...` self append).
+--   **`string_to_array`** / **`string_to_array_truncate`** stay compiler-inline:
+--   their `byte out dst_array[]` formal cannot be bound to a fixed array by the
+--   call machinery.  The same applies to `string_from_array*` when ROM (A) is
+--   built in (`-DJALV2_ROM_A_STRING_LITERAL_CALL=1`), because a lowered literal
+--   assign already calls that forwarder and the PIC18 IN/OUT copy-back is not
+--   correct for the second (RAM-array) call site yet.
 --
 -- Compiler-backed helper signatures (wrappers below):
 --

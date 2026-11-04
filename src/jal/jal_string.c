@@ -2099,6 +2099,48 @@ static void jal_string_clear_emit(pfile_t *pf, value_t dst)
   value_release(old_off);
 }
 
+/*
+ * NAME
+ *   jal_string_heap_fit_check
+ *
+ * DESCRIPTION
+ *   A compile-time-constant request that cannot fit even in a FRESH heap
+ *   (header + payload > _string_heap_size) can never succeed: compaction
+ *   and retry only reclaim, they cannot grow the heap.  Diagnose it instead
+ *   of leaving it to the runtime `_string_error` path (the string stays
+ *   silently empty).  Runtime-length requests keep the runtime contract
+ *   (check `_string_error` after the assign).
+ *
+ * PARAMETERS
+ *   pf : pfile handle
+ *   n  : requested payload bytes (known at compile time)
+ *
+ * NOTES
+ *   Shared with the ROM (A) literal-call lowering, which never reaches the
+ *   allocator at the call site (the shared body sees a runtime length).
+ */
+static void jal_string_heap_fit_check(pfile_t *pf, variable_const_t n)
+{
+  value_t          heap_sz_val;
+  variable_const_t heap_sz;
+
+  heap_sz_val = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
+  if (!heap_sz_val) {
+    return;
+  }
+  heap_sz = value_const_get(heap_sz_val);
+  value_release(heap_sz_val);
+  if ((variable_const_t) jal_string_header_size_get(pf) + n > heap_sz) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "string needs %lu heap bytes (%lu header + %lu payload)"
+        " but _string_heap_size is %lu",
+        (unsigned long) (jal_string_header_size_get(pf) + n),
+        (unsigned long) jal_string_header_size_get(pf),
+        (unsigned long) n,
+        (unsigned long) heap_sz);
+  }
+}
+
 static void jal_string_allocate_emit_ex(pfile_t *pf, value_t dst, value_t len,
     label_t fail_lbl, label_t have_storage_lbl, boolean_t free_old,
     value_t *old_off_keep, value_t *old_cap_keep)
@@ -2154,32 +2196,8 @@ static void jal_string_allocate_emit_ex(pfile_t *pf, value_t dst, value_t len,
   best_fit = (0U != pf->jal_str_heap_alloc_policy);
   use_retry = (0U != pf->jal_str_heap_alloc_retry);
 
-  /* A compile-time-constant request that cannot fit even in a fresh heap
-   * (header + payload > _string_heap_size) can never succeed -- compaction
-   * and retry only reclaim, they cannot grow the heap. Diagnose it here
-   * instead of leaving it to the runtime _string_error path (the string
-   * stays silently empty). Runtime-length requests keep the runtime
-   * contract (check _string_error after the assign). */
   if (value_is_const(len)) {
-    value_t          heap_sz_val;
-    variable_const_t heap_sz;
-
-    heap_sz_val = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
-    if (heap_sz_val) {
-      heap_sz = value_const_get(heap_sz_val);
-      value_release(heap_sz_val);
-      if ((variable_const_t) jal_string_header_size_get(pf)
-          + value_const_get(len) > heap_sz) {
-        pfile_log(pf, PFILE_LOG_ERR,
-            "string needs %lu heap bytes (%lu header + %lu payload)"
-            " but _string_heap_size is %lu",
-            (unsigned long) (jal_string_header_size_get(pf)
-              + value_const_get(len)),
-            (unsigned long) jal_string_header_size_get(pf),
-            (unsigned long) value_const_get(len),
-            (unsigned long) heap_sz);
-      }
-    }
+    jal_string_heap_fit_check(pf, value_const_get(len));
   }
 
   idx_max = jal_string_index_max(jal_string_current_index_size_get(pf));
@@ -4437,11 +4455,6 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
     return BOOLEAN_TRUE;
   }
 
-  if (!jal_string_is_dynamic(src)
-      && jal_string_assignment_string_from_array_lib_call_emit(pf, dst, src)) {
-    return BOOLEAN_TRUE;
-  }
-
   if (jal_string_is_dynamic(src)) {
     len = jal_string_length_value_get(pf, src);
     /* Option A heap-sizing diagnostic: a copy of a string whose static
@@ -4451,6 +4464,15 @@ boolean_t jal_string_assignment_emit(pfile_t *pf, value_t dst, value_t src)
   } else {
     len = jal_string_index_const_get(pf, value_ct_get(src));
     jal_string_heap_use_note(dst, len);
+  }
+
+  /* ROM (A): the outlined literal assign must be offered AFTER the heap-use
+   * note above -- the early return used to skip it, silently disabling the
+   * `_string_heap_size` recommendation for every literal-aligned program. */
+  if (!jal_string_is_dynamic(src)
+      && jal_string_assignment_string_from_array_lib_call_emit(pf, dst, src)) {
+    value_release(len);
+    return BOOLEAN_TRUE;
   }
   fail_lbl = pfile_label_alloc(pf, 0);
   copy_lbl = pfile_label_alloc(pf, 0);
@@ -4778,6 +4800,11 @@ static boolean_t jal_string_assignment_string_from_array_lib_call_emit(
       < (variable_ct_t) JALV2_ROM_A_STRING_LITERAL_CALL_MIN_BYTES) {
     return BOOLEAN_FALSE;
   }
+  /* The call below never reaches the allocator HERE (the shared body sees a
+   * runtime length), so the compile-time "cannot ever fit a fresh heap"
+   * diagnostic must run at the site or the literal assign would silently
+   * become a runtime `_string_error`. */
+  jal_string_heap_fit_check(pf, value_ct_get(src));
   proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_from_array");
   if (!proc) {
     return BOOLEAN_FALSE;
@@ -5848,8 +5875,198 @@ static boolean_t jal_string_builtin_max_ok(pfile_t *pf, value_t max)
   return BOOLEAN_TRUE;
 }
 
+#if JALV2_STRING_OUTLINE_CALLS
+
+/*
+ * NAME
+ *   jal_string_forwarder_call_emit
+ *
+ * DESCRIPTION
+ *   Emit a machine CALL to the outlined `strings_dynamic` forwarder for a
+ *   public `string_*` helper instead of expanding the builtin body at this
+ *   site: one shared body in program flash plus a short call, the same
+ *   contract `string_heap_compact` already uses.
+ *
+ * PARAMETERS
+ *   pf   : pfile handle
+ *   name : token spelling; only the PUBLIC name outlines
+ *   dst  : dynamic destination (already parsed and validated)
+ *   src  : source string / byte array (VALUE_NONE for string_truncate)
+ *   max  : max_len (VALUE_NONE when the helper has no max_len)
+ *
+ * RETURN
+ *   the call result value, or VALUE_NONE when this site must keep the
+ *   inline builtin: internal `_string_*` spelling, no forwarder compiled in,
+ *   a formal list that is not the expected shape, or an actual the outlined
+ *   call cannot hand over unchanged (fixed/literal append source, self
+ *   append, byte-array length unknown).
+ *
+ * NOTES
+ *   `_string_*` must never outline: the forwarder body itself spells the
+ *   builtin that way, so outlining it would call the forwarder from inside
+ *   its own body (heap_compact had exactly this recursion bug).
+ */
+static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
+    value_t dst, value_t src, value_t max)
+{
+  pfile_proc_t          *proc;
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        rdef;
+  variable_def_t        ddef;
+  variable_def_t        sdef;
+  size_t                param_ct;
+  size_t                want_ct;
+  value_t              *parms;
+  value_t               call_val;
+  value_t               result;
+  value_t               len;
+  boolean_t             is_append;
+  boolean_t             is_append_truncate;
+  boolean_t             is_truncate;
+  boolean_t             is_from_array;
+  boolean_t             is_from_array_truncate;
+
+  result = VALUE_NONE;
+  len = VALUE_NONE;
+  parms = 0;
+  if (!name || ('_' == name[0]) || !dst) {
+    return VALUE_NONE;
+  }
+  is_append = (0 == strcmp(name, "string_append"));
+  is_append_truncate = (0 == strcmp(name, "string_append_truncate"));
+  is_truncate = (0 == strcmp(name, "string_truncate"));
+  is_from_array = (0 == strcmp(name, "string_from_array"));
+  is_from_array_truncate = (0 == strcmp(name, "string_from_array_truncate"));
+  if (!is_append && !is_append_truncate && !is_truncate
+      && !is_from_array && !is_from_array_truncate) {
+    /* `string_to_array*` takes `byte out dst_array[]`, which the call
+     * machinery cannot bind to a fixed array; `string_heap_compact`
+     * outlines through its own path above. */
+    return VALUE_NONE;
+  }
+#if JALV2_ROM_A_STRING_LITERAL_CALL
+  if (is_from_array || is_from_array_truncate) {
+    /* ROM (A) lowers a literal assign through THIS same forwarder, and the
+     * PIC18 direct-CALL IN/OUT copy-back for the second (RAM-array) call
+     * site is still wrong when a lowered literal call ran first -- the
+     * known open bug in the ROM (A) line (repro: a = "abcdef" then
+     * string_from_array(a, ram_array)).  Keep from_array inline when ROM
+     * (A) is built in; the inline path is correct. */
+    return VALUE_NONE;
+  }
+#endif
+  if (is_append || is_append_truncate) {
+    /* A fixed/literal source would be marshalled through a heap cell at the
+     * call site (extra code AND a heap block the inline path never needed);
+     * a self append relies on the inline same-storage check. */
+    if (!jal_string_is_dynamic(src) || jal_string_pointer_is(src)
+        || jal_string_same_dynamic_storage(dst, src)) {
+      return VALUE_NONE;
+    }
+  }
+  proc = pfile_proc_find(pf, PFILE_LOG_NONE, name);
+  if (!proc) {
+    proc = jal_string_proc_find_deep(pf->proc_root, name);
+  }
+  if (!proc) {
+    return VALUE_NONE;
+  }
+  def = pfile_proc_def_get(proc);
+  param_ct = 0;
+  for (mbr = variable_def_member_get(def); mbr;
+       mbr = variable_def_member_link_get(mbr)) {
+    param_ct++;
+  }
+  if (is_append) {
+    want_ct = 3U;          /* return, dst, src               */
+  } else if (is_append_truncate) {
+    want_ct = 4U;          /* return, dst, src, max_len      */
+  } else if (is_truncate) {
+    want_ct = 3U;          /* return, dst, max_len           */
+  } else if (is_from_array) {
+    want_ct = 4U;          /* return, dst, count, array      */
+  } else {
+    want_ct = 5U;          /* return, dst, count, array, max */
+  }
+  if (param_ct != want_ct) {
+    return VALUE_NONE;
+  }
+  mbr = variable_def_member_get(def);
+  rdef = variable_def_member_def_get(mbr);
+  mbr = mbr ? variable_def_member_link_get(mbr) : 0;
+  ddef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  mbr = mbr ? variable_def_member_link_get(mbr) : 0;
+  sdef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  if (!rdef || !variable_def_flag_test(rdef, VARIABLE_DEF_FLAG_OUT)
+      || !ddef
+      || !variable_def_flag_test(ddef,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    return VALUE_NONE;
+  }
+  if ((is_append || is_append_truncate) && !sdef) {
+    return VALUE_NONE;
+  }
+  parms = CALLOC(want_ct, sizeof(*parms));
+  if (!parms) {
+    pfile_log_syserr(pf, ENOMEM);
+    return VALUE_NONE;
+  }
+  result = pfile_value_temp_get_from_def(pf, rdef);
+  if (!result) {
+    FREE(parms);
+    return VALUE_NONE;
+  }
+  parms[0] = result;
+  value_lock(dst);
+  parms[1] = dst;
+  if (is_append || is_append_truncate) {
+    value_lock(src);
+    parms[2] = src;
+    if (is_append_truncate) {
+      value_lock(max);
+      parms[3] = max;
+    }
+  } else if (is_truncate) {
+    value_lock(max);
+    parms[2] = max;
+  } else {
+    len = jal_string_byte_array_byte_length_get(pf, src);
+    if (!len) {
+      value_release(dst);
+      value_release(result);
+      FREE(parms);
+      return VALUE_NONE;
+    }
+    parms[2] = len;
+    value_lock(src);
+    parms[3] = src;
+    if (is_from_array_truncate) {
+      value_lock(max);
+      parms[4] = max;
+    }
+  }
+  call_val = jal_string_jal_proc_call_value_get(pf, name);
+  if (!call_val) {
+    value_release(src);
+    value_release(max);
+    value_release(dst);
+    value_release(len);
+    value_release(result);
+    FREE(parms);
+    return VALUE_NONE;
+  }
+  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_CALL, CMD_BRANCHCOND_NONE,
+      LABEL_NONE, VALUE_NONE, call_val, parms);
+  value_lock(result);
+  return result;
+}
+
+#endif /* JALV2_STRING_OUTLINE_CALLS */
+
 value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
 {
+  char    name_buf[40];
   value_t dst;
   value_t src;
   value_t max;
@@ -5864,6 +6081,13 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   boolean_t is_heap_compact;
 
   jal_string_core_gate(pf);
+  /* `name` points into the token buffer and the argument parse below
+   * overwrites it: keep a copy for the outline decision. */
+  name_buf[0] = 0;
+  if (name) {
+    strncpy(name_buf, name, sizeof(name_buf) - 1);
+    name_buf[sizeof(name_buf) - 1] = 0;
+  }
   dst = VALUE_NONE;
   src = VALUE_NONE;
   max = VALUE_NONE;
@@ -6000,6 +6224,23 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   if (!jal_string_builtin_sep_get(pf, ")")) {
     goto done;
   }
+#if JALV2_STRING_OUTLINE_CALLS
+  /*
+   * Public `string_*`: one shared forwarder body in flash plus a CALL here,
+   * instead of expanding the builtin body at every call site.  Falls back to
+   * the inline path when the forwarder is missing or an actual cannot be
+   * handed over unchanged (see jal_string_forwarder_call_emit).
+   */
+  if (!is_to_array && !is_to_array_truncate) {
+    value_t outlined;
+
+    outlined = jal_string_forwarder_call_emit(pf, name_buf, dst, src, max);
+    if (outlined) {
+      result = outlined;
+      goto done;
+    }
+  }
+#endif /* JALV2_STRING_OUTLINE_CALLS */
   jal_string_silent_truncate_begin(pf);
   if (is_append) {
     result = jal_string_append_emit(pf, dst, src);
