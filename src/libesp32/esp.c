@@ -42,7 +42,8 @@ static esp_code_t esp_isr_vecbase_lit;  /* startup LIT, bound to the
 static unsigned char esp_isr_vtab[0x400];
 
 /* The single `pragma interrupt` procedure, or NULL.  A second one is a
- * hard error: all level-1 interrupts share one vector on the ESP32. */
+ * hard error: one CPU interrupt (and therefore one vector slot) can have
+ * one handler -- `pragma interrupt N` selects which CPU interrupt. */
 static pfile_proc_t *esp_isr_proc_get(pfile_t *pf)
 {
   pfile_proc_t *proc;
@@ -68,6 +69,88 @@ variable_sz_t esp_pointer_size_get(pfile_t *pf)
   UNUSED(pf);
   return 4;
 }
+/* CPU interrupt number -> interrupt level.  The ESP32 groups its 32 CPU
+ * interrupts six per level, and the vector for level L lives at
+ * VECBASE + 0x340 + 0x20*(L-1), so the number a program routes its
+ * matrix source to decides which slot is used:
+ *   0-5 -> L1   6-11 -> L2   12-17 -> L3   18-23 -> L4
+ *   24-29 -> L5   30 -> L6   31 -> L7
+ * (xthal_intlevel / esp-intr-alloc's level table for this part.) */
+static unsigned esp_int_level(unsigned int_num)
+{
+  if (int_num < 6U) {
+    return 1;
+  }
+  if (int_num < 12U) {
+    return 2;
+  }
+  if (int_num < 18U) {
+    return 3;
+  }
+  if (int_num < 24U) {
+    return 4;
+  }
+  if (int_num < 30U) {
+    return 5;
+  }
+  if (30U == int_num) {
+    return 6;
+  }
+  return 7;
+}
+
+/* CPU interrupt the armed ISR sits on: `pragma interrupt N` selects it
+ * (0..31), plain `pragma interrupt` keeps CPU interrupt 1 (level 1, the
+ * shape every existing sample uses). */
+static unsigned esp_isr_int_get(pfile_t *pf, pfile_proc_t *isr)
+{
+  int irq = pfile_proc_irq_get(isr);
+
+  if (irq < 0) {
+    return 1;
+  }
+  if ((irq < 0) || (irq > 5)) {
+    /* Only the level-1 CPU interrupts are supported: the vector table
+     * carries one usable entry (VECBASE+0x340) and the exit is RFE.
+     * Levels 2..7 need per-level slots whose offsets could not be
+     * established (silicon, 2026-11-03: a level-2 handler was entered
+     * at VECBASE+0x3C0 with an exception-style return, but the boot-time
+     * source kept the line asserted and stormed, and QEMU models only
+     * level 1 -- see fixes/fix_esp32_isr_cpu_int_selection.md).
+     * Refusing is better than the old behaviour, which IGNORED the
+     * number and silently armed CPU interrupt 1. */
+    pfile_log(pf, PFILE_LOG_ERR,
+        "ESP32: `pragma interrupt %d` -- only CPU interrupts 0..5 "
+        "(interrupt level 1) are supported; route the interrupt-matrix "
+        "source to one of those (plain `pragma interrupt` means CPU "
+        "interrupt 1).  Levels > 1 are not implemented.", irq);
+    return 1;
+  }
+  return (unsigned) irq;
+}
+
+/* The armed ISR's vector slot in the table (bytes from the table base).
+ * The layout is NOT a single stride: a level-1 interrupt is an EXCEPTION
+ * (EXC_IRQ, EXCCAUSE 2, EPC1, PS.EXCM) and enters through the user
+ * exception slot at +0x340, while levels 2..7 are true interrupts with
+ * their own 0x40-spaced slots at +0x180..+0x2C0 (the "double" slots --
+ * see fixes/fix_esp32_phase3g_isr_vector.md, which pinned the +0x340
+ * slot and the +0x180..+0x280 range from QEMU's vector table). */
+static unsigned long esp_isr_slot(unsigned level)
+{
+  UNUSED(level);          /* level 1 only; see esp_isr_int_get() */
+  return 0x340UL;
+}
+
+static pfile_proc_t *esp_isr_proc;   /* cached by esp_cmd_generate */
+static unsigned     esp_isr_int   = 1;   /* CPU interrupt number      */
+static unsigned     esp_isr_level = 1;   /* its level (vector slot)   */
+
+unsigned esp_isr_level_get(void)
+{
+  return esp_isr_level;
+}
+
 
 /* the descriptor published through libpic12's back-end registry
  * (jal_main registers it for PIC_TARGET_CPU_ESP32); the clock hook
@@ -528,12 +611,21 @@ void esp_startup_emit(pfile_t *pf)
    * table node exists (bound in esp_cmd_generate, layout fills it).
    * INTENABLE after VECBASE so no interrupt can fire through a stale
    * table.  The LIT value 0 is a placeholder; ->target overrides it. */
-  if (esp_isr_proc_get(pf)) {
+  esp_isr_proc = esp_isr_proc_get(pf);
+  if (esp_isr_proc) {
     esp_isr_vecbase_lit = esp_pool_lit(0UL);
     esp_emit_l32r(ESP_REG_A3, esp_isr_vecbase_lit);
     (void) esp_code_alloc(ESP_OP_WSR, ESP_REG_A3, 0, ESP32_SR_VECBASE);
     (void) esp_code_alloc(ESP_OP_ESYNC, 0, 0, 0);
-    (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A2, 0, 2); /* CPU int 1 */
+    /* unmask the CPU interrupt the handler sits on: INTENABLE bit = the
+     * number (plain `pragma interrupt` = int 1, level 1).  Every
+     * supported number is 0..5, so 1<<n always fits MOVI's 12-bit
+     * immediate and the level-1 image stays byte-identical to the
+     * pre-2026-11-03 shape. */
+    esp_isr_int = esp_isr_int_get(pf, esp_isr_proc);
+    esp_isr_level = esp_int_level(esp_isr_int);
+    (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A2, 0,
+        (int) (1UL << esp_isr_int));
     (void) esp_code_alloc(ESP_OP_WSR, ESP_REG_A2, 0, ESP32_SR_INTENABLE);
     (void) esp_code_alloc(ESP_OP_ESYNC, 0, 0, 0);
   }
@@ -541,6 +633,7 @@ void esp_startup_emit(pfile_t *pf)
   esp_startup_wdt_off(ESP32_TG0_WPRO, ESP32_TG0_WCFG);
   esp_startup_wdt_off(ESP32_TG1_WPRO, ESP32_TG1_WCFG);
   esp_startup_wdt_off(ESP32_RTC_WPRO, ESP32_RTC_WCFG);
+
   /* delay timer: TIMG1 T0 free-run, divider 2 -> one tick per 25 ns
    * (APB domain -- exact on silicon, modeled by QEMU).  _usec_delay
    * polls T1LO (esp_delay_create); the timer also serves as a rough
@@ -670,22 +763,23 @@ void esp_cmd_generate(pfile_t *pf, const cmd_t cmd)
     }
   }
 
-  /* ISR vector table (3g), after everything: an alignment pad, 0x340
-   * bytes of `ill` filler, the level-1 entry slot (user-exception
-   * vector at VECBASE+0x340 -- level-1 interrupts arrive as EXCCAUSE
-   * 2), then filler up to 0x400.  The pad grows at layout time so the
+  /* ISR vector table (3g), after everything: an alignment pad, filler
+   * up to the handler's level slot (VECBASE+0x340 for level 1, +0x20 per
+   * level; level-1 interrupts arrive as EXCCAUSE 2), then filler up to
+   * 0x400.  The pad grows at layout time so the
    * table base is 0x400-aligned: QEMU relocates vectors additively
    * (VECBASE + vecofs) and tolerated any base, but hardware masks the
    * VECBASE low bits.  The slot is l32r + jx, not a near J: a J needs
    * a 4-aligned ISR entry, which the 3-byte instruction stream does
    * not guarantee (only short programs landed aligned by luck). */
   {
-    pfile_proc_t *isr = esp_isr_proc_get(pf);
+    pfile_proc_t *isr = esp_isr_proc;
 
     if (isr) {
       label_t    lbl  = pfile_proc_label_get(isr);
+      unsigned long slot = esp_isr_slot(esp_isr_level);
       esp_code_t pad  = esp_code_alloc(ESP_OP_CONST_DATA, 0, 0, 0);
-      esp_code_t fill = esp_code_alloc(ESP_OP_CONST_DATA, 0x340, 0, 0);
+      esp_code_t fill = esp_code_alloc(ESP_OP_CONST_DATA, (int) slot, 0, 0);
       esp_code_t ldr;
       esp_code_t jx;
 
@@ -710,10 +804,11 @@ void esp_cmd_generate(pfile_t *pf, const cmd_t cmd)
         }
       }
       /* the layout 4-aligns CONST_DATA starts, so the trailing fill
-       * sits at 0x346 (l32r + jx = 6 bytes + align pad) */
-      fill = esp_code_alloc(ESP_OP_CONST_DATA, 0x400 - 0x346, 0, 0);
+       * sits 6 bytes past the slot (l32r + jx), rounded up to 4 */
+      fill = esp_code_alloc(ESP_OP_CONST_DATA,
+          (int) (0x400UL - (slot + 0x6UL)), 0, 0);
       if (fill) {
-        fill->cdata = esp_isr_vtab + 0x346;
+        fill->cdata = esp_isr_vtab + slot + 0x6;
       }
     }
   }

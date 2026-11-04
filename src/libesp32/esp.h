@@ -224,6 +224,7 @@ void       esp_op_state_reset(void);
 
 void       esp_var_state_reset(void);
 void       esp_startup_emit(pfile_t *pf);   /* sp/WOE/WDT */
+unsigned   esp_isr_level_get(void);          /* armed ISR vector level */
 void       esp_delay_create(pfile_t *pf, variable_const_t usec);
 
 /* instruction encoding (esp_inst.c): writes 3 bytes */

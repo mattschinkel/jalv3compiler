@@ -3638,11 +3638,16 @@ static void esp_load_deref(pfile_t *pf, value_t ptr, unsigned reg,
 }
 
 /* ISR epilogue: undo the enter-pushed save area (a0, a2-a7, SAR) and
- * return from the level-1 interrupt.  Emitted at ISR_CLEANUP (the
- * normal interrupt-proc tail) and kept at PROC_LEAVE for safety.
- * RFE restores pc from EPC1 and clears PS.EXCM; PS.INTLEVEL is not
- * raised for level-1, so no PS restore is needed (our program runs
- * with PS = 0 throughout). */
+ * return from the interrupt.  Emitted at ISR_CLEANUP (the normal
+ * interrupt-proc tail) and kept at PROC_LEAVE for safety.
+ *
+ * The exit instruction depends on the armed level, because the CPU
+ * saves the interrupted state per level: level 1 lives in EPC1 with
+ * PS.EXCM set and exits via RFE (INTLEVEL is not raised, so no PS
+ * restore is needed); level N >= 2 lives in EPC[N]/EPS[N], raises
+ * PS.INTLEVEL to N, and must exit via `rfi N`, which restores PS (a
+ * bare RFE there would return through EPC1 and leave INTLEVEL raised,
+ * i.e. interrupts permanently off). */
 static void esp_isr_leave_emit(void)
 {
   (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A3, ESP_REG_A1, 12);
@@ -3655,6 +3660,12 @@ static void esp_isr_leave_emit(void)
   (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A2, ESP_REG_A1, 4);
   (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A0, ESP_REG_A1, 0);
   (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A1, ESP_REG_A1, 32);
+  /* Every level enters as an EXC_IRQ exception on this part (level 1 at
+   * VECBASE+0x340, level L at +0x40*L -- both bench-established), so the
+   * exit is always RFE: it restores pc from EPC1 and clears PS.EXCM.
+   * `rfi N` is NOT used: it returns through EPC[N]/EPS[N], which the
+   * exception entry never wrote (a level-2 handler that used `rfi 2`
+   * faulted on return on silicon, 2026-11-03). */
   (void) esp_code_alloc(ESP_OP_RFE, 0, 0, 0);
 }
 
@@ -3742,9 +3753,10 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
        * call-clobbered -- an interrupt is an involuntary call, so the
        * interrupted code may hold live values in any of them.  Push
        * a0, a2-a7 + SAR on the interrupted task's stack (leaf v1
-       * assumed for the stack budget; nested interrupts are masked by
-       * PS.EXCM while the handler runs).  The matching restore + rfe
-       * is emitted at ISR_CLEANUP (interrupt procs end there, not at
+       * assumed for the stack budget; a higher LEVEL can still preempt
+       * a level-N handler, and each nesting level saves/restores its own
+       * frame).  The matching restore + `rfe`/`rfi N` is emitted at
+       * ISR_CLEANUP (interrupt procs end there, not at
        * PROC_LEAVE -- same cmd shape as the PIC32 back-end). */
       (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A1, ESP_REG_A1, -32);
       (void) esp_code_alloc(ESP_OP_S32I, ESP_REG_A0, ESP_REG_A1, 0);

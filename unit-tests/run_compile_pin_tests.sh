@@ -163,6 +163,7 @@ run_sh task_locals                 unit-tests/test_task_locals.sh "$CC"
 run_movlb
 run_py pic18_v6_access_bank        unit-tests/test_pic18_v6_access_bank.py --compiler "$CC"
 run_py esp32_sfr_bit_alignment    unit-tests/test_esp32_sfr_bit_alignment.py --compiler "$CC"
+run_py esp32_isr_cpu_int          unit-tests/test_esp32_isr_cpu_int.py --compiler "$CC"
 # Driver/output contract the corpus and simulators cannot see: CLI requests
 # terminate, HEX install is atomic (a failed compile preserves the previous
 # good image), and a non-regular destination is never renamed over or removed
