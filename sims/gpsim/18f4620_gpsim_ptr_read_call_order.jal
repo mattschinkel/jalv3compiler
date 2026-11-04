@@ -1,0 +1,90 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - pointer-read CALL ordering (open-array sources)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Pins the shared `_pic_pointer_read` contract: the CALL body points
+--    FSR/IRP at the SOURCE for a RAM pointer (a ROM pointer uses TBLPTR and
+--    leaves them alone), so the back end must re-establish an indirect
+--    destination AFTER the call.  Before the fix the store landed at the
+--    source address:
+--      * `string_from_array(s, "mnop")` (const source) followed by
+--        `string_from_array(s, ram_src)` returned TRUE, set COUNT(s) but
+--        left the payload untouched;
+--      * a word element read through a polymorphic `word in x[]` formal
+--        into a runtime-indexed destination wrote both bytes over the
+--        source (0x0000 in the destination word).
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 3
+-- expect byte v__pcr_const_ok 1
+-- expect byte v__pcr_ram_ok 1
+-- expect byte v__pcr_src_ok 1
+-- expect word_le v__pcr_word0 0x2222
+-- expect word_le v__pcr_word1 0x9abc
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 96
+include strings_dynamic
+
+var string _pcr_s
+var byte _pcr_src[4]
+var volatile byte _pcr_const_ok = 0
+var volatile byte _pcr_ram_ok = 0
+var volatile byte _pcr_src_ok = 0
+var bit _pcr_ok
+
+var word _pcr_ram_words[3] = {0x1234, 0x5678, 0x9abc}
+const word _pcr_rom_words[] = {0x1111, 0x2222, 0x3333}
+var word _pcr_out[3] = {0, 0, 0}
+var volatile word _pcr_word0 = 0
+var volatile word _pcr_word1 = 0
+
+procedure _pcr_take(word in x[], byte in k, byte in d) is
+   _pcr_out[d] = x[k]
+end procedure
+
+procedure _pcr_run() is
+   regression_begin_run()
+
+   -- const-source outlined call, then RAM-source outlined call: the second
+   -- call must write its payload into the heap, not back over its source
+   _pcr_src[0] = "w"
+   _pcr_src[1] = "x"
+   _pcr_src[2] = "y"
+   _pcr_src[3] = "z"
+   _pcr_s = ""
+   _pcr_ok = string_from_array(_pcr_s, "mnop")
+   if _pcr_ok & (_pcr_s == "mnop") & (COUNT(_pcr_s) == 4) then
+      _pcr_const_ok = 1
+   end if
+   _pcr_ok = string_from_array(_pcr_s, _pcr_src)
+   if _pcr_ok & (_pcr_s == "wxyz") & (COUNT(_pcr_s) == 4) then
+      _pcr_ram_ok = 1
+   end if
+   regression_checkpoint()
+
+   -- 2-byte read through a runtime ROM/RAM pointer into an indirect dst
+   _pcr_take(_pcr_rom_words, 1, 0)
+   _pcr_take(_pcr_ram_words, 2, 1)
+   _pcr_word0 = _pcr_out[0]
+   _pcr_word1 = _pcr_out[1]
+   regression_checkpoint()
+
+   -- the source arrays must be untouched by the read
+   if ((_pcr_ram_words[0] == 0x1234)
+      & (_pcr_ram_words[2] == 0x9abc)) then
+      _pcr_src_ok = 1
+   end if
+   regression_checkpoint()
+end procedure
+
+_pcr_run()

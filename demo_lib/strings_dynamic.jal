@@ -29,10 +29,7 @@
 --   append source, `s = ...` self append).
 --   **`string_to_array`** / **`string_to_array_truncate`** stay compiler-inline:
 --   their `byte out dst_array[]` formal cannot be bound to a fixed array by the
---   call machinery.  The same applies to `string_from_array*` when ROM (A) is
---   built in (`-DJALV2_ROM_A_STRING_LITERAL_CALL=1`), because a lowered literal
---   assign already calls that forwarder and the PIC18 IN/OUT copy-back is not
---   correct for the second (RAM-array) call site yet.
+--   call machinery.
 --
 -- Compiler-backed helper signatures (wrappers below):
 --

@@ -5945,17 +5945,6 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
      * outlines through its own path above. */
     return VALUE_NONE;
   }
-#if JALV2_ROM_A_STRING_LITERAL_CALL
-  if (is_from_array || is_from_array_truncate) {
-    /* ROM (A) lowers a literal assign through THIS same forwarder, and the
-     * PIC18 direct-CALL IN/OUT copy-back for the second (RAM-array) call
-     * site is still wrong when a lowered literal call ran first -- the
-     * known open bug in the ROM (A) line (repro: a = "abcdef" then
-     * string_from_array(a, ram_array)).  Keep from_array inline when ROM
-     * (A) is built in; the inline path is correct. */
-    return VALUE_NONE;
-  }
-#endif
   if (is_append || is_append_truncate) {
     /* A fixed/literal source would be marshalled through a heap cell at the
      * call site (extra code AND a heap block the inline path never needed);

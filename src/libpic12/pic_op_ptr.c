@@ -334,6 +334,8 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
       /* this will necessitate a function call */
       variable_sz_t sz;
       variable_sz_t ipos;
+      boolean_t     store_ind;
+      value_t       stage;
       label_t       lbl;
 
       if ((VALUE_NONE == baseofs)
@@ -395,18 +397,41 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
       value_def_set(src, src_def);
       lbl = pic_label_find(pf, PIC_LABEL_PTR_READ, BOOLEAN_TRUE);
       sz  = pic_result_sz_get(src, VALUE_NONE, dst);
-      pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
+      /* A CALL may clobber FSR/IRP: the shared PTR_READ body points them at
+       * the SOURCE when the pointer is RAM (a ROM pointer is read through
+       * TBLPTR and leaves them alone).  It must therefore not run between
+       * the destination setup and the INDF store -- staging the byte and
+       * re-establishing the destination AFTER the call keeps a runtime
+       * ROM/RAM pointer read from storing the payload back into the source
+       * (the `string_from_array` copy loop after a lowered literal call on
+       * PIC18, and its 16F877 twin, both hit it).  A plain file
+       * destination does not use FSR, so it keeps the direct store. */
+      store_ind = (!pic_value_is_w(dst)
+          && (value_is_indirect(dst)
+              || value_flag_test(dst, VALUE_FLAG_POINTER)));
+      stage = store_ind
+        ? pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1)
+        : VALUE_NONE;
       for (ii = 0; ii < sz; ii++) {
         if (ii) {
           pic_instr_append_f_d(pf, PIC_OPCODE_INCF, tmp, 0, PIC_OPDST_F);
           pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
           pic_instr_append_f_d(pf, PIC_OPCODE_INCF, tmp, 1, PIC_OPDST_F);
         }
-        pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
         pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
         if (!pic_value_is_w(dst)) {
-          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+          if (store_ind) {
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, stage, 0);
+            pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
+            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, stage, 0, PIC_OPDST_W);
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+          } else {
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+          }
         }
+      }
+      if (store_ind) {
+        pic_var_temp_release(pf, stage);
       }
       pic_value_sign_extend(pf, dst, ii - 1, value_is_signed(src));
 
