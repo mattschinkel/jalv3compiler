@@ -691,7 +691,7 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
   variable_sz_t   sz[PIC_CHUNK_MAP_MAX];
   variable_base_t base[PIC_CHUNK_MAP_MAX];
 
-  if (!formal || !actual || !value_is_array(actual)) {
+  if (!formal || !actual) {
     return;
   }
   fv = value_variable_get(formal);
@@ -706,6 +706,48 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
   }
   av = value_variable_get(actual);
   if (!av || (VARIABLE_NONE == av)) {
+    return;
+  }
+  {
+    variable_t    chain_src;
+    variable_sz_t chain_sz;
+
+    if (pic_var_openarray_pair_chain_get(av, fv, &chain_src, &chain_sz)) {
+      /* PASS-ON: hand the source formal's ACTIVE map over byte for byte.
+       * Both maps are compiler-owned globals placed after the final
+       * placement, so this is a plain register copy (unrolled: the size is a
+       * compile-time constant) -- no index, no flags, nothing the caller has
+       * staged in W can be disturbed. */
+      value_t srcval;
+      value_t dstval;
+      size_t  bi;
+
+      if ((VARIABLE_BASE_UNKNOWN == variable_base_get(chain_src, 0))
+          || (VARIABLE_BASE_UNKNOWN == variable_base_get(mapv, 0))) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "the runtime chunk map of open-array formal '%s' has no address",
+            variable_name_get(fv) ? variable_name_get(fv) : "?");
+        return;
+      }
+      srcval = value_alloc(chain_src);
+      dstval = value_alloc(mapv);
+      if (srcval && dstval) {
+        for (bi = 0; bi < chain_sz; bi++) {
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, srcval, bi, PIC_OPDST_W);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dstval, bi);
+        }
+      }
+      if (srcval) {
+        value_release(srcval);
+      }
+      if (dstval) {
+        value_release(dstval);
+      }
+      return;
+    }
+  }
+  if (!value_is_array(actual)) {
+    /* a non-array actual with no chain to copy: nothing to hand over */
     return;
   }
   if (!pic_var_openarray_pair_layout_get(av, &ct, sz, base)) {
@@ -6385,12 +6427,23 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
 
                 cmd_pos_get(mark_cmd, &call_pos);
                 pic_var_openarray_pair_record(avar,
-                    value_variable_get(fval), &call_pos);
+                    value_variable_get(fval), &call_pos, BOOLEAN_FALSE);
+              } else if (fval
+                  && (VARIABLE_DEF_TYPE_POINTER == value_type_get(fval))) {
+                /* PASS-ON (`inner(data)` inside a procedure that is itself
+                 * walking `data`): all this call site knows is a pointer, so
+                 * the layout can only come from the source formal's own map.
+                 * Recorded as a pair; pic_var_chunk_prepare_emit copies the
+                 * source's runtime map (or hands over its compile-time one)
+                 * and blocks the formal only when neither exists. */
+                pfile_pos_t call_pos;
+
+                cmd_pos_get(mark_cmd, &call_pos);
+                pic_var_openarray_pair_record(avar,
+                    value_variable_get(fval), &call_pos, BOOLEAN_TRUE);
               } else {
-                /* non-array actual (e.g. a bare pointer) reaching an
-                 * open-array formal: that call site cannot hand over a
-                 * layout, so the formal keeps the baked map
-                 * (`pic_var_chunk_prepare_emit` reads this) */
+                /* non-array actual reaching a non-array formal (a plain
+                 * value): nothing to hand over */
                 if (fval) {
                   pic_var_openarray_formal_block(value_variable_get(fval));
                 }

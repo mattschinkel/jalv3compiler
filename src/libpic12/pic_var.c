@@ -79,6 +79,14 @@ typedef struct pic_var_openarray_pair_ {
   boolean_t                   reported;
   pfile_pos_t                  pos;   /* call site */
   boolean_t                    pos_valid;
+  /* PASS-ON pair: the actual is another procedure's open-array formal, so all
+   * this call site knows is the pointer.  When that formal has a runtime map
+   * of its own the CALL SITE copies it here (the layout is only known at run
+   * time); when it has a compile-time map the captured layout below is enough
+   * (see pic_var_openarray_pair_layout_get). */
+  boolean_t                    passon;
+  variable_t                   chain_src;   /* runtime map copied per call */
+  variable_sz_t                chain_sz;    /* bytes to copy */
   /* Layout of the ACTUAL captured at the end of placement: the chunk maps
    * are not visible during call emission (found 2026-11-02 -- ct read 0 at
    * the call site), so the call-site fill reads the layout from here.  A
@@ -885,8 +893,28 @@ boolean_t pic_var_openarray_pair_layout_get(variable_t actual,
   return BOOLEAN_FALSE;
 }
 
+/* A PASS-ON call site (`inner(data)` inside a procedure that is itself walking
+ * `data`) has no compile-time layout to hand over: it copies the source
+ * formal's runtime map instead.  Returns the source map and its byte count. */
+boolean_t pic_var_openarray_pair_chain_get(variable_t actual, variable_t formal,
+    variable_t *src, variable_sz_t *sz)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if ((pic_var.openarray_pairs[ii].actual == actual)
+        && (pic_var.openarray_pairs[ii].formal == formal)
+        && (VARIABLE_NONE != pic_var.openarray_pairs[ii].chain_src)) {
+      *src = pic_var.openarray_pairs[ii].chain_src;
+      *sz  = pic_var.openarray_pairs[ii].chain_sz;
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    const pfile_pos_t *pos)
+    const pfile_pos_t *pos, boolean_t passon)
 {
   size_t ii;
 
@@ -918,6 +946,9 @@ void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].formal   = formal;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].reported = BOOLEAN_FALSE;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos_valid = BOOLEAN_FALSE;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].passon   = passon;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_src = VARIABLE_NONE;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_sz  = 0;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chunk_ct = 0;
   if (pos) {
     pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos       = *pos;
@@ -993,23 +1024,32 @@ static boolean_t pic_var_openarray_layout_same(
   return BOOLEAN_TRUE;
 }
 
-/* create the map buffer of one formal (it holds [count][base lo,hi,span]...;
- * the size is exact for the widest layout this formal is fed) */
-static boolean_t pic_var_formal_map_create(pfile_t *pf, variable_t formal,
-    variable_ct_t max_ct)
+/* create (or grow) the map buffer of one formal.  It holds
+ * [count][base lo,hi,span]..., and the size is exact for the widest layout
+ * this formal is fed.  A map only GROWS when a pass-on source (see the pair's
+ * `chain_src`) turns out wider than the formal's own layouts: a bigger map is
+ * created and replaces the registry entry (the old bytes stay allocated but
+ * unused -- the alternative is a per-call copy that overflows). */
+static boolean_t pic_var_formal_map_resize(pfile_t *pf, variable_t formal,
+    variable_sz_t need)
 {
   char                 name[32];
-  variable_sz_t        sz;
   variable_t           map;
   pic_var_formal_map_t *ent;
 
-  sz  = (variable_sz_t) (1 + 3 * max_ct);
-  map = VARIABLE_NONE;
+  ent = pic_var_formal_map_find(formal);
+  if (ent && (variable_sz_get(ent->map) >= need)) {
+    return BOOLEAN_TRUE;
+  }
   /* a deterministic name so the emitted .asm is stable across passes */
   sprintf(name, "_pic_chunkmap_%u", (unsigned) (pic_var.formal_maps_used + 1));
-  map = pic_var_chunk_global_create(pf, name, sz);
+  map = pic_var_chunk_global_create(pf, name, need);
   if (VARIABLE_NONE == map) {
     return BOOLEAN_FALSE;
+  }
+  if (ent) {
+    ent->map = map;
+    return BOOLEAN_TRUE;
   }
   if (pic_var.formal_maps_used == pic_var.formal_maps_alloc) {
     size_t                resize;
@@ -1040,11 +1080,84 @@ static boolean_t pic_var_formal_map_create(pfile_t *pf, variable_t formal,
  *  3. create + place the walk scratch, so nothing is created during emission
  *     (creating and placing a variable mid-emit re-entered the allocator --
  *     a pass-3 hang on Rob's full program, found 2026-11-02). */
+/* the byte size `formal`'s map needs given the state right now (0 = none).
+ *  - its own captured layouts: a map only when two of them DIFFER and one is
+ *    chunked (one layout is addressed exactly by the baked copy);
+ *  - every PASS-ON source formal that already has a runtime map: the call site
+ *    copies that map, so the target must be at least as big. */
+static variable_sz_t pic_var_formal_map_need(variable_t formal)
+{
+  size_t        pi;
+  size_t        pj;
+  variable_ct_t max_ct;
+  variable_sz_t need;
+  boolean_t     differ;
+  boolean_t     chunked;
+
+  max_ct  = 0;
+  differ  = BOOLEAN_FALSE;
+  chunked = BOOLEAN_FALSE;
+  need    = 0;
+  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+    pic_var_openarray_pair_t *pair;
+
+    pair = &pic_var.openarray_pairs[pi];
+    if ((pair->formal != formal) || (pair->chunk_ct < 1)) {
+      continue;
+    }
+    if (pair->chunk_ct > max_ct) {
+      max_ct = pair->chunk_ct;
+    }
+    if (pair->chunk_ct >= 2) {
+      chunked = BOOLEAN_TRUE;
+    }
+    for (pj = 0; pj < pic_var.openarray_pairs_used; pj++) {
+      pic_var_openarray_pair_t *other;
+
+      other = &pic_var.openarray_pairs[pj];
+      if ((other->formal != formal) || (other->chunk_ct < 1)) {
+        continue;
+      }
+      if (!pic_var_openarray_layout_same(pair, other)) {
+        differ = BOOLEAN_TRUE;
+      }
+    }
+  }
+  if (chunked && differ && (max_ct <= PIC_CHUNK_MAP_MAX)) {
+    need = (variable_sz_t) (1 + 3 * max_ct);
+  }
+  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+    pic_var_openarray_pair_t *pair;
+    variable_t                src;
+    variable_sz_t             ssz;
+
+    pair = &pic_var.openarray_pairs[pi];
+    if ((pair->formal != formal) || !pair->passon
+        || (0 != pair->chunk_ct)) {
+      continue;
+    }
+    src = pic_var_openarray_formal_map_get(pair->actual);
+    if (VARIABLE_NONE == src) {
+      continue;
+    }
+    ssz = variable_sz_get(src);
+    if (ssz > need) {
+      need = ssz;
+    }
+  }
+  return need;
+}
+
 void pic_var_chunk_prepare_emit(pfile_t *pf)
 {
-  size_t pi;
-  size_t pj;
+  size_t   pi;
+  size_t   pj;
+  unsigned round;
 
+  /* 1. capture every pair's layout.  A PASS-ON pair only knows a pointer, so
+   * it has a layout only when the source formal carries a COMPILE-TIME chunk
+   * map (the call site can then hand those literals over); a source with a
+   * runtime map is handled in step 2 by copying it. */
   for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
     pic_var_openarray_pair_t *pair;
     pic_variable_chunk_map_t *m;
@@ -1059,6 +1172,8 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
         pair->chunk_sz[cix]   = m->sz[cix];
         pair->chunk_base[cix] = m->base[cix];
       }
+    } else if (pair->passon) {
+      pair->chunk_ct = 0;
     } else {
       /* no chunk map: the actual is placed linearly (or is a ROM const
        * array, whose base is unknown here) -- one chunk covers it */
@@ -1068,59 +1183,126 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
           variable_def_get(pair->actual), 0);
     }
   }
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
-    variable_ct_t             max_ct;
-    boolean_t                 differ;
-    boolean_t                 chunked;
+  /* 2. create the maps, to a FIXPOINT: a pass-on pair can only be sized once
+   * the source formal's map exists, and a chain can be longer than one hop
+   * (`a -> b -> c`).  Then record each chain (the per-call copy). */
+  for (round = 0; round < 8; round++) {
+    boolean_t changed;
 
-    pair = &pic_var.openarray_pairs[pi];
-    if ((0 == pair->chunk_ct)
-        || pic_var_openarray_formal_blocked(pair->formal)
-        || (VARIABLE_NONE !=
-          pic_var_openarray_formal_map_get(pair->formal))) {
-      continue;
+    changed = BOOLEAN_FALSE;
+    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+      pic_var_openarray_pair_t *pair;
+
+      /* A pass-on pair whose source formal has a runtime map is a CHAIN: the
+       * baked layout it may have inherited (the first actual's, via
+       * pic_var_chunk_map_propagate) describes only one call site, so it must
+       * not be handed over as literals. */
+      pair = &pic_var.openarray_pairs[pi];
+      if (pair->passon && (0 != pair->chunk_ct)
+          && (VARIABLE_NONE !=
+            pic_var_openarray_formal_map_get(pair->actual))) {
+        pair->chunk_ct = 0;
+        changed = BOOLEAN_TRUE;
+      }
     }
-    max_ct  = pair->chunk_ct;
-    differ  = BOOLEAN_FALSE;
-    chunked = BOOLEAN_FALSE;
-    for (pj = 0; pj < pic_var.openarray_pairs_used; pj++) {
-      pic_var_openarray_pair_t *other;
+    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+      variable_t    formal;
+      variable_t    map;
+      variable_sz_t need;
 
-      other = &pic_var.openarray_pairs[pj];
-      if ((other->formal != pair->formal) || (0 == other->chunk_ct)) {
+      formal = pic_var.openarray_pairs[pi].formal;
+      if (!formal || (VARIABLE_NONE == formal)
+          || pic_var_openarray_formal_blocked(formal)) {
         continue;
       }
-      if (other->chunk_ct > max_ct) {
-        max_ct = other->chunk_ct;
+      for (pj = 0; pj < pi; pj++) {
+        if (pic_var.openarray_pairs[pj].formal == formal) {
+          break;
+        }
       }
-      if (other->chunk_ct >= 2) {
-        chunked = BOOLEAN_TRUE;
+      if (pj != pi) {
+        continue; /* this formal was handled at an earlier index */
       }
-      if (!pic_var_openarray_layout_same(pair, other)) {
-        differ = BOOLEAN_TRUE;
+      need = pic_var_formal_map_need(formal);
+      if (0 == need) {
+        continue;
+      }
+      map = pic_var_openarray_formal_map_get(formal);
+      if ((VARIABLE_NONE != map)
+          && (variable_sz_get(map) >= need)) {
+        continue;
+      }
+      if (pic_var_formal_map_resize(pf, formal, need)) {
+        changed = BOOLEAN_TRUE;
       }
     }
-    if (!differ || !chunked) {
-      /* Nothing to hand over: with no chunked actual at all the formal has
-       * no baked map either and addresses through the pointer, which every
-       * call site passes correctly; with one layout the baked copy is exact.
-       * Either way the runtime map would only cost RAM and instructions. */
-      continue;
+    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+      pic_var_openarray_pair_t *pair;
+      variable_t                src;
+      variable_t                dst;
+      variable_sz_t             ssz;
+      variable_sz_t             dsz;
+
+      pair = &pic_var.openarray_pairs[pi];
+      if (!pair->passon || (0 != pair->chunk_ct)
+          || (VARIABLE_NONE != pair->chain_src)) {
+        continue;
+      }
+      src = pic_var_openarray_formal_map_get(pair->actual);
+      dst = pic_var_openarray_formal_map_get(pair->formal);
+      if ((VARIABLE_NONE == src) || (VARIABLE_NONE == dst)) {
+        continue;
+      }
+      ssz = variable_sz_get(src);
+      dsz = variable_sz_get(dst);
+      pair->chain_src = src;
+      pair->chain_sz  = (ssz < dsz) ? ssz : dsz;
+      changed = BOOLEAN_TRUE;
     }
-    if (max_ct > PIC_CHUNK_MAP_MAX) {
+    if (!changed) {
+      break;
+    }
+  }
+  /* 3. a pass-on pair that never got a layout or a chain hands over nothing:
+   * keep the baked map, exactly as before this mechanism existed */
+  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+    pic_var_openarray_pair_t *pair;
+
+    pair = &pic_var.openarray_pairs[pi];
+    if (pair->passon && (0 == pair->chunk_ct)
+        && (VARIABLE_NONE == pic_var_openarray_formal_map_get(pair->formal))) {
+      pic_var_openarray_formal_block(pair->formal);
+    }
+  }
+  /* 4. report a buffer split into more pieces than the map can describe,
+   * once per formal */
+  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+    pic_var_openarray_pair_t *pair;
+    variable_t                formal;
+    variable_ct_t             max_ct;
+    size_t                    pj2;
+
+    pair   = &pic_var.openarray_pairs[pi];
+    formal = pair->formal;
+    max_ct = 0;
+    for (pj2 = 0; pj2 < pic_var.openarray_pairs_used; pj2++) {
+      if ((pic_var.openarray_pairs[pj2].formal == formal)
+          && (pic_var.openarray_pairs[pj2].chunk_ct > max_ct)) {
+        max_ct = pic_var.openarray_pairs[pj2].chunk_ct;
+      }
+    }
+    if ((max_ct > PIC_CHUNK_MAP_MAX) && !pair->reported && formal
+        && (VARIABLE_NONE != formal)) {
+      pair->reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
           "open-array formal '%s' receives a buffer split into %u RAM bank "
           "pieces, but the runtime chunk map holds %u; reduce the buffer "
           "size so it needs fewer bank pieces",
-          variable_name_get(pair->formal) ?
-            variable_name_get(pair->formal) : "?",
+          variable_name_get(formal) ? variable_name_get(formal) : "?",
           (unsigned) max_ct, (unsigned) PIC_CHUNK_MAP_MAX);
-      continue;
     }
-    (void) pic_var_formal_map_create(pf, pair->formal, max_ct);
   }
-  /* the walk scratch: needed by every runtime-map formal AND by the SHARED
+  /* 5. the walk scratch: needed by every runtime-map formal AND by the SHARED
    * static walk (one helper per holed variable) */
   {
     boolean_t need;

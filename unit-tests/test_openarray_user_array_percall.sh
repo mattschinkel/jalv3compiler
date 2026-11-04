@@ -252,6 +252,43 @@ else
       "$(grep -aE 'error|errors,' "$WORK/out.txt" | head -2)"
 fi
 
+# ------------------- 7. a formal handed ON to another procedure (pass-on)
+# `outer(data)` -> `inner(data)`: the call site only has the pointer, so the
+# callee must copy the source formal's runtime map, not address linearly.
+{
+  dev_head 16f1825
+  cat <<'JAL'
+var byte big_a[150]
+var byte big_b[150]
+var volatile byte sink = 0
+procedure inner(byte in data[]) is
+   var byte ii = 0
+   for 150 loop
+      data[ii] = data[ii] + 1
+      ii = ii + 1
+   end loop
+end procedure
+procedure outer(byte in data[]) is
+   inner(data)
+end procedure
+forever loop
+   outer(big_a)
+   outer(big_b)
+   sink = big_a[149]
+   sink = big_b[149]
+end loop
+JAL
+} >"$WORK/passon.jal"
+rc=$(cc_one "$WORK/passon.jal")
+nmap=$(grep -cE "_pic_chunkmap_[0-9]+ +EQU" "$WORK/out.asm")
+if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/out.txt" \
+   && [ "$nmap" -ge 2 ]; then
+  ok "a formal handed on to another procedure: map chain wired ($nmap maps)"
+else
+  bad "a formal handed on to another procedure: map chain wired ($nmap maps)" \
+      "rc=$rc" "$(grep -aE 'error|errors,' "$WORK/out.txt" | head -2)"
+fi
+
 echo "----"
 if [ "$fails" -ne 0 ]; then
   echo "openarray user-array per-call: $fails FAILURE(S)"

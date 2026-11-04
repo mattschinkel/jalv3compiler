@@ -45,9 +45,13 @@ boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar);
 variable_t pic_var_pointer_bind_walk_target(variable_t pvar);
 void pic_var_pointer_bind_check_escaped(pfile_t *pf);
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    const pfile_pos_t *pos);
+    const pfile_pos_t *pos, boolean_t passon);
 boolean_t pic_var_openarray_pair_layout_get(variable_t actual,
     variable_ct_t *ct, variable_sz_t *sz, variable_base_t *base);
+/* a PASS-ON call site copies the source formal's runtime map (it has no
+ * compile-time layout of its own to hand over) */
+boolean_t pic_var_openarray_pair_chain_get(variable_t actual, variable_t formal,
+    variable_t *src, variable_sz_t *sz);
 /* runtime chunk-map capacity: a marshalling buffer is split by RAM bank
  * nodes; the call-site store refuses (with a diagnostic) beyond this */
 #define PIC_CHUNK_MAP_MAX 8

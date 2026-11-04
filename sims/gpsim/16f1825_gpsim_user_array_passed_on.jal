@@ -1,0 +1,161 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — open-array formal handed ON to another proc
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The PASS-ON shape (fixes/fix_openarray_user_array_percall.md): a
+--    procedure that is itself walking an open-array formal passes THAT formal
+--    to another procedure taking an open array —
+--
+--       procedure inner(byte in data[]) ...  end
+--       procedure outer(byte in data[]) is   inner(data)   end
+--
+--    This shape is all over jallib (fat32, bluetooth_hc05/06, checksum,
+--    crc7_sd_card, debug, ds18b20, esp8266, http, nrf24l01, strings,
+--    usb_drv_core, usb_keyboard, usb_mouse).  The call site only has a
+--    pointer, so before this fix `inner` addressed the buffer linearly from
+--    that pointer and every element past the first RAM bank piece was written
+--    to the wrong address (silently: the array stayed 0 and `big_a[149]` came
+--    out 0).
+--
+--    Now a pass-on call site copies the SOURCE formal's runtime map into the
+--    callee's own map (a compile-time-constant register copy), so `inner`
+--    walks the layout the buffer really has.
+--
+-- @gpsim_validate begin
+-- steps: 4000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_ok_a 1
+-- expect byte v_ok_b 1
+-- expect byte v_ok_deep 1
+-- expect byte v_a0 3
+-- expect byte v_a149 152
+-- expect byte v_b0 101
+-- expect byte v_b149 250
+-- @gpsim_validate end
+
+--
+-- Notes:
+--    **`sims/jal_gpsim_validate.sh sims/gpsim/16f1825_gpsim_user_array_passed_on.jal`**
+--    Compile-side contract: unit-tests/test_openarray_user_array_percall.sh.
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+var byte big_a[150]
+var byte big_b[150]
+
+var volatile byte _ck_ok = 0
+var volatile byte ok_a = 0
+var volatile byte ok_b = 0
+var volatile byte ok_deep = 0
+var volatile byte a0 = 0
+var volatile byte a149 = 0
+var volatile byte b0 = 0
+var volatile byte b149 = 0
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array with `base + i` for every element
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure fill_array(byte in data[], byte in base) is
+   var byte ii = 0
+   for 150 loop
+      data[ii] = base + ii
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Check an open array against `base + i`
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none; _ck_ok is 1 when every element matches
+--------------------------------------------------------------------------------
+procedure check_array(byte in data[], byte in base) is
+   var byte ii = 0
+   var byte bad = 0
+   for 150 loop
+      if data[ii] != (base + ii) then
+         bad = 1
+      end if
+      ii = ii + 1
+   end loop
+   _ck_ok = 1
+   if bad != 0 then
+      _ck_ok = 0
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Add one to every element (the LEAF of the pass-on chain)
+-- Parameters: data -- the open array
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure inner(byte in data[]) is
+   var byte ii = 0
+   for 150 loop
+      data[ii] = data[ii] + 1
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Hand the formal on to `inner`, then use it again itself
+-- Parameters: data -- the open array
+-- Returns: none; _ck_ok is 1 when `data` still addresses correctly afterwards
+-- Notes: the nested call must not disturb the map this procedure walks.
+--------------------------------------------------------------------------------
+procedure outer(byte in data[]) is
+   var byte last = 0
+   inner(data)
+   last = data[149]
+   _ck_ok = 1
+   if last != (data[0] + 149) then
+      _ck_ok = 0
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Two hops: hand the formal to `outer`, which hands it to `inner`
+-- Parameters: data -- the open array
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure deeper(byte in data[]) is
+   outer(data)
+end procedure
+
+fill_array(big_a, 1)
+fill_array(big_b, 100)
+
+outer(big_a)
+check_array(big_a, 2)
+ok_a = _ck_ok
+
+deeper(big_a)
+check_array(big_a, 3)
+ok_deep = _ck_ok
+
+outer(big_b)
+check_array(big_b, 101)
+ok_b = _ck_ok
+
+a0 = big_a[0]
+a149 = big_a[149]
+b0 = big_b[0]
+b149 = big_b[149]
+
+if (ok_a + ok_b + ok_deep) != 3 then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+end loop
