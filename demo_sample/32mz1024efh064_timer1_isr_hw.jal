@@ -1,0 +1,112 @@
+-- Title: PIC32MZ1024EFH064 Timer1 PR1 period-match ISR witness (bench)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    SETTLES the 2026-10-09 note "Timer1 period match never fires on this
+--    part (TMR1 counts, PR1 readback correct, TMR1 wraps at 0xFFFF) --
+--    Type-A timer quirk, open": **it is REFUTED.**  Timer1's PR1 match
+--    fires, and this witness measures it: three PR1 values give three
+--    rates that match PBCLK/256/(PR1+1) within 1 %
+--    (bench 2026-11-03, 100 MHz FRC_SPLL, RE1 edge count from the ESP32
+--    pin monitor):
+--
+--        PR1 = 0x1000 (4096)  predicted 47.7 Hz  measured 47.3 edges/s
+--        PR1 = 0x0800 (2048)  predicted 95.3 Hz  measured 95.0 edges/s
+--        PR1 = 0x4000 (16384) predicted 11.9 Hz  measured 11.8 edges/s
+--
+--    The original observation came from a body that armed the vector with
+--    `IPC0 = 4` -- IPC0 covers IRQ0..IRQ3, and Timer1 is IRQ4, whose
+--    priority lives in IPC1<7:0>.  Timer1 therefore sat at priority 0 and
+--    was never delivered, which reads exactly like "the timer never
+--    matches".  It was a second-order casualty of the 2026-10-09 era,
+--    like the loader-ISR "wedge" (whose real cause was the power-on
+--    Cause.IP[1:0] request).
+--
+--    This witness removes both confounders:
+--      * the image is a PFM ISR image (the only supported shape),
+--      * Timer1 (IRQ4) gets its priority from IPC1, and
+--      * phase 1 software-sets T1IF once, so "dispatch works" is proven
+--        before Timer1 is trusted (without it, a dead ISR and a dead
+--        timer look identical).
+--
+--    Verdict is read on RE1 with the ESP32 pin monitor (GPIO23 <- RE1,
+--    `demo_sample/esp32_pin_monitor.jal`), NOT on the UART: the handler
+--    toggles RE1 on every Timer1 interrupt, so
+--        ~1 edge then silence   = dispatch works, Timer1 never matched
+--        ~95 edges per second   = Timer1 matches (PR1=0x1000 at 1:256)
+--        thousands per second   = wrong prescaler / PR1 readback
+--
+-- Notes:
+--    Bench (PK5, 100 MHz FRC_SPLL): flash, then read the monitor:
+--        python3 tmp/prog_run.sh program --board mini32 --file <abs hex>
+--        python3 tmp/prog_run.sh reset --board mini32
+--        python3 tmp/cp2102_read.py 5 115200
+--    Expected when Timer1 works: the monitor's `e=` climbs ~95 per second
+--    and RE1 flickers at ~48 Hz.
+--
+-- -----------------------------------------------------------------------------
+include 32mz1024efh064
+pragma target clock 100_000_000
+pragma target OSC FRC_SPLL
+pragma target image pfm
+pragma target WDT DISABLED
+pragma target DMT DISABLED
+
+enable_digital_io()
+_usec_delay(100_000)
+
+alias led is pin_E1
+pin_E1_direction = OUTPUT
+led = OFF
+
+var volatile byte hits = 0
+
+--------------------------------------------------------------------------------
+-- Description: Timer1 (IRQ4) handler -- clears T1IF and toggles RE1
+-- Parameters: none (pragma interrupt)
+-- Returns: none
+-- Notes: one toggle per Timer1 period match, so the monitor's edge count
+-- - is a direct measure of the hardware timer, and `hits` is the same
+-- - count for any debugger that can read RAM.
+--------------------------------------------------------------------------------
+procedure _t1_isr() is
+   pragma interrupt
+
+   IFS0CLR = 0x10                    -- T1IF (write-1-to-clear)
+
+   hits = hits + 1
+   if led == ON then
+      led = OFF
+   else
+      led = ON
+   end if
+end procedure
+
+-- Timer1 is IRQ4: its priority lives in IPC1<7:0> (IPC0 covers IRQ0..3).
+IPC1 = 0x1C
+IEC0SET = 0x10
+
+-- phase 1: software-set T1IF -- proves the vector, the stub, the handler
+-- and the ERET path work.  One RE1 toggle, then silence if Timer1 never
+-- matches.
+IFS0SET = 0x10
+_usec_delay(20_000)
+
+-- phase 2: the actual question.  Async Type-A timer: stop it, latch the
+-- period, then start it (the TWDIS/TWIP write pipeline can swallow writes
+-- made while the timer is running -- the original note suspected exactly
+-- that).
+T1CON = 0x0000                       -- TON=0
+_usec_delay(1_000)
+TMR1 = 0x0000
+PR1 = 0x1000                         -- 4096 ticks
+T1CON = 0x8070                       -- TON=1, TCKPS=1:256
+                                     -- T1 clk = 50 MHz/256 = 195.3 kHz
+                                     -- -> 47.7 Hz interrupts -> ~95 edges/s
+
+forever loop
+end loop
