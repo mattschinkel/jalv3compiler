@@ -1540,6 +1540,31 @@ static void esp_load_bitfield(pfile_t *pf, value_t val, unsigned reg)
     return;
   }
   addr = esp_var_ram(cv) + (pos >> 3);
+  if (esp_addr_is_peripheral(addr)) {
+    /* SFR read: same lane hazard as the store -- one aligned 32-bit
+     * load, then shift the field down. */
+    unsigned long base = addr & ~3UL;
+    esp_code_t lit = esp_pool_lit(base);
+
+    (void) esp_emit_l32r(ESP_REG_A4, lit);
+    (void) esp_code_alloc(ESP_OP_L32I, rd, ESP_REG_A4, 0);
+    if (pos & 31U) {
+      (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A6, 0,
+          (int) (pos & 31U));
+      (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A6, 0);
+      (void) esp_code_alloc(ESP_OP_SRL, rd, rd, 0);
+    }
+    if (width <= 16U) {
+      esp_code_extui(reg, rd, 0, width);
+    } else {
+      unsigned long mask = (width >= 32U) ? 0xFFFFFFFFUL
+          : ((1UL << width) - 1UL);
+      esp_code_t m = esp_pool_lit(mask);
+      (void) esp_emit_l32r(ESP_REG_A6, m);
+      (void) esp_code_alloc(ESP_OP_AND, reg, rd, (int) ESP_REG_A6);
+    }
+    return;
+  }
   {
     esp_code_t lit = esp_pool_lit(addr);
     (void) esp_emit_l32r(ESP_REG_A4, lit);
@@ -1609,6 +1634,39 @@ static void esp_store_bitfield(pfile_t *pf, value_t val, unsigned vreg)
     (void) esp_code_alloc(ESP_OP_AND, vreg, vreg, (int) ESP_REG_A6);
   }
   addr = esp_var_ram(cv) + (pos >> 3);
+  if (esp_addr_is_peripheral(addr)) {
+    /* SFR: byte-lane writes GARBLE on silicon -- an ESP32 peripheral
+     * register ignores the byte enables (the write lands on the wrong
+     * lane), which is why `GPIO_PIN23_INT_TYPE_MASK = 3` read back as 6
+     * and `_INT_ENA_MASK = 0x1F` as 24 (2026-11-03 bench, RAM fields
+     * were unaffected).  Do the field update as ONE aligned 32-bit
+     * read-modify-write, the same shape the single-bit path uses. */
+    unsigned long base  = addr & ~3UL;
+    unsigned long fmask = (width >= 32U) ? 0xFFFFFFFFUL
+        : ((1UL << width) - 1UL);
+    unsigned long shifted = (fmask << (pos & 31U)) & 0xFFFFFFFFUL;
+    unsigned long keep = (~shifted) & 0xFFFFFFFFUL;
+    esp_code_t lit;
+
+    lit = esp_pool_lit(base);
+    (void) esp_emit_l32r(ESP_REG_A4, lit);
+    lit = esp_pool_lit(fmask);
+    (void) esp_emit_l32r(ESP_REG_A6, lit);
+    (void) esp_code_alloc(ESP_OP_AND, vreg, vreg, (int) ESP_REG_A6);
+    if (pos & 31U) {
+      (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A7, 0,
+          (int) (pos & 31U));
+      (void) esp_code_alloc(ESP_OP_SSL, 0, ESP_REG_A7, 0);
+      (void) esp_code_alloc(ESP_OP_SLL, vreg, vreg, 0);
+    }
+    (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A3, ESP_REG_A4, 0);
+    lit = esp_pool_lit(keep);
+    (void) esp_emit_l32r(ESP_REG_A6, lit);
+    (void) esp_code_alloc(ESP_OP_AND, ESP_REG_A3, ESP_REG_A3, (int) ESP_REG_A6);
+    (void) esp_code_alloc(ESP_OP_OR, ESP_REG_A3, ESP_REG_A3, (int) vreg);
+    (void) esp_code_alloc(ESP_OP_S32I, ESP_REG_A3, ESP_REG_A4, 0);
+    return;
+  }
   {
     esp_code_t lit = esp_pool_lit(addr);
     (void) esp_emit_l32r(ESP_REG_A4, lit);

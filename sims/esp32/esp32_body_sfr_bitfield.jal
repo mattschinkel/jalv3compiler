@@ -1,0 +1,91 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — multi-bit SFR bit-field RMW
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A multi-bit field that SPANS a byte boundary is written with a
+--    read-modify-write: the back end reads the bytes the field overlaps,
+--    shifts the value in and writes the bytes back (the Xtensa has no
+--    store-mask instruction).  That split is easy to get wrong by one bit
+--    or one byte, and the failure is invisible until a peripheral is
+--    programmed with it -- which is exactly what happened while writing the
+--    ESP32 GPIO-source interrupt sample: `GPIO_PIN23_INT_TYPE_MASK = 3` and
+--    `_INT_ENA_MASK = 0x1F` (bits 9:7 and 17:13) read back as 6 and 24.
+--
+--    This body pins the semantics on a RAM dword, which is the same code
+--    path (bit alias into a word) and is QEMU-checkable:
+--      f3 at bit 7, width 3   (spans bytes 0 and 1)
+--      f5 at bit 13, width 5  (inside byte 2)
+--      f1 at bit 31, width 1  (top bit)
+--    After writing 3 / 0x1F / 1 the word must be exactly 0x8003E180, and
+--    each field must read back its own value.
+--
+-- @sim_validate begin
+-- machine: esp32
+-- duration_s: 8.0
+-- icount: 6
+-- uart_contains: SFRBF-OK
+-- expect byte v_sfr_ok 1
+-- @sim_validate end
+
+include regression_esp32_device
+include regression_esp32
+include esp32_xtensa_lx6
+
+pragma target clock 240_000_000
+pragma target OSC      PLL
+
+include esp32_clock
+esp32_clock_init()
+
+include esp32_serial_hw
+alias serial_data is serial_hw_data
+const PRINT_MAX_VAR_SIZE = 4
+
+include print
+
+var volatile byte sfr_ok = 0          -- 1 when every field read back
+var dword sfr_word = 0
+var bit*3 f3 at sfr_word : 7       -- spans bytes 0 and 1
+var bit*5 f5 at sfr_word : 13      -- inside byte 2
+var bit*1 f1 at sfr_word : 31      -- top bit
+
+f3 = 3
+f5 = 0x1F
+f1 = 1
+
+-- expected (3 << 7) | (0x1F << 13) | (1 << 31) = 0x8003E180 = 2147742592
+print_string(serial_data, "SFRBF v=")
+print_dword_dec(serial_data, sfr_word)
+print_string(serial_data, " lit=")
+print_dword_dec(serial_data, 0x8003E180)
+print_string(serial_data, " f3=")
+print_dword_dec(serial_data, dword(f3))
+print_string(serial_data, " f5=")
+print_dword_dec(serial_data, dword(f5))
+print_string(serial_data, " f1=")
+print_dword_dec(serial_data, dword(f1))
+print_crlf(serial_data)
+
+if (sfr_word == 0x8003E180) & (f3 == 3) & (f5 == 0x1F) & (f1 == 1) then
+   print_string(serial_data, "SFRBF-OK v=")
+else
+   print_string(serial_data, "SFRBF-FAIL v=")
+end if
+print_dword_dec(serial_data, sfr_word)
+print_string(serial_data, " f3=")
+print_dword_dec(serial_data, dword(f3))
+print_string(serial_data, " f5=")
+print_dword_dec(serial_data, dword(f5))
+print_string(serial_data, " f1=")
+print_dword_dec(serial_data, dword(f1))
+print_crlf(serial_data)
+
+if (sfr_word == 0x8003E180) & (f3 == 3) & (f5 == 0x1F) & (f1 == 1) then
+   sfr_ok = 1
+end if
+
+forever loop
+end loop
