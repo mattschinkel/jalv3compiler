@@ -12,7 +12,7 @@
 -- @gpsim_validate begin
 -- steps: 250000
 -- frequency_hz: auto
--- expect byte v__check_step 5
+-- expect byte v__check_step 7
 -- @gpsim_validate end
 --
 -- ------------------------------------------------------

@@ -163,6 +163,15 @@ case s of
   \"a\": s = \"b\"
 end case" "case selector must be an integer"
 
+# --- character stores through a string pointer (2026-11-04) -----------
+# `p[i] = c` is a byte store routed through the handle; a multi-byte string
+# RHS is not a character (same rule as the direct `s[i] = c` form).
+check ptr_store_multibyte "$HEAP
+var pointer p as var string
+s = \"abc\"
+p is s
+p[1] = \"text\"" "string element assignment requires a byte value"
+
 # --- heap-size declaration validation ---------------------------------
 check heap_word_overflow '
 include 16f877
@@ -209,6 +218,28 @@ var byte i = 1
 case i of
   1: i = 0
 end case"
+check_ok ok_ptr_store_byte "$HEAP
+var pointer p as var string
+s = \"abc\"
+p is s
+p[1] = 88"
+check_ok ok_ptr_store_char "$HEAP
+var pointer p as var string
+s = \"abc\"
+p is s
+p[1] = \"X\""
+check_ok ok_ptr_store_runtime "$HEAP
+var pointer p as var string
+var byte i = 1
+var byte c = 88
+s = \"abc\"
+p is s
+p[i] = c"
+check_ok ok_ptr_whole_string "$HEAP
+var pointer p as var string
+s = \"abc\"
+p is s
+p = \"wxyz\""
 
 echo
 echo "passed: $pass  failed: $fail"

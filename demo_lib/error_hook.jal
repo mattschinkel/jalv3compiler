@@ -37,8 +37,10 @@
 -- Cells the handler reads:
 --    _error_source       which subsystem raised it (1 = string)
 --    _string_error       the string code: 0 none, 1 heap full, 2 overflow,
---                        3 invalid.  READING IT CLEARS IT (consume-on-read),
---                        so it is read once into `err` below.
+--                        3 invalid, 4 range (a character store through a
+--                        string pointer past the block CAP -- `p[i] = c`).
+--                        READING IT CLEARS IT (consume-on-read), so it is
+--                        read once into `err` below.
 --
 -- The compiler clears `_error_source` and `_string_error` when the handler
 -- returns (delivered once, then gone).  `_error_bit` is NOT cleared: it is a
@@ -72,9 +74,13 @@ procedure _error_hook() is
                   if err == _STRING_ERROR_INVALID then
                      print_string(_error_device, "[string invalid]")
                   else
-                     print_string(_error_device, "[string error: ")
-                     print_byte_dec(_error_device, err)
-                     print_string(_error_device, "]")
+                     if err == _STRING_ERROR_RANGE then
+                        print_string(_error_device, "[string range]")
+                     else
+                        print_string(_error_device, "[string error: ")
+                        print_byte_dec(_error_device, err)
+                        print_string(_error_device, "]")
+                     end if
                   end if
                end if
             end if

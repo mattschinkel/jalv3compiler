@@ -776,8 +776,14 @@ static void jal_assign_rhs_parse(jal_assign_ctx_t *ctx)
   operator_t assign_op = ctx->assign_op;
   char      *ptr_rhs_dup = ctx->ptr_rhs_dup;
 
+  /* A dynamic-string destination WITH a subscript (`p[i]`) is a character
+   * element, not the whole string: leave it for the element-store chain
+   * (`jal_string_subscript_write_emit`), exactly like a direct `s[i] = c`.
+   * Only a bare dynamic string (`s`, a `string` formal, or a pointer to
+   * one without an index) is a whole-string assignment here. */
   if ((assign_op == OPERATOR_ASSIGN)
-      && (jal_string_is_dynamic(val)
+      && ((jal_string_is_dynamic(val)
+              && (VALUE_NONE == value_baseofs_get(val)))
           || jal_string_pointer_dynamic_dst_p(val)
           || jal_string_is_fixed(val))) {
     (void) jal_string_assignment_parse_emit(pf, val);

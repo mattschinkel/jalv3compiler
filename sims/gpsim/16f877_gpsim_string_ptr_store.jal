@@ -1,0 +1,115 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 classic gpsim — character store through a string pointer
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var pointer p as var string` + `p[i] = c` stores the i-th CHARACTER of
+--    the designated heap string, like a direct `s[i] = c` (byte or one-char
+--    RHS, COUNT unchanged by the write, the pointer follows a reallocated
+--    block).  Unlike the direct form the pointer store is BOUNDS-CHECKED
+--    against the block CAP at run time: an index at or past CAP writes
+--    nothing and reports `_string_error = _string_error_range` (4) through
+--    the optional `_error_hook`.
+--
+--    The shared `_regression_string_subscript_body` covers the same API on
+--    PIC18/PIC32/ESP32 with `_string_error` polling; this classic twin also
+--    proves the hook delivery of the new code.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 3
+-- expect byte v_store_ok 1
+-- expect byte v_bounds_ok 1
+-- expect byte v_edge_ok 1
+-- expect byte v_hook_ct 3
+-- expect byte v_hook_src 1
+-- expect byte v_hook_code 4
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+const word _string_heap_size = 64
+
+var string s
+var string t
+var string e
+var pointer p as var string
+var byte i
+var byte c
+var word wi
+var volatile byte hook_ct = 0
+var volatile byte hook_src = 0
+var volatile byte hook_code = 0
+var volatile byte store_ok = 0
+var volatile byte bounds_ok = 0
+var volatile byte edge_ok = 0
+
+-- the handler: defined before the code that can fail
+procedure _error_hook() is
+   hook_src = _error_source
+   hook_code = _string_error        -- consume-on-read
+   hook_ct = hook_ct + 1
+end procedure
+
+procedure run() is
+   regression_begin_run()
+
+   -- valid stores: char literal, byte variable, runtime index; COUNT is
+   -- not changed by a write; the pointer follows a reallocated block
+   s = "abc"
+   p is s
+   p[1] = "X"
+   i = 2
+   c = 90
+   p[i] = c
+   if (s == "aXZ") & (COUNT(s) == 3) then
+      store_ok = 1
+   end if
+   s = "abcdef"
+   p[1] = "Y"
+   if (store_ok == 1) & (s == "aYcdef") & (COUNT(s) == 6) then
+      store_ok = 2
+   end if
+   if store_ok == 2 then
+      store_ok = 1
+   end if
+   regression_checkpoint()
+
+   -- CAP bound: "abcdef" is CAP 6, so index 6 is refused (nothing written,
+   -- no neighbour corrupted) and the hook receives the range code
+   t = "keep"
+   p[6] = "Q"
+   if (s == "aYcdef") & (t == "keep") then
+      if (hook_ct == 1) & (hook_src == 1) & (hook_code == 4) then
+         bounds_ok = 1
+      end if
+   end if
+   regression_checkpoint()
+
+   -- in CAP but past LEN is allowed and leaves COUNT alone; a wide index
+   -- never wraps into range; an explicitly empty string (CAP 0) refuses
+   -- index 0
+   s = "12345"
+   s = "12"
+   p[4] = "W"
+   if (COUNT(s) == 2) & (s[4] == "W") then
+      wi = 300
+      p[wi] = "X"
+      if (hook_ct == 2) & (hook_code == 4) then
+         e = ""
+         p is e
+         p[0] = "A"
+         if (hook_ct == 3) & (hook_code == 4) & (e == "") then
+            edge_ok = 1
+         end if
+      end if
+   end if
+   regression_checkpoint()
+end procedure
+
+run()

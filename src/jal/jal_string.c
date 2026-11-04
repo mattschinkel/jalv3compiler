@@ -117,6 +117,7 @@ void jal_string_core_gate(pfile_t *pf)
 #define _STRING_ERROR_HEAP_FULL 1
 #define _STRING_ERROR_OVERFLOW  2
 #define _STRING_ERROR_INVALID   3
+#define _STRING_ERROR_RANGE     4
 
 #define _STRING_INDEX_AUTO  0
 #define _STRING_INDEX_BYTE  1
@@ -1163,6 +1164,8 @@ static boolean_t jal_string_fixed_runtime_ensure(pfile_t *pf)
            _STRING_ERROR_OVERFLOW)
       && jal_string_global_const_alloc(pf, "_string_error_invalid",
            _STRING_ERROR_INVALID)
+      && jal_string_global_const_alloc(pf, "_string_error_range",
+           _STRING_ERROR_RANGE)
       && jal_string_global_const_alloc(pf, "string_error_none",
            _STRING_ERROR_NONE)
       && jal_string_global_const_alloc(pf, "string_error_heap_full",
@@ -1170,7 +1173,9 @@ static boolean_t jal_string_fixed_runtime_ensure(pfile_t *pf)
       && jal_string_global_const_alloc(pf, "string_error_overflow",
            _STRING_ERROR_OVERFLOW)
       && jal_string_global_const_alloc(pf, "string_error_invalid",
-           _STRING_ERROR_INVALID);
+           _STRING_ERROR_INVALID)
+      && jal_string_global_const_alloc(pf, "string_error_range",
+           _STRING_ERROR_RANGE);
 }
 
 boolean_t jal_string_error_cell_ensure(pfile_t *pf)
@@ -1754,11 +1759,15 @@ value_t jal_string_subscript_read_emit(pfile_t *pf, value_t elem)
 boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     value_t src)
 {
-  value_t base;
-  value_t idx;
-  value_t off;
-  value_t ofs;
-  value_t hdr;
+  value_t   base;
+  value_t   idx;
+  value_t   off;
+  value_t   ofs;
+  value_t   hdr;
+  value_t   cap;
+  label_t   ok_lbl;
+  label_t   done_lbl;
+  boolean_t through_ptr;
 
   if (!src || !jal_string_subscript_value_is(dst)
       || value_is_bit(src)
@@ -1769,6 +1778,14 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
       || !jal_string_subscript_split(pf, dst, &base, &idx)) {
     return BOOLEAN_FALSE;
   }
+  /* A character written through a string pointer can designate ANY heap
+   * string (the block may have been reallocated or the pointer rebound), so
+   * this form is bounds-checked against the handle's CAP at run time: an
+   * index at or past CAP would corrupt the next heap block.  The direct
+   * `s[i] = c` form keeps the historical unchecked rule (like arrays); this
+   * one reports `_string_error = _string_error_range` and leaves the text
+   * unchanged instead. */
+  through_ptr = jal_string_pointer_is(dst);
   if (1 != value_byte_sz_get(src)) {
     pfile_log(pf, PFILE_LOG_ERR,
         "string element assignment requires a byte value");
@@ -1778,7 +1795,25 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     value_release(off);
     ofs = jal_string_binary_emit(pf, OPERATOR_ADD, hdr, idx);
     value_release(hdr);
-    jal_string_heap_index_set(pf, ofs, src);
+    if (through_ptr) {
+      cap = jal_string_handle_index_get(pf, base, _STRING_FIELD_CAP);
+      ok_lbl = pfile_label_alloc(pf, 0);
+      done_lbl = pfile_label_alloc(pf, 0);
+      jal_string_branch_if_value_cmp(pf, OPERATOR_LT, idx, cap,
+          CMD_BRANCHCOND_TRUE, ok_lbl);
+      jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
+          _STRING_ERROR_RANGE);
+      pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+          done_lbl, VALUE_NONE, VALUE_NONE, 0);
+      pfile_cmd_label_add(pf, ok_lbl);
+      jal_string_heap_index_set(pf, ofs, src);
+      pfile_cmd_label_add(pf, done_lbl);
+      label_release(done_lbl);
+      label_release(ok_lbl);
+      value_release(cap);
+    } else {
+      jal_string_heap_index_set(pf, ofs, src);
+    }
     value_release(ofs);
   }
   value_release(idx);

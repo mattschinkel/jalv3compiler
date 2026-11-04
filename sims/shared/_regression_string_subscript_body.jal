@@ -8,15 +8,24 @@
 --    `str[i]` on a heap `var string` reads and writes the i-th
 --    CHARACTER (payload through the handle), const and runtime
 --    indices, char-literal writes, COUNT unchanged by writes.
+--    A `var pointer p as var string` gives the same character access on
+--    every target, with one difference: the pointer form is BOUNDS-CHECKED
+--    against the block CAP at run time (out of range sets
+--    `_string_error = _string_error_range` and writes nothing), because the
+--    pointer can designate any string and an overrun would corrupt the next
+--    heap block.  The direct `str[i] = c` form stays unchecked.
 --
 -- Notes:
---    Unchecked like array subscripts. Wrapped by the ESP32 and PIC32
---    sim bodies.
+--    Wrapped by the ESP32, PIC32 and PIC18 sim bodies.
 --------------------------------------------------------------------------------
 const word _string_heap_size = 128
 include strings_dynamic
 
 var string _ss_s
+var string _ss_t
+var pointer _ss_p as var string
+var pointer _ss_pe as var string
+var word _ss_wi
 var byte _ss_i
 var byte _ss_b
 
@@ -68,6 +77,65 @@ procedure _run() is
       _check_failed = true
    end if
    regression_checkpoint()                       -- 5
+
+   -- character store through a string pointer: same access as `str[i]`,
+   -- const and runtime index, COUNT untouched
+   _ss_p is _ss_s
+   _ss_p[0] = "H"
+   _ss_i = 2
+   _ss_p[_ss_i] = "L"
+   if _ss_s[0] != "H" then
+      _check_failed = true
+   end if
+   if _ss_s[2] != "L" then
+      _check_failed = true
+   end if
+   if COUNT(_ss_s) != 11 then
+      _check_failed = true
+   end if
+   if _string_error != _STRING_ERROR_NONE then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 6
+
+   -- CAP bound: `_ss_s` was allocated for 11 bytes, so index 11 is refused
+   -- (nothing written, `_string_error_range`), and an index in CAP but past
+   -- LEN is allowed without changing COUNT.  An explicitly empty string
+   -- (CAP 0) refuses even index 0, and a wide index never wraps into range.
+   _ss_p[11] = "Q"
+   if _string_error != _STRING_ERROR_RANGE then
+      _check_failed = true
+   end if
+   if _ss_s[10] != "d" then
+      _check_failed = true
+   end if
+   _ss_s = "12345"
+   _ss_s = "12"
+   _ss_p[4] = "Z"
+   if COUNT(_ss_s) != 2 then
+      _check_failed = true
+   end if
+   if _ss_s[4] != "Z" then
+      _check_failed = true
+   end if
+   if _string_error != _STRING_ERROR_NONE then
+      _check_failed = true
+   end if
+   _ss_wi = 300
+   _ss_p[_ss_wi] = "X"
+   if _string_error != _STRING_ERROR_RANGE then
+      _check_failed = true
+   end if
+   _ss_t = ""
+   _ss_pe is _ss_t
+   _ss_pe[0] = "A"
+   if _string_error != _STRING_ERROR_RANGE then
+      _check_failed = true
+   end if
+   if COUNT(_ss_t) != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()                       -- 7
 end procedure
 
 _run()

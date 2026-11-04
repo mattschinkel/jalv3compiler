@@ -221,6 +221,7 @@ static void jal_error_constants_ensure(pfile_t *pf)
   (void) jal_error_const_alloc(pf, "_string_error_heap_full", 1);
   (void) jal_error_const_alloc(pf, "_string_error_overflow", 2);
   (void) jal_error_const_alloc(pf, "_string_error_invalid", 3);
+  (void) jal_error_const_alloc(pf, "_string_error_range", 4);
   (void) jal_error_const_alloc(pf, "_error_source_string",
       JAL_ERROR_SOURCE_STRING);
   (void) jal_error_const_alloc(pf, "_error_source_user",
@@ -231,6 +232,7 @@ static void jal_error_constants_ensure(pfile_t *pf)
   (void) jal_error_const_alloc(pf, "string_error_heap_full", 1);
   (void) jal_error_const_alloc(pf, "string_error_overflow", 2);
   (void) jal_error_const_alloc(pf, "string_error_invalid", 3);
+  (void) jal_error_const_alloc(pf, "string_error_range", 4);
   (void) jal_error_const_alloc(pf, "error_source_string",
       JAL_ERROR_SOURCE_STRING);
   (void) jal_error_const_alloc(pf, "error_source_user",

@@ -1206,20 +1206,14 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
        * so **`p is arr[1]`** (POINTER_ASSIGN RHS) parses as an lvalue, not leaving **`[`** at
        * top level (would become "unexpected token" at EOF). */
       (void) jal_parse_postfix(pf, &val, jvals);
-      /* A character reached through a string POINTER is READ-only: storing
-       * would have to allocate or alias inside the target's heap block via
-       * a descriptor the expression does not own.  Refuse it here, where
-       * the lvalue-ness is known, instead of letting the assignment chain
-       * reinterpret the element (pre-fix it silently stored over the
-       * handle byte; with read support it would have fallen through to a
-       * string assignment and written the RHS as text). */
-      if ((JAL_PARSE_VALUE_TYPE_RVALUE != type) && val
-          && jal_string_pointer_is(val)
-          && (VALUE_NONE != value_baseofs_get(val))) {
-        pfile_log(pf, PFILE_LOG_ERR,
-            "cannot assign to a character through a string pointer;"
-            " assign through the string variable");
-      }
+      /* A character through a string POINTER is a valid store target since
+       * 2026-11-04: the assignment chain routes the element view to
+       * `jal_string_subscript_write_emit`, which stores through the handle
+       * and bounds-checks the index against the block's CAP (reporting
+       * `_string_error_range`).  This used to be refused here because the
+       * chain would reinterpret the element as a whole string (writing the
+       * RHS as text) and, before read support, the store silently
+       * overwrote the handle byte. */
       /* RVALUE heap-string subscript: str[i] must read the i-th
        * CHARACTER, not the handle's storage (off/cap/len) -- the normal
        * element view on a heap string would do exactly that. Swap the
