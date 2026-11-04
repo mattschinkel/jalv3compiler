@@ -1,0 +1,173 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — open-array formal controls (user arrays)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The control shapes that must keep working for the per-call chunk
+--    addressing of user arrays (fixes/fix_openarray_user_array_percall.md).
+--    A runtime map is created only when a formal is fed two DIFFERENT layouts
+--    and at least one of them is split across RAM banks, so these shapes must
+--    still be addressed by the BAKED layout (or by the pointer alone) and be
+--    correct at run time:
+--
+--      * `fill_one`  -- ONE call site with a multi-bank buffer (150 bytes,
+--                       two chunks on a 16F1825);
+--      * `fill_same` -- the SAME buffer passed twice (one recorded pair, so
+--                       one layout: the baked copy is exact);
+--      * `fill_pair` -- two buffers small enough to stay inside one RAM bank
+--                       (40 bytes each), so neither has a chunk map and the
+--                       per-call pointer is the whole address.
+--
+--    These pass on the pre-fix build too: they are the "do not disturb" half.
+--    The defect, the nested-call proof and the const-ROM + RAM shape live in
+--    sims/gpsim/16f1825_gpsim_user_array_over_bank.jal.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_ok_one 1
+-- expect byte v_ok_same 1
+-- expect byte v_ok_pair 1
+-- expect byte v_a0 1
+-- expect byte v_a149 150
+-- expect byte v_b0 100
+-- expect byte v_b99 199
+-- expect byte v_p0 50
+-- expect byte v_p39 89
+-- @gpsim_validate end
+
+--
+-- Notes:
+--    **`sims/jal_gpsim_validate.sh sims/gpsim/16f1825_gpsim_user_array_controls.jal`**
+--    Compile-side contract: unit-tests/test_openarray_user_array_percall.sh.
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+var byte big_a[150]
+var byte b1[100]
+var byte b2[40]
+var byte b3[40]
+
+var volatile byte _ck_ok = 0
+var volatile byte ok_one = 0
+var volatile byte ok_same = 0
+var volatile byte ok_pair = 0
+var volatile byte a0 = 0
+var volatile byte a149 = 0
+var volatile byte b0 = 0
+var volatile byte b99 = 0
+var volatile byte p0 = 0
+var volatile byte p39 = 0
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array with `base + i` (150 elements)
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure fill_one(byte in data[], byte in base) is
+   var byte ii = 0
+   for 150 loop
+      data[ii] = base + ii
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array with `base + i` (100 elements)
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure fill_same(byte in data[], byte in base) is
+   var byte ii = 0
+   for 100 loop
+      data[ii] = base + ii
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Fill a 40-byte open array with `base + i`
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none
+--------------------------------------------------------------------------------
+procedure fill_pair(byte in data[], byte in base) is
+   var byte ii = 0
+   for 40 loop
+      data[ii] = base + ii
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Check `base + i` over a 150-element open array's ends
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none; _ck_ok is 1 when the first and last element match
+--------------------------------------------------------------------------------
+procedure check_ends(byte in data[], byte in base) is
+   var byte last = 0
+   var byte ii = 0
+   for 150 loop
+      last = data[ii]
+      ii = ii + 1
+   end loop
+   _ck_ok = 1
+   if data[0] != base then
+      _ck_ok = 0
+   end if
+   if last != (base + 149) then
+      _ck_ok = 0
+   end if
+end procedure
+
+-- 1. one call site with a multi-bank buffer
+fill_one(big_a, 1)
+check_ends(big_a, 1)
+ok_one = _ck_ok
+
+-- 2. the same buffer twice
+fill_same(b1, 100)
+fill_same(b1, 100)
+ok_same = 1
+if b1[0] != 100 then
+   ok_same = 0
+end if
+if b1[99] != 199 then
+   ok_same = 0
+end if
+
+-- 3. two 40-byte buffers (one bank each), through one formal
+fill_pair(b2, 50)
+fill_pair(b3, 20)
+ok_pair = 1
+if b2[0] != 50 then
+   ok_pair = 0
+end if
+if b3[0] != 20 then
+   ok_pair = 0
+end if
+if b3[39] != 59 then
+   ok_pair = 0
+end if
+
+a0 = big_a[0]
+a149 = big_a[149]
+b0 = b1[0]
+b99 = b1[99]
+p0 = b2[0]
+p39 = b2[39]
+
+if (ok_one + ok_same + ok_pair) != 3 then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

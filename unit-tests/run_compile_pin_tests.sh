@@ -102,6 +102,12 @@ run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$C
 # first string's text); the compiler's `_strargN` buffer is the case the
 # author can act on (fixes/fix_openarray_formal_chunk_map.md).
 run_sh string_arg_chunk_map        unit-tests/test_string_arg_chunk_map.sh "$CC"
+# The USER-array half of the same defect: a formal fed two different multi-bank
+# user arrays addressed the second one with the first one's bank math.  Now
+# every such formal owns a map that each call site fills (and none is created
+# for a single layout -- the inertness the corpus relies on).
+# fixes/fix_openarray_user_array_percall.md
+run_sh openarray_user_array_percall unit-tests/test_openarray_user_array_percall.sh "$CC"
 run_sh error_hook                  unit-tests/test_error_hook.sh "$CC"
 run_sh optional_params_negative    unit-tests/test_optional_params_negative.sh "$CC"
 run_sh optional_empty_string       unit-tests/test_optional_empty_string.sh "$CC"

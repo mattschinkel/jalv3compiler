@@ -102,23 +102,25 @@ EOF
 expect_one_error "string free-list head" "$WORK/r_sfree.jal" \
   "'_string_free_head' is reserved for the compiler"
 
+# the runtime chunk map and its walk scratch are per-formal now, and both carry
+# the `_pic_chunk` prefix (fixes/fix_openarray_user_array_percall.md)
 cat >"$WORK/r_chunkmap.jal" <<'EOF'
 include 16f877
-var byte _chunkmap
+var byte _pic_chunkmap_7
 forever loop
 end loop
 EOF
-expect_one_error "chunk map" "$WORK/r_chunkmap.jal" \
-  "'_chunkmap' is reserved for the compiler"
+expect_one_error "per-formal chunk map" "$WORK/r_chunkmap.jal" \
+  "uses the compiler-reserved prefix '_pic_chunk'"
 
-cat >"$WORK/r_strarg.jal" <<'EOF'
+cat >"$WORK/r_chunkcnt.jal" <<'EOF'
 include 16f877
-var byte _strarg_map_ptr
+var byte _pic_chunk_cnt
 forever loop
 end loop
 EOF
-expect_one_error "chunk-map pointer" "$WORK/r_strarg.jal" \
-  "'_strarg_map_ptr' is reserved for the compiler"
+expect_one_error "chunk-walk scratch" "$WORK/r_chunkcnt.jal" \
+  "uses the compiler-reserved prefix '_pic_chunk'"
 
 # --------------------------------------------------------- reserved prefixes
 cat >"$WORK/r_fixarg.jal" <<'EOF'

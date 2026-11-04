@@ -1,0 +1,223 @@
+-- ------------------------------------------------------
+-- Title: 16f1825 gpsim witness — ONE open-array formal fed TWO big arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The user-array half of the open-array chunk-map work (follow-up (a) of
+--    fixes/fix_openarray_formal_chunk_map.md).  A big buffer passed to an
+--    open-array formal is addressed through a compile-time chunk map, and the
+--    callee body is emitted ONCE -- so when the map was BAKED into the formal
+--    at the first call site, a procedure called with two different buffers
+--    that span RAM banks addressed the SECOND one with the FIRST one's bank
+--    math: silent memory corruption.  That is the shape in sd_card/fat32
+--    (`byte in data[]` fed several 512-byte buffers), and those samples are
+--    compile-only, so nothing caught it.
+--
+--    Fix (fixes/fix_openarray_user_array_percall.md): a formal fed two or more
+--    different layouts owns a small map of its own, every call site fills it
+--    with the ACTIVE layout just before the call, and the callee's dynamic
+--    subscript walks that map.
+--
+--    Two 150-byte arrays on a 16F1825 (128-byte banks -> two and three
+--    chunks) are filled through the SAME formal and then verified element by
+--    element, through the same formal.  Pre-fix the second fill lands at the
+--    first array's chunk bases: `big_b` stays zero and `big_a` is corrupted
+--    (`big_a[0]=100, big_a[149]=249, big_b[0]=0, big_b[149]=0`).
+--
+--    Two more shapes ride along, because they are the ones a driver uses:
+--      * `touch()` is called once from the main line and once from INSIDE
+--        `fill_and_touch()`, which is walking its own formal `data` when the
+--        nested call happens.  The old design kept one program-wide map, so
+--        the inner call clobbered the outer layout; now each formal owns its
+--        map and the re-reads after the call still see the right buffer.
+--      * `data[149]` is a CONSTANT subscript past the first chunk: it used to
+--        fall through to the linear `deref + 149` sequence (45 bytes short of
+--        the element) and now walks the map like a dynamic index;
+--      * `sum_array` is fed a const ROM array AND a multi-bank RAM buffer:
+--        the two need different address paths, and only the runtime map makes
+--        the RAM call read the right memory.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_ok_a 1
+-- expect byte v_ok_b 1
+-- expect byte v_ok_nested 1
+-- expect byte v_ok_nested2 1
+-- expect byte v_a0 2
+-- expect byte v_a149 150
+-- expect byte v_b0 100
+-- expect byte v_b149 249
+-- expect byte v_c0 2
+-- expect byte v_rom_sum 98
+-- expect byte v_ram_sum 61
+-- expect byte v_rom_len 16
+-- @gpsim_validate end
+
+--
+-- Notes:
+--    **`sims/jal_gpsim_validate.sh sims/gpsim/16f1825_gpsim_user_array_over_bank.jal`**
+--    Compile-side contract: unit-tests/test_openarray_user_array_percall.sh.
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f1825_device
+include regression
+
+const byte rom_tab[] = "0123456789abcdef"
+
+var byte big_a[150]
+var byte big_b[150]
+var byte big_c[150]
+
+var volatile byte _ck_ok = 0
+var volatile byte ok_a = 0
+var volatile byte ok_b = 0
+var volatile byte ok_nested = 0
+var volatile byte ok_nested2 = 0
+var volatile byte a0 = 0
+var volatile byte a149 = 0
+var volatile byte b0 = 0
+var volatile byte b149 = 0
+var volatile byte c0 = 0
+var volatile byte rom_sum = 0
+var volatile byte ram_sum = 0
+var volatile byte rom_len = 0
+var volatile byte _sum = 0
+var volatile byte _sum_len = 0
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array with `base + i` for every element
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none
+-- Notes: writes across the whole buffer, so a wrong bank map corrupts
+-- - memory instead of raising an error.
+--------------------------------------------------------------------------------
+procedure fill_array(byte in data[], byte in base) is
+   var byte ii = 0
+   for 150 loop
+      data[ii] = base + ii
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Check an open array against `base + i`
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none; _ck_ok is 1 when every element matches
+-- Notes: reads through the same formal, so it uses the same bank map as
+-- - the fill -- a mismatch means the map was wrong for THIS call.
+--------------------------------------------------------------------------------
+procedure check_array(byte in data[], byte in base) is
+   var byte ii = 0
+   var byte bad = 0
+   for 150 loop
+      if data[ii] != (base + ii) then
+         bad = 1
+      end if
+      ii = ii + 1
+   end loop
+   _ck_ok = 1
+   if bad != 0 then
+      _ck_ok = 0
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Bump the first element of an open array
+-- Parameters: data -- the open array
+-- Returns: none
+-- Notes: two call sites with different layouts, so this formal gets a map of
+-- - its own -- which is what makes the nested call interesting.
+--------------------------------------------------------------------------------
+procedure touch(byte in data[]) is
+   data[0] = data[0] + 1
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array, then make a nested chunked call
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none; _ck_ok is 1 when `data` still addresses correctly
+-- Notes: the nested `touch(big_c)` fills touch's map, not data's; the reads
+-- - after it therefore prove the two maps are independent.  This formal has
+-- - two call sites (big_a and big_b), so it owns a runtime map itself -- the
+-- - shape where a shared map would corrupt.
+--------------------------------------------------------------------------------
+procedure fill_and_touch(byte in data[], byte in base) is
+   var byte ii = 0
+   var byte first
+   var byte last
+   for 150 loop
+      data[ii] = base + ii
+      ii = ii + 1
+   end loop
+   first = data[0]
+   touch(big_c)
+   last = data[149]
+   _ck_ok = 1
+   if data[0] != first then
+      _ck_ok = 0
+   end if
+   if last != (base + 149) then
+      _ck_ok = 0
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Sum an open array through the formal, into globals
+-- Parameters: data -- the open array (a ROM const array or a RAM buffer)
+-- Returns: none; _sum holds the byte sum, _sum_len the element count
+-- Notes: ONE formal fed a const ROM array and a multi-bank RAM buffer -- the
+-- - two need different address paths (ROM goes through the lookup read, RAM
+-- - walks the map), and the map is what makes the second call correct.
+--------------------------------------------------------------------------------
+procedure sum_array(byte in data[]) is
+   var word len = count(data)
+   var byte ii = 0
+   var byte acc = 0
+   for len using ii loop
+      acc = acc + data[ii]
+   end loop
+   _sum = acc
+   _sum_len = byte(len)
+end procedure
+
+fill_array(big_a, 1)
+fill_array(big_b, 100)
+
+check_array(big_a, 1)
+ok_a = _ck_ok
+check_array(big_b, 100)
+ok_b = _ck_ok
+
+fill_and_touch(big_a, 1)
+ok_nested = _ck_ok
+fill_and_touch(big_b, 100)
+ok_nested2 = _ck_ok
+
+sum_array(rom_tab)
+rom_sum = _sum
+rom_len = _sum_len
+sum_array(big_a)
+ram_sum = _sum
+
+touch(big_a)
+
+a0 = big_a[0]
+a149 = big_a[149]
+b0 = big_b[0]
+b149 = big_b[149]
+c0 = big_c[0]
+
+if (ok_a + ok_b + ok_nested + ok_nested2) != 4 then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

@@ -99,7 +99,8 @@ void pic_classic_irp_set_from_w(pfile_t *pf);
 boolean_t pic_variable_chunks_holed(variable_t var);
 void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
     value_t idx, size_t offset, boolean_t hybrid);
-void pic_fsr_chunk_walk_emit_runtime(pfile_t *pf, value_t idx, size_t offset);
+void pic_fsr_chunk_walk_emit_runtime(pfile_t *pf, variable_t formal,
+    value_t idx, size_t offset);
 void pic_lookup_index_load_w(pfile_t *pf, value_t baseofs);
 boolean_t pic_value_variable_is_array_of_pointers(const value_t val);
 void pic_indirect_setup3(pfile_t *pf, value_t val1, value_t val2,

@@ -45,15 +45,29 @@ boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar);
 variable_t pic_var_pointer_bind_walk_target(variable_t pvar);
 void pic_var_pointer_bind_check_escaped(pfile_t *pf);
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    const pfile_pos_t *pos, variable_t descriptor);
+    const pfile_pos_t *pos);
 boolean_t pic_var_openarray_pair_layout_get(variable_t actual,
     variable_ct_t *ct, variable_sz_t *sz, variable_base_t *base);
-boolean_t pic_var_openarray_pair_descriptor_get(variable_t actual,
-    variable_t *descriptor);
 /* runtime chunk-map capacity: a marshalling buffer is split by RAM bank
  * nodes; the call-site store refuses (with a diagnostic) beyond this */
 #define PIC_CHUNK_MAP_MAX 8
 boolean_t pic_var_openarray_pair_formal_runtime_get(variable_t formal);
+/* the runtime chunk map of ONE open-array formal (its own storage, filled by
+ * every call site), or VARIABLE_NONE while the formal uses its baked map */
+variable_t pic_var_openarray_formal_map_get(variable_t formal);
+/* a formal whose call sites cannot all hand over a layout keeps the baked
+ * map (the actual is a bare pointer, or the callee is reached through a
+ * function pointer / as a reentrant procedure) */
+void pic_var_openarray_formal_block(variable_t formal);
+/* place every variable that was allocated after an earlier placement round
+ * again (a layout trial emits code that creates scratch, and that scratch
+ * belongs to the layout the trial threw away) */
+void pic_var_late_replace_all(pfile_t *pf);
+/* called once, after the FINAL placement: capture each open-array pair's
+ * layout, give every formal that needs per-call addressing a map of its own
+ * and place the map + the walk scratch (no later placement round may move
+ * them).  Layout trials re-place variables, so this must run after them. */
+void pic_var_chunk_prepare_emit(pfile_t *pf);
 boolean_t pic_var_chunk_walk_globals_get(pfile_t *pf, variable_t *cnt,
     variable_t *base, variable_t *span);
 variable_t pic_var_chunk_walk_arg_get(void);

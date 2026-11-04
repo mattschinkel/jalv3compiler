@@ -1202,78 +1202,14 @@ value_t jal_string_length_value_get(pfile_t *pf, value_t val)
  * The caller passes the buffer to the formal; pair with
  * jal_string_length_value_get for the hidden count parameter (the
  * buffer capacity would over-report). Returns VALUE_NONE when val is
- * not a string. */
-/* One program-wide runtime chunk map (see jal_string_arg_byte_array).
+ * not a string.
  *
- * The map is [count][base lo, base hi, span]... and every call site that
- * passes a heap string to an open-array formal fills in the layout of ITS
- * marshalling buffer, so the callee's dynamic subscript can walk it.  The
- * pointer tells the callee where the map is; it exists so the walk has a
- * stable operand if the map is ever made per-call (it costs 2 bytes).
- *
- * Both are created on the first string-argument coercion and are GLOBAL:
- * one map serves the whole program.  `pfile_value_find` first, so a second
- * compile in the same process does not create duplicates.
- */
-static boolean_t jal_string_chunk_sym_alloc(pfile_t *pf, const char *name,
-    size_t sz)
-{
-  variable_def_t bdef;
-  variable_def_t adef;
-  value_t        val;
-  value_t        found;
-  result_t       rc;
-
-  found = pfile_value_find(pf, PFILE_LOG_NONE, name);
-  if (found) {
-    variable_def_t        d;
-    variable_def_member_t m;
-
-    d = value_def_get(found);
-    m = d ? variable_def_member_get(d) : (variable_def_member_t) 0;
-    if (!d || (VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(d))
-        || !m || (variable_def_member_ct_get(m) < (variable_ct_t) sz)) {
-      pfile_log(pf, PFILE_LOG_ERR,
-          "'%s' is reserved for the compiler (wrong type or width)", name);
-      value_release(found);
-      return BOOLEAN_FALSE;
-    }
-    value_release(found);
-    return BOOLEAN_TRUE;
-  }
-  bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
-      VARIABLE_DEF_FLAG_NONE, 1);
-  adef = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
-      VARIABLE_DEF_FLAG_NONE, 1);
-  if (!bdef || !adef) {
-    return BOOLEAN_FALSE;
-  }
-  variable_def_member_add(adef, 0, bdef, sz);
-  val = VALUE_NONE;
-  rc = pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL, name, adef, &val);
-  if (RESULT_OK != rc) {
-    pfile_log_syserr(pf, rc);
-    return BOOLEAN_FALSE;
-  }
-  /* keep it alive: the back end fills/reads it long after the front end
-   * drops unreferenced variables (found 2026-11-02: the name lookup at
-   * emit time returned NONE).  Not released on purpose -- the value arena
-   * is compile scoped and frees it at pfile_close. */
-  if (value_variable_get(val)
-      && (VARIABLE_NONE != value_variable_get(val))) {
-    variable_use_ct_bump(value_variable_get(val), CTR_BUMP_INCR);
-    variable_assign_ct_bump(value_variable_get(val), CTR_BUMP_INCR);
-  }
-  return BOOLEAN_TRUE;
-}
-
-static boolean_t jal_string_chunk_map_create(pfile_t *pf)
-{
-  return jal_string_chunk_sym_alloc(pf, "_chunkmap",
-        (size_t) (1 + 3 * PIC_CHUNK_MAP_MAX))
-    && jal_string_chunk_sym_alloc(pf, "_strarg_map_ptr", 2);
-}
-
+ * A marshalling buffer larger than one RAM bank is split by the allocator,
+ * so a callee body that serves several of them cannot carry any one layout:
+ * the BACK END hands the active layout over at run time through a per-formal
+ * map (fixes/fix_openarray_formal_chunk_map.md, then
+ * fixes/fix_openarray_user_array_percall.md).  Nothing is created here -- the
+ * map's size depends on the final placement, so it is created after it. */
 value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
 {
   variable_def_t bdef;
@@ -1326,30 +1262,9 @@ value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
       pfile_log_syserr(pf, rc);
       return VALUE_NONE;
     }
-    /* RUNTIME CHUNK MAP (2026-11-02, see
-     * docs/investigations/runtime_chunk_arguments_design_20261102.md):
-     * a marshalling buffer can be larger than one RAM bank, and one callee
-     * body must serve every call site, so the callee's chunk layout is not
-     * a compile-time constant -- the call site writes the ACTIVE layout to
-     * this one program-wide map and points `_strarg_map_ptr` at it.
-     *
-     * Layout (interleaved, walked by pic_fsr_chunk_walk_emit_globals):
-     *   [count][base0 lo, base0 hi, span0][base1 lo, ...]...
-     *
-     * Both variables are created HERE, in the front end, because a variable
-     * created after the emit snapshot never reaches the image (no equate).
-     * ONE map serves every call site: the walk runs inside the callee, and a
-     * call can only be made from a site that has already finished walking
-     * (nested chunked calls are the documented limitation -- the inner call
-     * overwrites the map before the outer body resumes).
-     *
-     * Size: 1 + 3 * 8 chunks (25 bytes).  A marshalling buffer is split by
-     * RAM bank nodes; 8 is more chunks than any banked layout observed and
-     * the call-site store refuses (with a diagnostic) beyond it. */
-    if (!jal_string_chunk_map_create(pf)) {
-      /* the scratch allocator logged the specific problem; do not report
-       * a spurious out-of-memory here (RC values are not errno) */
-    }
+    /* nb: a marshalling buffer larger than one RAM bank gets a runtime chunk
+     * map from the BACK END (one per formal, created after placement) -- see
+     * pic_chunk_desc_store / pic_var_chunk_prepare_emit. */
   }
   res = jal_string_to_array_emit(pf, buf, src, VALUE_NONE,
       BOOLEAN_FALSE);

@@ -215,7 +215,7 @@ void pic_assign_from_runtime_formal(pfile_t *pf, value_t dst, value_t src)
       (variable_sz_t) (pic_pointer_size_get(pf) - 1), 7);
   pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_linear);
   /* data pointer: FSR0 = base + index, walked through the runtime map */
-  pic_fsr_chunk_walk_emit_runtime(pf, baseofs, 0);
+  pic_fsr_chunk_walk_emit_runtime(pf, var, baseofs, 0);
   ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
   if (ind) {
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);

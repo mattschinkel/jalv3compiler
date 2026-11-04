@@ -282,8 +282,8 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
       if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
           && pic_var_openarray_pair_formal_runtime_get(
                value_variable_get(val))) {
-        pic_fsr_chunk_walk_emit_runtime(pf, VALUE_NONE,
-            offset + (size_t) value_const_get(baseofs));
+        pic_fsr_chunk_walk_emit_runtime(pf, value_variable_get(val),
+            VALUE_NONE, offset + (size_t) value_const_get(baseofs));
         value_release(tmp);
         return;
       }
@@ -402,6 +402,34 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
       }
     } else {
       /* assert(value_is_pointer(val)); */
+      /* A CONSTANT subscript through a pointer whose target is split across
+       * RAM banks (an open-array formal carrying a chunk map, or an unescaped
+       * pointer bind to a chunked array) used to fall through to the linear
+       * `deref + offset` sequence below, which cannot see the holes: element
+       * 149 of a 150-byte array split 73/77 landed 45 bytes short of its real
+       * address.  Walk the map instead (no index register: the offset is a
+       * constant, exactly like the runtime-formal const case above). */
+      {
+        variable_t walk;
+
+        walk = value_variable_get(tmp);
+        if (!pic_variable_chunks_holed(walk)) {
+          walk = pic_var_pointer_bind_walk_target(walk);
+        }
+        if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
+            && walk && (VARIABLE_NONE != walk)
+            && (pic_variable_chunks_holed(walk)
+              || pic_var_openarray_pair_formal_runtime_get(walk))) {
+          /* the offset/rare entry picks the runtime map walk for a formal
+           * that has one and the baked ladder for a compile-time map */
+          pic_fsr_chunk_walk_emit_ofs(pf, walk, VALUE_NONE,
+              offset + (size_t) value_const_get(baseofs),
+              (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+                ? BOOLEAN_TRUE : BOOLEAN_FALSE);
+          value_release(tmp);
+          return;
+        }
+      }
       value_flag_clr(tmp, VALUE_FLAG_INDIRECT);
       /* Element is typed as the pointee; POINTER stays set and makes
        * value_is_indirect() true (baseofs is often const 0). pic_instr_append_f_d

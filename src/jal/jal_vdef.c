@@ -83,8 +83,6 @@ static const char *const jal_compiler_names[] = {
   "_task_active",
   "_string_heap",     /* dynamic string heap storage        */
   "_string_free_head",/* dynamic string free-list head      */
-  "_chunkmap",        /* call-site chunk map (open arrays)  */
-  "_strarg_map_ptr",  /* pointer to the chunk map           */
   0
 };
 
@@ -97,6 +95,7 @@ static const char *const jal_compiler_name_prefixes[] = {
   "_string_num",      /* runtime integer renderer scratch        */
   "_string_cast",     /* text-cast const string                  */
   "_pic_bss_",        /* clear-BSS block name (pic.c)            */
+  "_pic_chunk",       /* runtime chunk walk: map + walk scratch  */
   0
 };
 

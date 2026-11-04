@@ -31,27 +31,30 @@
 #include "pic_op.h"
 #include "pic_op_priv.h"
 
-/* RUNTIME CHUNK WALK (2026-11-02; no chunk-count cap).
+/* RUNTIME CHUNK WALK (2026-11-02; per-formal map 2026-11-03; no chunk cap).
  *
- * An open-array formal serving several chunked actuals cannot carry a baked
- * chunk map, so the call site writes the ACTIVE layout into the one
- * program-wide `_chunkmap` and points `_strarg_map_ptr` at it:
+ * An open-array formal serving several different layouts cannot carry a baked
+ * chunk map, so it owns a small map buffer that every call site fills with the
+ * ACTIVE layout just before the call (pic_chunk_desc_store):
  *
  *     [count][base0 lo, base0 hi, span0][base1 lo, base1 hi, span1]...
  *
- * This walk loops over that table through the pointer until the index falls
- * inside a chunk, so the number of chunks is limited only by the heap:
+ * This walk loops over that table until the index falls inside a chunk, so the
+ * number of chunks is limited only by the map's size:
  *
- *     FSR0 = table + 1; count = table[0]
+ *     FSR0 = map + 1; count = map[0]
  *   loop: base = INDF++; hi = INDF++; span = INDF++
  *         if (t < span) goto done          ; t = index inside this chunk
  *         t -= span; if (--count) loop
  *   done: FSR0 = base + t                  ; leaves FSR0 at the element
+ *
+ * The map belongs to the FORMAL, so a nested call to another procedure fills
+ * its own formal's map and cannot disturb this one.
  */
-static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, value_t idx,
-    size_t offset)
+static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
+    value_t idx, size_t offset)
 {
-  value_t ptr;
+  variable_t map;
   unsigned t_wide;
   value_t t;
   value_t cnt;
@@ -63,8 +66,9 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, value_t idx,
 
   long idx_const;
 
-  ptr = pfile_value_find(pf, PFILE_LOG_ERR, "_strarg_map_ptr");
-  if ((VALUE_NONE == ptr) || !value_variable_get(ptr)) {
+  map = pic_var_openarray_formal_map_get(formal);
+  if ((VARIABLE_NONE == map)
+      || (VARIABLE_BASE_UNKNOWN == variable_base_get(map, 0))) {
     return;
   }
   ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
@@ -133,11 +137,8 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, value_t idx,
       pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
     }
   }
-  /* FSR0 = pointer; count = *FSR0++; table walk starts at +1 */
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptr, 0, PIC_OPDST_W);
-  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptr, 1, PIC_OPDST_W);
-  pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  /* FSR0 = map; count = *FSR0++; table walk starts at +1 */
+  pic_fsr0_load_addr(pf, variable_base_get(map, 0));
   pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cnt, 0);
   pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
@@ -216,10 +217,13 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, value_t idx,
 
 
 /* runtime-map walk entry for callers outside this TU (the pointer path in
- * pic_op_indirect.c); `idx` may be VALUE_NONE/const for a constant subscript */
-void pic_fsr_chunk_walk_emit_runtime(pfile_t *pf, value_t idx, size_t offset)
+ * pic_op_indirect.c, the ROM/data dispatch in pic_op_ptr.c); `formal` is the
+ * open-array formal whose map is walked and `idx` may be VALUE_NONE/const for
+ * a constant subscript */
+void pic_fsr_chunk_walk_emit_runtime(pfile_t *pf, variable_t formal,
+    value_t idx, size_t offset)
 {
-  pic_fsr_chunk_walk_emit_globals(pf, idx, offset);
+  pic_fsr_chunk_walk_emit_globals(pf, formal, idx, offset);
 }
 
 /* defined in this TU (prototypes keep definition order free) */
@@ -283,7 +287,7 @@ void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
 
   walk_var = value_variable_get(array_val);
   if (pic_var_openarray_pair_formal_runtime_get(walk_var)) {
-    pic_fsr_chunk_walk_emit_globals(pf, idx, 0);
+    pic_fsr_chunk_walk_emit_globals(pf, walk_var, idx, 0);
     return;
   }
   if (!pic_variable_chunks_holed(walk_var)) {
@@ -698,7 +702,38 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
   value_t        t;
 
   if (pic_var_openarray_pair_formal_runtime_get(var)) {
-    pic_fsr_chunk_walk_emit_globals(pf, idx, offset);
+    pic_fsr_chunk_walk_emit_globals(pf, var, idx, offset);
+    return;
+  }
+  if ((!idx || value_is_const(idx))
+      && (pic_variable_chunk_ct_get(var) > 1)) {
+    /* CONSTANT subscript through a compile-time chunk map (e.g.
+     * `data[149]` inside a procedure fed one multi-bank buffer): there is
+     * no index register to copy -- fold idx and the offset into the
+     * scratch and run the ladder.  Without this the caller's linear
+     * `deref + offset` sequence addressed across the holes (element 149 of
+     * a 150-byte array split 73/77 landed 45 bytes short).  A variable with
+     * no chunk map (ct <= 1) is addressed linearly by the caller instead. */
+    unsigned long tot;
+
+    tot    = offset
+      + (idx ? (unsigned long) value_const_get(idx) : 0UL);
+    t_wide = (tot > 0xFFU) ? 1 : 0;
+    t      = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, t_wide ? 2 : 1);
+    if (!t) {
+      pfile_log_syserr(pf, ENOMEM);
+      return;
+    }
+    pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) (tot & 0xFFU));
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
+    if (t_wide) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (unsigned) ((tot >> 8) & 0xFFU));
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+    }
+    pic_fsr_chunk_ladder(pf, var, t, t_wide ? BOOLEAN_TRUE : BOOLEAN_FALSE,
+        hybrid);
+    pic_var_temp_release(pf, t);
     return;
   }
   if ((0 == offset) && pic_fsr_chunk_walk_emit_call(pf, var, idx)) {

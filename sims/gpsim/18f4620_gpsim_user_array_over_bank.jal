@@ -1,0 +1,172 @@
+-- ------------------------------------------------------
+-- Title: 18f4620 gpsim witness — one open-array formal, 300-byte buffers
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The PIC18 twin of sims/gpsim/16f1825_gpsim_user_array_over_bank.jal
+--    (fixes/fix_openarray_user_array_percall.md): one `byte in data[]` formal
+--    fed several big buffers, so the callee body is emitted ONCE and the
+--    layout has to arrive per call.  The same three sections as the 16F1825
+--    witness run here --
+--      * two 300-byte arrays filled and verified through the same formal,
+--      * `data[299]`, a CONSTANT subscript past the first bank,
+--      * a nested chunked call (`touch(big_c)`) from inside a callee that is
+--        itself addressing through its own formal.
+--
+--    NOTE (measured, not assumed): on an 18F4620 a fresh 300-byte array is
+--    placed as ONE contiguous run (the PIC18 data banks are linearly
+--    addressable, so the allocator does not need a chunk map for it), so this
+--    program is CORRECT on the pre-fix build as well -- like the 18F4620
+--    string twin it is a REGRESSION witness for the PIC18 code path, not a
+--    pre-fix-failing pin.  The 16F1825 witness is the pin: its 128-byte banks
+--    split the buffers, which is what the defect needs.
+--
+-- @gpsim_validate begin
+-- steps: 4000000
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v__check_step 1
+-- expect byte v_ok_a 1
+-- expect byte v_ok_b 1
+-- expect byte v_ok_nested 1
+-- expect byte v_ok_nested2 1
+-- expect byte v_a0 2
+-- expect byte v_a299 44
+-- expect byte v_b0 100
+-- expect byte v_b299 143
+-- expect byte v_c0 2
+-- @gpsim_validate end
+
+--
+-- Notes:
+--    **`sims/jal_gpsim_validate.sh sims/gpsim/18f4620_gpsim_user_array_over_bank.jal`**
+--    Compile-side contract: unit-tests/test_openarray_user_array_percall.sh.
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word fill_ct = 300
+
+var byte big_a[300]
+var byte big_b[300]
+var byte big_c[300]
+
+var volatile byte _ck_ok = 0
+var volatile byte ok_a = 0
+var volatile byte ok_b = 0
+var volatile byte ok_nested = 0
+var volatile byte ok_nested2 = 0
+var volatile byte a0 = 0
+var volatile byte a299 = 0
+var volatile byte b0 = 0
+var volatile byte b299 = 0
+var volatile byte c0 = 0
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array with `base + i` (mod 256) everywhere
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none
+-- Notes: writes every element, so a wrong bank map corrupts memory instead
+-- - of raising an error.
+--------------------------------------------------------------------------------
+procedure fill_array(byte in data[], byte in base) is
+   var word ii = 0
+   for fill_ct loop
+      data[ii] = byte(base + byte(ii))
+      ii = ii + 1
+   end loop
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Check an open array against `base + i` (mod 256)
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none; _ck_ok is 1 when every element matches
+--------------------------------------------------------------------------------
+procedure check_array(byte in data[], byte in base) is
+   var word ii = 0
+   var byte bad = 0
+   for fill_ct loop
+      if data[ii] != byte(base + byte(ii)) then
+         bad = 1
+      end if
+      ii = ii + 1
+   end loop
+   _ck_ok = 1
+   if bad != 0 then
+      _ck_ok = 0
+   end if
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Bump the first element of an open array
+-- Parameters: data -- the open array
+-- Returns: none
+-- Notes: two call sites with different layouts, so this formal gets a map of
+-- - its own -- which is what makes the nested call interesting.
+--------------------------------------------------------------------------------
+procedure touch(byte in data[]) is
+   data[0] = data[0] + 1
+end procedure
+
+--------------------------------------------------------------------------------
+-- Description: Fill an open array, then make a nested chunked call
+-- Parameters: data -- the open array; base -- first value
+-- Returns: none; _ck_ok is 1 when `data` still addresses correctly
+-- Notes: the nested `touch(big_c)` fills touch's map, not data's; the reads
+-- - after it therefore prove the two maps are independent.  This formal has
+-- - two call sites (big_a and big_b), so it owns a runtime map itself -- the
+-- - shape where a shared map would corrupt.
+--------------------------------------------------------------------------------
+procedure fill_and_touch(byte in data[], byte in base) is
+   var word ii = 0
+   var byte first
+   var byte last
+   for fill_ct loop
+      data[ii] = byte(base + byte(ii))
+      ii = ii + 1
+   end loop
+   first = data[0]
+   touch(big_c)
+   last = data[299]
+   _ck_ok = 1
+   if data[0] != first then
+      _ck_ok = 0
+   end if
+   if last != byte(base + 43) then
+      _ck_ok = 0
+   end if
+end procedure
+
+fill_array(big_a, 1)
+fill_array(big_b, 100)
+
+check_array(big_a, 1)
+ok_a = _ck_ok
+check_array(big_b, 100)
+ok_b = _ck_ok
+
+fill_and_touch(big_a, 1)
+ok_nested = _ck_ok
+fill_and_touch(big_b, 100)
+ok_nested2 = _ck_ok
+
+touch(big_a)
+
+a0 = big_a[0]
+a299 = big_a[299]
+b0 = big_b[0]
+b299 = big_b[299]
+c0 = big_c[0]
+
+if (ok_a + ok_b + ok_nested + ok_nested2) != 4 then
+   _check_failed = true
+end if
+
+regression_checkpoint()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

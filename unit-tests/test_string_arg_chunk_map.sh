@@ -17,18 +17,27 @@
 #     print_string(serial, svalue)        -- a second heap-string argument
 # printed the FIRST string's text (`My stri\t\t` / `My string\0`).
 #
-# The fix hands the ACTIVE layout to the callee at run time: the call site
-# fills `_chunkmap` and points `_strarg_map_ptr` at it, and the callee's
-# dynamic subscript walks it (see pic_fsr_chunk_walk_emit_globals).  So the
-# multi-bank configuration now COMPILES AND RUNS; the runtime proof is
-# sims/gpsim/16f1825_gpsim_string_heap_over_bank.jal, and this script pins the
-# compile-side contract:
+# The fix hands the ACTIVE layout to the callee at run time: every call site
+# fills a small map that belongs to the FORMAL (`_pic_chunkmap_N`,
+# [count][base lo,hi,span]...) and the callee's dynamic subscript walks it (see
+# pic_fsr_chunk_walk_emit_globals).  The map is created only when the formal is
+# fed two or more DIFFERENT layouts and at least one of them is split across
+# RAM banks -- one layout is addressed exactly by the baked copy, and a formal
+# with no chunked actual at all addresses through the pointer every call.
+#
+# The multi-bank configuration COMPILES AND RUNS; the runtime proof is
+# sims/gpsim/16f1825_gpsim_string_heap_over_bank.jal (plus the user-array
+# witnesses 16f1825/18f4620_gpsim_user_array_over_bank.jal).  This script pins
+# the compile-side contract:
 #   * heap over one bank + two heap-string argument sites -> clean compile AND
-#     the runtime map is wired into the output (`_chunkmap`, walk);
+#     the per-formal runtime map is wired into the output (`_pic_chunkmap_N`
+#     plus the walk scratch `_pic_chunk_cnt`);
 #   * heap that fits one bank -> clean compile with no map at all;
-#   * one string-argument site with a multi-bank heap -> clean;
-#   * several big USER buffers fed to one formal (pristine jallib sd_card /
-#     fat32 do this) -> still clean: user arrays keep the baked layout.
+#   * one string-argument site with a multi-bank heap -> clean, and NO map
+#     (one layout needs no hand-over);
+#   * two 100-byte USER buffers fed to one formal -> clean, and NO map (both
+#     are placed linearly, so the pointer alone is correct -- this is the
+#     inertness control the corpus depends on).
 #
 # Usage: unit-tests/test_string_arg_chunk_map.sh [compiler]
 set -u
@@ -89,11 +98,12 @@ write_prog "$WORK/big.jal" 100
 run_cc "$WORK/big.txt" "$WORK/big.rc" "$WORK/big.jal"
 rc=$(cat "$WORK/big.rc")
 if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/big.txt" \
-   && grep -q "_chunkmap" "$WORK/out.asm" \
-   && grep -q "_strarg_map_ptr" "$WORK/out.asm"; then
-  ok "multi-bank argument buffers compile, with the runtime chunk map wired"
+   && grep -q "_pic_chunkmap_" "$WORK/out.asm" \
+   && grep -q "_pic_chunk_cnt" "$WORK/out.asm" \
+   && ! grep -q "_strarg_map_ptr" "$WORK/out.asm"; then
+  ok "multi-bank argument buffers compile, with the per-formal runtime map wired"
 else
-  bad "multi-bank argument buffers compile, with the runtime chunk map wired" \
+  bad "multi-bank argument buffers compile, with the per-formal runtime map wired" \
       "rc=$rc" "$(grep -aE 'error|errors,' "$WORK/big.txt" | head -2)"
 fi
 
@@ -101,10 +111,11 @@ fi
 write_prog "$WORK/small.jal" 48
 run_cc "$WORK/small.txt" "$WORK/small.rc" "$WORK/small.jal"
 rc=$(cat "$WORK/small.rc")
-if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/small.txt"; then
-  ok "single-bank argument buffer compiles clean"
+if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/small.txt" \
+   && ! grep -q "_pic_chunkmap_" "$WORK/out.asm"; then
+  ok "single-bank argument buffer compiles clean, with no runtime map"
 else
-  bad "single-bank argument buffer compiles clean" "rc=$rc" \
+  bad "single-bank argument buffer compiles clean, with no runtime map" "rc=$rc" \
       "$(grep -aE 'error|errors,' "$WORK/small.txt" | head -2)"
 fi
 
@@ -142,16 +153,20 @@ end loop
 JAL
 run_cc "$WORK/one.txt" "$WORK/one.rc" "$WORK/one.jal"
 rc=$(cat "$WORK/one.rc")
-if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/one.txt"; then
-  ok "a single string-argument site compiles clean even with a multi-bank heap"
+if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/one.txt" \
+   && ! grep -q "_pic_chunkmap_" "$WORK/out.asm"; then
+  ok "one string-argument site with a multi-bank heap compiles with no runtime map"
 else
-  bad "a single string-argument site compiles clean even with a multi-bank heap" \
+  bad "one string-argument site with a multi-bank heap compiles with no runtime map" \
       "rc=$rc" "$(grep -aE 'error|errors,' "$WORK/one.txt" | head -2)"
 fi
 
-# 3. user buffers: several big arrays to one formal is the SAME latent
-#    ambiguity but pre-existing and pervasive (sd_card/fat32); the narrowed
-#    diagnostic must not fire, or the corpus turns red.
+# 3. user buffers that FIT one bank: two different arrays to one formal is
+#    the same ambiguity in principle, but neither is chunked, so the formal
+#    has no baked map and addresses through the per-call pointer -- no runtime
+#    map may be created (that inertness is what keeps the corpus byte
+#    identical).  The chunked user-array contract is pinned by
+#    unit-tests/test_openarray_user_array_percall.sh.
 cat > "$WORK/userbuf.jal" <<'JAL'
 include 16f1825
 pragma target clock 16_000_000
@@ -185,10 +200,12 @@ JAL
 run_cc "$WORK/user.txt" "$WORK/user.rc" "$WORK/userbuf.jal"
 nerr=$(grep -c "open-array formal" "$WORK/user.txt")
 rc=$(cat "$WORK/user.rc")
-if [ "$rc" -eq 0 ] && [ "$nerr" -eq 0 ]; then
-  ok "two user buffers to one formal still compile (out of scope, corpus)"
+if [ "$rc" -eq 0 ] && [ "$nerr" -eq 0 ] \
+   && grep -q "0 errors, 0 warnings" "$WORK/user.txt" \
+   && ! grep -q "_pic_chunkmap_" "$WORK/out.asm"; then
+  ok "two one-bank user buffers to one formal: clean, no runtime map"
 else
-  bad "two user buffers to one formal still compile (out of scope, corpus)" \
+  bad "two one-bank user buffers to one formal: clean, no runtime map" \
       "rc=$rc refusals=$nerr" \
       "$(grep -aE 'error|errors,' "$WORK/user.txt" | head -2)"
 fi
