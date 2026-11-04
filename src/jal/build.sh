@@ -32,11 +32,14 @@ echo "#define JAL_BUILD `date +%Y%m%d`" >> $DST
 JAL_VERSION_STR="${JALV3_VERSION_STR:-3.0a1-beta}"
 echo "#define JAL_VERSION_STR \"$JAL_VERSION_STR\"" >> $DST
 
-# ROM (A): optional shared ROM for heap `var string = "..."` via `CALL string_from_array`.
-# Override at compile time: `make -C src EXTRA_CFLAGS=-DJALV2_ROM_A_STRING_LITERAL_CALL=1 project`
+# ROM (A): shared ROM for heap `var string = "..."` via `CALL string_from_array`.
+# Default ON: string-heavy programs (the target workload -- many literals and
+# many helper calls) save one inline assign path (~390 words / ~768 bytes) per
+# site after the first; a single-literal program pays ~300 words for the one
+# shared body.  Opt out with EXTRA_CFLAGS=-DJALV2_ROM_A_STRING_LITERAL_CALL=0.
 echo "" >> $DST
 echo "#ifndef JALV2_ROM_A_STRING_LITERAL_CALL" >> $DST
-echo "#define JALV2_ROM_A_STRING_LITERAL_CALL 0" >> $DST
+echo "#define JALV2_ROM_A_STRING_LITERAL_CALL 1" >> $DST
 echo "#endif" >> $DST
 # ROM (A): only emit CALL string_from_array when const literal byte count >= this (default 2).
 # Override: EXTRA_CFLAGS='-DJALV2_ROM_A_STRING_LITERAL_CALL=1 -DJALV2_ROM_A_STRING_LITERAL_CALL_MIN_BYTES=4'
