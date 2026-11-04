@@ -19,6 +19,13 @@ Pins the 2026-10-17 PIC32 ISR work, which QEMU cannot fully model:
 * PIC32MX (fix_pic32mx270f256b_support.md) has no PRISS/shadow sets:
   plain interrupts use software save/restore, `fast` is rejected, and
   numbered/MVEC interrupts are rejected.
+* fixes/fix_pic32_bootflash_isr_refusal.md -- a boot-flash (non-PFM)
+  image cannot dispatch interrupts: the EIC fetches its vector page at
+  EBASE+0x200 and only the PFM boot init points it into the app, so
+  `pragma interrupt` there is REFUSED (it used to compile, run, and
+  silently never fire).  Any interrupt kind must be refused, exactly one
+  error, and a boot-flash program WITHOUT an interrupt must still
+  compile.
 * fixes/fix_pic32_mz_isr_state_clear.md -- the arming must not inherit
   stale exception state.  Two emissions are pinned: `Cause = IV` (a
   WRITE, so a software-interrupt request latched at power-on is cleared
@@ -146,6 +153,25 @@ def main(argv: list[str] | None = None) -> int:
         ("mx_mvec_pfm",
          build_body("32mx270f256b", "40_000_000", "1"),
          True, [ARM_CAUSE_IV, STUB_CAUSE_IV], [], []),
+        # boot-flash images cannot dispatch interrupts: refused, not
+        # silently dead (fix_pic32_bootflash_isr_refusal.md)
+        ("mz_plain_bootflash",
+         build_body("32mz1024efh064", "200_000_000", "", image_pfm=False),
+         False, [], [], ["boot-flash", "pragma target image pfm"]),
+        ("mz_raw_bootflash",
+         build_body("32mz1024efh064", "200_000_000", "raw",
+                    image_pfm=False),
+         False, [], [], ["boot-flash", "pragma target image pfm"]),
+        # ... while a boot-flash program with NO interrupt still builds
+        ("mz_no_isr_bootflash",
+         "include 32mz1024efh064\n"
+         "pragma target clock 200_000_000\n"
+         "pragma target OSC FRC_SPLL\n"
+         "var byte x = 0\n"
+         "forever loop\n"
+         "   x = x + 1\n"
+         "end loop\n",
+         True, [], [], []),
     ]
 
     failures = 0
@@ -171,6 +197,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 if rc == 0:
                     problems.append("expected a compile error, got 0 errors")
+                n_err = sum(1 for ln in out.splitlines() if ": error: " in ln)
+                if n_err != 1:
+                    problems.append(
+                        f"expected exactly 1 error line, got {n_err}")
                 for needle in err_expected:
                     if needle.lower() not in out.lower():
                         problems.append(f"diagnostic missing {needle!r}")

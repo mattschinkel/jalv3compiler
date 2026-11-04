@@ -1045,6 +1045,27 @@ void mips_cmd_generate(pfile_t *pf, const cmd_t cmd)
       "flash + compiler boot block)");
   }
 
+  /* Boot-flash images cannot dispatch interrupts, and it is a REFUSAL,
+   * not a missing feature (2026-11-03): the EIC fetches the vector page
+   * from EBASE+0x200, and only the PFM boot init points EBASE into the
+   * app.  A boot-flash body would need EBASE moved into boot flash --
+   * the "EIC delivery from the boot-flash KSEG0 mirror page wedges the
+   * core" path, which has NO QEMU coverage (EVIC dispatches only the BEV
+   * vector), so it is bench-only forever.  Shipping it silently (the
+   * pre-2026-11-03 state: compiles, runs, ISR never fires) is the worst
+   * of the three options -- that is the "dark image" failure class.
+   * Reopen only if a boot-flash bootloader with interrupt I/O is
+   * actually wanted.  The MX rule above already refuses MX boot-flash
+   * (3 KB), so this one is MZ-only to keep exactly one diagnostic. */
+  if ((MIPS_FAMILY_MX1 != mips_family(pf))
+      && pfile_isr_entry_active(pf) && !mips_loader_pfm(pf)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "boot-flash images cannot dispatch interrupts -- the EIC fetches "
+      "its vector page at EBASE+0x200, which only a PFM image points into "
+      "the app; use `pragma target image pfm` (app in program flash + "
+      "compiler boot block)");
+  }
+
   /* pass 1: allocate variables linearly in RAM */
   mips_var_alloc(pf);
   /* Phase A/B: collect eligible scalars; assign caller-saved homes. */

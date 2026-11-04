@@ -22,6 +22,14 @@
 -- @sim_validate end
 
 include regression_32mz1024efh064_device
+
+-- Image shape: PFM app + compiler boot block.  A boot-flash body
+-- cannot dispatch interrupts at all (the EIC fetches its vector page
+-- at EBASE+0x200 and only the PFM boot init points EBASE into the
+-- app), so `pragma interrupt` in a boot-flash image is REFUSED since
+-- 2026-11-03 (fixes/fix_pic32_bootflash_isr_refusal.md).  QEMU
+-- dispatches this body through the BEV slot every ISR image emits.
+pragma target image pfm
 var volatile byte ra = 0
 var volatile byte rb = 0
 

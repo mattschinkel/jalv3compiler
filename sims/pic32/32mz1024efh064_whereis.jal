@@ -86,7 +86,9 @@ end if
 if (we >> 16) == 0x8000 then
    rd = 1
 end if
-if (wf >> 16) == 0xBFC0 then
+-- code address must be a FLASH window, not RAM: boot-flash images put it
+-- at 0xBFC0xxxx, PFM images (the only ISR-capable shape) at 0x9D00xxxx
+if ((wf >> 16) == 0xBFC0) | ((wf >> 16) == 0x9D00) then
    re = 1
 end if
 if _wh_ran == 1 then
