@@ -87,6 +87,10 @@ boolean_t pic_var_openarray_formal_strview_get(variable_t formal);
 variable_t pic_var_strview_formal_base_get(variable_t formal);
 /* does ANY string payload-view pair feed this formal (all cores)? */
 boolean_t pic_var_openarray_formal_strview_fed(variable_t formal);
+/* a CLASSIC-core string-view formal (fed + its per-formal base cell
+ * exists): even a constant subscript must walk, and even a contiguous
+ * heap needs the cell -- the base is runtime data */
+boolean_t pic_var_strview_classic_formal(variable_t formal);
 /* place every variable that was allocated after an earlier placement round
  * again (a layout trial emits code that creates scratch, and that scratch
  * belongs to the layout the trial threw away) */

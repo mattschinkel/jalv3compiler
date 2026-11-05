@@ -923,6 +923,13 @@ variable_t pic_var_strview_formal_base_get(variable_t formal)
   return VARIABLE_NONE;
 }
 
+boolean_t pic_var_strview_classic_formal(variable_t formal)
+{
+  return (pic_var_openarray_formal_strview_fed(formal)
+      && (VARIABLE_NONE != pic_var_strview_formal_base_get(formal)))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
 /* any string payload-view pair feeds this formal? */
 boolean_t pic_var_openarray_formal_strview_fed(variable_t formal)
 {
@@ -1532,6 +1539,14 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
           || (VARIABLE_NONE == pair->formal)
           || (VARIABLE_NONE != pic_var_strview_formal_base_get(pair->formal))) {
         continue;
+      }
+      /* the walk needs the formal to carry a chunk map, and a CONTIGUOUS
+       * heap never propagates one (the baked copy only happens for chunked
+       * actuals) -- normalize from the pair's captured layout (>= 1 chunk)
+       * so the classic ladder always has an entry to land in */
+      if (!pic_variable_chunk_map_find(pair->formal)) {
+        pic_variable_chunk_map_set(pf, pair->formal, pair->chunk_ct,
+            pair->chunk_base, pair->chunk_sz);
       }
       sprintf(name, "_pic_strviewbase_%u",
           (unsigned) (pic_var.strview_formals_used + 1));

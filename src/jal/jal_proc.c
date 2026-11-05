@@ -1700,21 +1700,15 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
     pfile_proc_t *callee = value_proc_get(call_val);
     boolean_t     stored;
-    boolean_t     classic;
 
     /* read-only formals keep the payload view: the clone wrapper would be
      * pure duplication when the body never assigns through this formal
      * (the note is taken when the body's assignment target resolves into
-     * the formal).  A CLASSIC core clones even reads-only bodies: its
-     * bare-expression read path (`return x[0]`) has no strview routing
-     * yet -- the follow-up list carries that gap */
-    classic = (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)
-        && (pfile_pointer_width_get(pf) < 4)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+     * the formal) */
     stored = (callee && (PFILE_PROC_NONE != callee)
         && (ii > 0) && (ii <= pfile_proc_param_ct_get(callee))
-        && (classic
-          || jal_string_formal_stored_get(callee,
-               value_variable_get(pfile_proc_param_get(callee, ii)))));
+        && jal_string_formal_stored_get(callee,
+             value_variable_get(pfile_proc_param_get(callee, ii))));
 
     if (stored) {
       pfile_proc_t *clone = jal_proc_strclone_get(pf, callee);

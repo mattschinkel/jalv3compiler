@@ -276,7 +276,11 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
       boolean_t  formal_map;
 
       formal_map = pic_variable_chunks_holed(value_variable_get(val))
-        || pic_var_openarray_pair_formal_runtime_get(value_variable_get(val));
+        || pic_var_openarray_pair_formal_runtime_get(value_variable_get(val))
+        /* a CLASSIC string-view formal walks even when the heap placed
+         * contiguously: the payload base rides the per-formal cell, so
+         * no subscript (const or dynamic) can address linearly */
+        || pic_var_strview_classic_formal(value_variable_get(val));
       /* a runtime-map formal has no compile-time layout at all, so even a
        * CONSTANT subscript must walk the map the call site handed over */
       if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
@@ -411,15 +415,18 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
        * constant, exactly like the runtime-formal const case above). */
       {
         variable_t walk;
+        boolean_t  sv_view;
 
         walk = value_variable_get(tmp);
-        if (!pic_variable_chunks_holed(walk)) {
+        sv_view = pic_var_strview_classic_formal(walk);
+        if (!pic_variable_chunks_holed(walk) && !sv_view) {
           walk = pic_var_pointer_bind_walk_target(walk);
         }
         if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
             && walk && (VARIABLE_NONE != walk)
             && (pic_variable_chunks_holed(walk)
-              || pic_var_openarray_pair_formal_runtime_get(walk))) {
+              || pic_var_openarray_pair_formal_runtime_get(walk)
+              || sv_view)) {
           /* the offset/rare entry picks the runtime map walk for a formal
            * that has one and the baked ladder for a compile-time map */
           pic_fsr_chunk_walk_emit_ofs(pf, walk, VALUE_NONE,
