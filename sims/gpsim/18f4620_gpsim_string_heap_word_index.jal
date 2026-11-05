@@ -1,0 +1,57 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — word-index string heap (> 255 bytes)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A string heap larger than 255 bytes stores its handle and free-list
+--    fields in 2-byte words.  The index load/store helpers used to read and
+--    write the HIGH byte through a `byte << 8` / `byte >> 8` shift, which the
+--    width logic folds to 0 for a byte operand: every word-sized field lost
+--    its high byte (the free-list cap 294 read as 38; a split remainder 283
+--    stored as 27), so the allocator fragmented/corrupted the free list above
+--    a 255-byte heap and the 5th append or a 39+ character literal hung.
+--
+--    This witness exercises both: a textual build with ten appends (length
+--    15) and a 100-character literal, on a 300-byte heap, and reads the
+--    characters back.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_len 15
+-- expect byte v_lit 100
+-- expect byte v_ok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 300
+
+var string s
+var string t
+var byte i
+var volatile word len = 0
+var volatile word lit = 0
+var volatile byte ok = 0
+
+procedure run() is
+   regression_begin_run()
+   s = "abcde"
+   for 10 using i loop
+      s[COUNT(s)] = "x"
+   end loop
+   len = COUNT(s)
+   t = "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+   lit = COUNT(t)
+   if (s[0] == "a") & (s[5] == "x") & (s[14] == "x") & (t[0] == "0") & (t[99] == "9") then
+      ok = 1
+   end if
+   regression_checkpoint()
+end procedure
+
+run()

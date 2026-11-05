@@ -880,14 +880,12 @@ static value_t jal_string_index_load_emit(pfile_t *pf, value_t base,
     byte_lval = jal_string_index_byte_lvalue_get(pf, base, byte_ofs);
     byte_val = byte_lval;
     if (ii) {
-      value_t shift;
-      value_t shifted;
+      value_t scale;
 
-      shift = jal_string_const_get(pf, 8 * ii);
-      shifted = jal_string_binary_emit(pf, OPERATOR_SHIFT_LEFT,
-          byte_lval, shift);
-      value_release(shift);
-      byte_val = shifted;
+      scale = jal_string_index_const_get(pf, (variable_const_t) 256 * ii);
+      byte_val = jal_string_temp_index_get(pf);
+      pfile_cmd_op_add(pf, OPERATOR_MUL, &byte_val, byte_lval, scale);
+      value_release(scale);
     }
     pfile_cmd_op_add(pf, OPERATOR_ADD, &result, result, byte_val);
     if (ii) {
@@ -914,12 +912,12 @@ static void jal_string_index_store_emit(pfile_t *pf, value_t base,
     byte_ofs = ii ? jal_string_add_const(pf, ofs, ii) : value_clone(ofs);
     byte_lval = jal_string_index_byte_lvalue_get(pf, base, byte_ofs);
     if (ii) {
-      value_t shift;
+      value_t scale;
 
-      shift = jal_string_const_get(pf, 8 * ii);
-      byte_val = jal_string_binary_emit(pf, OPERATOR_SHIFT_RIGHT,
-          val, shift);
-      value_release(shift);
+      scale = jal_string_index_const_get(pf, (variable_const_t) 256 * ii);
+      byte_val = jal_string_temp_index_get(pf);
+      pfile_cmd_op_add(pf, OPERATOR_DIV, &byte_val, val, scale);
+      value_release(scale);
     } else {
       byte_val = value_clone(val);
     }
