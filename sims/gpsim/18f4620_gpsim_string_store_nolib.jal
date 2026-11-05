@@ -1,0 +1,60 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — heap character stores WITHOUT strings_dynamic
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A program that declares the string heap but never includes
+--    `strings_dynamic` still gets the shared store body: the compiler
+--    synthesizes `_string_put` on the first store site (the heap declaration
+--    is the trigger, not the library).  The COUNT rule must hold through the
+--    synthesized body: in place below COUNT, append AT COUNT (COUNT follows),
+--    refuse past it with `_string_error_range`.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_store_ok 1
+-- expect byte v_append_ok 2
+-- expect byte v_range_ok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 64
+
+var string s
+var byte i
+var volatile byte store_ok = 0
+var volatile byte append_ok = 0
+var volatile byte range_ok = 0
+
+procedure run() is
+   regression_begin_run()
+   s = "abc"
+   s[1] = "X"                         -- in place
+   if (s == "aXc") & (COUNT(s) == 3) then
+      store_ok = 1
+   end if
+   s[3] = "!"                         -- append at COUNT
+   if (s == "aXc!") & (COUNT(s) == 4) then
+      append_ok = 1
+   end if
+   i = 4
+   s[i] = "?"                         -- runtime append
+   if (s == "aXc!?") & (COUNT(s) == 5) then
+      append_ok = 2
+   end if
+   regression_checkpoint()
+   s[6] = "Q"                         -- past COUNT: refused
+   if (s == "aXc!?") & (_string_error == _STRING_ERROR_RANGE) then
+      range_ok = 1
+   end if
+   regression_checkpoint()
+end procedure
+
+run()

@@ -3741,6 +3741,135 @@ static boolean_t jal_string_assign_outline_emit(pfile_t *pf, value_t dst,
 
 
 /*
+ * The shared character-store body for a heap-string program that does not
+ * include `strings_dynamic`: synthesize
+ *
+ *   function _string_put(string in out d, word in i, byte in c) return bit
+ *      d[i] = c
+ *      return TRUE
+ *   end function
+ *
+ * once at FILE SCOPE on the first outlined store site.  It lowers to the same
+ * `jal_string_subscript_write_emit` body the library forwarder's source
+ * compiles to, so the synthesized body and the library body are the same
+ * code; the call site passes the handle view (plain string or string pointer)
+ * exactly as the library path does.  Created lazily, so a heap program that
+ * never stores a character pays nothing for it.
+ *
+ * Returns the proc, or 0 when it cannot be created (the caller then keeps the
+ * inline store).
+ */
+static pfile_proc_t *jal_string_shared_put_ensure(pfile_t *pf)
+{
+  pfile_proc_t   *proc;
+  variable_def_t  def;
+  variable_def_t  rdef;
+  variable_def_t  ddef;
+  variable_def_t  idef;
+  variable_def_t  cdef;
+  pfile_proc_t   *save_proc;
+  pfile_block_t  *save_blk;
+  pfile_proc_t   *root;
+  pfile_block_t  *root_blk;
+  value_t         dst;
+  value_t         idx;
+  value_t         ch;
+  value_t         elem;
+  value_t         ofs;
+  value_t         ret;
+  value_t         tval;
+  boolean_t       entered;
+
+  proc = jal_string_proc_find_deep(pf->proc_root, "_string_put");
+  if (proc) {
+    return proc;
+  }
+  if (!pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size")) {
+    return 0; /* no heap declared: the store's own diagnostics spoke */
+  }
+  def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_FUNCTION, 0, 0);
+  rdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_OUT, 1);
+  ddef = jal_string_dynamic_def_alloc(pf);
+  if (ddef) {
+    ddef = variable_def_flags_change(ddef,
+        variable_def_flags_get_all(ddef)
+        | VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT);
+  }
+  idef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_IN, 2);
+  cdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_IN, 1);
+  if (!def || !rdef || !ddef || !idef || !cdef) {
+    if (def)  { variable_def_free(def);  }
+    if (rdef) { variable_def_free(rdef); }
+    if (ddef) { variable_def_free(ddef); }
+    if (idef) { variable_def_free(idef); }
+    if (cdef) { variable_def_free(cdef); }
+    return 0;
+  }
+  variable_def_member_add(def, 0, rdef, 1);
+  variable_def_member_add(def, "d", ddef, 1);
+  variable_def_member_add(def, "i", idef, 1);
+  variable_def_member_add(def, "c", cdef, 1);
+
+  /* Create it at FILE SCOPE: the call can come from any procedure, and the
+   * body must be emitted in the root block (the accessor synthesis does the
+   * same thing for a file-scope pseudo variable). */
+  save_proc = pfile_proc_active_get(pf);
+  save_blk  = pfile_proc_block_active_get(save_proc);
+  root      = save_proc; /* emit the body HERE, before the call site */
+  (void) root;
+  root_blk  = save_blk;
+  (void) root_blk;
+  proc    = pfile_proc_create(pf, "_string_put", def);
+  entered = BOOLEAN_FALSE;
+  if (proc) {
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        pfile_proc_skip_label_get(proc), VALUE_NONE, VALUE_NONE, 0);
+    entered = (boolean_t) (RESULT_OK
+        == pfile_proc_enter(pf, pfile_proc_tag_get(proc)));
+    if (entered) {
+      pfile_block_enter(pf);
+      pfile_proc_define(proc, def, pf);
+      dst = pfile_proc_param_get(proc, 1);
+      idx = pfile_proc_param_get(proc, 2);
+      ch  = pfile_proc_param_get(proc, 3);
+      elem = ((dst && idx) ? value_clone(dst) : VALUE_NONE);
+      ofs  = (idx ? value_clone(idx) : VALUE_NONE);
+      if (elem && ofs) {
+        value_baseofs_set(elem, ofs);
+        ofs = VALUE_NONE;
+        (void) jal_string_subscript_write_emit(pf, elem, ch);
+      }
+      value_release(ofs);
+      value_release(elem);
+      ret  = pfile_proc_param_get(proc, 0);
+      tval = jal_string_const_get(pf, 1);
+      if (ret && tval) {
+        pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &ret, tval, VALUE_NONE);
+      }
+      value_release(tval);
+      pfile_block_leave(pf);
+      pfile_proc_leave(pf);
+      /* the parsed-procedure path sets this after its body parses; the
+       * synthesized body needs it too, or a CALL is reported as a call to
+       * a proc "declared but not defined" at codegen */
+      label_flag_set(pfile_proc_label_get(proc), LABEL_FLAG_DEFINED);
+    } else {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "cannot enter the shared string store body");
+    }
+    pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
+    pfile_cmd_cursor_set(pf, CMD_NONE);
+  }
+  pfile_proc_active_set(pf, save_proc);
+  pfile_proc_block_active_set(save_proc, save_blk);
+  return entered ? proc : 0;
+}
+
+
+/*
  * NAME
  *   jal_string_store_outline_emit
  *
@@ -3805,6 +3934,11 @@ boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
     proc = jal_string_proc_find_deep(pf->proc_root, "string_put");
   }
   if (!proc) {
+    /* no library forwarder: a heap-string program still gets the shared body,
+     * synthesized by the compiler and created on this first store site */
+    proc = jal_string_shared_put_ensure(pf);
+  }
+  if (!proc) {
     value_release(idx);
     value_release(base);
     return BOOLEAN_FALSE;
@@ -3854,7 +3988,8 @@ boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
   value_lock(src);
   parms[3] = src;
 
-  call_val = jal_string_jal_proc_call_value_get(pf, "string_put");
+  call_val = jal_string_jal_proc_call_value_get(pf,
+      pfile_proc_tag_get(proc));
   if (!call_val) {
     /* release both the call's locks and the split's own references */
     value_release(src);

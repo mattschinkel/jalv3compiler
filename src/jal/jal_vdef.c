@@ -83,6 +83,7 @@ static const char *const jal_compiler_names[] = {
   "_task_active",
   "_string_heap",     /* dynamic string heap storage        */
   "_string_free_head",/* dynamic string free-list head      */
+  "_string_put",      /* synthesized shared character store */
   0
 };
 

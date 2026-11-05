@@ -177,6 +177,19 @@ EOF
 expect_one_error "BSS block prefix" "$WORK/r_bss.jal" \
   "uses the compiler-reserved prefix '_pic_bss_'"
 
+cat >"$WORK/r_put.jal" <<'EOF'
+include 16f877
+pragma target string_heap_size 64
+function _string_put(string in out d, word in i, byte in c) return bit is
+   d[i] = c
+   return TRUE
+end function
+forever loop
+end loop
+EOF
+expect_one_error "synthesized store body name" "$WORK/r_put.jal" \
+  "'_string_put' is reserved for the compiler"
+
 # --------------------------------- malformed API constant: ONE diagnostic
 cat >"$WORK/r_heap.jal" <<'EOF'
 var byte _string_heap_size

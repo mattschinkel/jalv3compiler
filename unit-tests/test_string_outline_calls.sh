@@ -308,5 +308,42 @@ else
   bad "internal _string_append compiles" "(rc=$RC)"
 fi
 
+# --------------------------------------------------------------- 10
+# A heap program that does NOT include strings_dynamic: the compiler
+# synthesizes `_string_put` itself (the heap declaration is the trigger, not
+# the library), so the store body is still emitted once and every site is one
+# CALL.
+nolib="$TMP/store_nolib.jal"
+{
+  echo 'include 16f1825'
+  echo 'pragma target clock 32_000_000'
+  echo 'pragma target string_heap_size 100'
+  echo 'pragma string index byte'
+  echo 'var string a'
+  echo 'var string b'
+  echo 'a = "abcdef"'
+  echo 'b = "abcdef"'
+  echo 'a[0] = "z"'
+  echo 'b[0] = "z"'
+  echo 'a[1] = "y"'
+  echo 'b[1] = "y"'
+} > "$nolib"
+compile store_nolib "$nolib"
+if [ "$RC" -eq 0 ]; then
+  labels="$(grep -c '^l__string_put$' "$ASM")"
+  calls="$(grep -c '^[[:space:]]*call[[:space:]][[:space:]]*l__string_put$' "$ASM")"
+  lib="$(grep -c '^l_string_put$' "$ASM")"
+  if [ "$labels" -eq 1 ] && [ "$calls" -eq 4 ] && [ "$lib" -eq 0 ]; then
+    ok "heap without the library: one synthesized body, four calls"
+  else
+    bad "heap without the library: synthesized body" \
+      "(labels=$labels calls=$calls library=$lib)"
+  fi
+else
+  bad "heap without the library compiles" "(rc=$RC)"
+  printf '%s\n' "$OUT" | tail -6
+fi
+
 echo "string outline calls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
+
