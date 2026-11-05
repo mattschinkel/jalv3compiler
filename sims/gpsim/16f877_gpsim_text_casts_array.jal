@@ -35,7 +35,7 @@ pin_A0_direction = OUTPUT
 
 include regression
 
-const word _string_heap_size = 48
+pragma target string_heap_size 48
 include strings_dynamic
 
 var byte tbl[3] = {1, 26, 255}

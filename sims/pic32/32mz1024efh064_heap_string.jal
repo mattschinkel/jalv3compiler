@@ -24,7 +24,7 @@
 -- @sim_validate end
 
 include regression_32mz1024efh064_device
-const word _string_heap_size = 32
+pragma target string_heap_size 32
 
 
 var volatile byte ra = 0

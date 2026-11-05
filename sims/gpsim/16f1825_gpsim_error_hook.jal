@@ -39,7 +39,7 @@ var volatile byte err_after = 99
 var volatile word len = 0
 var volatile byte done = 0
 
-const word _string_heap_size = 100
+pragma target string_heap_size 100
 
 -- the handler: it must be defined before the code that can fail
 procedure _error_hook() is

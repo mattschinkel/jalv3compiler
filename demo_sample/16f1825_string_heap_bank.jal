@@ -46,7 +46,7 @@ alias serial is serial_hw_data
 include print                              -- output library
 include delay
 
-const word _string_heap_size = 100
+pragma target string_heap_size 100
 const string another_string = "Yet another string"
 const byte okc_string[] = "Const string that does it."
 var byte okv_string[] = "Var string that does it."

@@ -369,7 +369,8 @@ boolean_t jal_string_heap_size_const_check(pfile_t *pf, const char *name,
   if (value_is_float(expr)) {
     pfile_log(pf, PFILE_LOG_ERR,
         "_string_heap_size must be a constant integer "
-        "(declare it as: const word _string_heap_size = <bytes>)");
+        "(declare it as: pragma target string_heap_size <bytes>, or the "
+        "legacy const word _string_heap_size = <bytes>)");
     jal_string_state.heap_size_reported = BOOLEAN_TRUE;
     jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
     return BOOLEAN_FALSE;
@@ -378,7 +379,8 @@ boolean_t jal_string_heap_size_const_check(pfile_t *pf, const char *name,
   if (VARIABLE_DEF_TYPE_INTEGER != type) {
     pfile_log(pf, PFILE_LOG_ERR,
         "_string_heap_size must be a constant integer "
-        "(declare it as: const word _string_heap_size = <bytes>)");
+        "(declare it as: pragma target string_heap_size <bytes>, or the "
+        "legacy const word _string_heap_size = <bytes>)");
     jal_string_state.heap_size_reported = BOOLEAN_TRUE;
     jal_string_state.heap_size_invalid  = BOOLEAN_TRUE;
     return BOOLEAN_FALSE;
@@ -431,7 +433,8 @@ static value_t jal_string_pragma_const_get(pfile_t *pf, const char *name)
       jal_string_state.heap_size_reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
           "_string_heap_size must be a constant integer "
-          "(declare it as: const word _string_heap_size = <bytes>)");
+          "(declare it as: pragma target string_heap_size <bytes>, or the "
+          "legacy const word _string_heap_size = <bytes>)");
     }
     value_release(val);
     val = VALUE_NONE;
@@ -1438,7 +1441,8 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
     if (!jal_string_state.heap_size_reported) {
       jal_string_state.heap_size_reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
-          "dynamic string storage requires const word _string_heap_size = <bytes>");
+          "dynamic string storage requires `pragma target string_heap_size <bytes>` "
+          "(or the legacy const word _string_heap_size = <bytes>)");
     }
     /* Error recovery: build the smallest valid heap so the library's
      * `var string` formals and bodies still PARSE.  The error above keeps
@@ -1450,7 +1454,8 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
       jal_string_state.heap_size_reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
           "_string_heap_size must be a constant integer "
-          "(declare it as: const word _string_heap_size = <bytes>)");
+          "(declare it as: pragma target string_heap_size <bytes>, or the "
+          "legacy const word _string_heap_size = <bytes>)");
     }
     value_release(heap_sz_val);
     return BOOLEAN_FALSE;

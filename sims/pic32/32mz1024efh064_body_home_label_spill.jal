@@ -47,7 +47,7 @@ alias serial_data is serial_hw_data
 const PRINT_MAX_VAR_SIZE = 4
 include print
 
-const word _string_heap_size = 128
+pragma target string_heap_size 128
 include strings_dynamic
 include print_float_exact
 

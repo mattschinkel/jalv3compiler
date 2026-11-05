@@ -24,7 +24,7 @@
 -- @sim_validate end
 --
 include regression_esp32_device
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 pragma string index byte
 include strings_dynamic
 

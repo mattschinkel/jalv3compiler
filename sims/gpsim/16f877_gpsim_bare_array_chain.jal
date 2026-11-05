@@ -24,7 +24,7 @@
 include regression_16f877_device
 include regression
 include 16f877
-const word _string_heap_size = 96
+pragma target string_heap_size 96
 include strings_dynamic
 
 const byte NAME[3] = { 65, 86, 82 }   -- "AVR"

@@ -188,7 +188,7 @@ end loop
 EOF
 expect_one_error "malformed _string_heap_size" "$WORK/r_heap.jal" \
   "_string_heap_size must be a constant integer"
-if grep -qF 'declare it as: const word _string_heap_size = <bytes>' \
+if grep -qF 'declare it as: pragma target string_heap_size <bytes>' \
      "$WORK/r_heap.out"; then
   ok "malformed _string_heap_size names the declaration to use"
 else

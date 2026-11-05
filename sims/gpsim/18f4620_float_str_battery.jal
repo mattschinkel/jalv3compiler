@@ -22,7 +22,7 @@
 --
 include 18f4620
 pragma target clock 40_000_000
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 pragma string index byte
 include strings_dynamic
 

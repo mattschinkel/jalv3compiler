@@ -616,7 +616,7 @@ end loop
 -- (Kept at end: **`const word _string_heap_size`** + **`include strings_dynamic`** must precede first **`var string`**.)
 -- ========================================
 print_string(serial_data, "--- pointer to heap string ----------------\r\n")
-const word _string_heap_size = 128
+pragma target string_heap_size 128
 
 include strings_dynamic
 var string _ptr_ds_t

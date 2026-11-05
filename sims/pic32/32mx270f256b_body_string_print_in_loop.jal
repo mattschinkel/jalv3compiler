@@ -31,7 +31,7 @@
 
 include regression_32mx270f256b_device
 
-const word _string_heap_size = 48
+pragma target string_heap_size 48
 
 var byte _cap[24]
 var volatile byte _capn = 0

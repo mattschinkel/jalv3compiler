@@ -79,7 +79,7 @@ include print
                 -- runtime length as the hidden count)
 include format
 
-const word _string_heap_size = 255
+pragma target string_heap_size 255
 pragma string index byte
 
 include strings_dynamic

@@ -18,7 +18,7 @@
 -- Notes:
 --    Wrapped by the ESP32, PIC32 and PIC18 sim bodies.
 --------------------------------------------------------------------------------
-const word _string_heap_size = 128
+pragma target string_heap_size 128
 include strings_dynamic
 
 var string _ss_s

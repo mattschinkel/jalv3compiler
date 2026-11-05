@@ -33,7 +33,7 @@ pin_A0_direction = OUTPUT
 
 include regression
 
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 
 var byte lvl = 42

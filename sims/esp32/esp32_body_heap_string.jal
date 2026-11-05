@@ -26,7 +26,7 @@
 include regression_esp32_device
 include regression_esp32
 
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 pragma string index byte
 include strings_dynamic
 

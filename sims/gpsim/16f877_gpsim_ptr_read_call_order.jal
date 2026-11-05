@@ -32,7 +32,7 @@
 include regression_16f877_device
 include regression
 
-const word _string_heap_size = 96
+pragma target string_heap_size 96
 include strings_dynamic
 
 var string _pcr_s

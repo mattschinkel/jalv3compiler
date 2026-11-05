@@ -21,5 +21,5 @@
 -- @sim_validate end
 --
 include regression_32mz1024efh064_device
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include _regression_optional_body

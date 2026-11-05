@@ -19,6 +19,7 @@
 #include "../libcore/pf_proc.h"
 #include "../libpic12/pic.h"
 #include "jal_expr.h"
+#include "jal_string.h"
 #include "jal_tokn.h"
 #include "jal_vdef.h"
 #include "jal_incl.h"
@@ -330,6 +331,45 @@ static void jal_parse_pragma_target_page(pfile_t *pf)
   jal_pragma_variable_assign(pf, "target_page_size");
 }
 
+/* pragma target string_heap_size <bytes>
+ *
+ * The preferred spelling of the dynamic-string heap declaration.  It creates
+ * the compiler-owned `const _string_heap_size` cell, so every existing heap
+ * reader (the heap builder, the sizing report, the index-width choice) keeps
+ * using the same name; the legacy `const word _string_heap_size = <bytes>`
+ * declaration remains accepted and runs the same validation. */
+static void jal_parse_pragma_target_string_heap_size(pfile_t *pf)
+{
+  value_t cexpr;
+
+  cexpr = jal_parse_expr(pf);
+  if (!cexpr) {
+    pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_CONSTANT_EXPECTED);
+    return;
+  }
+  if (!value_is_const(cexpr)) {
+    pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_CONSTANT_EXPECTED);
+    value_release(cexpr);
+    return;
+  }
+  if (!jal_string_heap_size_const_check(pf, "_string_heap_size",
+        value_def_get(cexpr), cexpr)) {
+    value_release(cexpr);
+    return;
+  }
+  {
+    jal_variable_info_t inf;
+
+    jal_variable_info_init(&inf);
+    inf.name      = "_string_heap_size";
+    inf.ct        = 0;
+    inf.def_flags = VARIABLE_DEF_FLAG_CONST;
+    variable_release(jal_variable_alloc(pf, &inf, BOOLEAN_FALSE, 1,
+        &cexpr, PFILE_VARIABLE_ALLOC_GLOBAL));
+  }
+  value_release(cexpr);
+}
+
 /* `pragma string heap <expr>` was REMOVED: the arena size is only
  * `const word _string_heap_size = <bytes>` in user source.  The name stays as
  * a tombstone so old code gets one actionable diagnostic instead of the
@@ -340,8 +380,8 @@ static void jal_parse_pragma_string_heap_removed(pfile_t *pf)
   value_t cexpr;
 
   pfile_log(pf, PFILE_LOG_ERR,
-      "pragma string heap was removed -- declare "
-      "`const word _string_heap_size = <bytes>` instead");
+      "pragma string heap was removed -- use "
+      "`pragma target string_heap_size <bytes>` instead");
   cexpr = jal_parse_expr(pf);
   value_release(cexpr);
 }
@@ -653,6 +693,7 @@ static void jal_parse_pragma_target(pfile_t *pf)
     {"bank",  jal_parse_pragma_target_bank},
     {"inst",  jal_parse_pragma_target_instruction_set},
     {"page",  jal_parse_pragma_target_page},
+    {"string_heap_size", jal_parse_pragma_target_string_heap_size},
     {"PLLDIV", jal_parse_pragma_target_plldiv},
     {"CPUDIV", jal_parse_pragma_target_cpudiv},
     {"WDT",   jal_parse_pragma_target_wdt},

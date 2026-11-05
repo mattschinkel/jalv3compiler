@@ -38,7 +38,7 @@ include regression
 const string STR = "hello"
 const string TAIL = "!"
 
-const word _string_heap_size = 60
+pragma target string_heap_size 60
 include strings_dynamic
 
 var string s = STR

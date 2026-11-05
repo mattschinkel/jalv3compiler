@@ -34,7 +34,7 @@
 include regression_16f877_device
 include regression
 
-const word _string_heap_size = 48
+pragma target string_heap_size 48
 pragma string retry on
 
 var volatile byte _frag_err at 0x20

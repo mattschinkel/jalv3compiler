@@ -68,7 +68,7 @@ const PRINT_MAX_VAR_SIZE = 4
 
 include print
 include format
-const word _string_heap_size = 76
+pragma target string_heap_size 76
 pragma string index byte
 
 include strings_dynamic

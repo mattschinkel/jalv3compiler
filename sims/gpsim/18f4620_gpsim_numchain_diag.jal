@@ -14,7 +14,7 @@
 include regression_18f4620_device
 include regression
 
-const word _string_heap_size = 240
+pragma target string_heap_size 240
 pragma string index byte
 include strings_dynamic
 

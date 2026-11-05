@@ -98,7 +98,7 @@ regression_checkpoint()
 
 -- DYNAMIC-string formal takes literals of ANY length (including
 -- empty) and the omitted-arg default reads as a real string
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 var volatile byte _op_litn = 255
 var volatile byte _op_lit0 = 99

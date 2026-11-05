@@ -42,7 +42,7 @@ procedure cap'put(byte in x) is
    _capn = _capn + 1
 end procedure
 
-const word _string_heap_size = 100
+pragma target string_heap_size 100
 include print
 
 var string my_string1 = "My string" & 1

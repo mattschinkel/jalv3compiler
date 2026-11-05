@@ -63,10 +63,22 @@ EOF
 expect_warn "literal assigns: heap 9, recommended 17" "$WORK/w1.jal" \
   "recommend at least 17 (7 payload + 3-byte headers across 2 strings"
 
+# --- 1b: the `pragma target string_heap_size` spelling drives the same
+# advisory: it creates the same compiler-owned const cell, so the heap
+# builder, the index width and this report all read the same value.
+sed "s/^const word _string_heap_size = 9$/pragma target string_heap_size 9/" \
+  "$WORK/w1.jal" > "$WORK/w1p.jal"
+expect_warn "pragma heap: same recommendation" "$WORK/w1p.jal" \
+  "recommend at least 17 (7 payload + 3-byte headers across 2 strings"
+
 # --- 2: roomy heap -> silent -----------------------------------------
 sed "s/_string_heap_size = 9/_string_heap_size = 64/" "$WORK/w1.jal" \
   > "$WORK/w2.jal"
 expect_clean "roomy heap is silent" "$WORK/w2.jal"
+
+sed "s/^const word _string_heap_size = 9$/pragma target string_heap_size 64/" \
+  "$WORK/w1.jal" > "$WORK/w2p.jal"
+expect_clean "pragma roomy heap is silent" "$WORK/w2p.jal"
 
 # --- 3: runtime-length assign (from_array) -> SKIP -------------------
 cat > "$WORK/w3.jal" << 'EOF'
@@ -172,6 +184,47 @@ expect_warn "const-number chain counted (6 payload)" "$WORK/w7.jal" \
 } > "$WORK/w8.jal"
 expect_warn "index feedback: 6-byte headers, 390" "$WORK/w8.jal" \
   "recommend at least 390 (240 payload + 6-byte headers across 12 strings"
+
+# --- 9: bad pragma values -> the same one-line diagnostics -----------
+bad_case() { # name value expected-substring
+  local name=$1 value=$2 want=$3 out
+  {
+    echo "include 16f1825"
+    echo "pragma target string_heap_size $value"
+    echo "var string s"
+    echo "procedure demo() is"
+    echo '   s = "abc"'
+    echo "end procedure"
+    echo "demo()"
+    echo "forever loop"
+    echo "end loop"
+  } > "$WORK/bad.jal"
+  out=$(run "$WORK/bad.jal")
+  if echo "$out" | grep -q "$want"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: expected '$want' in:"
+    echo "$out" | grep -v "^generating\|^writing\|tokens\|^jal " | sed 's/^/     /'
+    fails=$((fails + 1))
+  fi
+}
+bad_case "pragma negative heap" -1 "_string_heap_size must not be negative"
+bad_case "pragma over 65535" 70000 "dynamic string heap is currently limited to 65535 bytes"
+bad_case "pragma non-integer" 1.5 "must be a constant integer"
+bad_case "pragma missing value" "" "constant expression expected"
+
+# the removed `pragma string heap` now names the new spelling
+{
+  echo "include 16f1825"
+  echo "pragma string heap 64"
+  echo "var string s"
+} > "$WORK/oldheap.jal"
+if run "$WORK/oldheap.jal" | grep -q "pragma target string_heap_size"; then
+  echo "ok   removed pragma string heap names the new spelling"
+else
+  echo "FAIL removed pragma string heap message"
+  fails=$((fails + 1))
+fi
 
 echo "----"
 if [ "$fails" -eq 0 ]; then

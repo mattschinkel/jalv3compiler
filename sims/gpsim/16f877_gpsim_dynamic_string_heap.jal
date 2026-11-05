@@ -29,7 +29,7 @@
 include regression_16f877_device
 include regression
 
-const word _string_heap_size = 32
+pragma target string_heap_size 32
 
 var volatile byte _dynstr_lit at 0x20
 var volatile byte _dynstr_copy at 0x21

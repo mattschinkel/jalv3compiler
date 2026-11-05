@@ -53,7 +53,7 @@ procedure _error_hook() is
    end if
 end procedure
 
-const word _string_heap_size = 200
+pragma target string_heap_size 200
 include strings_dynamic
 
 var string my_string1 = "My string" & 1

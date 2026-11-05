@@ -62,7 +62,7 @@ procedure put_crlf() is
    _capn = _capn + 1
 end procedure
 
-const word _string_heap_size = 100
+pragma target string_heap_size 100
 include print
 
 const byte okc_string[] = "Const string that does it."

@@ -44,7 +44,7 @@ include regression
 
 -- the size the compiler's own sizing report asks for with these three
 -- strings plus the concat pieces
-const word _string_heap_size = 80
+pragma target string_heap_size 80
 
 var string a = "My string"
 var string b = "My string" & 1

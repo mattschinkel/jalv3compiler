@@ -27,7 +27,7 @@
 --
 include regression_32mx270f256b_device
 include regression_pic32
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 pragma string index byte
 include strings_dynamic
 

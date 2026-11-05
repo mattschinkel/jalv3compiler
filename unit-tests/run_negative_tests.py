@@ -61,7 +61,7 @@ TABLE = [
      ["pragma string heap was removed",
       "const word _string_heap_size = <bytes>"]),
     ("string_heap_missing.jal",
-     ["dynamic string storage requires const word _string_heap_size"]),
+     ["dynamic string storage requires `pragma target string_heap_size"]),
     # pointer-signature enforcement (recovered from the retired
     # scripts/run_pointer_negative_tests.py; its compilertest case
     # directory was never committed and was lost)

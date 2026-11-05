@@ -47,7 +47,7 @@ include regression_16f1825_device
 include regression
 include print
 
-const word _string_heap_size = 15
+pragma target string_heap_size 15
 include strings_dynamic
 
 var string my_string

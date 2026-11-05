@@ -31,7 +31,7 @@
 include regression_32mx270f256b_device
 include regression_pic32
 
-const word _string_heap_size = 96
+pragma target string_heap_size 96
 include strings_dynamic
 
 var float fv = 0.1

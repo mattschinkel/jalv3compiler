@@ -35,7 +35,7 @@
 include regression_16f1825_device
 include regression
 
-const word _string_heap_size = 48
+pragma target string_heap_size 48
 
 var string s
 var pointer ps as var string

@@ -8,10 +8,11 @@
 -- Description: Helper API for heap-backed dynamic strings.
 --
 -- Notes:
--- - Heap byte count is **`const word _string_heap_size = N`** (compile-time
+-- - Heap byte count is **`pragma target string_heap_size N`** (compile-time
 --   constant, the single source of truth; declare it **before** the first
---   dynamic **`var string`**).  `pragma string heap N` was **removed** -- it
---   is now an error that points back at the constant.
+--   dynamic **`var string`**).  The legacy `const word _string_heap_size = N`
+--   declaration still works; `pragma string heap N` was **removed** and its
+--   error now names the `pragma target` spelling.
 -- - `include strings_dynamic` pulls in JAL **`string_*`** wrappers; **`_string_*`**
 --   builtins are recognized by the compiler whenever spelled (**`jal_string_builtin_is`**
 --   in **`src/jal/jal_string.c`**).

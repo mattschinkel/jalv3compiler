@@ -60,7 +60,7 @@ include print   -- print_string accepts const literals, byte buffers,
                 -- and heap var strings (content marshalled + exact
                 -- runtime length as the hidden count)
 
-const word _string_heap_size = 255
+pragma target string_heap_size 255
 pragma string index byte
 
 include strings_dynamic
