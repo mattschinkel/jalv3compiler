@@ -1,0 +1,81 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim - OUT / IN OUT open-array formals
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `byte out a[]` and `byte in out a[]` formals are pointers plus a hidden
+--    _a_count parameter.  Checks that an OUT formal writes through to the
+--    caller's array, that an IN OUT formal reads the caller's values and
+--    writes back, and that an OUT formal can be passed on to another OUT
+--    formal.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- expect byte v__oa_out 1
+-- expect byte v__oa_inout 1
+-- expect byte v__oa_relayed 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte _oa_out = 0
+var volatile byte _oa_inout = 0
+var volatile byte _oa_relayed = 0
+
+var byte _oa_buf[4]
+
+procedure _oa_write(byte out a[]) is
+   a[0] = 0x11
+   a[1] = 0x22
+   a[3] = 0x44
+end procedure
+
+procedure _oa_inc(byte in out a[]) is
+   a[1] = a[0] + 1
+end procedure
+
+procedure _oa_relay(byte out a[]) is
+   _oa_write(a)
+end procedure
+
+procedure _oa_run() is
+   regression_begin_run()
+
+   _oa_buf[0] = 0
+   _oa_buf[1] = 0
+   _oa_buf[2] = 0xAA
+   _oa_buf[3] = 0
+   _oa_write(_oa_buf)
+   if (_oa_buf[0] == 0x11) & (_oa_buf[1] == 0x22) & (_oa_buf[2] == 0xAA) & (_oa_buf[3] == 0x44) then
+      _oa_out = 1
+   end if
+   regression_checkpoint()
+
+   _oa_buf[0] = 5
+   _oa_buf[1] = 0
+   _oa_inc(_oa_buf)
+   if (_oa_buf[0] == 5) & (_oa_buf[1] == 6) then
+      _oa_inout = 1
+   end if
+   regression_checkpoint()
+
+   _oa_buf[0] = 0
+   _oa_buf[1] = 0
+   _oa_relay(_oa_buf)
+   if (_oa_buf[0] == 0x11) & (_oa_buf[1] == 0x22) then
+      _oa_relayed = 1
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+end procedure
+
+_oa_run()
+forever loop end loop

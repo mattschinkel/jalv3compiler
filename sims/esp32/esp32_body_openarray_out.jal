@@ -1,0 +1,70 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — OUT / IN OUT open arrays
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Same OUT / IN OUT open-array checks as the PIC32 body: the call passes
+--    the array address, the callee writes through it (no copy-back), and an
+--    OUT formal can be passed on to another OUT formal.  v_r is 0x5A only
+--    when every check passes.
+--
+-- @sim_validate begin
+-- duration_s: 5.0
+-- machine: esp32
+-- expect byte v_r 0x5A
+-- @sim_validate end
+
+include regression_esp32_device
+
+var volatile byte r
+var byte buf[4]
+
+procedure p_write(byte out a[]) is
+  a[0] = 0x11
+  a[1] = 0x22
+  a[3] = 0x44
+end procedure
+
+procedure p_inc(byte in out a[]) is
+  a[1] = a[0] + 1
+end procedure
+
+procedure p_relay(byte out a[]) is
+  p_write(a)
+end procedure
+
+procedure p_run() is
+  var byte ok
+
+  ok = 0
+  buf[0] = 0
+  buf[1] = 0
+  buf[2] = 0xAA
+  buf[3] = 0
+  p_write(buf)
+  if (buf[0] == 0x11) & (buf[1] == 0x22) & (buf[2] == 0xAA) & (buf[3] == 0x44) then
+    ok = ok + 1
+  end if
+  buf[0] = 5
+  buf[1] = 0
+  p_inc(buf)
+  if (buf[0] == 5) & (buf[1] == 6) then
+    ok = ok + 1
+  end if
+  buf[0] = 0
+  buf[1] = 0
+  p_relay(buf)
+  if (buf[0] == 0x11) & (buf[1] == 0x22) then
+    ok = ok + 1
+  end if
+  if ok == 3 then
+    r = 0x5A
+  else
+    r = ok
+  end if
+end procedure
+
+r = 0
+p_run()

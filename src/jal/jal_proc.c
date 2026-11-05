@@ -503,7 +503,9 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
             }
           }
           vdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
-              variable_def_flags_get_all(variable_def_get(var)), 
+              variable_def_flags_get_all(variable_def_get(var))
+                | (variable_is_array(var)
+                    ? VARIABLE_DEF_FLAG_OPENARRAY : 0), 
               pfile_pointer_width_get(pf));
           if (variable_is_array(var)) {
             variable_def_member_add(vdef,
@@ -1322,7 +1324,7 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
 
 /* OUT formal: a PUT procedure (its 'put is called after the callee
  * returns, value in tow) or a plain lvalue */
-static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms)
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct)
 {
   value_t val;
 
@@ -1383,13 +1385,60 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
   }
   if (!((variable_def_type_is_number(variable_def_type_get(def))
       && value_is_number(val))
-      || variable_def_is_same(def, value_def_get(val)))) {
+      || variable_def_is_same(def, value_def_get(val))
+      /* open-array OUT formal (a POINTER built from `byte out a[]`):
+       * an array actual of matching elements is legal, exactly like the
+       * IN direction */
+      || ((val
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && (VARIABLE_DEF_TYPE_ARRAY
+              == variable_def_type_get(value_def_get(val)))
+          && variable_def_is_same(
+              variable_def_member_def_get(
+                variable_def_member_get(def)),
+              variable_def_member_def_get(
+                variable_def_member_get(value_def_get(val)))))))) {
     pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
     value_release(val);
     val = VALUE_NONE;
   }
+  if (val && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
+      && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+      && value_is_array(val)) {
+    /* same address-escape rule as an IN open array: keep the target in RAM */
+    variable_t av;
+
+    av = value_variable_get(val);
+    pfile_pointer_bind_target_note(av);
+    if (av) {
+      variable_use_ct_bump(av, CTR_BUMP_INCR);
+    }
+  }
   if (parms && (ii < param_ct)) {
     parms[ii] = val;
+    if (val && need_ct) {
+      /* the hidden _<name>_count slot precedes the pointer (same fill as
+       * the IN direction): a fixed array's element count, or the actual
+       * formal's own _count when it is an open-array formal */
+      char *ct_name;
+
+      ptr     = value_name_get(val);
+      ct_name = MALLOC(8 + strlen(ptr));
+      if (!ct_name) {
+        pfile_log_syserr(pf, ENOMEM);
+      } else {
+        value_t ct_val;
+
+        sprintf(ct_name, "_%s_count", ptr);
+        ct_val = pfile_value_find(pf, PFILE_LOG_NONE, ct_name);
+        if (!ct_val) {
+          ct_val = pfile_constant_get(pf, value_ct_get(val),
+            VARIABLE_DEF_NONE);
+        }
+        parms[ii - 1] = ct_val;
+        FREE(ct_name);
+      }
+    }
   } else {
     value_release(val);
   }
@@ -1581,6 +1630,20 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
         pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
         value_release(val);
         val = VALUE_NONE;
+      }
+    }
+    if (val && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
+        && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+        && value_is_array(val)) {
+      /* an open-array formal receives the ARRAY ADDRESS: count the target
+       * as assigned AND used so it is not folded to CONST (a CONST target
+       * makes the pointer ROM-bound and refuses every store) */
+      variable_t av;
+
+      av = value_variable_get(val);
+      pfile_pointer_bind_target_note(av);
+      if (av) {
+        variable_use_ct_bump(av, CTR_BUMP_INCR);
       }
     }
   }
@@ -1822,7 +1885,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
                 &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
             jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
-                put_parms);
+                put_parms, need_ct);
           } else {
             jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
                 need_ct, flags, call_val);

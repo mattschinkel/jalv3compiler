@@ -1234,7 +1234,8 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
         /* if the proc parameter has gone const, it will be reflected in the
          * attached variable, *not* the value itself */
         val = pfile_proc_param_get(proc, ii);
-        if (value_dflag_test(val, VARIABLE_DEF_FLAG_IN)) {
+        if (value_dflag_test(val, VARIABLE_DEF_FLAG_IN)
+            || value_dflag_test(val, VARIABLE_DEF_FLAG_OPENARRAY)) {
           if (!value_is_const(val)
             && !variable_is_const(value_variable_get(val))) {
             if (ii != param_in_w) {
@@ -1346,7 +1347,8 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
         for (ii = 0; ii < pfile_proc_param_ct_get(proc); ii++) {
           val = pfile_proc_param_get(proc, ii);
 
-          if (value_dflag_test(val, VARIABLE_DEF_FLAG_OUT)) {
+          if (value_dflag_test(val, VARIABLE_DEF_FLAG_OUT)
+              && !value_dflag_test(val, VARIABLE_DEF_FLAG_OPENARRAY)) {
             if (proc_params[ii]
                 && !value_is_const(proc_params[ii])
                 && !variable_is_const(value_variable_get(proc_params[ii]))) {

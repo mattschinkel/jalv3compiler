@@ -377,6 +377,16 @@ void pfile_block_variable_fixup(pfile_block_t *blk,
     if (!variable_is_const(vptr)
         && (VARIABLE_BASE_UNKNOWN == variable_base_get(vptr, 0))
         && !variable_master_get(vptr)) {
+      if (variable_dflag_test(vptr, VARIABLE_DEF_FLAG_OPENARRAY)
+          && variable_dflag_test(vptr, VARIABLE_DEF_FLAG_OUT)) {
+        /* an OUT-direction open-array formal is a POINTER the callee
+         * dereferences but may never "read": the assigned-and-used test
+         * below would mark it CONST, and every store through it would be
+         * refused ("Attempt to assign to a lookup table").  It always
+         * needs storage.  IN-only formals keep the existing folding. */
+        variable_flag_set(vptr, VARIABLE_FLAG_AUTO);
+        continue;
+      }
       /* this variable either needs to be marked CONST or AUTO */
       if (((flags & PFILE_FLAG_OPT_VARIABLE_REDUCE)
           && ((variable_is_volatile(vptr)

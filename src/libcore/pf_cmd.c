@@ -365,6 +365,7 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
 
         val = pfile_proc_param_get(proc, ii);
         if (value_dflag_test(val, VARIABLE_DEF_FLAG_OUT)
+            && !value_dflag_test(val, VARIABLE_DEF_FLAG_OPENARRAY)
             && !value_is_const(proc_params[ii])) {
           pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &proc_params[ii], val, 
               VALUE_NONE);

@@ -3311,7 +3311,8 @@ static void esp_emit_call_proc(pfile_t *pf, const cmd_t cmd)
     variable_t pv;
 
     if (!pval || !arg) { continue; }
-    if (!value_dflag_test(pval, VARIABLE_DEF_FLAG_IN)) { continue; }
+    if (!value_dflag_test(pval, VARIABLE_DEF_FLAG_IN)
+        && !value_dflag_test(pval, VARIABLE_DEF_FLAG_OPENARRAY)) { continue; }
     pv = value_variable_get(pval);
     /* Unused `_name_count` (open array) is assigned by the caller but
      * never used in the callee, so it has no RAM -- do not store. */
@@ -3372,6 +3373,8 @@ static void esp_emit_call_proc(pfile_t *pf, const cmd_t cmd)
 
     if (!pval || !arg) { continue; }
     if (!value_dflag_test(pval, VARIABLE_DEF_FLAG_OUT)) { continue; }
+    /* open-array OUT: the callee wrote through the passed address */
+    if (value_dflag_test(pval, VARIABLE_DEF_FLAG_OPENARRAY)) { continue; }
     if (bitbufs && bitbufs[ii]) {
       /* IN OUT bit formal: unpack the buffer back onto the actual */
       if (!value_is_const(arg)

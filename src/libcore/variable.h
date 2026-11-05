@@ -95,6 +95,12 @@ __extension__ typedef unsigned __int128 variable_const_t;
 #define VARIABLE_DEF_FLAG_STRING   0x0100U
 /* dynamic string handle backed by the compiler-managed string heap */
 #define VARIABLE_DEF_FLAG_STRING_DYNAMIC 0x0200U
+/* an OPEN-ARRAY formal (`byte in a[]`, `byte in out a[]`, `byte out a[]`):
+ * the declaration lowered it to a POINTER whose pointee is the element type
+ * and added a hidden _<name>_count parameter.  The callee indexes it as the
+ * array, and a call passes the ARRAY ADDRESS (never a value), so an OUT
+ * direction needs no copy-back. */
+#define VARIABLE_DEF_FLAG_OPENARRAY 0x0400U
  
 #define VARIABLE_FLAG_NONE         0x0000U
 #define VARIABLE_FLAG_AUTO         0x0001U

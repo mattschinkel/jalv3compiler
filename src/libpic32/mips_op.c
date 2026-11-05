@@ -2733,7 +2733,8 @@ static void mips_emit_call(pfile_t *pf, const cmd_t cmd)
     value_t    arg  = params ? params[ii] : VALUE_NONE;
     variable_t pv;
     if (!pval || !arg) continue;
-    if (!value_dflag_test(pval, VARIABLE_DEF_FLAG_IN)) continue;
+    if (!value_dflag_test(pval, VARIABLE_DEF_FLAG_IN)
+        && !value_dflag_test(pval, VARIABLE_DEF_FLAG_OPENARRAY)) continue;
     pv = value_variable_get(pval);
     /* Unused `_name_count` (open array) is assigned by the caller but
      * never used in the callee, so it has no RAM — do not SH to 0xFFFF. */
@@ -2813,6 +2814,9 @@ static void mips_emit_call(pfile_t *pf, const cmd_t cmd)
     value_t arg  = params ? params[ii] : VALUE_NONE;
     if (!pval || !arg) continue;
     if (!value_dflag_test(pval, VARIABLE_DEF_FLAG_OUT)) continue;
+    /* an open-array OUT formal holds the caller's address; the callee wrote
+     * through it, so there is no value to copy back */
+    if (value_dflag_test(pval, VARIABLE_DEF_FLAG_OPENARRAY)) continue;
     if (bitbufs && bitbufs[ii]) {
       if (!value_is_const(arg)
           && !variable_is_const(value_variable_get(arg))) {
