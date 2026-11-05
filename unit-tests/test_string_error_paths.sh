@@ -204,8 +204,24 @@ r = string_to_array(rom, s)' "assign to constant"
 # --- string actual into out / in out array formals (2026-11-05) ---------
 # The OUT direction marshals nothing (the snapshot lives in the IN parser),
 # so the callee would write through the string's handle and silently corrupt
-# the heap.  Refused until the payload view (fixes/fix_string_arg_view.md).
-check out_string_refused '
+# the heap.  A CLEAN callee now receives the payload VIEW on every core
+# family (fixes/fix_string_arg_view.md) -- including the CLASSIC 14-bit
+# core, whose walk uses the baked chunk map plus a per-formal base cell.
+# A callee that can reallocate a string keeps the refusal (no snapshot
+# exists on the OUT path).
+check out_tainted_refused_classic '
+include 16f877
+pragma target string_heap_size 64
+var string s
+var string t
+procedure grower(byte out x[]) is
+  s = s & "!"
+  x[0] = 1
+end procedure
+s = "abcde"
+t = "hello"
+grower(t)' "writes through it would corrupt the string"
+check_ok ok_out_view_classic '
 include 16f877
 pragma target string_heap_size 64
 var string s
@@ -213,8 +229,8 @@ procedure pv_w(byte out x[]) is
   x[0] = 1
 end procedure
 s = "ab"
-pv_w(s)' "writes through it would corrupt the string"
-check inout_string_refused '
+pv_w(s)'
+check_ok ok_inout_view_classic '
 include 16f877
 pragma target string_heap_size 64
 var string s
@@ -222,8 +238,8 @@ procedure pv_w(byte in out x[]) is
   x[0] = 1
 end procedure
 s = "ab"
-pv_w(s)' "writes through it would corrupt the string"
-check inout_ptr_actual_still_mismatched '
+pv_w(s)'
+check_ok ok_inout_ptr_view_classic '
 include 16f877
 pragma target string_heap_size 64
 var string s
@@ -233,7 +249,7 @@ procedure pv_w(byte in out x[]) is
 end procedure
 s = "ab"
 p is s
-pv_w(p)' "type mismatch"
+pv_w(p)'
 # the view exists only into a callee that cannot move the string: a
 # reallocating callee keeps the refusal (no snapshot on the OUT path)
 check inout_tainted_refused '
@@ -248,17 +264,6 @@ end procedure
 s = "abcde"
 t = "hello"
 grower(t)' "writes through it would corrupt the string"
-# a CLASSIC 14-bit core has no FSR0 walk, so the view is refused there even
-# into a clean callee (the kill-criterion fallback)
-check inout_classic_core_refused '
-include 16f877
-pragma target string_heap_size 64
-var string s
-procedure pv_w(byte in out x[]) is
-  x[0] = 1
-end procedure
-s = "ab"
-pv_w(s)' "writes through it would corrupt the string"
 # a pass-on touching a string-view formal cannot hand the base word over
 # (either direction); without the refusal the callee walks the stale map of
 # the string call site

@@ -701,7 +701,37 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
   mapv = pic_var_openarray_formal_map_get(fv);
   if (!mapv || (VARIABLE_NONE == mapv)) {
     /* the callee addresses this formal linearly (or with its baked layout),
-     * so there is nothing to hand over */
+     * so there is nothing to hand over -- EXCEPT a CLASSIC-core string
+     * view: its payload base cannot ride a map (no runtime-map walk
+     * exists), so hand it to the formal's per-formal cell instead (a
+     * plain register copy from this site's staged base; nothing the
+     * caller staged in W is disturbed) */
+    if (pic_var_openarray_formal_strview_fed(fv)) {
+      variable_t cell;
+      variable_t src;
+
+      cell = pic_var_strview_formal_base_get(fv);
+      src  = pic_var_strview_site_get(actual);
+      if ((VARIABLE_NONE != cell) && (VARIABLE_NONE != src)) {
+        value_t cval;
+        value_t sval;
+
+        cval = value_alloc(cell);
+        sval = value_alloc(src);
+        if (cval && sval) {
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, sval, 0, PIC_OPDST_W);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cval, 0);
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, sval, 1, PIC_OPDST_W);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cval, 1);
+        }
+        if (cval) {
+          value_release(cval);
+        }
+        if (sval) {
+          value_release(sval);
+        }
+      }
+    }
     return;
   }
   av = value_variable_get(actual);

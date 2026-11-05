@@ -79,6 +79,14 @@ variable_t pic_var_strview_site_get(value_t actual);
  * formal -- its map is [count][base lo,hi][base,hi,span]... and its walk
  * adds the base word to the index before chunk-walking)? */
 boolean_t pic_var_openarray_formal_strview_get(variable_t formal);
+/* CLASSIC 14-bit cores have no runtime-map walk: a string-view formal
+ * there walks its BAKED copy of the heap's chunk map (the ladder's
+ * classic path), and the payload base offset travels in a per-formal
+ * cell every call site of that formal fills.  This returns the cell
+ * (VARIABLE_NONE before pic_var_chunk_prepare_emit created it). */
+variable_t pic_var_strview_formal_base_get(variable_t formal);
+/* does ANY string payload-view pair feed this formal (all cores)? */
+boolean_t pic_var_openarray_formal_strview_fed(variable_t formal);
 /* place every variable that was allocated after an earlier placement round
  * again (a layout trial emits code that creates scratch, and that scratch
  * belongs to the layout the trial threw away) */

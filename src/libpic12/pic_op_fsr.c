@@ -708,6 +708,10 @@ boolean_t pic_chunk_walk_helpers_exist(void)
 
 /* emit the helpers that were referenced; called once, at the same point as
  * the intrinsic bodies (after every call site has been emitted) */
+static boolean_t pic_strview_base_needs_wide(pfile_t *pf);
+static void pic_strview_classic_base_add(pfile_t *pf, variable_t var,
+    value_t t, boolean_t t_wide);
+
 void pic_chunk_walk_helpers_create(pfile_t *pf)
 {
   variable_t arg;
@@ -729,7 +733,15 @@ void pic_chunk_walk_helpers_create(pfile_t *pf)
     }
     pic_instr_append_label(pf, pic_cw_help[ii].lbl);
     /* the argument is always a 2-byte index here: the caller zeroes the
-     * high byte for a byte-sized index */
+     * high byte for a byte-sized index.  A CLASSIC-core string-view
+     * formal's helper also folds its per-formal base cell in -- the base
+     * is per call, but it was staged before the CALL and this body owns
+     * the whole walk, so no nested helper can observe the modified
+     * argument (two procedures always own distinct formals). */
+    if (pic_var_openarray_formal_strview_fed(pic_cw_help[ii].var)) {
+      pic_strview_classic_base_add(pf, pic_cw_help[ii].var, tv,
+          BOOLEAN_TRUE);
+    }
     pic_fsr_chunk_ladder(pf, pic_cw_help[ii].var, tv, BOOLEAN_TRUE, hybrid);
     pic_instr_append(pf, PIC_OPCODE_RETURN);
     value_release(tv);
@@ -771,6 +783,57 @@ static void pic_fsr_chunk_walk_emit(pfile_t *pf, variable_t var,
   pic_fsr_chunk_walk_emit_ofs(pf, var, idx, 0, hybrid);
 }
 
+/* ---- CLASSIC-core string payload view --------------------------------
+ *
+ * A classic 14-bit core has no FSR0 linear walk, so a string-view formal
+ * walks its BAKED copy of the heap's chunk map (the ladder above) and the
+ * payload base offset travels in a per-formal cell the call sites fill.
+ * These helpers add that cell into the walk's index scratch. */
+
+/* does the payload base need a wide scratch (heap index wider than a
+ * byte)?  Mirrors the FSR0 walk's rule. */
+static boolean_t pic_strview_base_needs_wide(pfile_t *pf)
+{
+  value_t hv;
+  boolean_t wide;
+
+  hv = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
+  if (!hv) {
+    return BOOLEAN_FALSE;
+  }
+  wide = (value_const_get(hv) > 255) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  value_release(hv);
+  return wide;
+}
+
+/* t += the per-formal base cell (16-bit when the scratch is wide; a small
+ * heap's payload offsets fit one byte -- base+idx stays under the heap
+ * size, which is what the count bounds) */
+static void pic_strview_classic_base_add(pfile_t *pf, variable_t var,
+    value_t t, boolean_t t_wide)
+{
+  variable_t cell;
+  value_t    bval;
+
+  cell = pic_var_strview_formal_base_get(var);
+  if ((VARIABLE_NONE == cell) || !t) {
+    return;
+  }
+  bval = value_alloc(cell);
+  if (!bval) {
+    return;
+  }
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, bval, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
+  if (t_wide) {
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, bval, 1, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
+  }
+  value_release(bval);
+}
+
 /* offset-aware walk: the scratch t is initialized to idx + offset (the
  * const part folded out of a pointer-view subscript, e.g. p[256 + i]).
  * W-staged values around the caller are NOT touched -- the offset add
@@ -782,25 +845,37 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
   variable_sz_t  idx_sz;
   unsigned       t_wide;
   value_t        t;
+  boolean_t      sv_classic;
 
   if (pic_var_openarray_pair_formal_runtime_get(var)) {
     pic_fsr_chunk_walk_emit_globals(pf, var, idx, offset);
     return;
   }
+  /* a CLASSIC-core string-view formal walks its BAKED copy of the heap's
+   * chunk map, and the payload base rides the per-formal cell -- added
+   * into the scratch below (the FSR0 cores took their base from the
+   * runtime map and returned above) */
+  sv_classic = (pic_var_openarray_formal_strview_fed(var)
+      && (VARIABLE_NONE != pic_var_strview_formal_base_get(var)))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
   if ((!idx || value_is_const(idx))
-      && (pic_variable_chunk_ct_get(var) > 1)) {
+      && ((pic_variable_chunk_ct_get(var) > 1) || sv_classic)) {
     /* CONSTANT subscript through a compile-time chunk map (e.g.
      * `data[149]` inside a procedure fed one multi-bank buffer): there is
      * no index register to copy -- fold idx and the offset into the
      * scratch and run the ladder.  Without this the caller's linear
      * `deref + offset` sequence addressed across the holes (element 149 of
      * a 150-byte array split 73/77 landed 45 bytes short).  A variable with
-     * no chunk map (ct <= 1) is addressed linearly by the caller instead. */
+     * no chunk map (ct <= 1) is addressed linearly by the caller instead --
+     * except a string view, whose baked base still has to ride the ladder. */
     unsigned long tot;
 
     tot    = offset
       + (idx ? (unsigned long) value_const_get(idx) : 0UL);
     t_wide = (tot > 0xFFU) ? 1 : 0;
+    if (sv_classic && !t_wide && pic_strview_base_needs_wide(pf)) {
+      t_wide = 1;
+    }
     t      = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, t_wide ? 2 : 1);
     if (!t) {
       pfile_log_syserr(pf, ENOMEM);
@@ -810,8 +885,12 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
     if (t_wide) {
       pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
-          (unsigned) ((tot >> 8) & 0xFFU));
+          (unsigned) (tot >> 8 & 0xFFU));
       pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+    }
+    if (sv_classic) {
+      pic_strview_classic_base_add(pf, var, t,
+          t_wide ? BOOLEAN_TRUE : BOOLEAN_FALSE);
     }
     pic_fsr_chunk_ladder(pf, var, t, t_wide ? BOOLEAN_TRUE : BOOLEAN_FALSE,
         hybrid);
@@ -823,6 +902,9 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
   }
   idx_sz = pic_dynamic_index_byte_sz_get(idx);
   t_wide = ((idx_sz > 1) || (offset > 0xFFU)) ? 1 : 0;
+  if (sv_classic && !t_wide && pic_strview_base_needs_wide(pf)) {
+    t_wide = 1;
+  }
   t = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE,
       t_wide ? 2 : 1);
   if (!t) {
@@ -834,7 +916,7 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
   if (idx_sz > 1) {
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
-  } else if (offset > 0xFFU) {
+  } else if (t_wide) {
     pic_instr_append_f(pf, PIC_OPCODE_CLRF, t, 1);
   }
   if (offset) {
@@ -850,6 +932,10 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
         pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
       }
     }
+  }
+  if (sv_classic) {
+    pic_strview_classic_base_add(pf, var, t,
+        t_wide ? BOOLEAN_TRUE : BOOLEAN_FALSE);
   }
 
   pic_fsr_chunk_ladder(pf, var, t, t_wide ? BOOLEAN_TRUE : BOOLEAN_FALSE,
@@ -867,11 +953,18 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
 {
   variable_sz_t idx_sz;
   boolean_t     wide16;
+  boolean_t     sv_classic;
 
-  if (!pic_variable_chunks_holed(var)) {
+  /* a CLASSIC-core string-view formal always walks (its payload base is
+   * runtime data the linear forms cannot carry), even when the baked copy
+   * of the heap's map is a single chunk */
+  sv_classic = (pic_var_openarray_formal_strview_fed(var)
+      && (VARIABLE_NONE != pic_var_strview_formal_base_get(var)))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  if (!pic_variable_chunks_holed(var) && !sv_classic) {
     var = pic_var_pointer_bind_walk_target(var);
   }
-  if (pic_variable_chunks_holed(var)) {
+  if (pic_variable_chunks_holed(var) || sv_classic) {
     pic_fsr_chunk_walk_emit(pf, var, idx, BOOLEAN_FALSE);
     return;
   }

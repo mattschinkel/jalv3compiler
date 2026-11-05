@@ -127,6 +127,16 @@ typedef struct pic_var_strview_site_ {
   variable_t                   base;
 } pic_var_strview_site_t;
 
+/* CLASSIC 14-bit cores: one string-view FORMAL -> the per-formal cell
+ * carrying the CURRENT call's payload base (every call site of the formal
+ * copies its staged base in; the callee's walk adds it to the index
+ * before the ladder).  Sound for the non-reentrant call graph the taint
+ * gate already enforces: two procedures always own distinct formals. */
+typedef struct pic_var_strview_formal_ {
+  variable_t                   formal;
+  variable_t                   base;
+} pic_var_strview_formal_t;
+
 struct pic_var_layout_snap_;
 
 typedef struct pic_var_state_ {
@@ -162,6 +172,10 @@ typedef struct pic_var_state_ {
   pic_var_strview_site_t      *strview_sites;
   size_t                       strview_sites_used;
   size_t                       strview_sites_alloc;
+  /* classic-core string-view formals (see pic_var_strview_formal_) */
+  pic_var_strview_formal_t    *strview_formals;
+  size_t                       strview_formals_used;
+  size_t                       strview_formals_alloc;
   /* formals that must keep the baked map */
   variable_t                  *openarray_blocked;
   size_t                       openarray_blocked_used;
@@ -228,6 +242,7 @@ void pic_var_reset(void)
   FREE(pic_var.openarray_pairs);
   FREE(pic_var.formal_maps);
   FREE(pic_var.strview_sites);
+  FREE(pic_var.strview_formals);
   FREE(pic_var.openarray_blocked);
   FREE(pic_var.late);
   memset(&pic_var, 0, sizeof(pic_var));
@@ -893,8 +908,23 @@ variable_t pic_var_strview_site_get(value_t actual)
   return VARIABLE_NONE;
 }
 
+variable_t pic_var_strview_formal_base_get(variable_t formal)
+{
+  size_t ii;
+
+  if (!formal || (VARIABLE_NONE == formal)) {
+    return VARIABLE_NONE;
+  }
+  for (ii = 0; ii < pic_var.strview_formals_used; ii++) {
+    if (pic_var.strview_formals[ii].formal == formal) {
+      return pic_var.strview_formals[ii].base;
+    }
+  }
+  return VARIABLE_NONE;
+}
+
 /* any string payload-view pair feeds this formal? */
-static boolean_t pic_var_formal_strview_fed(variable_t formal)
+boolean_t pic_var_openarray_formal_strview_fed(variable_t formal)
 {
   size_t ii;
 
@@ -1178,7 +1208,7 @@ static boolean_t pic_var_formal_map_resize(pfile_t *pf, variable_t formal,
   ent         = &pic_var.formal_maps[pic_var.formal_maps_used++];
   ent->formal = formal;
   ent->map    = map;
-  ent->strview = pic_var_formal_strview_fed(formal);
+  ent->strview = pic_var_openarray_formal_strview_fed(formal);
   return BOOLEAN_TRUE;
 }
 
@@ -1197,7 +1227,7 @@ static boolean_t pic_var_formal_map_resize(pfile_t *pf, variable_t formal,
  *    chunked (one layout is addressed exactly by the baked copy);
  *  - every PASS-ON source formal that already has a runtime map: the call site
  *    copies that map, so the target must be at least as big. */
-static variable_sz_t pic_var_formal_map_need(variable_t formal)
+static variable_sz_t pic_var_formal_map_need(pfile_t *pf, variable_t formal)
 {
   size_t        pi;
   size_t        pj;
@@ -1243,8 +1273,11 @@ static variable_sz_t pic_var_formal_map_need(variable_t formal)
    * baked map cannot carry it) and its format is
    * [count][base lo,hi][pad][entries 3*ct] -- with every run longer than
    * 255 bytes SPLIT (the walk's span compare is byte-sized), so the size
-   * must count the pieces */
-  if (pic_var_formal_strview_fed(formal)) {
+   * must count the pieces.  A CLASSIC 14-bit core has no runtime-map
+   * walk: the formal keeps the BAKED copy of the heap's map and the base
+   * travels in the per-formal cell instead. */
+  if ((pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+      && pic_var_openarray_formal_strview_fed(formal)) {
     variable_ct_t piece_ct;
 
     piece_ct = 0;
@@ -1370,7 +1403,7 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
       if (pj != pi) {
         continue; /* this formal was handled at an earlier index */
       }
-      need = pic_var_formal_map_need(formal);
+      need = pic_var_formal_map_need(pf, formal);
       if (0 == need) {
         continue;
       }
@@ -1449,8 +1482,8 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
 
     pair = &pic_var.openarray_pairs[pi];
     if (pair->passon && !pair->reported
-        && (pic_var_formal_strview_fed(pair->formal)
-          || pic_var_formal_strview_fed(pair->actual))) {
+        && (pic_var_openarray_formal_strview_fed(pair->formal)
+          || pic_var_openarray_formal_strview_fed(pair->actual))) {
       pair->reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
           "an open-array parameter bound to a string cannot be passed "
@@ -1483,6 +1516,47 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
           "size so it needs fewer bank pieces",
           variable_name_get(formal) ? variable_name_get(formal) : "?",
           (unsigned) max_ct, (unsigned) PIC_CHUNK_MAP_MAX);
+    }
+  }
+  /* 4b. CLASSIC 14-bit cores: one base cell per string-view FORMAL (the
+   * payload offset's per-call rendezvous -- see pic_var_strview_formal_).
+   * Created here, after the final placement, like the runtime maps. */
+  if (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)) {
+    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+      pic_var_openarray_pair_t *pair;
+      variable_t                cell;
+      char                      name[32];
+
+      pair = &pic_var.openarray_pairs[pi];
+      if (!pair->strview || !pair->formal
+          || (VARIABLE_NONE == pair->formal)
+          || (VARIABLE_NONE != pic_var_strview_formal_base_get(pair->formal))) {
+        continue;
+      }
+      sprintf(name, "_pic_strviewbase_%u",
+          (unsigned) (pic_var.strview_formals_used + 1));
+      cell = pic_var_chunk_global_create(pf, name, 2);
+      if (VARIABLE_NONE != cell) {
+        if (pic_var.strview_formals_used == pic_var.strview_formals_alloc) {
+          size_t                    resize;
+          pic_var_strview_formal_t *tmp;
+
+          resize = pic_var.strview_formals_alloc
+            ? 2 * pic_var.strview_formals_alloc : 4;
+          tmp = REALLOC(pic_var.strview_formals,
+              resize * sizeof(*tmp));
+          if (!tmp) {
+            pfile_log_syserr(pf, ENOMEM);
+            continue;
+          }
+          pic_var.strview_formals       = tmp;
+          pic_var.strview_formals_alloc = resize;
+        }
+        pic_var.strview_formals[pic_var.strview_formals_used].formal
+          = pair->formal;
+        pic_var.strview_formals[pic_var.strview_formals_used].base = cell;
+        pic_var.strview_formals_used++;
+      }
     }
   }
   /* 5. the walk scratch: needed by every runtime-map formal AND by the SHARED

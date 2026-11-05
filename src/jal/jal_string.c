@@ -1858,16 +1858,11 @@ value_t jal_string_arg_payload_view(pfile_t *pf, value_t str, value_t *len_out)
   /* FLAT targets (PIC32/ESP32: 4-byte pointers) have no bank chunks and no
    * runtime map machinery -- the view is the by-ref payload POINTER, and a
    * write through an open-array formal is a plain indirect store there.
-   * The banked classic cores take the map path below. */
+   * The banked cores take the map path below (an FSR0 core walks its
+   * runtime map; a CLASSIC 14-bit core walks the BAKED copy of the heap's
+   * chunk map with the base riding a per-formal cell). */
   if (pfile_pointer_width_get(pf) >= 4) {
     return jal_string_arg_payload_ptr(pf, str, len_out);
-  }
-  /* the map walk reads the payload through FSR0 (12/16-bit linear): a
-   * CLASSIC 14-bit core (one 8-bit FSR) has no such path, so the view is
-   * refused there (the caller keeps its diagnostic) -- the documented
-   * fallback of the kill criterion in fixes/fix_string_arg_view.md */
-  if (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)) {
-    return VALUE_NONE;
   }
   off = jal_string_handle_index_get(pf, str, _STRING_FIELD_OFFSET);
   if (!off) {
