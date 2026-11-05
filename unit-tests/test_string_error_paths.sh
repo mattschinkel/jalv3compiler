@@ -209,18 +209,16 @@ r = string_to_array(rom, s)' "assign to constant"
 # core, whose walk uses the baked chunk map plus a per-formal base cell.
 # A callee that can reallocate a string keeps the refusal (no snapshot
 # exists on the OUT path).
-check out_tainted_refused_classic '
+check out_alias_refused_classic '
 include 16f877
 pragma target string_heap_size 64
 var string s
-var string t
 procedure grower(byte out x[]) is
   s = s & "!"
   x[0] = 1
 end procedure
 s = "abcde"
-t = "hello"
-grower(t)' "writes through it would corrupt the string"
+grower(s)' "writes through it would corrupt the string"
 check_ok ok_out_view_classic '
 include 16f877
 pragma target string_heap_size 64
@@ -252,7 +250,19 @@ p is s
 pv_w(p)'
 # the view exists only into a callee that cannot move the string: a
 # reallocating callee keeps the refusal (no snapshot on the OUT path)
-check inout_tainted_refused '
+check inout_alias_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+procedure grower(byte in out x[]) is
+  s = s & "!"
+  x[0] = 1
+end procedure
+s = "abcde"
+grower(s)' "writes through it would corrupt the string"
+# the taint is alias-aware: growing an UNRELATED string does not move the
+# view source, so the out view is granted (the blanket refusal is gone)
+check_ok ok_out_unrelated_growth '
 include 18f4620
 pragma target string_heap_size 64
 var string s
@@ -263,7 +273,7 @@ procedure grower(byte in out x[]) is
 end procedure
 s = "abcde"
 t = "hello"
-grower(t)' "writes through it would corrupt the string"
+grower(t)'
 # a pass-on touching a string-view formal cannot hand the base word over
 # (either direction); without the refusal the callee walks the stale map of
 # the string call site

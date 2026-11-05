@@ -1427,8 +1427,7 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
         && (PFILE_PROC_NONE != callee)
         && label_flag_test(pfile_proc_label_get(callee),
              LABEL_FLAG_DEFINED)
-        && !pfile_proc_flag_test(callee,
-             PFILE_PROC_FLAG_STRING_REALLOC)
+        && !jal_string_grow_aliases(callee, val)
         && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_TASK)
         && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_REENTRANT)) {
       value_t len = VALUE_NONE;
@@ -1654,8 +1653,7 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
       if (callee && (PFILE_PROC_NONE != callee)
           && label_flag_test(pfile_proc_label_get(callee),
                LABEL_FLAG_DEFINED)
-          && !pfile_proc_flag_test(callee,
-               PFILE_PROC_FLAG_STRING_REALLOC)
+          && !jal_string_grow_aliases(callee, val)
           && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_TASK)
           && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_REENTRANT)) {
         value_t len  = VALUE_NONE;
@@ -2143,9 +2141,12 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
              LABEL_FLAG_DEFINED)) {
       taint = BOOLEAN_TRUE;               /* may realloc, or unknown body */
     }
-    if (taint && caller && (PFILE_PROC_NONE != caller)
-        && !pfile_proc_flag_test(caller, PFILE_PROC_FLAG_STRING_REALLOC)) {
-      pfile_proc_flag_set(caller, PFILE_PROC_FLAG_STRING_REALLOC);
+    if (taint && caller && (PFILE_PROC_NONE != caller)) {
+      /* alias-aware: carry WHICH strings the callee can grow into the
+       * caller, substituting the callee's formals with this call's
+       * actuals -- the caller's own view gates then refuse only true
+       * aliasing, not growth of unrelated strings */
+      jal_string_grow_propagate(pf, caller, callee, parms, param_ct);
     }
   }
   /* look for any PUT params, and do the necessary calls here... */

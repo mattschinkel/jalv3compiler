@@ -32,6 +32,14 @@ value_t   jal_string_arg_payload_ptr(pfile_t *pf, value_t str,
 value_t   jal_string_arg_payload_view(pfile_t *pf, value_t str,
     value_t *len_out);
 void      jal_string_note_realloc(pfile_t *pf);
+/* alias-aware reallocation taint (fixes/fix_string_arg_view.md): growth
+ * sites that know their destination record the exact string variable;
+ * the propagation substitutes a callee's formals with each call's
+ * actuals; the consumer asks whether a callee can move ONE given string */
+void      jal_string_note_realloc_dst(pfile_t *pf, value_t dst);
+void      jal_string_grow_propagate(pfile_t *pf, pfile_proc_t *caller,
+    pfile_proc_t *callee, value_t *parms, size_t param_ct);
+boolean_t jal_string_grow_aliases(pfile_proc_t *callee, value_t actual);
 void      jal_string_heap_size_legacy_declared(pfile_t *pf);
 /* create `_string_error` + the error constants without allocating a heap
  * (used when the user defines `_error_hook`, whose body reads the cell) */

@@ -165,6 +165,55 @@ else
       "rc=$rc" "$(grep -aE 'error|errors,' "$WORK/one.txt" | head -2)"
 fi
 
+# 2c. ALIAS-AWARE TAINT: a callee that grows an UNRELATED string does not
+#     move the view source, so the call takes the payload VIEW -- no
+#     `_strargN` snapshot buffer exists in the image (fix_string_arg_view.md)
+cat > "$WORK/alias.jal" <<'JAL'
+include 16f1825
+pragma target clock 16_000_000
+pragma target OSC INTOSC_NOCLKOUT
+pragma target PLLEN DISABLED
+pragma target WDT DISABLED
+pragma target PWRTE ENABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN DISABLED
+pragma target IESO DISABLED
+pragma target LVP DISABLED
+pragma target MCLR EXTERNAL
+enable_digital_io()
+const serial_hw_baudrate = 115200
+alias pin_RX_direction is pin_c5_direction
+alias pin_TX_direction is pin_c4_direction
+include serial_hardware
+serial_hw_init()
+alias serial is serial_hw_data
+include print
+pragma target string_heap_size 100
+var string a = "My string"
+var string other = "zz"
+procedure grow_and_read(byte in x[]) is
+   var byte i = 0
+   other = other & "!"
+   for 8 loop
+      serial = x[i]
+      i = i + 1
+   end loop
+end procedure
+forever loop
+   grow_and_read(a)
+   print_crlf(serial)
+end loop
+JAL
+run_cc "$WORK/alias.txt" "$WORK/alias.rc" "$WORK/alias.jal"
+rc=$(cat "$WORK/alias.rc")
+if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/alias.txt" \
+   && ! grep -q "_strarg" "$WORK/out.asm"; then
+  ok "unrelated-string growth keeps the payload view (no snapshot buffer)"
+else
+  bad "unrelated-string growth keeps the payload view (no snapshot buffer)" \
+      "rc=$rc" "$(grep -aE 'error|errors,' "$WORK/alias.txt" | head -2)"
+fi
+
 # 3. user buffers that FIT one bank: two different arrays to one formal is
 #    the same ambiguity in principle, but neither is chunked, so the formal
 #    has no baked map and addresses through the per-call pointer -- no runtime

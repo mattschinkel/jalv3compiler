@@ -37,6 +37,14 @@ typedef struct jal_str_heap_use_ {
  * fix_jal_string_state_reset.md). The heap-use table was grown by the
  * string heap planner and never freed by anything.
  */
+/* one may-grow record: the procedure, and WHICH string variable its body
+ * (or something it called) can reallocate; VARIABLE_NONE = an unnamed
+ * target (pointer-deref, unparsed/indirect path, inline builtin) */
+typedef struct jal_string_grow_ent_ {
+  pfile_proc_t       *proc;
+  variable_t         var;
+} jal_string_grow_ent_t;
+
 typedef struct jal_string_state_ {
   unsigned            silent_truncate_nest;
   boolean_t           silent_had_truncate;
@@ -58,6 +66,15 @@ typedef struct jal_string_state_ {
                                        * already issued (see
                                        * jal_string_core_gate) */
   unsigned            dec_no_shared;
+  /* ALIAS-AWARE REALLOCATION TAINT (fixes/fix_string_arg_view.md): one
+   * entry per (procedure, string variable it may grow); VARIABLE_NONE
+   * means "some string we cannot name" (growth through a pointer, an
+   * unparsed/indirect call path, an inline builtin fallback).  The
+   * consumer asks whether a callee's set can alias one given string --
+   * most "tainted" callees grow OTHER strings and keep the payload view. */
+  jal_string_grow_ent_t *grow;
+  size_t               grow_used;
+  size_t               grow_alloc;
 } jal_string_state_t;
 
 static jal_string_state_t jal_string_state;
@@ -1751,15 +1768,201 @@ static boolean_t jal_string_subscript_split(pfile_t *pf, value_t elem,
   return BOOLEAN_TRUE;
 }
 
+/* record that PROC may grow VAR (VARIABLE_NONE = an unnamed string); the
+ * boolean flag stays the cheap "grows something" summary */
+static void jal_string_grow_add(pfile_proc_t *proc, variable_t var)
+{
+  size_t ii;
+
+  for (ii = 0; ii < jal_string_state.grow_used; ii++) {
+    if ((jal_string_state.grow[ii].proc == proc)
+        && (jal_string_state.grow[ii].var == var)) {
+      return;
+    }
+  }
+  if (jal_string_state.grow_used == jal_string_state.grow_alloc) {
+    size_t                 resize;
+    jal_string_grow_ent_t *tmp;
+
+    resize = jal_string_state.grow_alloc
+      ? 2 * jal_string_state.grow_alloc : 16;
+    tmp = realloc(jal_string_state.grow, resize * sizeof(*tmp));
+    if (!tmp) {
+      return;   /* the flag below keeps the conservative behaviour */
+    }
+    jal_string_state.grow       = tmp;
+    jal_string_state.grow_alloc = resize;
+  }
+  jal_string_state.grow[jal_string_state.grow_used].proc = proc;
+  jal_string_state.grow[jal_string_state.grow_used].var  = var;
+  jal_string_state.grow_used++;
+  if (!pfile_proc_flag_test(proc, PFILE_PROC_FLAG_STRING_REALLOC)) {
+    pfile_proc_flag_set(proc, PFILE_PROC_FLAG_STRING_REALLOC);
+  }
+}
+
+/* does VAR belong to one of PROC's own parameters? (a growth of a formal
+ * moves whatever THIS call bound to it) */
+static boolean_t jal_string_var_is_formal(pfile_proc_t *proc, variable_t var)
+{
+  size_t ct;
+  size_t ii;
+
+  ct = pfile_proc_param_ct_get(proc);
+  for (ii = 0; ii < ct; ii++) {
+    value_t    pval;
+    variable_t pv;
+
+    pval = pfile_proc_param_get(proc, ii);
+    pv   = pval ? value_variable_get(pval) : VARIABLE_NONE;
+    if (pv && (VARIABLE_NONE != pv) && (pv == var)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 void jal_string_note_realloc(pfile_t *pf)
 {
   pfile_proc_t *proc;
 
   proc = pfile_proc_active_get(pf);
-  if (proc && (PFILE_PROC_NONE != proc)
-      && !pfile_proc_flag_test(proc, PFILE_PROC_FLAG_STRING_REALLOC)) {
-    pfile_proc_flag_set(proc, PFILE_PROC_FLAG_STRING_REALLOC);
+  if (proc && (PFILE_PROC_NONE != proc)) {
+    jal_string_grow_add(proc, VARIABLE_NONE);
   }
+}
+
+/* the growth emitters that know their destination: a NAMED string
+ * variable (user string, formal, or compiler cell) records that exact
+ * identity; anything else -- a pointer's designated string, a value with
+ * no variable -- records the unnamed catch-all */
+void jal_string_note_realloc_dst(pfile_t *pf, value_t dst)
+{
+  pfile_proc_t *proc;
+  variable_t    var;
+
+  proc = pfile_proc_active_get(pf);
+  if (!proc || (PFILE_PROC_NONE == proc)) {
+    return;
+  }
+  var = VARIABLE_NONE;
+  if (dst && !jal_string_pointer_is(dst)) {
+    variable_t v;
+
+    v = value_variable_get(dst);
+    if (v && (VARIABLE_NONE != v)) {
+      var = v;
+    }
+  }
+  jal_string_grow_add(proc, var);
+}
+
+/* the callee's grow-set carried into the caller at a call site, with the
+ * callee's FORMALS substituted by this call's actuals (a formal's growth
+ * moves whatever was passed); unnamed and named-non-formal entries pass
+ * through unchanged */
+void jal_string_grow_propagate(pfile_t *pf, pfile_proc_t *caller,
+    pfile_proc_t *callee, value_t *parms, size_t param_ct)
+{
+  size_t ii;
+
+  if (!caller || (PFILE_PROC_NONE == caller)) {
+    return;
+  }
+  if (!callee || (PFILE_PROC_NONE == callee)
+      || pfile_proc_flag_test(callee, PFILE_PROC_FLAG_TASK)
+      || pfile_proc_flag_test(callee, PFILE_PROC_FLAG_REENTRANT)
+      || !label_flag_test(pfile_proc_label_get(callee),
+           LABEL_FLAG_DEFINED)) {
+    /* indirect, task, reentrant or unparsed: the growth target is not
+     * nameable at this call site */
+    jal_string_grow_add(caller, VARIABLE_NONE);
+    if (!callee || (PFILE_PROC_NONE == callee)) {
+      return;
+    }
+  }
+  for (ii = 0; ii < jal_string_state.grow_used; ii++) {
+    variable_t var;
+
+    if (jal_string_state.grow[ii].proc != callee) {
+      continue;
+    }
+    var = jal_string_state.grow[ii].var;
+    if ((VARIABLE_NONE != var) && jal_string_var_is_formal(callee, var)) {
+      value_t    actual;
+      variable_t av;
+      size_t     ct;
+      size_t     pi;
+
+      actual = VALUE_NONE;
+      ct     = pfile_proc_param_ct_get(callee);
+      for (pi = 0; pi < ct; pi++) {
+        value_t    pval;
+        variable_t pv;
+
+        pval = pfile_proc_param_get(callee, pi);
+        pv   = pval ? value_variable_get(pval) : VARIABLE_NONE;
+        if (pv && (VARIABLE_NONE != pv) && (pv == var)) {
+          actual = (parms && (pi < param_ct)) ? parms[pi] : VALUE_NONE;
+          break;
+        }
+      }
+      av = VARIABLE_NONE;
+      if (actual && !jal_string_pointer_is(actual)) {
+        variable_t v;
+
+        v = value_variable_get(actual);
+        if (v && (VARIABLE_NONE != v)) {
+          av = v;
+        }
+      }
+      jal_string_grow_add(caller, av);
+    } else {
+      jal_string_grow_add(caller, var);
+    }
+  }
+  (void) pf;
+}
+
+/* may the CALLEE reallocate the string behind ACTUAL?  FALSE = provably
+ * not, so the payload view is sound; TRUE = keep the snapshot (or, for
+ * the out direction, the refusal).  Clean callees answer FALSE without
+ * touching the set at all. */
+boolean_t jal_string_grow_aliases(pfile_proc_t *callee, value_t actual)
+{
+  size_t ii;
+
+  if (!callee || (PFILE_PROC_NONE == callee)) {
+    return BOOLEAN_TRUE;   /* indirect: unknown target */
+  }
+  if (!pfile_proc_flag_test(callee, PFILE_PROC_FLAG_STRING_REALLOC)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!actual || jal_string_pointer_is(actual)) {
+    /* the view source is whatever a pointer designates: any growth could
+     * be moving it (pointer binds are runtime data) */
+    return BOOLEAN_TRUE;
+  } else {
+    variable_t av;
+
+    av = value_variable_get(actual);
+    if (!av || (VARIABLE_NONE == av)) {
+      return BOOLEAN_TRUE;
+    }
+    for (ii = 0; ii < jal_string_state.grow_used; ii++) {
+      variable_t var;
+
+      if (jal_string_state.grow[ii].proc != callee) {
+        continue;
+      }
+      var = jal_string_state.grow[ii].var;
+      if ((VARIABLE_NONE == var) || (var == av)
+          || jal_string_var_is_formal(callee, var)) {
+        return BOOLEAN_TRUE;
+      }
+    }
+  }
+  return BOOLEAN_FALSE;
 }
 
 value_t jal_string_arg_payload_ptr(pfile_t *pf, value_t str, value_t *len_out)
@@ -1980,7 +2183,7 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
       || (value_is_string(src) && !value_is_const(src))) {
     return BOOLEAN_FALSE;
   }
-  jal_string_note_realloc(pf);
+  jal_string_note_realloc_dst(pf, dst);
   if (!jal_string_runtime_ensure(pf)
       || !jal_string_subscript_split(pf, dst, &base, &idx)) {
     return BOOLEAN_FALSE;
@@ -3035,7 +3238,7 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
   size_t ii;
 
   jal_string_dynamic_dst_through_pointer_maybe(dst);
-  jal_string_note_realloc(pf);
+  jal_string_note_realloc_dst(pf, dst);
   if (!jal_string_runtime_ensure(pf)) {
     return;
   }
@@ -5130,7 +5333,7 @@ boolean_t jal_string_assignment_parse_emit(pfile_t *pf, value_t dst)
     return BOOLEAN_FALSE;
   }
   if (jal_string_is_dynamic(dst)) {
-    jal_string_note_realloc(pf);
+    jal_string_note_realloc_dst(pf, dst);
   }
   jal_string_core_gate(pf);
   items = 0;
@@ -5983,7 +6186,7 @@ static value_t jal_string_append_emit(pfile_t *pf, value_t dst, value_t src)
   pfile_cmd_op_add(pf, OPERATOR_ADD, &max, max, src_len);
   result = jal_string_append_truncate_emit(pf, dst, src, max);
   done_lbl = pfile_label_alloc(pf, 0);
-  jal_string_note_realloc(pf);
+  jal_string_note_realloc_dst(pf, dst);
   jal_string_branch_if_const_cmp(pf, OPERATOR_NE, result, 0,
       CMD_BRANCHCOND_TRUE, done_lbl);
   jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
