@@ -204,7 +204,9 @@ else
 fi
 
 # ---------------------------------------------------------------- 7
-# Plain-string character stores are outlined; a pointer target stays inline.
+# Character stores are outlined for plain strings AND for a string pointer
+# target (the pointer actual is passed as an indirect handle view so the
+# call's copy-in/out goes through it).
 put="$TMP/store.jal"
 {
   echo 'include 16f1825'
@@ -235,10 +237,10 @@ compile store "$put"
 if [ "$RC" -eq 0 ]; then
   labels="$(grep -c '^l_string_put$' "$ASM")"
   calls="$(grep -c '^[[:space:]]*call[[:space:]][[:space:]]*l_string_put$' "$ASM")"
-  if [ "$labels" -eq 1 ] && [ "$calls" -eq 3 ]; then
-    ok "one shared store body, three calls (pointer inline)"
+  if [ "$labels" -eq 1 ] && [ "$calls" -eq 4 ]; then
+    ok "one shared store body, four calls (pointer included)"
   else
-    bad "one shared store body, three calls" "(labels=$labels calls=$calls)"
+    bad "one shared store body, four calls" "(labels=$labels calls=$calls)"
   fi
 else
   bad "store compiles" "(rc=$RC)"

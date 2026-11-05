@@ -1,0 +1,60 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — a string POINTER as an in / in out actual
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var pointer p as var string` passed to a `string in` formal (reads the
+--    designated handle) and to a `string in out` formal (the callee appends;
+--    the updated handle must be copied back THROUGH the pointer into the
+--    designated variable, not into `p` itself).  Before the coercion this
+--    shape was a bare `type mismatch`; it also lets `p[i] = c` outline through
+--    the shared `string_put` body.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_out_ok 1
+-- expect byte v_in_ok 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+const word _string_heap_size = 64
+
+var string s
+var pointer p as var string
+var volatile byte out_ok = 0
+var volatile byte in_ok = 0
+
+-- IN OUT: the append reallocates the block, so the handle changes; the
+-- call must write it back through p into s
+procedure grow(string in out d) is
+   d[COUNT(d)] = "W"
+end procedure
+
+-- IN: the designated handle is read through p
+procedure size_of(string in d) is
+   if COUNT(d) == 4 then
+      in_ok = 1
+   end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abc"
+   p is s
+   grow(p)
+   size_of(p)
+   if (s == "abcW") & (COUNT(s) == 4) then
+      out_ok = 1
+   end if
+   regression_checkpoint()
+   regression_checkpoint()
+end procedure
+
+run()

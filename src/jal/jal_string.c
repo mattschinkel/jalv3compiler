@@ -3751,8 +3751,9 @@ static boolean_t jal_string_assign_outline_emit(pfile_t *pf, value_t dst,
  *
  * RETURN
  *   TRUE when the call was emitted; FALSE when the site must stay inline
- *   (not a heap-string subscript, non-byte value, pointer target, no
- *   forwarder, forwarder body itself).
+ *   (not a heap-string subscript, non-byte value, no forwarder, forwarder
+ *   body itself).  A string-POINTER target is passed as an indirect handle
+ *   view, so the call's copy-in/out goes through the pointer.
  */
 boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
 {
@@ -3781,10 +3782,18 @@ boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
   if (!jal_string_subscript_split(pf, dst, &base, &idx)) {
     return BOOLEAN_FALSE;
   }
-  if (!jal_string_is_dynamic(base) || jal_string_pointer_is(base)) {
+  if (!jal_string_is_dynamic(base) && !jal_string_pointer_is(base)) {
     value_release(idx);
     value_release(base);
     return BOOLEAN_FALSE;
+  }
+  if (jal_string_pointer_is(base)) {
+    /* pointer target: pass the HANDLE VIEW (pointee def, pointer flag,
+     * indirect) as the forwarder's `string in out` actual -- the IN copy then
+     * reads the handle through the pointer and the OUT copy writes the
+     * (possibly reallocated) handle back through it.  This is the same shape
+     * a parsed call with a pointer actual gets in the parameter coercion. */
+    value_dereference(base);
   }
   proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_put");
   if (!proc) {

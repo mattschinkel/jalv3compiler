@@ -1383,6 +1383,21 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       || jal_parse_subscript(pf, &val, NULL))
       ; /* null body */
   }
+  /* A `var pointer p as var string` actual for an `in out` (or `out`)
+   * dynamic-string formal: pass the HANDLE VIEW -- the pointee def plus the
+   * pointer flag, indirect -- so the OUT copy writes the (possibly
+   * reallocated) handle THROUGH the pointer instead of into `p` itself.
+   * Without this the actual keeps its POINTER def and the check below
+   * reports a bare `type mismatch`, which is why `bump(p)` never compiled
+   * and the outlined `string_put` had to keep pointer store sites inline.
+   * The IN side (the caller's parameter loop) applies the same view. */
+  if (val
+      && (VARIABLE_DEF_TYPE_POINTER == value_type_get(val))
+      && jal_string_pointer_is(val)
+      && variable_def_flag_test(def,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    value_dereference(val);
+  }
   if (!((variable_def_type_is_number(variable_def_type_get(def))
       && value_is_number(val))
       || variable_def_is_same(def, value_def_get(val))
@@ -1582,6 +1597,23 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
       value_release(val);
       val = cell;
     }
+  }
+  /* A `var pointer p as var string` actual into a dynamic-string formal
+   * (`string in`, `string in out`, ...): pass the HANDLE VIEW -- the pointee
+   * def plus the pointer flag, indirect -- so the call's IN copy reads the
+   * handle THROUGH the pointer and the OUT copy writes the (possibly
+   * reallocated) handle back through it.  Without this the actual keeps its
+   * POINTER def and the formal comparison below reports a bare
+   * `type mismatch`; that is why an in-out call with a pointer actual never
+   * compiled, and why the outlined `string_put` had to keep pointer store
+   * sites inline. */
+  if (val
+      && (ii < param_ct)
+      && (VARIABLE_DEF_TYPE_POINTER == value_type_get(val))
+      && jal_string_pointer_is(val)
+      && variable_def_flag_test(def,
+           VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    value_dereference(val);
   }
   if (ii < param_ct) {
     vdef = value_def_get(val);
