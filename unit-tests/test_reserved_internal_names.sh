@@ -122,6 +122,35 @@ EOF
 expect_one_error "chunk-walk scratch" "$WORK/r_chunkcnt.jal" \
   "uses the compiler-reserved prefix '_pic_chunk'"
 
+# the string-flavored clone of a procedure (fixes/fix_string_arg_clone.md)
+cat >"$WORK/r_strp.jal" <<'EOF'
+include 16f877
+var byte _strp_bump
+forever loop
+end loop
+EOF
+expect_one_error "string clone" "$WORK/r_strp.jal" \
+  "uses the compiler-reserved prefix '_strp_'"
+
+# the classic-core string-view base cell and the payload-base staging cell
+cat >"$WORK/r_svbase.jal" <<'EOF'
+include 16f877
+var byte _pic_strviewbase_1
+forever loop
+end loop
+EOF
+expect_one_error "classic view base cell" "$WORK/r_svbase.jal" \
+  "uses the compiler-reserved prefix '_pic_strviewbase'"
+
+cat >"$WORK/r_argbase.jal" <<'EOF'
+include 16f877
+var byte _string_argbase0
+forever loop
+end loop
+EOF
+expect_one_error "view base staging" "$WORK/r_argbase.jal" \
+  "uses the compiler-reserved prefix '_string_argbase'"
+
 # --------------------------------------------------------- reserved prefixes
 cat >"$WORK/r_fixarg.jal" <<'EOF'
 include 16f877

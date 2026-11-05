@@ -75,6 +75,13 @@ typedef struct jal_string_state_ {
   jal_string_grow_ent_t *grow;
   size_t               grow_used;
   size_t               grow_alloc;
+  /* STORES THROUGH OPEN-ARRAY FORMALS (fixes/fix_string_arg_clone.md):
+   * (procedure, formal variable) pairs noted when a body assigns through
+   * that formal -- only storing formals need the string clone; read-only
+   * formals keep the cheaper payload view */
+  jal_string_grow_ent_t *formal_store;
+  size_t               formal_store_used;
+  size_t               formal_store_alloc;
 } jal_string_state_t;
 
 static jal_string_state_t jal_string_state;
@@ -83,6 +90,7 @@ static jal_string_state_t jal_string_state;
 void jal_string_state_reset(void)
 {
   free(jal_string_state.heap_use);
+  free(jal_string_state.formal_store);
   memset(&jal_string_state, 0, sizeof(jal_string_state));
 }
 
@@ -1922,6 +1930,59 @@ void jal_string_grow_propagate(pfile_t *pf, pfile_proc_t *caller,
     }
   }
   (void) pf;
+}
+
+/* note (or query) that the ACTIVE procedure's body assigns through the
+ * open-array formal whose variable is VAR -- read-only formals keep the
+ * payload view; only storing formals need the string clone */
+void jal_string_formal_store_note(pfile_t *pf, variable_t var)
+{
+  pfile_proc_t *proc;
+  size_t        ii;
+
+  proc = pfile_proc_active_get(pf);
+  if (!proc || (PFILE_PROC_NONE == proc) || !var
+      || (VARIABLE_NONE == var)) {
+    return;
+  }
+  for (ii = 0; ii < jal_string_state.formal_store_used; ii++) {
+    if ((jal_string_state.formal_store[ii].proc == proc)
+        && (jal_string_state.formal_store[ii].var == var)) {
+      return;
+    }
+  }
+  if (jal_string_state.formal_store_used
+      == jal_string_state.formal_store_alloc) {
+    size_t                 resize;
+    jal_string_grow_ent_t *tmp;
+
+    resize = jal_string_state.formal_store_alloc
+      ? 2 * jal_string_state.formal_store_alloc : 16;
+    tmp = realloc(jal_string_state.formal_store, resize * sizeof(*tmp));
+    if (!tmp) {
+      return;
+    }
+    jal_string_state.formal_store       = tmp;
+    jal_string_state.formal_store_alloc = resize;
+  }
+  jal_string_state.formal_store[jal_string_state.formal_store_used].proc
+    = proc;
+  jal_string_state.formal_store[jal_string_state.formal_store_used].var
+    = var;
+  jal_string_state.formal_store_used++;
+}
+
+boolean_t jal_string_formal_stored_get(pfile_proc_t *proc, variable_t var)
+{
+  size_t ii;
+
+  for (ii = 0; ii < jal_string_state.formal_store_used; ii++) {
+    if ((jal_string_state.formal_store[ii].proc == proc)
+        && (jal_string_state.formal_store[ii].var == var)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
 }
 
 /* may the CALLEE reallocate the string behind ACTUAL?  FALSE = provably

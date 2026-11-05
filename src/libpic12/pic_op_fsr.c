@@ -972,8 +972,12 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
   wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
   /* const index: fold into the base and use a literal high half (ADDWF
    * with a const value would read the const's value as a REGISTER
-   * address -- offset 2 reads PCL) */
-  if (value_is_const(idx)) {
+   * address -- offset 2 reads PCL).  A string-view formal cannot take
+   * the fold: its base is RUNTIME data in the per-formal cell, so even a
+   * constant subscript must run the walk (a reads-only body's
+   * `return x[0]` read the heap base linearly and returned the
+   * free-list byte) */
+  if (value_is_const(idx) && !sv_classic) {
     variable_base_t abs_addr;
 
     abs_addr = base + (variable_base_t) value_const_get(idx);

@@ -98,6 +98,9 @@ static const char *const jal_compiler_name_prefixes[] = {
   "_string_argptr",   /* by-ref open-array payload pointer        */
   "_pic_bss_",        /* clear-BSS block name (pic.c)            */
   "_pic_chunk",       /* runtime chunk walk: map + walk scratch  */
+  "_pic_strviewbase", /* classic-core string-view base cell       */
+  "_string_argbase",  /* string-view payload base staging         */
+  "_strp_",           /* string-flavored clone of a procedure     */
   0
 };
 

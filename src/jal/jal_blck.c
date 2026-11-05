@@ -725,6 +725,36 @@ static void jal_assign_lvalue_parse(jal_assign_ctx_t *ctx)
 
   ctx->lvalue_subscripted = lvalue_subscripted;
   ctx->val                = val;
+  /* an assignment whose target resolves INTO an open-array formal (the
+   * element view carries the formal's variable) tells the clone-vs-view
+   * decision that this formal is stored through -- read-only formals keep
+   * the cheaper payload view (fixes/fix_string_arg_clone.md) */
+  if (val) {
+    variable_t tvar = value_variable_get(val);
+
+    if (tvar && (VARIABLE_NONE != tvar)) {
+      pfile_proc_t *proc = pfile_proc_active_get(pf);
+      size_t         ct;
+      size_t         ii;
+
+      ct = (proc && (PFILE_PROC_NONE != proc))
+        ? pfile_proc_param_ct_get(proc) : 0;
+      for (ii = 0; ii < ct; ii++) {
+        value_t    pval = pfile_proc_param_get(proc, ii);
+        variable_t pvar = pval ? value_variable_get(pval)
+          : VARIABLE_NONE;
+
+        if (pvar && (VARIABLE_NONE != pvar) && (pvar == tvar)
+            && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(
+                  value_def_get(pval)))
+            && variable_def_flag_test(value_def_get(pval),
+                 VARIABLE_DEF_FLAG_OPENARRAY)) {
+          jal_string_formal_store_note(pf, pvar);
+          break;
+        }
+      }
+    }
+  }
 }
 
 /* 'put LHS: walk the accessor's parameter shape -- scalar 'put(v)

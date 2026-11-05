@@ -1164,10 +1164,11 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
       || !label_flag_test(pfile_proc_label_get(orig), LABEL_FLAG_DEFINED)
       || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_TASK)
       || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_REENTRANT)
-      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_INDIRECT)
-      || (VARIABLE_DEF_NONE != pfile_proc_return_def_get(orig))) {
-    /* Phase A: procedures only; forward/guarded/task/reentrant/indirect
-     * bodies keep the view/refusal */
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_INDIRECT)) {
+    /* forward/guarded/task/reentrant/indirect bodies keep the
+     * view/refusal; the return side needs nothing special -- a function's
+     * return member is duped into the clone def like any other, and the
+     * re-parsed `return expr` binds to the clone's own slot */
     return PFILE_PROC_NONE;
   }
   tag  = pfile_proc_tag_get(orig);
@@ -1659,20 +1660,74 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
   if (val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
+      && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)) {
+    /* an actual that is ITSELF an open-array formal of the active
+     * procedure needs the string flavor too when it is re-passed here:
+     * the payload view's base cannot be handed on (the pass-on refusal),
+     * but the clone's string formal composes.  The formal itself is
+     * array-flavored in the generic body, so this fires for ANY actual
+     * of an in/out open-array formal -- the membership test below makes
+     * it a no-op for ordinary actuals */
+    variable_t avar = value_variable_get(val);
+
+    if (avar && (VARIABLE_NONE != avar)) {
+      pfile_proc_t *me = pfile_proc_active_get(pf);
+
+      if (me && (PFILE_PROC_NONE != me)) {
+        size_t ct = pfile_proc_param_ct_get(me);
+        size_t pi;
+
+        for (pi = 0; pi < ct; pi++) {
+          value_t    pval = pfile_proc_param_get(me, pi);
+          variable_t pvar = pval ? value_variable_get(pval)
+            : VARIABLE_NONE;
+
+          if (pvar == avar) {
+            jal_string_formal_store_note(pf, pvar);
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (val
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
       && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
-      && jal_string_is_dynamic(val)
-      && !jal_string_pointer_is(val)
+      && (jal_string_is_dynamic(val) || jal_string_pointer_is(val))
       && strclone_out && !*strclone_out
       && call_val
       && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
     pfile_proc_t *callee = value_proc_get(call_val);
+    boolean_t     stored;
+    boolean_t     classic;
 
-    if (callee && (PFILE_PROC_NONE != callee)) {
+    /* read-only formals keep the payload view: the clone wrapper would be
+     * pure duplication when the body never assigns through this formal
+     * (the note is taken when the body's assignment target resolves into
+     * the formal).  A CLASSIC core clones even reads-only bodies: its
+     * bare-expression read path (`return x[0]`) has no strview routing
+     * yet -- the follow-up list carries that gap */
+    classic = (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)
+        && (pfile_pointer_width_get(pf) < 4)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+    stored = (callee && (PFILE_PROC_NONE != callee)
+        && (ii > 0) && (ii <= pfile_proc_param_ct_get(callee))
+        && (classic
+          || jal_string_formal_stored_get(callee,
+               value_variable_get(pfile_proc_param_get(callee, ii)))));
+
+    if (stored) {
       pfile_proc_t *clone = jal_proc_strclone_get(pf, callee);
 
       if (clone && (PFILE_PROC_NONE != clone)) {
         *strclone_out = clone;
         str_cloned = BOOLEAN_TRUE;
+        if (jal_string_pointer_is(val)) {
+          /* the clone's formal is a string handle: pass the designated
+           * handle (the copy-back writes the possibly-reallocated handle
+           * back THROUGH the pointer) */
+          value_dereference(val);
+        }
       }
     }
   }
@@ -1756,7 +1811,8 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       || (str_cloned
           && val
           && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
-          && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)))) {
+          && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+              || jal_string_pointer_is(val))))) {
     pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
     value_release(val);
     val = VALUE_NONE;

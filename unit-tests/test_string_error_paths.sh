@@ -209,20 +209,25 @@ r = string_to_array(rom, s)' "assign to constant"
 # core, whose walk uses the baked chunk map plus a per-formal base cell.
 # A callee that can reallocate a string keeps the refusal (no snapshot
 # exists on the OUT path).
-# a string-growing callee takes the string CLONE now (procedures); a
-# FUNCTION callee is not cloned in this phase, so the alias refusal still
-# guards its out/in-out formals
-check out_alias_fn_refused_classic '
+# functions clone too now, so the same-string growth WORKS through them;
+# the refusal survives only for callees the clone cannot serve -- a task
+# functions and procedures clone alike, so same-string growth works
+# through both; the refusal survives for a callee whose body is not
+# parsed at the call (a FORWARD declaration cannot be cloned)
+check out_forward_refused_classic '
 include 16f877
 pragma target string_heap_size 64
 var string s
-function grower(byte out x[]) return bit is
+procedure grower(byte out x[]);
+procedure run() is
+  s = "abcde"
+  grower(s)
+end procedure
+procedure grower(byte out x[]) is
   s = s & "!"
   x[0] = 1
-  return true
-end function
-s = "abcde"
-grower(s)' "writes through it would corrupt the string"
+end procedure
+run()' "writes through it would corrupt the string"
 check_ok ok_out_view_classic '
 include 16f877
 pragma target string_heap_size 64
@@ -254,7 +259,7 @@ p is s
 pv_w(p)'
 # the view exists only into a callee that cannot move the string: a
 # reallocating callee keeps the refusal (no snapshot on the OUT path)
-check inout_alias_fn_refused '
+check_ok ok_inout_fn_clone '
 include 18f4620
 pragma target string_heap_size 64
 var string s
@@ -264,7 +269,21 @@ function grower(byte in out x[]) return bit is
   return true
 end function
 s = "abcde"
-grower(s)' "writes through it would corrupt the string"
+grower(s)'
+check inout_forward_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+procedure grower(byte in out x[]);
+procedure run() is
+  s = "abcde"
+  grower(s)
+end procedure
+procedure grower(byte in out x[]) is
+  s = s & "!"
+  x[0] = 1
+end procedure
+run()' "writes through it would corrupt the string"
 # the PROCEDURE shape now clones and works: growth through the handle is
 # the clone's own semantics
 check_ok ok_inout_growing_clone '

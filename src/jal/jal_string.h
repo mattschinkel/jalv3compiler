@@ -40,6 +40,9 @@ void      jal_string_note_realloc_dst(pfile_t *pf, value_t dst);
 void      jal_string_grow_propagate(pfile_t *pf, pfile_proc_t *caller,
     pfile_proc_t *callee, value_t *parms, size_t param_ct);
 boolean_t jal_string_grow_aliases(pfile_proc_t *callee, value_t actual);
+/* stores through open-array formals (clone-vs-view decision) */
+void      jal_string_formal_store_note(pfile_t *pf, variable_t var);
+boolean_t jal_string_formal_stored_get(pfile_proc_t *proc, variable_t var);
 void      jal_string_heap_size_legacy_declared(pfile_t *pf);
 /* create `_string_error` + the error constants without allocating a heap
  * (used when the user defines `_error_hook`, whose body reads the cell) */
