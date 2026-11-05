@@ -1073,6 +1073,9 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
   variable_def_t       def;
   variable_def_t       odef;
   variable_def_member_t mbr;
+  char                *skip_tags[8];
+  size_t               skip_ct = 0;
+  size_t               si;
 
   odef = pfile_proc_def_get(orig);
   def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_FUNCTION, 0, 0);
@@ -1080,13 +1083,47 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
     if (def) { variable_def_free(def); }
     return VARIABLE_DEF_NONE;
   }
+  /* first pass: collect the hidden count members ("_<formal>_count") of
+   * the formals being re-flavored -- the clone DROPS them (2 bytes of
+   * RAM each), and the call site remaps its parameter array */
   for (mbr = variable_def_member_get(odef); mbr;
        mbr = variable_def_member_link_get(mbr)) {
     variable_def_t mdef;
     const char    *tag;
 
     mdef = variable_def_member_def_get(mbr);
+    if (mdef
+        && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))
+        && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)
+        && (skip_ct < COUNT(skip_tags))) {
+      tag = variable_def_member_tag_get(mbr);
+      if (tag) {
+        skip_tags[skip_ct] = MALLOC(strlen(tag) + 8);
+        if (skip_tags[skip_ct]) {
+          sprintf(skip_tags[skip_ct], "_%s_count", tag);
+          skip_ct++;
+        }
+      }
+    }
+  }
+  for (mbr = variable_def_member_get(odef); mbr;
+       mbr = variable_def_member_link_get(mbr)) {
+    variable_def_t mdef;
+    const char    *tag;
+    boolean_t      skip;
+
+    mdef = variable_def_member_def_get(mbr);
     tag  = variable_def_member_tag_get(mbr);
+    skip = BOOLEAN_FALSE;
+    for (si = 0; si < skip_ct; si++) {
+      if (tag && !strcmp(tag, skip_tags[si])) {
+        skip = BOOLEAN_TRUE;
+        break;
+      }
+    }
+    if (skip) {
+      continue;
+    }
     if (mdef
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))
         && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
@@ -1095,6 +1132,9 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
       sdef = jal_string_dynamic_def_alloc(pf);
       if (!sdef) {
         variable_def_free(def);
+        for (si = 0; si < skip_ct; si++) {
+          FREE(skip_tags[si]);
+        }
         return VARIABLE_DEF_NONE;
       }
       /* always IN|OUT: a byte-array `out` formal still receives the
@@ -1110,12 +1150,18 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
       mdef = variable_def_dup(mdef);
       if (!mdef) {
         variable_def_free(def);
+        for (si = 0; si < skip_ct; si++) {
+          FREE(skip_tags[si]);
+        }
         return VARIABLE_DEF_NONE;
       }
     }
     /* a procedure's member 0 (the return slot) carries NO def -- mirror
      * the parsed path, which inserts exactly that */
     variable_def_member_add(def, tag, mdef, 1);
+  }
+  for (si = 0; si < skip_ct; si++) {
+    FREE(skip_tags[si]);
   }
   return def;
 }
@@ -1572,7 +1618,7 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
 
 /* OUT formal: a PUT procedure (its 'put is called after the callee
  * returns, value in tow) or a plain lvalue */
-static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val, pfile_proc_t **strclone_out)
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val, pfile_proc_t **strclone_out, boolean_t *clone_drop)
 {
   value_t val;
   boolean_t str_refused = BOOLEAN_FALSE;
@@ -1852,9 +1898,13 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
           str_rt_len = VALUE_NONE;
         }
         if (str_cloned) {
-          /* the clone keeps the count member as an ignored dummy */
+          /* the clone DROPPED this count member: the tail rebuilds the
+           * parameter array without it */
           value_release(ct_val);
-          ct_val = pfile_constant_get(pf, 0, VARIABLE_DEF_NONE);
+          ct_val = VALUE_NONE;
+          if (clone_drop) {
+            clone_drop[ii - 1] = BOOLEAN_TRUE;
+          }
         }
         parms[ii - 1] = ct_val;
         FREE(ct_name);
@@ -2283,6 +2333,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
   const char           *param_close;
   size_t                ii;
   pfile_proc_t         *strclone = PFILE_PROC_NONE;
+  boolean_t            *clone_drop = 0;
 
   is_put = flags & JAL_PARSE_CALL_FLAG_PUT;
   assert((VALUE_NONE == call_val)
@@ -2319,10 +2370,12 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
   }
   parms = CALLOC(param_ct, sizeof(*parms));
   put_parms = CALLOC(param_ct, sizeof(*put_parms));
+  clone_drop = CALLOC(param_ct, sizeof(*clone_drop));
   if (!parms || !put_parms) {
     pfile_log_syserr(pf, ENOMEM);
     FREE(parms);
     FREE(put_parms);
+    FREE(clone_drop);
     return VALUE_NONE;
   }
 
@@ -2420,7 +2473,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
                 &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
             jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
-                put_parms, need_ct, call_val, &strclone);
+                put_parms, need_ct, call_val, &strclone, clone_drop);
           } else {
             jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
                 need_ct, flags, call_val);
@@ -2435,13 +2488,48 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
   }
   if (PFILE_PROC_NONE != strclone) {
     /* a string-flavored clone took over one or more out/in-out sites:
-     * re-route the whole call to the clone (same parameter layout -- the
-     * clone's count members stay as ignored dummies) */
+     * re-route the call to the clone and REBUILD the parameter array --
+     * the clone's def dropped the hidden count members of the string
+     * formals, so the marked slots go away (2 bytes of RAM per clone) */
     value_t cv;
+    size_t  ci;
+    size_t  kept;
+    size_t  clone_ct;
+    value_t *nparms;
 
     cv = pfile_value_find(pf, PFILE_LOG_ERR, pfile_proc_tag_get(strclone));
     if (cv) {
       call_val = cv;
+    }
+    clone_ct = pfile_proc_param_ct_get(strclone);
+    if (!clone_ct) {
+      clone_ct = 1;
+    }
+    nparms = CALLOC(clone_ct, sizeof(*nparms));
+    if (nparms) {
+      for (ci = 0, kept = 0; (ci < param_ct) && (kept < clone_ct); ci++) {
+        /* slot 0 is the return member (NONE for a procedure) -- it must
+         * be preserved even when empty, so the call's result handling
+         * and the clone's member walk stay aligned */
+        if ((0 == ci)
+            || (parms[ci] && !(clone_drop && clone_drop[ci]))) {
+          nparms[kept++] = parms[ci];
+          parms[ci] = VALUE_NONE;
+        }
+      }
+      for (ci = 0; ci < param_ct; ci++) {
+        if (parms[ci]) {
+          value_release(parms[ci]);
+          parms[ci] = VALUE_NONE;
+        }
+      }
+      FREE(parms);
+      parms = nparms;
+      param_ct = clone_ct;
+      /* every original argument was supplied (the clone call is only
+       * built for fully parsed calls) -- keep the optional-defaults and
+       * arity machinery consistent with the shorter layout */
+      ii = clone_ct;
     }
   }
   if (ii < param_ct) {
@@ -2520,6 +2608,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
     }
     FREE(put_parms);
   }
+  FREE(clone_drop);
 
   return val;
 }
