@@ -209,14 +209,18 @@ r = string_to_array(rom, s)' "assign to constant"
 # core, whose walk uses the baked chunk map plus a per-formal base cell.
 # A callee that can reallocate a string keeps the refusal (no snapshot
 # exists on the OUT path).
-check out_alias_refused_classic '
+# a string-growing callee takes the string CLONE now (procedures); a
+# FUNCTION callee is not cloned in this phase, so the alias refusal still
+# guards its out/in-out formals
+check out_alias_fn_refused_classic '
 include 16f877
 pragma target string_heap_size 64
 var string s
-procedure grower(byte out x[]) is
+function grower(byte out x[]) return bit is
   s = s & "!"
   x[0] = 1
-end procedure
+  return true
+end function
 s = "abcde"
 grower(s)' "writes through it would corrupt the string"
 check_ok ok_out_view_classic '
@@ -250,7 +254,20 @@ p is s
 pv_w(p)'
 # the view exists only into a callee that cannot move the string: a
 # reallocating callee keeps the refusal (no snapshot on the OUT path)
-check inout_alias_refused '
+check inout_alias_fn_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+function grower(byte in out x[]) return bit is
+  s = s & "!"
+  x[0] = 1
+  return true
+end function
+s = "abcde"
+grower(s)' "writes through it would corrupt the string"
+# the PROCEDURE shape now clones and works: growth through the handle is
+# the clone's own semantics
+check_ok ok_inout_growing_clone '
 include 18f4620
 pragma target string_heap_size 64
 var string s
@@ -259,7 +276,7 @@ procedure grower(byte in out x[]) is
   x[0] = 1
 end procedure
 s = "abcde"
-grower(s)' "writes through it would corrupt the string"
+grower(s)'
 # the taint is alias-aware: growing an UNRELATED string does not move the
 # view source, so the out view is granted (the blanket refusal is gone)
 check_ok ok_out_unrelated_growth '
@@ -277,32 +294,35 @@ grower(t)'
 # a pass-on touching a string-view formal cannot hand the base word over
 # (either direction); without the refusal the callee walks the stale map of
 # the string call site
-check inout_passon_into_view_refused '
+# an IN-formal view is still pass-on-refused (the view's base cannot be
+# handed on); the in/out clone composes instead
+check in_passon_refused '
 include 18f4620
-pragma target string_heap_size 64
+pragma target string_heap_size 100
 var string s
-var byte buf[8]
-procedure inner(byte in out y[]) is
-  y[0] = 1
+procedure inner(byte in y[]) is
+  var volatile byte b = 0
+  b = y[0]
 end procedure
-procedure outer(byte in out x[]) is
-  inner(x)
-end procedure
-s = "ab"
-inner(s)
-outer(buf)' "cannot be passed on to another procedure"
-check inout_passon_from_view_refused '
-include 18f4620
-pragma target string_heap_size 64
-var string s
-procedure inner(byte in out y[]) is
-  y[0] = 1
-end procedure
-procedure outer(byte in out x[]) is
+procedure outer(byte in x[]) is
   inner(x)
 end procedure
 s = "ab"
 outer(s)' "cannot be passed on to another procedure"
+# the in/out clone passing its string formal onward composes (the inner
+# call sees a string actual and clones inner)
+check_ok ok_inout_clone_passon '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+procedure inner(byte in out y[]) is
+  y[1] = 2
+end procedure
+procedure outer(byte in out x[]) is
+  inner(x)
+end procedure
+s = "ab"
+outer(s)'
 check_ok ok_out_array_actual '
 include 16f877
 pragma target string_heap_size 64

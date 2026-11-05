@@ -25,7 +25,7 @@ pfile_proc_t  *pfile_proc_alloc(pfile_proc_t *parent, label_t entry_label,
 {
   pfile_proc_t *proc;
 
-  proc = MALLOC(sizeof(*proc));
+  proc = CALLOC(1, sizeof(*proc));
   if (proc) {
     size_t                ii;
     variable_def_member_t mbr;

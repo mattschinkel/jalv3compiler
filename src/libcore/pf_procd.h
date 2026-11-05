@@ -56,6 +56,15 @@ struct pfile_proc_ {
                                    to the return label */
   const char         *name;
   int                 irq; /* PIC32 OFFx vector; -1 = unnumbered */
+  /* string-flavored clone bookkeeping (docs/investigations/
+   * string_clone_design_20261105.md): where the body starts (right after
+   * is/begin), whether the body may be re-parsed at all (include, pragma
+   * or a nested routine inside it blocks that), and the lazily created
+   * string clone */
+  pfile_pos_t         body_pos;
+  boolean_t           body_pos_valid;
+  boolean_t           clone_blocked;
+  struct pfile_proc_ *str_clone;
 };
 
 

@@ -23,6 +23,7 @@
 #include "jal_tokn.h"
 #include "jal_vdef.h"
 #include "jal_incl.h"
+#include "jal_proc.h"
 #include "../libcore/pfiled.h"
 #include "../libcore/label.h"
 
@@ -39,6 +40,9 @@ void jal_parse_include(pfile_t *pf, const pfile_pos_t *statement_start)
   size_t      jj;
 
   UNUSED(statement_start);
+  /* an include inside a body makes it uncloneable (the re-parse would
+   * re-include; includes are once-only at the JAL level) */
+  jal_proc_body_guard_note(pf);
   /* includes are COMPILE-TIME: inside a runtime-conditioned block (or a
    * loop body -- always block-scoped) the old behavior silently included
    * unconditionally with the declarations trapped block-local.  Clean
@@ -1850,6 +1854,9 @@ void jal_parse_pragma(pfile_t *pf, const pfile_pos_t *statement_start)
   static const pragma_word_t *cmd;
 
   UNUSED(statement_start);
+  /* a pragma inside a body makes it uncloneable (the re-parse would
+   * re-execute the configuration) */
+  jal_proc_body_guard_note(pf);
   for (cmd = base;
        cmd->key && (PRAGMA_ACTION_EOL != cmd->action);
        /* nothing */

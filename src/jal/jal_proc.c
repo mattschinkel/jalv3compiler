@@ -21,6 +21,7 @@
 #include "../libcore/pfile.h"
 #include "../libcore/pf_expr.h"
 #include "../libcore/pf_proc.h"
+#include "../libcore/pf_procd.h"
 #include "../libcore/vardef.h"
 #include "../libpic12/pic.h"
 #include "jal_vdef.h"
@@ -561,10 +562,30 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
   }
 }
 
+/* ---- string-flavored clone (docs/investigations/string_clone_design_20261105.md)
+ *
+ * The body currently being parsed, for the clone guards: include, pragma
+ * and nested routine statements inside a body mark it uncloneable, because
+ * the re-parse would re-include / re-configure / re-declare. */
+static pfile_proc_t *jal_body_owner;
+
+void jal_proc_body_guard_note(pfile_t *pf)
+{
+  UNUSED(pf);
+  if (jal_body_owner && (PFILE_PROC_NONE != jal_body_owner)) {
+    jal_body_owner->clone_blocked = BOOLEAN_TRUE;
+  }
+}
+
+/* find or create the string-flavored clone (documented at the
+ * definition) */
+static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig);
+
 void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
   const pfile_pos_t *statement_start)
 {
   size_t          sz;
+  pfile_proc_t   *saved_body_owner;
   variable_def_t  return_def;  /* return value definition */
   variable_def_t  var_def;     /* for GET & PUT, this is the required def */
   variable_def_t  proc_def;    /* full procedure definition */
@@ -581,6 +602,10 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
     PROC_PUT   /* PUT procedure          */
   } proc_type;
 
+  saved_body_owner = jal_body_owner;
+  /* a routine declared INSIDE a body makes that body uncloneable (the
+   * re-parse would re-declare it) */
+  jal_proc_body_guard_note(pf);
   return_def      = VARIABLE_DEF_NONE;
   var_def         = VARIABLE_DEF_NONE;
   params_ct       = 0;
@@ -959,6 +984,13 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
     proc_lbl = pfile_proc_label_get(proc);
 
     if (proc) {
+      /* the body starts at the CURRENT token: record it for the
+       * string-flavored clone's re-parse */
+      pfile_token_start_get(pf, &proc->body_pos);
+      proc->body_pos_valid = BOOLEAN_TRUE;
+      jal_body_owner = proc;
+    }
+    if (proc) {
       size_t ii;
 
       pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
@@ -1022,6 +1054,7 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
       pfile_proc_leave(pf);
       pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
     }
+    jal_body_owner = saved_body_owner;
   }
   while (params_ct--) {
     if (params_ct < params_alloc) {
@@ -1029,6 +1062,218 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
     }
   }
   FREE(params);
+}
+
+/* build the clone's def: the original's members with every open
+ * byte-array formal re-flavored as a dynamic-string handle (same member
+ * count and tags -- the hidden count slot stays as an ignored dummy, so
+ * the call-site parameter layout is unchanged) */
+static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
+{
+  variable_def_t       def;
+  variable_def_t       odef;
+  variable_def_member_t mbr;
+
+  odef = pfile_proc_def_get(orig);
+  def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_FUNCTION, 0, 0);
+  if (!def || !odef) {
+    if (def) { variable_def_free(def); }
+    return VARIABLE_DEF_NONE;
+  }
+  for (mbr = variable_def_member_get(odef); mbr;
+       mbr = variable_def_member_link_get(mbr)) {
+    variable_def_t mdef;
+    const char    *tag;
+
+    mdef = variable_def_member_def_get(mbr);
+    tag  = variable_def_member_tag_get(mbr);
+    if (mdef
+        && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))
+        && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
+      variable_def_t sdef;
+
+      sdef = jal_string_dynamic_def_alloc(pf);
+      if (!sdef) {
+        variable_def_free(def);
+        return VARIABLE_DEF_NONE;
+      }
+      /* always IN|OUT: a byte-array `out` formal still receives the
+       * CALLER's buffer (the array semantics), so the clone's string
+       * formal must stage the caller's handle -- a plain `string out`
+       * formal is callee-fresh and the body would read a stale handle
+       * (the second fill4 call wrote into the previous call's string) */
+      sdef = variable_def_flags_change(sdef,
+          variable_def_flags_get_all(sdef)
+          | VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT);
+      mdef = sdef;
+    } else if (mdef) {
+      mdef = variable_def_dup(mdef);
+      if (!mdef) {
+        variable_def_free(def);
+        return VARIABLE_DEF_NONE;
+      }
+    }
+    /* a procedure's member 0 (the return slot) carries NO def -- mirror
+     * the parsed path, which inserts exactly that */
+    variable_def_member_add(def, tag, mdef, 1);
+  }
+  return def;
+}
+
+/*
+ * NAME
+ *   jal_proc_strclone_get
+ *
+ * DESCRIPTION
+ *   Find or create the string-flavored clone of ORIG: a hidden procedure
+ *   whose open byte-array formals are re-flavored as dynamic-string
+ *   handles (keeping the member layout -- the hidden count slot stays as
+ *   an ignored dummy), with the body RE-PARSED from the recorded source
+ *   position so every statement lowers through the string rules (the
+ *   subscript append rule, live COUNT, per-access handle re-derivation).
+ *
+ * PARAMETERS
+ *   pf : the compile
+ *   orig : the procedure whose clone is requested
+ *
+ * RETURN
+ *   the clone, or PFILE_PROC_NONE when the body cannot be cloned
+ *   (forward, guarded, a function, task/reentrant/indirect) -- the
+ *   caller then falls back to the payload view or the refusal
+ */
+static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
+{
+  pfile_proc_t   *proc;
+  variable_def_t  def;
+  char           *name;
+  const char     *tag;
+  pfile_source_t *save_src;
+  pfile_pos_t     stmt_start;
+  pfile_pos_t     tok_start;
+  char           *save_tok;
+  pfile_proc_t   *save_proc;
+  pfile_block_t  *save_blk;
+  pfile_proc_t   *save_owner;
+  const char     *cmd;
+
+  if (!orig || (PFILE_PROC_NONE == orig) || orig->str_clone) {
+    return (orig && (PFILE_PROC_NONE != orig)) ? orig->str_clone
+      : PFILE_PROC_NONE;
+  }
+  if (!orig->body_pos_valid || orig->clone_blocked
+      || !label_flag_test(pfile_proc_label_get(orig), LABEL_FLAG_DEFINED)
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_TASK)
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_REENTRANT)
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_INDIRECT)
+      || (VARIABLE_DEF_NONE != pfile_proc_return_def_get(orig))) {
+    /* Phase A: procedures only; forward/guarded/task/reentrant/indirect
+     * bodies keep the view/refusal */
+    return PFILE_PROC_NONE;
+  }
+  tag  = pfile_proc_tag_get(orig);
+  name = MALLOC(strlen(tag) + 7);
+  if (!name) {
+    pfile_log_syserr(pf, ENOMEM);
+    return PFILE_PROC_NONE;
+  }
+  sprintf(name, "_strp_%s", tag);
+  def = jal_proc_strclone_def(pf, orig);
+  if (VARIABLE_DEF_NONE == def) {
+    FREE(name);
+    return PFILE_PROC_NONE;
+  }
+  proc = pfile_proc_create(pf, name, def);
+  FREE(name);
+  if (!proc) {
+    return PFILE_PROC_NONE;
+  }
+
+  /* the include machinery's save/switch/parse/restore pattern: push the
+   * body's source again (pfile_source_set bypasses the once-only include
+   * guard, which lives in jal_include_process), skip to the recorded
+   * line, re-parse the body, restore everything */
+  save_src   = pfile_source_get(pf);
+  save_proc  = pfile_proc_active_get(pf);
+  save_blk   = pfile_proc_block_active_get(save_proc);
+  save_owner = jal_body_owner;
+  pfile_statement_start_get(pf, &stmt_start);
+  pfile_token_start_get(pf, &tok_start);
+  cmd = pf_token_get(pf, PF_TOKEN_CURRENT);
+  save_tok = MALLOC(1 + strlen(cmd));
+  if (save_tok) {
+    strcpy(save_tok, cmd);
+  }
+
+  /* claim the memo BEFORE the re-parse: a call inside the re-parsed body
+   * (or a runaway re-parse) must not recurse into creating another clone
+   * of the same procedure */
+  orig->str_clone = proc;
+  if (RESULT_OK != pfile_source_set(pf,
+        pfile_source_name_get(orig->body_pos.src))) {
+    orig->clone_blocked = BOOLEAN_TRUE;
+    orig->str_clone   = PFILE_PROC_NONE;
+  } else {
+    unsigned want;
+    unsigned seen;
+
+    /* skip at the TOKEN level: char-level consumption between the source
+     * switch and the first fetch is discarded by the tokenizer's
+     * initialization (both the stale line counter and a counted-newline
+     * skip landed on the file's first token) */
+    want = orig->body_pos.line;
+    pf_token_get(pf, PF_TOKEN_FIRST);
+    for (seen = 1; seen < want; ) {
+      pfile_pos_t tpos;
+
+      pfile_token_start_get(pf, &tpos);
+      if (tpos.line >= want) {
+        break;
+      }
+      if (!pf_token_get(pf, PF_TOKEN_NEXT)[0]) {
+        break;
+      }
+    }
+    if (getenv("JAL_DBG_CLONE")) {
+      fprintf(stderr, "'%s' (line now %u)\n",
+        pf_token_get(pf, PF_TOKEN_CURRENT),
+        pfile_source_line_get(pfile_source_get(pf)));
+    }
+
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        pfile_proc_skip_label_get(proc), VALUE_NONE, VALUE_NONE, 0);
+    if (RESULT_OK == pfile_proc_enter(pf, pfile_proc_tag_get(proc))) {
+      pfile_block_enter(pf);
+      pfile_proc_define(proc, def, pf);
+      label_flag_set(pfile_proc_label_get(proc), LABEL_FLAG_DEFINED);
+      jal_body_owner = proc;
+      jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NO_BLOCK);
+      jal_body_owner = save_owner;
+      if (!jal_parse_aborted(pf)
+          && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "end")
+          && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_NONE, "procedure")) {
+        pf_token_get(pf, PF_TOKEN_NEXT);
+      }
+      pfile_cmd_label_add(pf, pfile_proc_exit_label_get(proc));
+      pfile_block_leave(pf);
+      pfile_proc_leave(pf);
+      pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
+    } else {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "cannot enter the string clone of '%s'", tag);
+      orig->clone_blocked = BOOLEAN_TRUE;
+      orig->str_clone   = PFILE_PROC_NONE;
+    }
+    pfile_source_restore(pf, save_src);
+    if (save_tok) {
+      pf_token_set(pf, save_tok);
+      FREE(save_tok);
+    }
+    pfile_token_start_set(pf, &tok_start);
+    pfile_statement_start_set(pf, &stmt_start);
+    pfile_proc_active_set(pf, save_proc);
+    pfile_proc_block_active_set(save_proc, save_blk);
+  }
+  return orig->str_clone;
 }
 
 void jal_parse_procedure(pfile_t *pf, const pfile_pos_t *statement_start)
@@ -1326,11 +1571,12 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
 
 /* OUT formal: a PUT procedure (its 'put is called after the callee
  * returns, value in tow) or a plain lvalue */
-static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val)
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val, pfile_proc_t **strclone_out)
 {
   value_t val;
   boolean_t str_refused = BOOLEAN_FALSE;
   boolean_t str_view = BOOLEAN_FALSE;
+  boolean_t str_cloned = BOOLEAN_FALSE;
   value_t str_rt_len = VALUE_NONE;
 
   /* this needs to be a simple variable or PUT procedure */
@@ -1403,6 +1649,33 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
            VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
     value_dereference(val);
   }
+  /* A STRING actual into an out/in-out open byte-array formal first tries
+   * the STRING-FLAVORED CLONE (docs/investigations/
+   * string_clone_design_20261105.md): the callee's body re-parsed with
+   * this formal as a string handle, giving it the full string semantics
+   * (the append rule at COUNT, live COUNT, growth through the handle --
+   * no taint gate needed, movement is handled per access).  The value
+   * then stays the string and the call is re-routed to the clone. */
+  if (val
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
+      && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
+      && jal_string_is_dynamic(val)
+      && !jal_string_pointer_is(val)
+      && strclone_out && !*strclone_out
+      && call_val
+      && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
+    pfile_proc_t *callee = value_proc_get(call_val);
+
+    if (callee && (PFILE_PROC_NONE != callee)) {
+      pfile_proc_t *clone = jal_proc_strclone_get(pf, callee);
+
+      if (clone && (PFILE_PROC_NONE != clone)) {
+        *strclone_out = clone;
+        str_cloned = BOOLEAN_TRUE;
+      }
+    }
+  }
   /* A string actual into an open byte-array formal has no writable path:
    * the OUT direction marshals nothing (the snapshot lives in the IN
    * parser), so the callee would write through the string's HANDLE as if
@@ -1413,7 +1686,8 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
    * IN-direction by-ref: the body must be parsed, no reallocation, no
    * task/reentrant frame).  Everything else keeps the refusal below. */
 #if JALV2_STRING_ARG_VIEW
-  if (val
+  if (!str_cloned
+      && val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
       && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
@@ -1443,7 +1717,8 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
     }
   }
 #endif
-  if (val
+  if (!str_cloned
+      && val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
       && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)) {
@@ -1475,7 +1750,13 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       || (str_view
           && val
           && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
-          && (VARIABLE_DEF_TYPE_POINTER == value_type_get(val))))) {
+          && (VARIABLE_DEF_TYPE_POINTER == value_type_get(val)))
+      /* the string clone: the value stays a string, bound to the clone's
+       * string-flavored formal */
+      || (str_cloned
+          && val
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)))) {
     pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
     value_release(val);
     val = VALUE_NONE;
@@ -1519,6 +1800,11 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
           value_release(ct_val);
           ct_val = str_rt_len;
           str_rt_len = VALUE_NONE;
+        }
+        if (str_cloned) {
+          /* the clone keeps the count member as an ignored dummy */
+          value_release(ct_val);
+          ct_val = pfile_constant_get(pf, 0, VARIABLE_DEF_NONE);
         }
         parms[ii - 1] = ct_val;
         FREE(ct_name);
@@ -1946,6 +2232,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
   const char           *param_open;
   const char           *param_close;
   size_t                ii;
+  pfile_proc_t         *strclone = PFILE_PROC_NONE;
 
   is_put = flags & JAL_PARSE_CALL_FLAG_PUT;
   assert((VALUE_NONE == call_val)
@@ -2083,7 +2370,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
                 &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
             jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
-                put_parms, need_ct, call_val);
+                put_parms, need_ct, call_val, &strclone);
           } else {
             jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
                 need_ct, flags, call_val);
@@ -2094,6 +2381,17 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
           && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, param_close)) {
         pf_token_get(pf, PF_TOKEN_NEXT);
       }
+    }
+  }
+  if (PFILE_PROC_NONE != strclone) {
+    /* a string-flavored clone took over one or more out/in-out sites:
+     * re-route the whole call to the clone (same parameter layout -- the
+     * clone's count members stay as ignored dummies) */
+    value_t cv;
+
+    cv = pfile_value_find(pf, PFILE_LOG_ERR, pfile_proc_tag_get(strclone));
+    if (cv) {
+      call_val = cv;
     }
   }
   if (ii < param_ct) {

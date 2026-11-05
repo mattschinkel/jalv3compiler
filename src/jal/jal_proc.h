@@ -60,3 +60,7 @@ void jal_parse_task_restart(pfile_t *pf, const pfile_pos_t *start);
 
 #endif /* jal_proc_h__ */
 
+/* string-flavored clone (docs/investigations/string_clone_design_20261105.md):
+ * mark the body being parsed as uncloneable (called by the include and
+ * pragma parsers when they fire inside a body) */
+void jal_proc_body_guard_note(pfile_t *pf);
