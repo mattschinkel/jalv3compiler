@@ -124,6 +124,10 @@ fi
 #     version of the guard refused this case too -- it could not tell "another
 #     actual's map is installed" from "this same actual was propagated in an
 #     earlier placement round"; pic_variable_chunk_map_t.owner now records it.
+#     Since the payload VIEW (fixes/fix_string_arg_view.md) a string site at
+#     a heap > 64 ALWAYS wires the runtime map -- the payload base offset is
+#     runtime data and the baked map cannot carry it -- so the contract is
+#     "clean compile AND the map is present".
 cat > "$WORK/one.jal" <<'JAL'
 include 16f1825
 pragma target clock 16_000_000
@@ -154,10 +158,10 @@ JAL
 run_cc "$WORK/one.txt" "$WORK/one.rc" "$WORK/one.jal"
 rc=$(cat "$WORK/one.rc")
 if [ "$rc" -eq 0 ] && grep -q "0 errors, 0 warnings" "$WORK/one.txt" \
-   && ! grep -q "_pic_chunkmap_" "$WORK/out.asm"; then
-  ok "one string-argument site with a multi-bank heap compiles with no runtime map"
+   && grep -q "_pic_chunkmap_" "$WORK/out.asm"; then
+  ok "one string-argument site with a multi-bank heap wires the runtime map"
 else
-  bad "one string-argument site with a multi-bank heap compiles with no runtime map" \
+  bad "one string-argument site with a multi-bank heap wires the runtime map" \
       "rc=$rc" "$(grep -aE 'error|errors,' "$WORK/one.txt" | head -2)"
 fi
 

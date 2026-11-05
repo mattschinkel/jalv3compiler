@@ -1,0 +1,86 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — `in`-formal string reads as a payload VIEW at
+--        heap > 64 (the old by-ref cap)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    An IN-only open byte-array formal reads a heap string in place.  For
+--    heaps <= 64 that is the payload POINTER (fix_string_arg_byref.md);
+--    larger heaps used to fall back to the heap-sized `_strargN` snapshot.
+--    Since fix_string_arg_view.md the > 64 case hands over the same VIEW
+--    the out direction uses: the formal's runtime chunk map with the
+--    staged base offset -- so a 300-byte (word-index) heap reads in place
+--    too, and the RAM cost of a heap-sized buffer per call site is gone.
+--    A tainted callee keeps the snapshot on the IN side.
+--
+-- @gpsim_validate begin
+-- steps: 800000
+-- frequency_hz: auto
+-- expect byte v__check_step 4
+-- expect byte v_ok1 1
+-- expect byte v_ok2 1
+-- expect byte v_ok3 1
+-- expect byte v_ok4 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 300
+
+var string s
+var string t
+var volatile byte ok1 = 0
+var volatile byte ok2 = 0
+var volatile byte ok3 = 0
+var volatile byte ok4 = 0
+
+-- constant and dynamic indexes, inside one boolean chain
+procedure peek(byte in x[], word in n) is
+   if (n == 5) & (x[0] == "a") & (x[4] == "e") then
+      ok1 = 1
+   end if
+end procedure
+
+-- a loop of dynamic reads through the formal
+procedure sum5(byte in x[], word in n) is
+   var byte i = 0
+   var byte tot = 0
+   for 5 loop
+      tot = tot + x[i]
+      i = i + 1
+   end loop
+   if tot == ("a" + "b" + "c" + "d" + "e") then
+      ok2 = 1
+   end if
+end procedure
+
+-- a callee that grows a string is tainted: the IN side keeps the snapshot
+procedure mut_check(byte in x[], word in n) is
+   s = s & "!"
+   if (n == 5) & (x[0] == "a") & (x[4] == "e") then
+      ok4 = 1
+   end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abcde"
+   t = "vwxyz"
+   peek(s, COUNT(s))
+   regression_checkpoint()
+   sum5(s, COUNT(s))
+   regression_checkpoint()
+   peek(t, COUNT(t))
+   if (t[0] == "v") & (s[0] == "a") & (COUNT(s) == 5) & (COUNT(t) == 5) then
+      ok3 = 1
+   end if
+   regression_checkpoint()
+   mut_check(s, COUNT(s))
+   regression_checkpoint()
+end procedure
+
+run()

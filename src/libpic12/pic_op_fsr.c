@@ -98,11 +98,22 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
         ? 1 : 0;
       idx_const = -1;
     }
-    /* a string payload view indexes the heap through a base offset that can
-     * sit past byte 255 (a > 255 heap), so the walk scratch is always wide
-     * there */
-    if (strview) {
-      t_wide = 1;
+    /* a string payload view indexes the heap through a base offset: the
+     * scratch must be wide when the INDEX is wide or the heap itself is
+     * (offsets past byte 255), and narrow otherwise -- the temp overlay
+     * sizes its reservation from the index width, so an unconditionally
+     * wide scratch wrote its high byte onto the neighbouring user variable
+     * (found: a boolean-chain probe's result flag sat exactly there) */
+    if (strview && !t_wide) {
+      value_t hv;
+
+      hv = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
+      if (hv) {
+        if (value_const_get(hv) > 255) {
+          t_wide = 1;
+        }
+        value_release(hv);
+      }
     }
     t    = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, t_wide ? 2 : 1);
     cnt  = value_alloc(gc);
@@ -135,8 +146,15 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 0, PIC_OPDST_W);
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
     if (t_wide) {
-      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
-      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+      if (pic_dynamic_index_byte_sz_get(idx) > 1) {
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idx, 1, PIC_OPDST_W);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+      } else {
+        /* the scratch is wide (a string-view base can sit past byte 255)
+         * but the index itself is one byte: zero the high byte instead of
+         * reading past the variable into whatever sits next in RAM */
+        pic_instr_append_f(pf, PIC_OPCODE_CLRF, t, 1);
+      }
     }
     if (offset) {
       pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) (offset & 0xFF));
@@ -177,13 +195,17 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
     pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
     pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
     pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
-    /* t += base (16-bit: low add with carry, then the high bytes) */
+    /* t += base: the low add always; the high half only for a wide scratch
+     * (a small heap's payload offsets fit one byte -- base+idx stays under
+     * the heap size, which is what the count bounds) */
     pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 0, PIC_OPDST_W);
     pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
-    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
-    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 1, PIC_OPDST_W);
-    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
+    if (t_wide) {
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 1, PIC_OPDST_W);
+      pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
+    }
   }
 
   pic_instr_append_label(pf, loop);
@@ -220,16 +242,41 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
    * register). */
   pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
   pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
-  /* t < span ? */
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
-  pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_W);
-  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
-  pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
-  /* next chunk: t -= span; if (--count) loop */
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
-  pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_F);
-  pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cnt, 0, PIC_OPDST_F);
-  pic_instr_append_n(pf, PIC_OPCODE_GOTO, loop);
+  /* t < span ?  A WIDE scratch (string payload offsets past byte 255)
+   * compares and subtracts 16-bit: spans are <= 255 (the fill splits
+   * larger runs), so a non-zero high byte already decides "not in this
+   * chunk", and the subtract borrows into it. */
+  if (t_wide) {
+    label_t ge;
+
+    ge = pfile_label_alloc(pf, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, ge);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_W);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+    pic_instr_append_label(pf, ge);
+    /* next chunk: t -= span (16-bit); if (--count) loop */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
+    pic_instr_append_f_d(pf, PIC_OPCODE_DECF, t, 1, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cnt, 0, PIC_OPDST_F);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, loop);
+    label_release(ge);
+  } else {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_W);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+    /* next chunk: t -= span; if (--count) loop */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, span, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, t, 0, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cnt, 0, PIC_OPDST_F);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, loop);
+  }
 
   pic_instr_append_label(pf, done);
   /* FSR0 = base + t */

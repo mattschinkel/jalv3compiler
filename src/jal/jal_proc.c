@@ -1632,8 +1632,10 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
      * sized `_strargN` snapshot.  Only into a callee that cannot move the
      * source string: its body must be parsed already (a forward call is
      * treated as unsafe) and it must not (transitively) reallocate a heap
-     * string.  `in out`/`out` always keep the snapshot: the check is that
-     * the callee cannot invalidate the pointer, not that it does not write.
+     * string.  `in out`/`out` use the same gate with the payload VIEW
+     * (fixes/fix_string_arg_view.md); a tainted callee on the IN side keeps
+     * the snapshot -- the check is that the callee cannot invalidate the
+     * bytes, not that it does not write.
      */
     if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
         && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
@@ -1644,22 +1646,11 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
       variable_const_t heap_sz = 0;
       value_t         heap_val;
 
-      /* The payload pointer binds the heap array to a pointer, and pointer
-       * arithmetic cannot walk a holed (bank-spanning) array: only use the
-       * in-place payload for a SMALL heap (<= 64 bytes), which every target
-       * can place contiguously; larger heaps keep the snapshot.  (The
-       * compiler's own pointer-target rule would otherwise refuse the
-       * program on a part whose largest contiguous run is smaller than the
-       * heap.) */
       heap_val = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
       if (heap_val) {
         heap_sz = value_const_get(heap_val);
         value_release(heap_val);
       }
-      if (heap_sz > 64U) {
-        by_ref = BOOLEAN_FALSE;   /* keep the snapshot */
-      } else {
-
       if (callee && (PFILE_PROC_NONE != callee)
           && label_flag_test(pfile_proc_label_get(callee),
                LABEL_FLAG_DEFINED)
@@ -1670,7 +1661,21 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
         value_t len  = VALUE_NONE;
         value_t pptr;
 
-        pptr = jal_string_arg_payload_ptr(pf, val, &len);
+        if (heap_sz <= 64U) {
+          /* SMALL heap: the payload POINTER binds the heap array to a
+           * pointer, and the pointer-target rule can only promise a
+           * contiguous run -- but every target can place <= 64 bytes in
+           * one piece, so the cheap pointer path stays */
+          pptr = jal_string_arg_payload_ptr(pf, val, &len);
+        } else {
+          /* LARGER heap (2026-11-05, fixes/fix_string_arg_view.md): the
+           * payload VIEW -- the heap array + a staged base offset into the
+           * formal's runtime chunk map on FSR0 cores, the payload pointer
+           * on flat 32-bit targets, VALUE_NONE (snapshot fallback) on a
+           * classic 14-bit core.  This retires the old "keep the snapshot
+           * above 64 bytes" cap: holed heaps now read in place too. */
+          pptr = jal_string_arg_payload_view(pf, val, &len);
+        }
 
         if (pptr) {
           str_rt_len = len;
@@ -1678,7 +1683,6 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
           val      = pptr;
           by_ref   = BOOLEAN_TRUE;
         }
-      }
       }
     }
 #endif

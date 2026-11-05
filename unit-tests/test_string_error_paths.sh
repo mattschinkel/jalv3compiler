@@ -259,6 +259,35 @@ procedure pv_w(byte in out x[]) is
 end procedure
 s = "ab"
 pv_w(s)' "writes through it would corrupt the string"
+# a pass-on touching a string-view formal cannot hand the base word over
+# (either direction); without the refusal the callee walks the stale map of
+# the string call site
+check inout_passon_into_view_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+var byte buf[8]
+procedure inner(byte in out y[]) is
+  y[0] = 1
+end procedure
+procedure outer(byte in out x[]) is
+  inner(x)
+end procedure
+s = "ab"
+inner(s)
+outer(buf)' "cannot be passed on to another procedure"
+check inout_passon_from_view_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+procedure inner(byte in out y[]) is
+  y[0] = 1
+end procedure
+procedure outer(byte in out x[]) is
+  inner(x)
+end procedure
+s = "ab"
+outer(s)' "cannot be passed on to another procedure"
 check_ok ok_out_array_actual '
 include 16f877
 pragma target string_heap_size 64

@@ -1241,14 +1241,36 @@ static variable_sz_t pic_var_formal_map_need(variable_t formal)
   /* a string payload-view formal ALWAYS needs the runtime map (its one
    * layout is the heap's, but the base offset differs per call site -- the
    * baked map cannot carry it) and its format is
-   * [count][base lo,hi][pad][entries 3*ct] */
-  if (pic_var_formal_strview_fed(formal) && (max_ct >= 1)
-      && (max_ct <= PIC_CHUNK_MAP_MAX)) {
-    variable_sz_t svneed;
+   * [count][base lo,hi][pad][entries 3*ct] -- with every run longer than
+   * 255 bytes SPLIT (the walk's span compare is byte-sized), so the size
+   * must count the pieces */
+  if (pic_var_formal_strview_fed(formal)) {
+    variable_ct_t piece_ct;
 
-    svneed = (variable_sz_t) (4 + 3 * max_ct);
-    if (svneed > need) {
-      need = svneed;
+    piece_ct = 0;
+    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+      pic_var_openarray_pair_t *pair;
+      variable_ct_t             ppieces;
+
+      pair = &pic_var.openarray_pairs[pi];
+      if ((pair->formal != formal) || (pair->chunk_ct < 1)) {
+        continue;
+      }
+      ppieces = 0;
+      for (pj = 0; pj < pair->chunk_ct; pj++) {
+        ppieces += (variable_ct_t) ((pair->chunk_sz[pj] + 254U) / 255U);
+      }
+      if (ppieces > piece_ct) {
+        piece_ct = ppieces;
+      }
+    }
+    if ((piece_ct >= 1) && (piece_ct <= PIC_CHUNK_MAP_MAX)) {
+      variable_sz_t svneed;
+
+      svneed = (variable_sz_t) (4 + 3 * piece_ct);
+      if (svneed > need) {
+        need = svneed;
+      }
     }
   }
   for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
@@ -1378,11 +1400,15 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
       if ((VARIABLE_NONE == src) || (VARIABLE_NONE == dst)) {
         continue;
       }
-      if (pic_var_openarray_formal_strview_get(pair->actual)) {
+      if (pic_var_openarray_formal_strview_get(pair->actual)
+          || pic_var_openarray_formal_strview_get(pair->formal)) {
         /* the source formal walks a STRING PAYLOAD VIEW (its map carries a
          * runtime base word): handing that map to another formal would make
-         * the callee walk payload-relative indices with plain-array math.
-         * Refuse the re-pass; pass the bytes through a user array instead. */
+         * the callee walk payload-relative indices with plain-array math --
+         * and a chain INTO a view formal misaligns the copied entries the
+         * same way (the two map formats differ by the base word).  Refuse
+         * the re-pass in both directions; pass the bytes through a user
+         * array instead. */
         if (!pair->reported) {
           pair->reported = BOOLEAN_TRUE;
           pfile_log(pf, PFILE_LOG_ERR,
@@ -1410,6 +1436,25 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
     if (pair->passon && (0 == pair->chunk_ct)
         && (VARIABLE_NONE == pic_var_openarray_formal_map_get(pair->formal))) {
       pic_var_openarray_formal_block(pair->formal);
+    }
+  }
+  /* 3b. a pass-on pair touching a STRING VIEW formal is refused even when no
+   * chain ever forms: the view formal's map carries the payload base word,
+   * and the re-passing site can hand over neither that nor a compatible
+   * plain-format copy -- without this the callee would walk the STALE map of
+   * the string call site (found with the b(s)+a(buf) probe: writes landed
+   * in the string's payload) */
+  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+    pic_var_openarray_pair_t *pair;
+
+    pair = &pic_var.openarray_pairs[pi];
+    if (pair->passon && !pair->reported
+        && (pic_var_formal_strview_fed(pair->formal)
+          || pic_var_formal_strview_fed(pair->actual))) {
+      pair->reported = BOOLEAN_TRUE;
+      pfile_log(pf, PFILE_LOG_ERR,
+          "an open-array parameter bound to a string cannot be passed "
+          "on to another procedure (copy it into a byte array first)");
     }
   }
   /* 4. report a buffer split into more pieces than the map can describe,

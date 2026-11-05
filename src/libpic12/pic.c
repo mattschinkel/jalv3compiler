@@ -809,6 +809,56 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
       pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 2);
     }
   }
+  /* a string-view map SPLITS any run longer than 255 bytes: the walk's
+   * span compare/subtract is byte-sized by design (bank-node bounded for
+   * user arrays), and a contiguous 300-byte heap would otherwise install
+   * span=300 -- the walk read its low byte 44 and subtracted it from every
+   * index past it (found on the heap-over-bank print witness) */
+  if (pic_var_openarray_formal_strview_get(fv)) {
+    variable_ct_t pieces;
+    variable_ct_t o;
+
+    pieces = 0;
+    for (ii = 0; ii < ct; ii++) {
+      pieces += (variable_ct_t) ((sz[ii] + 254U) / 255U);
+    }
+    if (pieces > ct) {
+      variable_sz_t   nsz[PIC_CHUNK_MAP_MAX];
+      variable_base_t nbase[PIC_CHUNK_MAP_MAX];
+
+      if (pieces > PIC_CHUNK_MAP_MAX) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "the runtime chunk map holds %u chunks but '%s' needs %u "
+            "after splitting runs longer than one byte can span; reduce "
+            "the buffer (e.g. _string_heap_size)",
+            (unsigned) PIC_CHUNK_MAP_MAX,
+            variable_name_get(av) ? variable_name_get(av) : "?",
+            (unsigned) pieces);
+        value_release(mapval);
+        return;
+      }
+      o = 0;
+      for (ii = 0; ii < ct; ii++) {
+        variable_sz_t left = sz[ii];
+        variable_base_t at  = base[ii];
+
+        while (left) {
+          variable_sz_t take = (left > 255U) ? 255U : left;
+
+          nsz[o]   = take;
+          nbase[o] = at;
+          o++;
+          at   = (variable_base_t) (at + take);
+          left = (variable_sz_t) (left - take);
+        }
+      }
+      ct = o;
+      for (ii = 0; ii < ct; ii++) {
+        sz[ii]   = nsz[ii];
+        base[ii] = nbase[ii];
+      }
+    }
+  }
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) ct);
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 0);
   for (ii = 0; ii < ct; ii++) {
