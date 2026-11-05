@@ -783,12 +783,39 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
   if (!mapval) {
     return;
   }
+  /* string-view maps carry a 2-byte BASE WORD after the count: the payload
+   * offset staged at run time for a string actual, 0 for a user array fed
+   * to the same formal.  The copy is a plain register move (staged before
+   * this call by the front end), so nothing already in W is disturbed. */
+  if (pic_var_openarray_formal_strview_get(fv)) {
+    variable_t base_src;
+
+    base_src = pic_var_strview_site_get(actual);
+    if (base_src && (VARIABLE_NONE != base_src)) {
+      value_t bval;
+
+      bval = value_alloc(base_src);
+      if (bval) {
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, bval, 0, PIC_OPDST_W);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 1);
+        pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, bval, 1, PIC_OPDST_W);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 2);
+        value_release(bval);
+      }
+    } else {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 1);
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 2);
+    }
+  }
   pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) ct);
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, 0);
   for (ii = 0; ii < ct; ii++) {
     size_t ofs;
 
-    ofs = (size_t) (1 + 3 * ii);
+    ofs = (size_t) (pic_var_openarray_formal_strview_get(fv)
+        ? (4 + 3 * ii) : (1 + 3 * ii));
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
         (unsigned) (base[ii] & 0xFF));
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, mapval, ofs);
@@ -6430,6 +6457,12 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
                 cmd_pos_get(mark_cmd, &call_pos);
                 pic_var_openarray_pair_record(avar,
                     value_variable_get(fval), &call_pos, BOOLEAN_FALSE);
+                /* a string payload-view actual (the heap array value with a
+                 * staged base offset): the formal's map needs the base word */
+                if (VARIABLE_NONE != pic_var_strview_site_get(params[ii])) {
+                  pic_var_openarray_pair_strview_mark(avar,
+                      value_variable_get(fval));
+                }
               } else if (fval
                   && (VARIABLE_DEF_TYPE_POINTER == value_type_get(fval))) {
                 /* PASS-ON (`inner(data)` inside a procedure that is itself

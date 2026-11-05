@@ -234,6 +234,31 @@ end procedure
 s = "ab"
 p is s
 pv_w(p)' "type mismatch"
+# the view exists only into a callee that cannot move the string: a
+# reallocating callee keeps the refusal (no snapshot on the OUT path)
+check inout_tainted_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+var string t
+procedure grower(byte in out x[]) is
+  s = s & "!"
+  x[0] = 1
+end procedure
+s = "abcde"
+t = "hello"
+grower(t)' "writes through it would corrupt the string"
+# a CLASSIC 14-bit core has no FSR0 walk, so the view is refused there even
+# into a clean callee (the kill-criterion fallback)
+check inout_classic_core_refused '
+include 16f877
+pragma target string_heap_size 64
+var string s
+procedure pv_w(byte in out x[]) is
+  x[0] = 1
+end procedure
+s = "ab"
+pv_w(s)' "writes through it would corrupt the string"
 check_ok ok_out_array_actual '
 include 16f877
 pragma target string_heap_size 64

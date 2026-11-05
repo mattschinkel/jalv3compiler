@@ -1,0 +1,65 @@
+-- ------------------------------------------------------
+-- Title: ESP32 @sim_validate — string payload VIEW into out formals
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A heap string actual bound to a `byte out x[]` / `byte in out x[]`
+--    formal is handed over as a payload VIEW (fixes/fix_string_arg_view.md).
+--    PIC32 is flat-addressed, so the view is the by-ref payload POINTER
+--    plus COUNT(s): the callee's writes land in the live payload, the
+--    count never changes, and a second string stays isolated.
+--
+-- @sim_validate begin
+-- duration_s: 20.0
+-- machine: esp32
+-- expect byte v_done 1
+-- expect byte v_ok_io 1
+-- expect byte v_ok_out 1
+-- @sim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_esp32_device
+include regression_esp32
+
+pragma target string_heap_size 48
+
+var string s
+var string t
+var volatile byte done = 0
+var volatile byte ok_io = 0
+var volatile byte ok_out = 0
+
+procedure poke(byte in out x[], byte in k, byte in v) is
+   x[k] = v
+end procedure
+
+procedure fill4(byte out x[], byte in v) is
+   var byte i = 0
+   for 4 loop
+      x[i] = v
+      i = i + 1
+   end loop
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abcde"
+   t = "hello"
+   poke(s, 0, "X")
+   poke(t, 2, "Z")
+   if (s[0] == "X") & (s[1] == "b") & (COUNT(s) == 5)
+      & (t[2] == "Z") & (t[0] == "h") & (COUNT(t) == 5) then
+      ok_io = 1
+   end if
+   fill4(t, "w")
+   if (t[0] == "w") & (t[3] == "w") & (t[4] == "o") & (COUNT(t) == 5)
+      & (s[0] == "X") then
+      ok_out = 1
+   end if
+   done = 1
+end procedure
+
+run()

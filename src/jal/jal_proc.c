@@ -1326,10 +1326,12 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
 
 /* OUT formal: a PUT procedure (its 'put is called after the callee
  * returns, value in tow) or a plain lvalue */
-static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct)
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val)
 {
   value_t val;
   boolean_t str_refused = BOOLEAN_FALSE;
+  boolean_t str_view = BOOLEAN_FALSE;
+  value_t str_rt_len = VALUE_NONE;
 
   /* this needs to be a simple variable or PUT procedure */
   value_t jvals[JAL_VAL_TYPE_CT];
@@ -1404,8 +1406,44 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
   /* A string actual into an open byte-array formal has no writable path:
    * the OUT direction marshals nothing (the snapshot lives in the IN
    * parser), so the callee would write through the string's HANDLE as if
-   * it were the array and silently corrupt the heap.  Refuse until the
-   * payload view (fixes/fix_string_arg_view.md) replaces this. */
+   * it were the array and silently corrupt the heap.  Hand it over as a
+   * payload VIEW instead -- the heap array with a staged base offset, the
+   * callee writes through the formal's runtime chunk map -- but only into
+   * a callee that cannot move the source string (same gate as the
+   * IN-direction by-ref: the body must be parsed, no reallocation, no
+   * task/reentrant frame).  Everything else keeps the refusal below. */
+#if JALV2_STRING_ARG_VIEW
+  if (val
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
+      && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+          || jal_string_pointer_is(val))
+      && (jal_string_is_dynamic(val) || jal_string_pointer_is(val))
+      && call_val
+      && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
+    pfile_proc_t *callee = value_proc_get(call_val);
+
+    if (callee
+        && (PFILE_PROC_NONE != callee)
+        && label_flag_test(pfile_proc_label_get(callee),
+             LABEL_FLAG_DEFINED)
+        && !pfile_proc_flag_test(callee,
+             PFILE_PROC_FLAG_STRING_REALLOC)
+        && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_TASK)
+        && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_REENTRANT)) {
+      value_t len = VALUE_NONE;
+      value_t hv;
+
+      hv = jal_string_arg_payload_view(pf, val, &len);
+      if (hv) {
+        str_rt_len = len;
+        value_release(val);
+        val = hv;
+        str_view = BOOLEAN_TRUE;
+      }
+    }
+  }
+#endif
   if (val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
@@ -1424,7 +1462,7 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       /* open-array OUT formal (a POINTER built from `byte out a[]`):
        * an array actual of matching elements is legal, exactly like the
        * IN direction */
-      || ((val
+      || (val
           && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
           && (VARIABLE_DEF_TYPE_ARRAY
               == variable_def_type_get(value_def_get(val)))
@@ -1432,7 +1470,13 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
               variable_def_member_def_get(
                 variable_def_member_get(def)),
               variable_def_member_def_get(
-                variable_def_member_get(value_def_get(val)))))))) {
+                variable_def_member_get(value_def_get(val)))))
+      /* the payload view on a FLAT target hands over a pointer built by
+       * the coercion above -- the only pointer actual an out formal takes */
+      || (str_view
+          && val
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && (VARIABLE_DEF_TYPE_POINTER == value_type_get(val))))) {
     pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
     value_release(val);
     val = VALUE_NONE;
@@ -1469,6 +1513,13 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
         if (!ct_val) {
           ct_val = pfile_constant_get(pf, value_ct_get(val),
             VARIABLE_DEF_NONE);
+        }
+        if (str_rt_len) {
+          /* string payload view: the count is the runtime length, not the
+           * heap capacity the array actual would report */
+          value_release(ct_val);
+          ct_val = str_rt_len;
+          str_rt_len = VALUE_NONE;
         }
         parms[ii - 1] = ct_val;
         FREE(ct_name);
@@ -2030,7 +2081,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
                 &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
             jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
-                put_parms, need_ct);
+                put_parms, need_ct, call_val);
           } else {
             jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
                 need_ct, flags, call_val);

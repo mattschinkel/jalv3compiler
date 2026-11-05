@@ -54,6 +54,16 @@ echo "" >> $DST
 echo "#ifndef JALV2_STRING_ARG_BYREF" >> $DST
 echo "#define JALV2_STRING_ARG_BYREF 1" >> $DST
 echo "#endif" >> $DST
+# A heap string actual bound to an `out`/`in out` open byte-array formal is
+# handed over as a payload VIEW (the heap array + a staged base offset; the
+# callee reads/writes the live payload through the formal's runtime chunk
+# map), when the callee cannot reallocate a heap string; content-only and
+# count-bounded (fixes/fix_string_arg_view.md).  Opt-out:
+# -DJALV2_STRING_ARG_VIEW=0
+echo "" >> $DST
+echo "#ifndef JALV2_STRING_ARG_VIEW" >> $DST
+echo "#define JALV2_STRING_ARG_VIEW 1" >> $DST
+echo "#endif" >> $DST
 # Optional: builtin `string_heap_compact()` / `_string_heap_compact()` → machine `CALL string_heap_compact`
 # when `include strings_dynamic` defines the outlined wrapper (default on; falls back to defer+NOP if missing).
 # Opt-out: EXTRA_CFLAGS=-DJALV2_STRING_HEAP_COMPACT_CALL=0

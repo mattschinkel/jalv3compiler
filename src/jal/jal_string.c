@@ -1812,6 +1812,11 @@ value_t jal_string_arg_payload_ptr(pfile_t *pf, value_t str, value_t *len_out)
   }
   ptr_val = value_alloc(var);
   variable_pointer_bound_ct_bump(var);
+  /* the pointer's only READER may be the call emission itself (an OUT
+   * actual is a write target at parse time, so the p-code never sees a
+   * read): without a use count the variable-reduce pass drops the cell and
+   * the callee receives a null payload pointer (found on the PIC32 view) */
+  variable_use_ct_bump(var, CTR_BUMP_INCR);
   variable_release(var);
   if (!ptr_val) {
     value_release(elem);
@@ -1823,6 +1828,97 @@ value_t jal_string_arg_payload_ptr(pfile_t *pf, value_t str, value_t *len_out)
     *len_out = jal_string_length_value_get(pf, str);
   }
   return ptr_val;
+}
+
+/*
+ * A string payload handed to an open-array formal as a VIEW (fixes/
+ * fix_string_arg_view.md): the actual becomes the HEAP ARRAY value, the
+ * payload's base offset (handle.OFFSET + header) is staged into a
+ * compiler-owned word at the call site, and the back end installs the
+ * heap's chunk layout plus that base word into the formal's runtime map
+ * (pic_var_strview_site_record keys the staging global to this actual
+ * value, which survives to call emission through the cmd params).  The
+ * callee reads and writes the payload in place, count-bounded by COUNT(s)
+ * -- the length never changes through the view.
+ */
+value_t jal_string_arg_payload_view(pfile_t *pf, value_t str, value_t *len_out)
+{
+  static unsigned base_no;
+  char             name[32];
+  variable_def_t   wdef;
+  variable_t       var;
+  value_t          off;
+  value_t          payload;
+  value_t          bval;
+  value_t          heap;
+
+  if (!str || !jal_string_runtime_ensure(pf)) {
+    return VALUE_NONE;
+  }
+  /* FLAT targets (PIC32/ESP32: 4-byte pointers) have no bank chunks and no
+   * runtime map machinery -- the view is the by-ref payload POINTER, and a
+   * write through an open-array formal is a plain indirect store there.
+   * The banked classic cores take the map path below. */
+  if (pfile_pointer_width_get(pf) >= 4) {
+    return jal_string_arg_payload_ptr(pf, str, len_out);
+  }
+  /* the map walk reads the payload through FSR0 (12/16-bit linear): a
+   * CLASSIC 14-bit core (one 8-bit FSR) has no such path, so the view is
+   * refused there (the caller keeps its diagnostic) -- the documented
+   * fallback of the kill criterion in fixes/fix_string_arg_view.md */
+  if (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)) {
+    return VALUE_NONE;
+  }
+  off = jal_string_handle_index_get(pf, str, _STRING_FIELD_OFFSET);
+  if (!off) {
+    return VALUE_NONE;
+  }
+  payload = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
+  value_release(off);
+  if (!payload) {
+    return VALUE_NONE;
+  }
+  /* the staging global is always a 2-byte word: the map's base word is two
+   * bytes and the call-site fill copies both (an index-sized global would
+   * make that copy read adjacent RAM on a small heap) */
+  wdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, 2);
+  var = VARIABLE_NONE;
+  sprintf(name, "_string_argbase%u", base_no);
+  base_no++;
+  if (!wdef
+      || (RESULT_OK != pfile_variable_alloc(pf,
+            PFILE_VARIABLE_ALLOC_GLOBAL, name, wdef, VARIABLE_NONE, &var))
+      || (VARIABLE_NONE == var)) {
+    if (wdef) {
+      variable_def_free(wdef);
+    }
+    value_release(payload);
+    return VALUE_NONE;
+  }
+  bval = value_alloc(var);
+  /* the only READER of this cell is the call-site map fill, emitted as raw
+   * instructions the p-code optimizer never sees -- without a use count
+   * the store looks dead, the cell goes unplaced and the fill reads
+   * address 0 (found on the first 16F1825 probe) */
+  variable_use_ct_bump(var, CTR_BUMP_INCR);
+  variable_release(var);
+  if (!bval) {
+    value_release(payload);
+    return VALUE_NONE;
+  }
+  pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &bval, payload, VALUE_NONE);
+  value_release(payload);
+  heap = jal_string_named_value_get(pf, _STRING_HEAP_NAME);
+  if (!heap) {
+    value_release(bval);
+    return VALUE_NONE;
+  }
+  pic_var_strview_site_record(heap, var);
+  if (len_out) {
+    *len_out = jal_string_length_value_get(pf, str);
+  }
+  return heap;
 }
 
 value_t jal_string_subscript_read_emit(pfile_t *pf, value_t elem)

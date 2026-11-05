@@ -55,6 +55,7 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
     value_t idx, size_t offset)
 {
   variable_t map;
+  boolean_t strview;
   unsigned t_wide;
   value_t t;
   value_t cnt;
@@ -71,6 +72,7 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
       || (VARIABLE_BASE_UNKNOWN == variable_base_get(map, 0))) {
     return;
   }
+  strview = pic_var_openarray_formal_strview_get(formal);
   ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
   {
     variable_t gc;
@@ -95,6 +97,12 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
       t_wide = ((pic_dynamic_index_byte_sz_get(idx) > 1) || (offset > 0xFFU))
         ? 1 : 0;
       idx_const = -1;
+    }
+    /* a string payload view indexes the heap through a base offset that can
+     * sit past byte 255 (a > 255 heap), so the walk scratch is always wide
+     * there */
+    if (strview) {
+      t_wide = 1;
     }
     t    = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, t_wide ? 2 : 1);
     cnt  = value_alloc(gc);
@@ -137,7 +145,11 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
       pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
     }
   }
-  /* FSR0 = map; count = *FSR0++; table walk starts at +1 */
+  /* FSR0 = map; count = *FSR0++; table walk starts at +1.  A string-view
+   * map carries a 2-byte BASE WORD at [1..2] (the payload's offset inside
+   * the heap): read it right after the count, skip the pad byte at [3]
+   * and add it into the index scratch, so the chunk walk that follows
+   * resolves heap element (base + idx).  The entries start at +4. */
   pic_fsr0_load_addr(pf, variable_base_get(map, 0));
   pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
   pic_instr_append_f(pf, PIC_OPCODE_MOVWF, cnt, 0);
@@ -150,6 +162,29 @@ static void pic_fsr_chunk_walk_emit_globals(pfile_t *pf, variable_t formal,
    * register). */
   pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
   pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  if (strview) {
+    /* base word at map[1..2]; skip the pad at [3]; entries start at +4 */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, base, 0);
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, base, 1);
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+    /* t += base (16-bit: low add with carry, then the high bytes) */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 0, PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, t, 1, PIC_OPDST_F);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, base, 1, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, t, 1, PIC_OPDST_F);
+  }
 
   pic_instr_append_label(pf, loop);
   pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);

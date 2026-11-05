@@ -87,6 +87,11 @@ typedef struct pic_var_openarray_pair_ {
   boolean_t                    passon;
   variable_t                   chain_src;   /* runtime map copied per call */
   variable_sz_t                chain_sz;    /* bytes to copy */
+  /* STRING PAYLOAD VIEW: the actual is the heap array standing for a string
+   * payload whose base offset is staged at run time -- the formal's map gets
+   * a base word and the walk adds it to the index (fixes/
+   * fix_string_arg_view.md) */
+  boolean_t                    strview;
   /* Layout of the ACTUAL captured at the end of placement: the chunk maps
    * are not visible during call emission (found 2026-11-02 -- ct read 0 at
    * the call site), so the call-site fill reads the layout from here.  A
@@ -109,7 +114,18 @@ typedef struct pic_var_late_ {
 typedef struct pic_var_formal_map_ {
   variable_t                   formal;
   variable_t                   map;
+  /* string-view map format: [count][base lo,hi][entries] -- the walk adds
+   * the base word to the index (user arrays fill it with 0) */
+  boolean_t                    strview;
 } pic_var_formal_map_t;
+
+/* one call site whose open-array actual is a string payload view: the
+ * actual value (of the heap array) -> the staging global holding the
+ * payload's runtime base offset */
+typedef struct pic_var_strview_site_ {
+  value_t                      actual;
+  variable_t                   base;
+} pic_var_strview_site_t;
 
 struct pic_var_layout_snap_;
 
@@ -142,6 +158,10 @@ typedef struct pic_var_state_ {
   pic_var_formal_map_t        *formal_maps;
   size_t                       formal_maps_used;
   size_t                       formal_maps_alloc;
+  /* string payload-view call sites (see pic_var_strview_site_record) */
+  pic_var_strview_site_t      *strview_sites;
+  size_t                       strview_sites_used;
+  size_t                       strview_sites_alloc;
   /* formals that must keep the baked map */
   variable_t                  *openarray_blocked;
   size_t                       openarray_blocked_used;
@@ -207,6 +227,7 @@ void pic_var_reset(void)
   FREE(pic_var.call_actuals);
   FREE(pic_var.openarray_pairs);
   FREE(pic_var.formal_maps);
+  FREE(pic_var.strview_sites);
   FREE(pic_var.openarray_blocked);
   FREE(pic_var.late);
   memset(&pic_var, 0, sizeof(pic_var));
@@ -811,6 +832,81 @@ variable_t pic_var_openarray_formal_map_get(variable_t formal)
   return ent ? ent->map : VARIABLE_NONE;
 }
 
+boolean_t pic_var_openarray_formal_strview_get(variable_t formal)
+{
+  pic_var_formal_map_t *ent;
+
+  if (!formal || (VARIABLE_NONE == formal)) {
+    return BOOLEAN_FALSE;
+  }
+  ent = pic_var_formal_map_find(formal);
+  return (ent && ent->strview) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* a string payload-view call site: the actual value (of the heap array) is
+ * keyed to the staging global that holds the payload's base offset.  The
+ * values are arena-scoped and the cmd params hold the same handle from
+ * parse to call emission, so identity is stable across passes. */
+void pic_var_strview_site_record(value_t actual, variable_t base)
+{
+  size_t ii;
+
+  if (!actual || !base || (VARIABLE_NONE == base)) {
+    return;
+  }
+  for (ii = 0; ii < pic_var.strview_sites_used; ii++) {
+    if (pic_var.strview_sites[ii].actual == actual) {
+      pic_var.strview_sites[ii].base = base;
+      return;
+    }
+  }
+  if (pic_var.strview_sites_used == pic_var.strview_sites_alloc) {
+    size_t                  resize;
+    pic_var_strview_site_t *tmp;
+
+    resize = pic_var.strview_sites_alloc
+      ? 2 * pic_var.strview_sites_alloc : 8;
+    tmp = REALLOC(pic_var.strview_sites, resize * sizeof(*tmp));
+    if (!tmp) {
+      return;
+    }
+    pic_var.strview_sites       = tmp;
+    pic_var.strview_sites_alloc = resize;
+  }
+  pic_var.strview_sites[pic_var.strview_sites_used].actual = actual;
+  pic_var.strview_sites[pic_var.strview_sites_used].base   = base;
+  pic_var.strview_sites_used++;
+}
+
+variable_t pic_var_strview_site_get(value_t actual)
+{
+  size_t ii;
+
+  if (!actual) {
+    return VARIABLE_NONE;
+  }
+  for (ii = 0; ii < pic_var.strview_sites_used; ii++) {
+    if (pic_var.strview_sites[ii].actual == actual) {
+      return pic_var.strview_sites[ii].base;
+    }
+  }
+  return VARIABLE_NONE;
+}
+
+/* any string payload-view pair feeds this formal? */
+static boolean_t pic_var_formal_strview_fed(variable_t formal)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if ((pic_var.openarray_pairs[ii].formal == formal)
+        && pic_var.openarray_pairs[ii].strview) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 /* a formal whose call sites cannot all hand over a layout: keep the baked
  * map (the runtime walk would read a stale one) */
 void pic_var_openarray_formal_block(variable_t formal)
@@ -913,6 +1009,20 @@ boolean_t pic_var_openarray_pair_chain_get(variable_t actual, variable_t formal,
   return BOOLEAN_FALSE;
 }
 
+/* mark every (actual, formal) pair of this call site as a string payload
+ * view -- the actual value is registered with a staged base offset */
+void pic_var_openarray_pair_strview_mark(variable_t actual, variable_t formal)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
+    if ((pic_var.openarray_pairs[ii].actual == actual)
+        && (pic_var.openarray_pairs[ii].formal == formal)) {
+      pic_var.openarray_pairs[ii].strview = BOOLEAN_TRUE;
+    }
+  }
+}
+
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
     const pfile_pos_t *pos, boolean_t passon)
 {
@@ -949,6 +1059,7 @@ void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].passon   = passon;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_src = VARIABLE_NONE;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_sz  = 0;
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].strview  = BOOLEAN_FALSE;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chunk_ct = 0;
   if (pos) {
     pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos       = *pos;
@@ -1067,6 +1178,7 @@ static boolean_t pic_var_formal_map_resize(pfile_t *pf, variable_t formal,
   ent         = &pic_var.formal_maps[pic_var.formal_maps_used++];
   ent->formal = formal;
   ent->map    = map;
+  ent->strview = pic_var_formal_strview_fed(formal);
   return BOOLEAN_TRUE;
 }
 
@@ -1125,6 +1237,19 @@ static variable_sz_t pic_var_formal_map_need(variable_t formal)
   }
   if (chunked && differ && (max_ct <= PIC_CHUNK_MAP_MAX)) {
     need = (variable_sz_t) (1 + 3 * max_ct);
+  }
+  /* a string payload-view formal ALWAYS needs the runtime map (its one
+   * layout is the heap's, but the base offset differs per call site -- the
+   * baked map cannot carry it) and its format is
+   * [count][base lo,hi][pad][entries 3*ct] */
+  if (pic_var_formal_strview_fed(formal) && (max_ct >= 1)
+      && (max_ct <= PIC_CHUNK_MAP_MAX)) {
+    variable_sz_t svneed;
+
+    svneed = (variable_sz_t) (4 + 3 * max_ct);
+    if (svneed > need) {
+      need = svneed;
+    }
   }
   for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
     pic_var_openarray_pair_t *pair;
@@ -1251,6 +1376,19 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
       src = pic_var_openarray_formal_map_get(pair->actual);
       dst = pic_var_openarray_formal_map_get(pair->formal);
       if ((VARIABLE_NONE == src) || (VARIABLE_NONE == dst)) {
+        continue;
+      }
+      if (pic_var_openarray_formal_strview_get(pair->actual)) {
+        /* the source formal walks a STRING PAYLOAD VIEW (its map carries a
+         * runtime base word): handing that map to another formal would make
+         * the callee walk payload-relative indices with plain-array math.
+         * Refuse the re-pass; pass the bytes through a user array instead. */
+        if (!pair->reported) {
+          pair->reported = BOOLEAN_TRUE;
+          pfile_log(pf, PFILE_LOG_ERR,
+              "an open-array parameter bound to a string cannot be passed "
+              "on to another procedure (copy it into a byte array first)");
+        }
         continue;
       }
       ssz = variable_sz_get(src);

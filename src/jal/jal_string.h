@@ -26,6 +26,11 @@ boolean_t jal_string_heap_size_const_check(pfile_t *pf, const char *name,
     variable_def_t def, value_t expr);
 value_t   jal_string_arg_payload_ptr(pfile_t *pf, value_t str,
     value_t *len_out);
+/* the string payload as a VIEW for `out`/`in out` byte-array formals: the
+ * actual becomes the heap array value; the base offset is staged into a
+ * compiler word the back end installs as the formal map's base word */
+value_t   jal_string_arg_payload_view(pfile_t *pf, value_t str,
+    value_t *len_out);
 void      jal_string_note_realloc(pfile_t *pf);
 void      jal_string_heap_size_legacy_declared(pfile_t *pf);
 /* create `_string_error` + the error constants without allocating a heap
