@@ -35,7 +35,7 @@ base() { # $1 = literal
 cat << EOF
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 procedure report(byte in tag, string in s) is
 end procedure
@@ -54,7 +54,7 @@ done
 cat > "$WORK/od.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 procedure report(byte in tag, optional string in s default "dflt") is
 end procedure
@@ -115,7 +115,7 @@ expect_ok "fixed formal + same-capacity var (direct)" "$WORK/fvar.jal"
 cat > "$WORK/dyn.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 var string t
 procedure report(byte in tag, string in s) is

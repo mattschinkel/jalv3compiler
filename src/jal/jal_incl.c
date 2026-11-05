@@ -333,11 +333,12 @@ static void jal_parse_pragma_target_page(pfile_t *pf)
 
 /* pragma target string_heap_size <bytes>
  *
- * The preferred spelling of the dynamic-string heap declaration.  It creates
- * the compiler-owned `const _string_heap_size` cell, so every existing heap
- * reader (the heap builder, the sizing report, the index-width choice) keeps
- * using the same name; the legacy `const word _string_heap_size = <bytes>`
- * declaration remains accepted and runs the same validation. */
+ * The dynamic-string heap declaration.  It creates the compiler-owned
+ * `const _string_heap_size` cell, so every existing heap reader (the heap
+ * builder, the sizing report, the index-width choice) keeps using the same
+ * name.  The old `const word _string_heap_size = <bytes>` declaration was
+ * REMOVED: a user declaration of that name is now a reserved-name error that
+ * names this pragma. */
 static void jal_parse_pragma_target_string_heap_size(pfile_t *pf)
 {
   value_t cexpr;

@@ -190,27 +190,27 @@ EOF
 expect_one_error "synthesized store body name" "$WORK/r_put.jal" \
   "'_string_put' is reserved for the compiler"
 
-# --------------------------------- malformed API constant: ONE diagnostic
+# --------------------------------- removed legacy constant: ONE diagnostic
 cat >"$WORK/r_heap.jal" <<'EOF'
-var byte _string_heap_size
+const word _string_heap_size = 64
 include 16f877
 var string s
 s = "hello"
 forever loop
 end loop
 EOF
-expect_one_error "malformed _string_heap_size" "$WORK/r_heap.jal" \
-  "_string_heap_size must be a constant integer"
-if grep -qF 'declare it as: pragma target string_heap_size <bytes>' \
+expect_one_error "legacy _string_heap_size is refused" "$WORK/r_heap.jal" \
+  "_string_heap_size is set with"
+if grep -qF 'pragma target string_heap_size <bytes>' \
      "$WORK/r_heap.out"; then
-  ok "malformed _string_heap_size names the declaration to use"
+  ok "legacy _string_heap_size diagnostic names the pragma"
 else
-  bad "malformed _string_heap_size diagnostic lacks the corrective form"
+  bad "legacy _string_heap_size diagnostic lacks the corrective form"
 fi
 
 # ------------------------------------------------------ positive control
 cat >"$WORK/ok.jal" <<'EOF'
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include 16f877
 var string s
 s = "hello"
@@ -219,7 +219,7 @@ end loop
 EOF
 rc=$(compile "$WORK/ok.jal")
 if [ "$rc" -eq 0 ] && grep -qE '^0 errors, 0 warnings$' "$(out_for "$WORK/ok.jal")"; then
-  ok "documented const _string_heap_size form still compiles clean"
+  ok "pragma target string_heap_size form compiles clean"
 else
   bad "positive control failed (rc=$rc)" "$(tail -4 "$(out_for "$WORK/ok.jal")")"
 fi

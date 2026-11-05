@@ -6,13 +6,13 @@
 -- Description:
 --    Same allocation pattern as **`16f877_gpsim_string_heap_retry_off_fragment_fail.jal`**
 --    (five `var string` handles, clear **`_s2`** and **`_s4`** with **`x = x & ""`**, then
---    assign a **14**-byte literal to **`_t`**). Here **`const word _string_heap_size = 48`** and
+--    assign a **14**-byte literal to **`_t`**). Here **`pragma target string_heap_size 48`** and
 --    **`pragma string retry on`** give enough total space that, after the first
 --    free-list scan fails, **`string_heap_compact`**-equivalent relocation runs once
 --    and the second scan succeeds: **`_string_error == STRING_ERROR_NONE`** and
 --    **`COUNT(_t) == 14`**.
 --
---    On **`const word _string_heap_size = 46`**, the same final assignment still fails even with
+--    On **`pragma target string_heap_size 46`**, the same final assignment still fails even with
 --    **retry on** (not enough bytes after packing). See the companion **retry off**
 --    test for the **46**-byte **heap-full** baseline.
 --

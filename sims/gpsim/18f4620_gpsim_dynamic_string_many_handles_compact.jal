@@ -5,7 +5,7 @@
 --
 -- Description:
 --    Thirty-two dynamic `var string` handles with `pragma string index byte`
---    and `const word _string_heap_size = 255` so `_pfile_strc_cpt` fits one PIC18 GPR bank.
+--    and `pragma target string_heap_size 255` so `_pfile_strc_cpt` fits one PIC18 GPR bank.
 --    Compiler summary (PIC18F4620, `bin/jalv3-x86-64 -s lib`, default
 --    `JALV2_ROM_A_STRING_LITERAL_CALL=0`): **Code area** ~45076 bytes, **Data area** ~2187 bytes
 --    (static map; heap is `_string_heap_size` at runtime). With

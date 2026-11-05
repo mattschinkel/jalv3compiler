@@ -5,7 +5,7 @@
 -- Compiler: JALv2
 --
 -- Description:
---    Rob's 2026-11-02 report: with `const word _string_heap_size = 100`
+--    Rob's 2026-11-02 report: with `pragma target string_heap_size 100`
 --    (more than one 16F1825 RAM bank) `print_string` printed the FIRST
 --    heap string's text for every later one (`My stri\t\t`, `My string\0`).
 --    Root cause: `print_string(dev, <heap string>)` marshals the text into

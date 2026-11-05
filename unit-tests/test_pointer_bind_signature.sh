@@ -26,7 +26,7 @@ ncase=0
 COMMON='
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 15
+pragma target string_heap_size 15
 include strings_dynamic
 var string v_dyn
 var string v_fixed[8]

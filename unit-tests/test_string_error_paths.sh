@@ -63,7 +63,7 @@ check_ok() { # name source
 # ("s = \"abc\" & n" now compiles); the remaining error shapes are
 # floats, bits and byte arrays.
 HEAP='include 16f877
-const word _string_heap_size = 128
+pragma target string_heap_size 128
 include strings_dynamic
 var string s'
 
@@ -81,13 +81,13 @@ s = \"abc\" & b"
 # fit _string_heap_size at compile time. Both assign forms are pinned.
 check heap_undersized_stmt '
 include 16f877
-const word _string_heap_size = 9
+pragma target string_heap_size 9
 include strings_dynamic
 var string s
 s = "My string"'
 check heap_undersized_decl '
 include 16f877
-const word _string_heap_size = 9
+pragma target string_heap_size 9
 include strings_dynamic
 var string s = "My string"'
 
@@ -175,15 +175,15 @@ p[1] = \"text\"" "string element assignment requires a byte value"
 # --- heap-size declaration validation ---------------------------------
 check heap_word_overflow '
 include 16f877
-const word _string_heap_size = 65599
+pragma target string_heap_size 65599
 var string s' "dynamic string heap is currently limited to 65535 bytes"
 check heap_float_const '
 include 16f877
-const word _string_heap_size = 64.5
+pragma target string_heap_size 64.5
 var string s' "_string_heap_size must be a constant integer"
-check heap_negative_const '
+check heap_negative_pragma '
 include 16f877
-const word _string_heap_size = -64
+pragma target string_heap_size -64
 var string s' "_string_heap_size must not be negative"
 
 # --- to_array destination writability ---------------------------------
@@ -193,7 +193,7 @@ var string s' "_string_heap_size must not be negative"
 # inline path, which reports `assign to constant`.
 check to_array_const_dst '
 include 16f877
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 const byte rom[4] = {1, 2, 3, 4}
 var string s
@@ -230,7 +230,7 @@ var byte b
 b = a[i]"
 check_ok ok_to_array_writable '
 include 16f877
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 var string s
 var byte b[4]

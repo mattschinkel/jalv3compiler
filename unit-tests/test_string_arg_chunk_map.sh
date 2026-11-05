@@ -73,7 +73,7 @@ serial_hw_init()
 alias serial is serial_hw_data
 include print
 include delay
-const word _string_heap_size = $2
+pragma target string_heap_size $2
 var string a = "My string"
 var string b = "My string1"
 forever loop
@@ -144,7 +144,7 @@ include serial_hardware
 serial_hw_init()
 alias serial is serial_hw_data
 include print
-const word _string_heap_size = 100
+pragma target string_heap_size 100
 var string a = "My string"
 forever loop
    print_string(serial, a)

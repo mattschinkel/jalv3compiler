@@ -59,7 +59,7 @@ TABLE = [
      ["type mismatch"]),
     ("pragma_string_heap_removed.jal",
      ["pragma string heap was removed",
-      "const word _string_heap_size = <bytes>"]),
+      "dynamic string storage requires `pragma target string_heap_size"]),
     ("string_heap_missing.jal",
      ["dynamic string storage requires `pragma target string_heap_size"]),
     # pointer-signature enforcement (recovered from the retired

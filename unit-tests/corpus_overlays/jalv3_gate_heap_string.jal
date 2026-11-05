@@ -16,7 +16,7 @@
 
 include 16f1825
 
-const word _string_heap_size = 64
+pragma target string_heap_size 64
 include strings_dynamic
 
 var string a

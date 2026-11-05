@@ -133,7 +133,7 @@ expect_gate "string relation on 12f508" "$WORK/rel.jal"
 # --- 4: including the strings library is refused --------------------
 pic12_head "$WORK/lib.jal"
 cat >> "$WORK/lib.jal" << 'EOF'
-const word _string_heap_size = 16
+pragma target string_heap_size 16
 include strings_dynamic
 forever loop
 end loop
@@ -180,7 +180,7 @@ pragma target MCLR EXTERNAL
 WDTCON_SWDTEN = OFF
 OSCCON_SCS = 0
 enable_digital_io()
-const word _string_heap_size = 16
+pragma target string_heap_size 16
 pragma string index byte
 include strings_dynamic
 var string s
@@ -202,7 +202,7 @@ pragma target XINST DISABLED
 pragma target DEBUG DISABLED
 pragma target LVP DISABLED
 pragma target MCLR EXTERNAL
-const word _string_heap_size = 16
+pragma target string_heap_size 16
 pragma string index byte
 include strings_dynamic
 var string s

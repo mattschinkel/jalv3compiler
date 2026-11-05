@@ -75,7 +75,7 @@ mini="$TMP/mini.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 100'
+  echo 'pragma target string_heap_size 100'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'
@@ -101,7 +101,7 @@ fa="$TMP/from_array.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 60'
+  echo 'pragma target string_heap_size 60'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'
@@ -133,7 +133,7 @@ cat="$TMP/concat.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 100'
+  echo 'pragma target string_heap_size 100'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'
@@ -172,7 +172,7 @@ asg="$TMP/assign.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 100'
+  echo 'pragma target string_heap_size 100'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'
@@ -211,7 +211,7 @@ put="$TMP/store.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 100'
+  echo 'pragma target string_heap_size 100'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'
@@ -253,7 +253,7 @@ toa="$TMP/toarray.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 100'
+  echo 'pragma target string_heap_size 100'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'
@@ -286,7 +286,7 @@ internal="$TMP/internal.jal"
 {
   echo 'include 16f1825'
   echo 'pragma target clock 32_000_000'
-  echo 'const word _string_heap_size = 60'
+  echo 'pragma target string_heap_size 60'
   echo 'pragma string index byte'
   echo 'include strings_dynamic'
   echo 'var string a'

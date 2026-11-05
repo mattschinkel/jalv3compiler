@@ -45,11 +45,23 @@ expect_clean() { # name file
   fi
 }
 
+expect_err() { # name file substring
+  local name=$1 file=$2 want=$3 out
+  out=$(run "$file")
+  if echo "$out" | grep -q "$want"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: expected '$want' in:"
+    echo "$out" | grep -v "^generating\|^writing\|tokens\|^jal " | sed 's/^/     /'
+    fails=$((fails + 1))
+  fi
+}
+
 # --- 1: literal assigns under-size -> warn with both numbers ---------
 cat > "$WORK/w1.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 9
+pragma target string_heap_size 9
 var string s
 var string t
 procedure demo() is
@@ -63,28 +75,22 @@ EOF
 expect_warn "literal assigns: heap 9, recommended 17" "$WORK/w1.jal" \
   "recommend at least 17 (7 payload + 3-byte headers across 2 strings"
 
-# --- 1b: the `pragma target string_heap_size` spelling drives the same
-# advisory: it creates the same compiler-owned const cell, so the heap
-# builder, the index width and this report all read the same value.
-sed "s/^const word _string_heap_size = 9$/pragma target string_heap_size 9/" \
+# --- 1b: the removed legacy constant is refused by name, ONE diagnostic
+sed "s/^pragma target string_heap_size 9$/const word _string_heap_size = 9/" \
   "$WORK/w1.jal" > "$WORK/w1p.jal"
-expect_warn "pragma heap: same recommendation" "$WORK/w1p.jal" \
-  "recommend at least 17 (7 payload + 3-byte headers across 2 strings"
+expect_err "legacy const is refused" "$WORK/w1p.jal" \
+  "_string_heap_size is set with"
 
 # --- 2: roomy heap -> silent -----------------------------------------
-sed "s/_string_heap_size = 9/_string_heap_size = 64/" "$WORK/w1.jal" \
+sed "s/string_heap_size 9$/string_heap_size 64/" "$WORK/w1.jal" \
   > "$WORK/w2.jal"
 expect_clean "roomy heap is silent" "$WORK/w2.jal"
-
-sed "s/^const word _string_heap_size = 9$/pragma target string_heap_size 64/" \
-  "$WORK/w1.jal" > "$WORK/w2p.jal"
-expect_clean "pragma roomy heap is silent" "$WORK/w2p.jal"
 
 # --- 3: runtime-length assign (from_array) -> SKIP -------------------
 cat > "$WORK/w3.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 9
+pragma target string_heap_size 9
 include strings_dynamic
 var string s
 var byte buf[4]
@@ -104,7 +110,7 @@ expect_clean "runtime-length assign skips the advisory" "$WORK/w3.jal"
 cat > "$WORK/w4.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 10
+pragma target string_heap_size 10
 var string s
 procedure demo() is
    s = "abc" & "def" & "ghi"
@@ -120,7 +126,7 @@ expect_warn "const chain: heap 10, recommended 15" "$WORK/w4.jal" \
 cat > "$WORK/w5.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 12
+pragma target string_heap_size 12
 var string a
 var string b
 procedure demo() is
@@ -138,7 +144,7 @@ expect_warn "copy + const chain: heap 12, recommended 22" "$WORK/w5.jal" \
 cat > "$WORK/w6.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 8
+pragma target string_heap_size 8
 var string s
 var word lvl
 procedure demo() is
@@ -155,7 +161,7 @@ expect_clean "runtime-number chain skips the advisory" "$WORK/w6.jal"
 cat > "$WORK/w7.jal" << 'EOF'
 include 16f1825
 pragma target clock 20_000_000
-const word _string_heap_size = 8
+pragma target string_heap_size 8
 var string s
 procedure demo() is
    s = "v=" & 123 & "!"
@@ -171,7 +177,7 @@ expect_warn "const-number chain counted (6 payload)" "$WORK/w7.jal" \
 {
   echo "include 16f1825"
   echo "pragma target clock 20_000_000"
-  echo "const word _string_heap_size = 250"
+  echo "pragma target string_heap_size 250"
   for i in $(seq 0 11); do echo "var string s$i"; done
   echo "procedure demo() is"
   for i in $(seq 0 11); do

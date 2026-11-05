@@ -40,7 +40,7 @@ pragma target OSC INTOSC_NOCLKOUT
 pragma target WDT DISABLED
 enable_digital_io()
 var volatile byte seen
-const word _string_heap_size = 100
+pragma target string_heap_size 100
 JAL
 }
 

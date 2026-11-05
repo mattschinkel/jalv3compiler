@@ -116,6 +116,16 @@ boolean_t jal_identifier_is_reserved(pfile_t *pf)
     pfile_log(pf, PFILE_LOG_ERR, "'%s' is a reserved word", name);
     rc = BOOLEAN_TRUE;
   } else if (name && *name) {
+    /* The heap size is compiler-owned now: it is set with the
+     * `pragma target string_heap_size <bytes>` pragma, and the legacy
+     * constant declaration was removed (2026-11-05). */
+    if (0 == strcmp(name, "_string_heap_size")) {
+      jal_string_heap_size_legacy_declared(pf);
+      rc = BOOLEAN_TRUE;
+    }
+    if (rc) {
+      return rc;
+    }
     for (ii = 0; jal_compiler_names[ii]; ii++) {
       if (0 == strcmp(name, jal_compiler_names[ii])) {
         pfile_log(pf, PFILE_LOG_ERR,
@@ -169,12 +179,6 @@ static void jal_parse_var_init(pfile_t *pf, variable_t var, size_t el,
           );
   }
   sz = variable_def_sz_get(vdef);
-  if (variable_is_const(var) && (0 == el) && !variable_is_array(var)
-      && !jal_string_heap_size_const_check(pf, variable_name_get(var),
-        vdef, expr)) {
-    return; /* one declaration-time diagnostic; do not store the truncated
-             * word value and do not let the heap builder complain again */
-  }
   if (variable_is_const(var)) {
     if (!value_is_const(expr)) {
       if ((0 == el) && jal_const_var_whereis_metadata_set(var, expr)) {
@@ -2323,18 +2327,6 @@ void jal_parse_var_common(pfile_t *pf,
         }
         sval = dyn_str_init ? jal_parse_expr(pf)
           : jal_parse_init(pf, inf.vdef);
-        if (!dst && (inf.def_flags & VARIABLE_DEF_FLAG_CONST)
-            && inf.name
-            && !jal_string_heap_size_const_check(pf, inf.name, inf.vdef,
-                 sval)) {
-          /* keep a well-formed value so the rest of the declaration can
-           * parse; _string_heap_size is marked unusable, so the heap
-           * builder stays quiet and codegen will not run */
-          if (sval) {
-            value_release(sval);
-          }
-          sval = pfile_constant_get(pf, 0, VARIABLE_DEF_NONE);
-        }
         inf.ct = 0;
         if ((VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(inf.vdef))
           && (VARIABLE_CT_UNKNOWN == variable_def_member_ct_get(
