@@ -73,7 +73,7 @@ static boolean_t jal_data_pointer_pointee_is_array(const value_t val)
  * **`byte in name[]`** / byref formals: lowered to a **POINTER** whose def copies
  * **`VARIABLE_DEF_FLAG_IN`** (**`jal_proc.c`**). Subscript and **COUNT** must still work.
  */
-static boolean_t jal_data_pointer_in_formal_allows_subscript(pfile_t *pf,
+static boolean_t jal_data_pointer_openarray_formal_allows_subscript(
     const value_t val)
 {
   variable_def_t d;
@@ -85,46 +85,12 @@ static boolean_t jal_data_pointer_in_formal_allows_subscript(pfile_t *pf,
     return BOOLEAN_FALSE;
   }
   d = value_def_get(val);
-  if (d && (variable_def_flag_test(d, VARIABLE_DEF_FLAG_IN)
-        || variable_def_flag_test(d, VARIABLE_DEF_FLAG_OPENARRAY))) {
-    return BOOLEAN_TRUE;
-  }
-  if (d && variable_def_flag_test(d, VARIABLE_DEF_FLAG_OUT)) {
-    /* an OUT (or OUT-only) open-array formal is the same pointer; the
-     * declaration converted it and added a _<name>_count parameter, so
-     * the name hitting that tag in the ACTIVE proc identifies the
-     * open-array shape (a plain pointer-to-scalar OUT formal has no
-     * count parameter and stays refused). */
-    pfile_proc_t          *proc;
-    variable_def_member_t  mbr;
-    const char            *name;
-    char                  *tag;
-    boolean_t              found;
-
-    proc = pfile_proc_active_get(pf);
-    name = value_name_get(val);
-    found = BOOLEAN_FALSE;
-    if (proc && name) {
-      tag = MALLOC(8 + strlen(name));
-      if (!tag) {
-        return BOOLEAN_FALSE;
-      }
-      sprintf(tag, "_%s_count", name);
-      for (mbr = variable_def_member_get(pfile_proc_def_get(proc)); mbr;
-           mbr = variable_def_member_link_get(mbr)) {
-        const char *mtag;
-
-        mtag = variable_def_member_tag_get(mbr);
-        if (mtag && (0 == strcmp(tag, mtag))) {
-          found = BOOLEAN_TRUE;
-          break;
-        }
-      }
-      FREE(tag);
-    }
-    return found;
-  }
-  return BOOLEAN_FALSE;
+  /* an open-array formal (`byte in[]`, `byte in out[]`, `byte out[]`) is
+   * a POINTER the declaration marked OPENARRAY; a plain pointer-to-scalar
+   * formal (IN or OUT) stays refused */
+  return d && (variable_def_flag_test(d, VARIABLE_DEF_FLAG_IN)
+      || variable_def_flag_test(d, VARIABLE_DEF_FLAG_OPENARRAY))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
 /* **`_name_count`** for open-array formals: same slot index as **`pfile_proc_define`** (member list). */
@@ -356,7 +322,7 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
 
       if (value_is_pointer(val)
           && !jal_data_pointer_pointee_is_array(val)
-          && !jal_data_pointer_in_formal_allows_subscript(pf, val)) {
+          && !jal_data_pointer_openarray_formal_allows_subscript(val)) {
         pfile_log(pf, PFILE_LOG_ERR,
             "subscript on data pointer requires pointer-to-array "
             "(e.g. var pointer var byte p[3]); for pointer-to-scalar use the name "
