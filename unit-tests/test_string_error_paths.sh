@@ -201,6 +201,50 @@ var bit r
 s = "ab"
 r = string_to_array(rom, s)' "assign to constant"
 
+# --- string actual into out / in out array formals (2026-11-05) ---------
+# The OUT direction marshals nothing (the snapshot lives in the IN parser),
+# so the callee would write through the string's handle and silently corrupt
+# the heap.  Refused until the payload view (fixes/fix_string_arg_view.md).
+check out_string_refused '
+include 16f877
+pragma target string_heap_size 64
+var string s
+procedure pv_w(byte out x[]) is
+  x[0] = 1
+end procedure
+s = "ab"
+pv_w(s)' "writes through it would corrupt the string"
+check inout_string_refused '
+include 16f877
+pragma target string_heap_size 64
+var string s
+procedure pv_w(byte in out x[]) is
+  x[0] = 1
+end procedure
+s = "ab"
+pv_w(s)' "writes through it would corrupt the string"
+check inout_ptr_actual_still_mismatched '
+include 16f877
+pragma target string_heap_size 64
+var string s
+var pointer p as var string
+procedure pv_w(byte in out x[]) is
+  x[0] = 1
+end procedure
+s = "ab"
+p is s
+pv_w(p)' "type mismatch"
+check_ok ok_out_array_actual '
+include 16f877
+pragma target string_heap_size 64
+var string s
+var byte b[4]
+procedure pv_w(byte out x[]) is
+  x[0] = 1
+end procedure
+s = "ab"
+pv_w(b)'
+
 # --- legal controls: the gates above must not over-reject ---------------
 check_ok ok_dynamic_literal "$HEAP
 s = \"x\"

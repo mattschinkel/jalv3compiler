@@ -1329,6 +1329,7 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
 static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct)
 {
   value_t val;
+  boolean_t str_refused = BOOLEAN_FALSE;
 
   /* this needs to be a simple variable or PUT procedure */
   value_t jvals[JAL_VAL_TYPE_CT];
@@ -1400,7 +1401,24 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
            VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
     value_dereference(val);
   }
-  if (!((variable_def_type_is_number(variable_def_type_get(def))
+  /* A string actual into an open byte-array formal has no writable path:
+   * the OUT direction marshals nothing (the snapshot lives in the IN
+   * parser), so the callee would write through the string's HANDLE as if
+   * it were the array and silently corrupt the heap.  Refuse until the
+   * payload view (fixes/fix_string_arg_view.md) replaces this. */
+  if (val
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
+      && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "cannot pass the string %s to an `out`/`in out` array parameter: "
+      "writes through it would corrupt the string", value_name_get(val));
+    value_release(val);
+    val = VALUE_NONE;
+    str_refused = BOOLEAN_TRUE;
+  }
+  if (!str_refused
+      && !((variable_def_type_is_number(variable_def_type_get(def))
       && value_is_number(val))
       || variable_def_is_same(def, value_def_get(val))
       /* open-array OUT formal (a POINTER built from `byte out a[]`):
