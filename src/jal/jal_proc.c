@@ -22,8 +22,10 @@
 #include "../libcore/pf_expr.h"
 #include "../libcore/pf_proc.h"
 #include "../libcore/vardef.h"
+#include "../libpic12/pic.h"
 #include "jal_vdef.h"
 #include "jal_blck.h"
+#include "jal_build.h"
 #include "jal_expr.h"
 #include "jal_proc.h"
 #include "jal_string.h"
@@ -1553,12 +1555,72 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
           || jal_string_pointer_is(val))) {
-    value_t sbuf = jal_string_arg_byte_array(pf, val);
+    boolean_t by_ref = BOOLEAN_FALSE;
 
-    if (sbuf) {
-      str_rt_len = jal_string_length_value_get(pf, val);
-      value_release(val);
-      val = sbuf;
+#if JALV2_STRING_ARG_BYREF
+    /* An IN-only open byte-array formal can read the string's PAYLOAD in
+     * place: pass `&heap[offset + header]` + COUNT(s) instead of the heap
+     * sized `_strargN` snapshot.  Only into a callee that cannot move the
+     * source string: its body must be parsed already (a forward call is
+     * treated as unsafe) and it must not (transitively) reallocate a heap
+     * string.  `in out`/`out` always keep the snapshot: the check is that
+     * the callee cannot invalidate the pointer, not that it does not write.
+     */
+    if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+        && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+        && (jal_string_is_dynamic(val) || jal_string_pointer_is(val))
+        && call_val
+        && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
+      pfile_proc_t   *callee = value_proc_get(call_val);
+      variable_const_t heap_sz = 0;
+      value_t         heap_val;
+
+      /* The payload pointer binds the heap array to a pointer, and pointer
+       * arithmetic cannot walk a holed (bank-spanning) array: only use the
+       * in-place payload for a SMALL heap (<= 64 bytes), which every target
+       * can place contiguously; larger heaps keep the snapshot.  (The
+       * compiler's own pointer-target rule would otherwise refuse the
+       * program on a part whose largest contiguous run is smaller than the
+       * heap.) */
+      heap_val = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
+      if (heap_val) {
+        heap_sz = value_const_get(heap_val);
+        value_release(heap_val);
+      }
+      if (heap_sz > 64U) {
+        by_ref = BOOLEAN_FALSE;   /* keep the snapshot */
+      } else {
+
+      if (callee && (PFILE_PROC_NONE != callee)
+          && label_flag_test(pfile_proc_label_get(callee),
+               LABEL_FLAG_DEFINED)
+          && !pfile_proc_flag_test(callee,
+               PFILE_PROC_FLAG_STRING_REALLOC)
+          && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_TASK)
+          && !pfile_proc_flag_test(callee, PFILE_PROC_FLAG_REENTRANT)) {
+        value_t len  = VALUE_NONE;
+        value_t pptr;
+
+        pptr = jal_string_arg_payload_ptr(pf, val, &len);
+
+        if (pptr) {
+          str_rt_len = len;
+          value_release(val);
+          val      = pptr;
+          by_ref   = BOOLEAN_TRUE;
+        }
+      }
+      }
+    }
+#endif
+    if (!by_ref) {
+      value_t sbuf = jal_string_arg_byte_array(pf, val);
+
+      if (sbuf) {
+        str_rt_len = jal_string_length_value_get(pf, val);
+        value_release(val);
+        val = sbuf;
+      }
     }
   }
   if (value_vflag_test(val, VARIABLE_FLAG_WRITE)
@@ -1627,6 +1689,39 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
       }
     }
     ok = ok || variable_def_is_same(def, vdef);
+    /* A POINTER actual for an open-array formal of the same pointee (e.g.
+     * `check(p)` where `p is big[0]` and the formal is `byte in x[]`).  The
+     * formal stores the ADDRESS VALUE, so its element accesses must go
+     * through the linear 16-bit pointer path -- bank-crossing safe -- not the
+     * baked array layout (which would be the pointer's own storage). */
+    ok = ok
+      || ((VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
+          && variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+          && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+          && !variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_OPENARRAY)
+          && variable_def_member_get(def)
+          && variable_def_member_get(vdef)
+          && variable_def_is_same(
+               variable_def_member_def_get(variable_def_member_get(def)),
+               variable_def_member_def_get(variable_def_member_get(vdef))));
+    if (val
+        && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+        && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
+        && variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+        && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
+        && !variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
+      pfile_proc_t *callee = value_proc_get(call_val);
+
+      if (callee) {
+        value_t    fval = pfile_proc_param_get(callee, ii);
+        variable_t fvar = fval ? value_variable_get(fval) : VARIABLE_NONE;
+
+        if (fvar && (VARIABLE_NONE != fvar)) {
+          variable_flag_set(fvar, VARIABLE_FLAG_PTR_LOOKUP);
+        }
+      }
+    }
     /*
      * allow the assignment of an array to a pointer
      */
@@ -1952,6 +2047,33 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
           : CMD_BRANCHTYPE_CALL,
         CMD_BRANCHCOND_NONE, LABEL_NONE,
         VALUE_NONE, call_val, parms);
+  }
+  /* String-mutation taint: a call to a procedure that (transitively) can
+   * reallocate a heap string makes the CALLER one too.  A callee whose body
+   * is not parsed yet, a task/reentrant callee and an indirect call are all
+   * treated as "can" (conservative) -- the by-reference open-array actual
+   * then keeps the snapshot. */
+  if (call_val) {
+    pfile_proc_t *caller = pfile_proc_active_get(pf);
+    pfile_proc_t *callee = PFILE_PROC_NONE;
+    boolean_t     taint  = BOOLEAN_FALSE;
+
+    if (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val)) {
+      callee = value_proc_get(call_val);
+    }
+    if (!callee || (PFILE_PROC_NONE == callee)) {
+      taint = BOOLEAN_TRUE;               /* indirect call */
+    } else if (pfile_proc_flag_test(callee, PFILE_PROC_FLAG_STRING_REALLOC)
+        || pfile_proc_flag_test(callee, PFILE_PROC_FLAG_TASK)
+        || pfile_proc_flag_test(callee, PFILE_PROC_FLAG_REENTRANT)
+        || !label_flag_test(pfile_proc_label_get(callee),
+             LABEL_FLAG_DEFINED)) {
+      taint = BOOLEAN_TRUE;               /* may realloc, or unknown body */
+    }
+    if (taint && caller && (PFILE_PROC_NONE != caller)
+        && !pfile_proc_flag_test(caller, PFILE_PROC_FLAG_STRING_REALLOC)) {
+      pfile_proc_flag_set(caller, PFILE_PROC_FLAG_STRING_REALLOC);
+    }
   }
   /* look for any PUT params, and do the necessary calls here... */
   if (put_parms) {

@@ -1,0 +1,46 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — string actual into a byte[] formal
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    An IN-only open byte-array formal reads a heap string's payload in
+--    place (no `_strargN` snapshot) when the callee cannot reallocate a
+--    string.  PIC32 is flat-addressed, so this also covers a payload pointer
+--    with no bank/chunk concerns.  The direct string actual and the
+--    string-pointer actual must both read the characters.
+--
+-- @sim_validate begin
+-- duration_s: 1.0
+-- machine: pic32mx7-explorer16
+-- expect byte v_done 1
+-- expect byte v_ok 1
+-- expect byte v_pok 1
+-- @sim_validate end
+-- ------------------------------------------------------
+
+include regression_32mx270f256b_device
+
+pragma target string_heap_size 48
+
+var string s
+var pointer p as var string
+var volatile byte ok = 0
+var volatile byte pok = 0
+var volatile byte done = 0
+
+procedure pure_check(byte in x[], word in n) is
+   if (n == 5) & (x[0] == "a") & (x[4] == "e") then
+      ok = 1
+   end if
+end procedure
+
+s = "abcde"
+pure_check(s, COUNT(s))
+p is s
+pure_check(p, COUNT(p))
+pok = ok
+done = 1
+forever loop
+end loop

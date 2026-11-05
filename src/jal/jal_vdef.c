@@ -95,6 +95,7 @@ static const char *const jal_compiler_name_prefixes[] = {
   "_string_dec",      /* compile-time decimal text               */
   "_string_num",      /* runtime integer renderer scratch        */
   "_string_cast",     /* text-cast const string                  */
+  "_string_argptr",   /* by-ref open-array payload pointer        */
   "_pic_bss_",        /* clear-BSS block name (pic.c)            */
   "_pic_chunk",       /* runtime chunk walk: map + walk scratch  */
   0

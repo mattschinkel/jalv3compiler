@@ -24,6 +24,9 @@ void      jal_string_core_gate(pfile_t *pf);
  * marks the heap unusable for the rest of the compile. */
 boolean_t jal_string_heap_size_const_check(pfile_t *pf, const char *name,
     variable_def_t def, value_t expr);
+value_t   jal_string_arg_payload_ptr(pfile_t *pf, value_t str,
+    value_t *len_out);
+void      jal_string_note_realloc(pfile_t *pf);
 void      jal_string_heap_size_legacy_declared(pfile_t *pf);
 /* create `_string_error` + the error constants without allocating a heap
  * (used when the user defines `_error_hook`, whose body reads the cell) */

@@ -38,6 +38,13 @@
                                                frame */
 #define PFILE_PROC_FLAG_NOSTACK      0x1000 /* execute calls without using
                                                the stack */
+/* This procedure (transitively) can REALLOCATE a heap string: it appends,
+ * grows or assigns one, or calls a procedure that can.  A by-reference
+ * open-array actual (`&heap[payload]`) is only sound into a callee that
+ * cannot move the source string, so the string layer consults this flag at
+ * each candidate call site.  A call to a procedure whose body is not parsed
+ * yet is treated as "can" (conservative). */
+#define PFILE_PROC_FLAG_STRING_REALLOC 0x2000
 
 /* def is a type function
      its first member is the return definition

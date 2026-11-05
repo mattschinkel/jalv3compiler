@@ -1753,6 +1753,80 @@ static boolean_t jal_string_subscript_split(pfile_t *pf, value_t elem,
   return BOOLEAN_TRUE;
 }
 
+void jal_string_note_realloc(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  proc = pfile_proc_active_get(pf);
+  if (proc && (PFILE_PROC_NONE != proc)
+      && !pfile_proc_flag_test(proc, PFILE_PROC_FLAG_STRING_REALLOC)) {
+    pfile_proc_flag_set(proc, PFILE_PROC_FLAG_STRING_REALLOC);
+  }
+}
+
+value_t jal_string_arg_payload_ptr(pfile_t *pf, value_t str, value_t *len_out)
+{
+  static unsigned ptr_no;
+  char             name[32];
+  variable_def_t   byte_def;
+  variable_def_t   ptr_def;
+  variable_t       var;
+  value_t          off;
+  value_t          payload;
+  value_t          elem;
+  value_t          ptr_val;
+
+  if (!str || !jal_string_runtime_ensure(pf)) {
+    return VALUE_NONE;
+  }
+  off = jal_string_handle_index_get(pf, str, _STRING_FIELD_OFFSET);
+  if (!off) {
+    return VALUE_NONE;
+  }
+  payload = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
+  value_release(off);
+  if (!payload) {
+    return VALUE_NONE;
+  }
+  elem = jal_string_heap_elem_get(pf, payload);
+  value_release(payload);
+  if (!elem) {
+    return VALUE_NONE;
+  }
+  byte_def = jal_string_byte_def_alloc(VARIABLE_DEF_FLAG_NONE);
+  ptr_def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
+      VARIABLE_DEF_FLAG_NONE, pfile_pointer_width_get(pf));
+  if (byte_def && ptr_def) {
+    variable_def_member_add(ptr_def, 0, byte_def, 1);
+  }
+  var = VARIABLE_NONE;
+  sprintf(name, "_string_argptr%u", ptr_no);
+  ptr_no++;
+  if (!byte_def || !ptr_def
+      || (RESULT_OK != pfile_variable_alloc(pf,
+            PFILE_VARIABLE_ALLOC_GLOBAL, name, ptr_def, VARIABLE_NONE,
+            &var))
+      || (VARIABLE_NONE == var)) {
+    if (byte_def) { variable_def_free(byte_def); }
+    if (ptr_def)  { variable_def_free(ptr_def);  }
+    value_release(elem);
+    return VALUE_NONE;
+  }
+  ptr_val = value_alloc(var);
+  variable_pointer_bound_ct_bump(var);
+  variable_release(var);
+  if (!ptr_val) {
+    value_release(elem);
+    return VALUE_NONE;
+  }
+  pfile_cmd_op_add(pf, OPERATOR_POINTER_ASSIGN, &ptr_val, elem, VALUE_NONE);
+  value_release(elem);
+  if (len_out) {
+    *len_out = jal_string_length_value_get(pf, str);
+  }
+  return ptr_val;
+}
+
 value_t jal_string_subscript_read_emit(pfile_t *pf, value_t elem)
 {
   value_t base;
@@ -1817,6 +1891,7 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
       || (value_is_string(src) && !value_is_const(src))) {
     return BOOLEAN_FALSE;
   }
+  jal_string_note_realloc(pf);
   if (!jal_string_runtime_ensure(pf)
       || !jal_string_subscript_split(pf, dst, &base, &idx)) {
     return BOOLEAN_FALSE;
@@ -2871,6 +2946,7 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
   size_t ii;
 
   jal_string_dynamic_dst_through_pointer_maybe(dst);
+  jal_string_note_realloc(pf);
   if (!jal_string_runtime_ensure(pf)) {
     return;
   }
@@ -4012,6 +4088,7 @@ boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
     FREE(parms);
     return BOOLEAN_FALSE;
   }
+  jal_string_note_realloc(pf);   /* the append path grows the block */
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_CALL, CMD_BRANCHCOND_NONE,
       LABEL_NONE, VALUE_NONE, call_val, parms);
   value_release(idx);
@@ -4963,6 +5040,9 @@ boolean_t jal_string_assignment_parse_emit(pfile_t *pf, value_t dst)
   if (!jal_string_is_dynamic(dst) && !jal_string_is_fixed(dst)) {
     return BOOLEAN_FALSE;
   }
+  if (jal_string_is_dynamic(dst)) {
+    jal_string_note_realloc(pf);
+  }
   jal_string_core_gate(pf);
   items = 0;
   lens = 0;
@@ -5814,6 +5894,7 @@ static value_t jal_string_append_emit(pfile_t *pf, value_t dst, value_t src)
   pfile_cmd_op_add(pf, OPERATOR_ADD, &max, max, src_len);
   result = jal_string_append_truncate_emit(pf, dst, src, max);
   done_lbl = pfile_label_alloc(pf, 0);
+  jal_string_note_realloc(pf);
   jal_string_branch_if_const_cmp(pf, OPERATOR_NE, result, 0,
       CMD_BRANCHCOND_TRUE, done_lbl);
   jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
@@ -6771,6 +6852,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   /* `name` points into the token buffer and the argument parse below
    * overwrites it: keep a copy for the outline decision. */
   name_buf[0] = 0;
+  jal_string_note_realloc(pf);
   if (name) {
     strncpy(name_buf, name, sizeof(name_buf) - 1);
     name_buf[sizeof(name_buf) - 1] = 0;
@@ -6790,6 +6872,12 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   is_to_array = jal_string_builtin_pub_internal_eq(name, "string_to_array");
   is_to_array_truncate = jal_string_builtin_pub_internal_eq(name,
       "string_to_array_truncate");
+  /* These builtins allocate/grow (or shrink, which reallocates) a heap
+   * string; COUNT() and the comparisons do not. */
+  if (is_append || is_append_truncate || is_truncate || is_from_array
+      || is_from_array_truncate) {
+    jal_string_note_realloc(pf);
+  }
   is_heap_compact = jal_string_builtin_pub_internal_eq(name,
       "string_heap_compact");
   pf_token_get(pf, PF_TOKEN_NEXT);

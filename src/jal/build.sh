@@ -46,6 +46,14 @@ echo "#endif" >> $DST
 echo "#ifndef JALV2_ROM_A_STRING_LITERAL_CALL_MIN_BYTES" >> $DST
 echo "#define JALV2_ROM_A_STRING_LITERAL_CALL_MIN_BYTES 2" >> $DST
 echo "#endif" >> $DST
+# A heap string actual bound to an `in`-only open byte-array formal passes
+# `&heap[payload]` + COUNT(s) instead of snapshotting the text into a
+# `_strargN` buffer, when the callee cannot reallocate a heap string (see
+# PFILE_PROC_FLAG_STRING_REALLOC).  Opt-out: -DJALV2_STRING_ARG_BYREF=0
+echo "" >> $DST
+echo "#ifndef JALV2_STRING_ARG_BYREF" >> $DST
+echo "#define JALV2_STRING_ARG_BYREF 1" >> $DST
+echo "#endif" >> $DST
 # Optional: builtin `string_heap_compact()` / `_string_heap_compact()` → machine `CALL string_heap_compact`
 # when `include strings_dynamic` defines the outlined wrapper (default on; falls back to defer+NOP if missing).
 # Opt-out: EXTRA_CFLAGS=-DJALV2_STRING_HEAP_COMPACT_CALL=0

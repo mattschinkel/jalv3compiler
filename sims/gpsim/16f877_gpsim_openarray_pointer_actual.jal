@@ -1,0 +1,54 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — a pointer actual for an open-array formal (14-bit)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The 14-bit twin of the 18F4620 witness: a pointer actual must read
+--    through the formal with the linear pointer path (the baked array layout
+--    would address the pointer's own storage).  On this core a pointer bind
+--    requires one contiguous run, so the array stays inside a bank; the
+--    bank-crossing case is the 18F4620 witness.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_a 1
+-- expect byte v_pv 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+var byte big[64]
+var pointer p as var byte
+var volatile byte a = 0
+var volatile byte pv = 0
+
+procedure check(byte in x[], word in n) is
+   if (n == 64) & (x[0] == 1) & (x[32] == 2) & (x[63] == 3) then
+      a = 1
+   end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   big[0] = 1
+   big[32] = 2
+   big[63] = 3
+   p is big[0]
+   check(big, 64)
+   if a == 1 then
+      a = 0
+      check(p, 64)
+      if a == 1 then
+         pv = 1
+      end if
+   end if
+   regression_checkpoint()
+end procedure
+
+run()

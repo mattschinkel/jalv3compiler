@@ -1,0 +1,73 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F877 gpsim — a string actual into a `byte in x[]` formal
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    An IN-only open byte-array formal reads a heap string's PAYLOAD in
+--    place (`&heap[payload]` + COUNT) instead of snapshotting it, but only
+--    into a callee that cannot reallocate a heap string.  The witness checks
+--    both sides: a pure reader (by reference) and a callee that appends to
+--    the SAME string through a global (the taint gate keeps the snapshot, so
+--    its reads stay valid after the reallocation).
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_ok 1
+-- expect byte v_pok 1
+-- expect byte v_mok 2
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f877_device
+include regression
+
+pragma target string_heap_size 64
+
+var string s
+var pointer p as var string
+var volatile byte ok = 0
+var volatile byte pok = 0
+var volatile byte mok = 0
+
+-- pure reader: no string is allocated here
+procedure pure_check(byte in x[], word in n) is
+   if (n == 5) & (x[0] == "a") & (x[4] == "e") then
+      ok = 1
+   end if
+end procedure
+
+-- tainted: appends to the source string through the global, reallocating it
+procedure mut_check(byte in x[], word in n) is
+   s = s & "!"
+   if (n == 5) & (x[0] == "a") & (x[4] == "e") then
+      mok = 1
+   end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abcde"
+   pure_check(s, COUNT(s))
+   p is s
+   pure_check(p, COUNT(p))
+   if ok == 1 then
+      ok = 0
+      pure_check(p, COUNT(p))
+      if ok == 1 then
+         pok = 1
+      end if
+   end if
+   mut_check(s, COUNT(s))       -- snapshot path; s becomes "abcde!"
+   mut_check(s, COUNT(s))       -- snapshot path again after the realloc
+   if (mok == 1) & (COUNT(s) == 7) then
+      mok = 2
+   end if
+   regression_checkpoint()
+   regression_checkpoint()
+end procedure
+
+run()
