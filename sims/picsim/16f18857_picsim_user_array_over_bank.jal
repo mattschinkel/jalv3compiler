@@ -1,0 +1,81 @@
+-- Title: picsim 16F18857 — one open-array formal fed two big arrays
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of 16f1825_gpsim_user_array_over_bank: a formal fed
+--    two or more DIFFERENT layouts owns a per-call runtime map; the
+--    callee walks it, so the second fill no longer lands through the
+--    first call's chunk bases.  Also carries the nested-call shape and
+--    the constant-subscript-past-the-first-chunk check from the same
+--    witness (fixes/fix_openarray_user_array_percall.md).
+--
+-- @picsim_validate begin
+-- steps: 800000
+-- expect byte v_ok_a 1
+-- expect byte v_ok_b 1
+-- expect byte v_ok_nested 1
+-- expect byte v_ok_const 1
+-- expect byte v_ok_iso 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var byte big_a[150]
+var byte big_b[150]
+var byte big_c[48]
+var volatile byte ok_a = 0
+var volatile byte ok_b = 0
+var volatile byte ok_nested = 0
+var volatile byte ok_const = 0
+var volatile byte ok_iso = 0
+
+procedure fill16(byte in out data[], byte in seed) is
+   var byte i = 0
+   for 16 loop
+      data[i] = seed + i
+      i = i + 1
+   end loop
+end procedure
+
+-- nested: a call from INSIDE a callee that is walking its own formal
+procedure touch_one(byte in out data[], byte in k) is
+   data[k] = 200
+end procedure
+
+procedure fill_and_touch(byte in out data[]) is
+   fill16(data, 100)
+   touch_one(data, 149)
+end procedure
+
+function elem(byte in data[], byte in k) return byte is
+   return data[k]
+end function
+
+  fill_and_touch(big_a)
+  if (big_a[0] == 100) & (big_a[15] == 115) & (big_a[149] == 200) then
+     ok_a = 1
+  end if
+  fill_and_touch(big_b)
+  if (big_b[0] == 100) & (big_b[15] == 115) & (big_b[149] == 200)
+    & (big_a[0] == 100) & (big_a[149] == 200) then
+     ok_b = 1
+  end if
+  -- re-reads after the nested call still see the right buffer
+  fill_and_touch(big_c)
+  if (big_c[0] == 100) & (big_c[15] == 115) & (big_b[149] == 200) then
+     ok_nested = 1
+  end if
+  -- CONSTANT subscript past the first chunk walks the map too
+  if elem(big_a, 149) == 200 then
+     ok_const = 1
+  end if
+  -- isolation: writing one buffer leaves the other intact
+  fill16(big_a, 7)
+  if (big_a[0] == 7) & (big_b[0] == 100) & (big_b[149] == 200) then
+     ok_iso = 1
+  end if
+  forever loop
+    ok_iso = ok_iso
+  end loop

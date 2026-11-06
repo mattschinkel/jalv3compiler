@@ -1,0 +1,49 @@
+-- Title: picsim 16F18857 — an open-array formal RE-PASSED to another
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of 16f1825_gpsim_user_array_passed_on: `inner(data)`
+--    inside a procedure that is itself walking `data` — the call site
+--    copies the source formal's runtime map into the callee's own.
+--
+-- @picsim_validate begin
+-- steps: 600000
+-- expect byte v_ok_fill 1
+-- expect byte v_ok_pass 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var byte data[150]
+var volatile byte ok_fill = 0
+var volatile byte ok_pass = 0
+
+procedure inner_set(byte in out x[], byte in k, byte in v) is
+   x[k] = v
+end procedure
+
+procedure outer_set(byte in out x[], byte in k, byte in v) is
+   inner_set(x, k, v)
+end procedure
+
+function inner_get(byte in x[], byte in k) return byte is
+   return x[k]
+end function
+
+function outer_get(byte in x[], byte in k) return byte is
+   return inner_get(x, k)
+end function
+
+  outer_set(data, 0, 42)
+  outer_set(data, 149, 99)
+  if (data[0] == 42) & (data[149] == 99) then
+     ok_fill = 1
+  end if
+  if (outer_get(data, 0) == 42) & (outer_get(data, 149) == 99) then
+     ok_pass = 1
+  end if
+  forever loop
+    ok_pass = ok_pass
+  end loop

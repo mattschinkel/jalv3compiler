@@ -40,8 +40,9 @@ at extended linear **`0x0030`**, **PIC14** words as **little-endian** pairs at l
 **`0x10000 + 2×(addr − 0x8000)`** (INHX32 segment **`0x0001`**), as emitted by this compiler.
 The block may live in the main **`.jal`** or in a **local** included fragment (same directory), e.g.
 **`tests/regression_18f4620_device.jal`** / **`regression_18f26k22_device.jal`** /
-**`regression_16f1825_device.jal`** / **`regression_12f1840_device.jal`** /
-**`regression_16f877_device.jal`** (classic **PIC16F877** / **`p16f877`**, no **`@config_expect`**).
+**`regression_12f1840_device.jal`**.  (The **PIC16F1825** and **PIC16F877**
+bundles were RETIRED 2026-11-05 with their suites; the midrange runtime gate
+is the **PIC16F18857** picsim suite in `sims/picsim`.)
 Other MCUs must use a **different** **`regression_<device>_device.jal`** — do not **`include regression_18f4620_device`** on non-4620 parts.
 Omit **`@config_expect`** when no fuse check is needed.
 

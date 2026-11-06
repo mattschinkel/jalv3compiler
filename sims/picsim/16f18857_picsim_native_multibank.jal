@@ -1,0 +1,71 @@
+-- Title: picsim 16F18857 — native arrays spanning several banks
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of 16f877_gpsim_native_array320 / the 16f1825
+--    native_array family: a byte[400] and a word[200] (400 bytes)
+--    filled and verified across the 128-byte banks of the 16F1xxx
+--    map, with both constant and dynamic indexes.
+--
+-- @picsim_validate begin
+-- steps: 3000000
+-- expect byte v_ok_byte 1
+-- expect byte v_ok_word 1
+-- expect byte v_w1 1
+-- expect byte v_w2 1
+-- expect byte v_w3 1
+-- expect byte v_ok_corners 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var byte b[400]
+var word wa[200]
+var volatile byte ok_byte = 0
+var volatile byte ok_word = 0
+var volatile byte ok_corners = 0
+var volatile byte w1 = 0
+var volatile byte w2 = 0
+var volatile byte w3 = 0
+var word i = 0
+var byte tot = 0
+
+  var byte k = 0
+  for 400 loop
+     b[i] = k
+     i = i + 1
+     k = k + 1
+  end loop
+  if (b[0] == 0) & (b[127] == 127) & (b[128] == 128) & (b[255] == 255)
+    & (b[256] == 0) & (b[399] == 143) then
+     ok_byte = 1
+  end if
+  i = 0
+  for 200 loop
+     wa[i] = i + 1000
+     i = i + 1
+  end loop
+  if wa[0] == 1000 then
+     w1 = 1
+  end if
+  if wa[100] == 1100 then
+     w2 = 1
+  end if
+  if wa[199] == 1199 then
+     w3 = 1
+  end if
+  if (w1 == 1) & (w2 == 1) & (w3 == 1) then
+     ok_word = 1
+  end if
+  -- dynamic corner reads
+  i = 399
+  tot = b[i]
+  i = 0
+  if (tot == 143) & (b[i] == 0) then
+     ok_corners = 1
+  end if
+  forever loop
+    ok_corners = ok_corners
+  end loop

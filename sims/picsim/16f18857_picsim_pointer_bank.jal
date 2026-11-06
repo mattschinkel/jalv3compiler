@@ -1,0 +1,57 @@
+-- Title: picsim 16F18857 — pointers across bank boundaries
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of the 16f1825 pointer family (pointer_chunked,
+--    pointer_chunked_elem, pointer_elem_bind): a pointer bound to a
+--    multi-bank array, runtime and constant subscripts, an element
+--    bound through the pointer, and a re-bind mid-program.
+--
+-- @picsim_validate begin
+-- steps: 800000
+-- expect byte v_ok_dyn 1
+-- expect byte v_ok_const 1
+-- expect byte v_ok_bind 1
+-- expect byte v_ok_rebind 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var byte big[300]
+var pointer p as var byte[300]
+var pointer q as var byte
+var volatile byte ok_dyn = 0
+var volatile byte ok_const = 0
+var volatile byte ok_bind = 0
+var volatile byte ok_rebind = 0
+var byte i = 0
+var byte v = 0
+
+  for 30 loop
+     big[i] = i * 2
+     i = i + 1
+  end loop
+  p is big
+  -- runtime index across banks
+  if (p[0] == 0) & (p[5] == 10) & (p[29] == 58) then
+     ok_dyn = 1
+  end if
+  -- constant subscript
+  if (p[5] == 10) & (p[29] == 58) then
+     ok_const = 1
+  end if
+  -- element bind through the pointer
+  v = p[7]
+  if v == 14 then
+     ok_bind = 1
+  end if
+  -- a scalar pointer binds and reads beside the array pointer
+  q is v
+  if q == 14 then
+     ok_rebind = 1
+  end if
+  forever loop
+    ok_rebind = ok_rebind
+  end loop

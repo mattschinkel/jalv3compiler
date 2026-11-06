@@ -1,4 +1,4 @@
-# sims/picsim — 16F18857 runtime suite (experimental)
+# sims/picsim — 16F18857 runtime suite (THE midrange gate)
 
 Runs JAL tests on **picsim** (the fork with the PIC16F18857 model) and checks
 RAM, pins and UART text.
@@ -48,7 +48,11 @@ PICSIM_DIR=/path/to/picsim python3 sims/picsim_validate_engine.py sims/picsim/16
 ```
 
 Status: wired into `unit-tests/run_gates.sh` (runs when `PICSIM_DIR`
-is set; skipped with a note otherwise).
+is set; skipped with a note otherwise).  Since 2026-11-05 this suite is
+the midrange runtime gate: the 16F1825/16F877 gpsim suites were RETIRED
+and their unique witnesses (user arrays over banks / passed on, string
+heap over a bank, the in-direction payload view, pointers across banks,
+native multibank arrays, the string-compare family) are PORTED here.
 Known limits: libpicsim has no I2C/SPI slave models, so peripheral-init
 samples that wait for a device stop there; timing/peripheral fidelity beyond
 RAM/UART/ADC/pins needs per-test validation.

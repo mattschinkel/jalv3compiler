@@ -1,0 +1,51 @@
+-- Title: picsim 16F18857 — a string heap larger than one RAM bank
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of 18f4620_gpsim_string_heap_word_index: at heap 300
+--    the index fields are WORD-sized; a 100-character literal, appends
+--    past the first block and element reads verify the word-index path
+--    on the 128-byte-bank midrange part (fixes/
+--    fix_string_heap_word_index_fields.md).
+--
+-- @picsim_validate begin
+-- steps: 1500000
+-- expect byte v_ok_lit 1
+-- expect byte v_ok_app 1
+-- expect byte v_ok_rd 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target string_heap_size 300
+
+var string s
+var string t
+var volatile byte ok_lit = 0
+var volatile byte ok_app = 0
+var volatile byte ok_rd = 0
+
+  -- a literal longer than one bank copies across it
+  s = "----------------------------------------------------------------------------------------------------"
+  -- 100 dashes
+  if (COUNT(s) == 100) & (s[0] == "-") & (s[50] == "-") & (s[99] == "-") then
+     ok_lit = 1
+  end if
+  -- appends grow past the first block (the word-index free-list walk)
+  t = "abcde"
+  var byte n = 0
+  for 10 loop
+     t = t & "!"
+     n = n + 1
+  end loop
+  if (COUNT(t) == 15) & (t[5] == "!") & (t[14] == "!") & (t[0] == "a") then
+     ok_app = 1
+  end if
+  -- reads follow the (possibly moved) blocks
+  if (s[0] == "-") & (t[4] == "e") & (COUNT(s) == 100) then
+     ok_rd = 1
+  end if
+  forever loop
+    ok_rd = ok_rd
+  end loop

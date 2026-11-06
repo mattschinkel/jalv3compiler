@@ -96,7 +96,7 @@ clean_no_leak() { # name file [extra compiler args...]
 }
 
 clean_no_leak pic18_blink "$REPO/demo_sample/18f67j50_blink.jal"
-clean_no_leak pic14h_blink "$REPO/demo_sample/16f1825_blink.jal"
+clean_no_leak pic14h_blink "$REPO/demo_sample/16f18857_blink.jal"
 clean_no_leak pic32_slot_rt "$REPO/sims/pic32/32mx270f256b_body_ptr_slot_rt.jal" \
   -s "$REPO/sims/shared" -s "$REPO/sims"
 clean_no_leak esp32_slot_rt "$REPO/sims/esp32/esp32_body_ptr_slot_rt.jal" \

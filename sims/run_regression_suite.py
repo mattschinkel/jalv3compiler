@@ -10,7 +10,7 @@ Multi-device gpsim compiler regression: checkpoint verification + jal_gpsim_vali
 Usage (from repo root):
   ./sims/run_regression_suite.py              # show help only
   ./sims/run_regression_suite.py --list-suites
-  ./sims/run_regression_suite.py --run        # default: all suites (146 .jal: 30+23+30+25 compiler regression + 16f877×27 + 18f4620_gpsim×11)
+  ./sims/run_regression_suite.py --run        # default: all suites (the classic compiler-regression families + the focused gpsim smokes)
   ./sims/run_regression_suite.py --suite 18f4620 --run
   ./sims/run_regression_suite.py --suite-all --quiet
   ./sims/run_regression_suite.py --baseline --run
@@ -111,7 +111,10 @@ class RegressionSuite:
 # Register new architectures here: each suite needs its own regression_<device>_device.jal
 # (never include regression_18f4620_device on a non–18F4620 part) plus a matching *.jal glob.
 # Device bundles: regression_18f4620_device, regression_18f26k22_device,
-# regression_16f1825_device, regression_12f1840_device (see instructions_gpsim_test.txt).
+# regression_12f1840_device (see instructions_gpsim_test.txt).  The 16F1825 and 16F877
+# suites were RETIRED 2026-11-05: the midrange runtime gate is the 16F18857
+# picsim suite (sims/picsim), which carries the ported multibank/string/pointer
+# witnesses; compile coverage for the retired parts stays with the corpus and pins.
 SUITES: dict[str, RegressionSuite] = {
     "12f1840": RegressionSuite(
         id="12f1840",
@@ -122,12 +125,6 @@ SUITES: dict[str, RegressionSuite] = {
         id="12f508",
         description="PIC12F508 12-bit-core gpsim smoke (sims/gpsim/12f508_gpsim_*.jal)",
         globs=("sims/gpsim/12f508_gpsim_*.jal",),
-    ),
-    "16f1825": RegressionSuite(
-        id="16f1825",
-        description="PIC16F1825 compiler regression (sims/gpsim/16f1825_compiler_regression_*.jal)",
-        globs=("sims/gpsim/16f1825_compiler_regression_*.jal",
-            "sims/gpsim/16f1825_gpsim_*.jal"),
     ),
     "18f4620": RegressionSuite(
         id="18f4620",
@@ -160,13 +157,6 @@ SUITES: dict[str, RegressionSuite] = {
                     " second 12-bit device file, 41 bytes RAM)",
         globs=("sims/gpsim/12f509_gpsim_*.jal",),
     ),
-    "16f877": RegressionSuite(
-        id="16f877",
-        description="PIC16F877 classic mid-range gpsim (sims/gpsim/16f877_gpsim_*.jal"
-                    " + the shared pic14 compiler-regression bodies)",
-        globs=("sims/gpsim/16f877_gpsim_*.jal",
-            "sims/gpsim/16f877_compiler_regression_*.jal"),
-    ),
     "print_shadow": RegressionSuite(
         id="print_shadow",
         description="print.jal fork shadow under the demo_lib-first include order "
@@ -175,20 +165,10 @@ SUITES: dict[str, RegressionSuite] = {
         globs=("sims/gpsim/18f4620_print_shadow*.jal",),
         libdir="demo_lib;third_party/jallib/lib",
     ),
-    "string_cmp_bank_merge": RegressionSuite(
-        id="string_cmp_bank_merge",
-        description="BSR-worklist round-truncation witness under the demo_lib-first "
-                    "include order (sims/gpsim/16f1825_string_cmp_bank_merge.jal -- the "
-                    "layout that puts the string-compare result bit in a non-zero bank "
-                    "only resolves demo_lib-first; pin: pre-fix builds read the compare "
-                    "as false with byte-exact content)",
-        globs=("sims/gpsim/16f1825_gpsim_string_cmp_bank_merge.jal",),
-        libdir="demo_lib;third_party/jallib/lib",
-    ),
 }
 
 # Order for --suite all / default (not alphabetical: 4620 first, then other PIC18, PIC14 enhanced, classic 877).
-SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "12f508", "12f509", "16f877", "16f887", "print_shadow", "string_cmp_bank_merge")
+SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "12f508", "12f509", "16f877", "16f887", "print_shadow", )
 
 
 def registered_suite_ids_ordered() -> list[str]:

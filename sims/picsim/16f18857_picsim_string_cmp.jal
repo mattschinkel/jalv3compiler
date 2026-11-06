@@ -1,0 +1,60 @@
+-- Title: picsim 16F18857 — string compares across banks (bank-merge port)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of the 16f1825 string_cmp_bank_merge witness: string
+--    == against literals and other strings under the demo_lib-first
+--    include order, at a heap that spans banks (the original caught a
+--    BSR round-truncation reading the compare result bit from a
+--    non-zero bank; the port keeps the compare family covered).
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- expect byte v_ok1 1
+-- expect byte v_ok2 1
+-- expect byte v_ok3 1
+-- expect byte v_ok4 1
+-- expect byte v_n4 57
+-- expect byte v_d4 0
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target string_heap_size 200
+
+var string name = "JALv2!"
+var string greeting
+var string other
+var volatile byte ok1 = 0
+var volatile byte ok2 = 0
+var volatile byte ok3 = 0
+var volatile byte ok4 = 0
+
+  greeting = "Hello, " & name
+  if greeting == "Hello, JALv2!" then
+     ok1 = 1
+  end if
+  if greeting == name then
+     ok2 = 0
+  else
+     ok2 = 1
+  end if
+  other = greeting
+  if other == greeting then
+     ok3 = 1
+  end if
+  -- push the heap over a bank and compare again (the original's shape)
+  other = other & " 1234567890 1234567890 1234567890 1234567890"
+  var volatile byte n4 = 0
+  var volatile byte d4 = 0
+  if other == greeting then
+     d4 = 1
+  end if
+  n4 = COUNT(other)
+  if (d4 == 0) & (n4 == 57) then
+     ok4 = 1
+  end if
+  forever loop
+    ok4 = ok4
+  end loop

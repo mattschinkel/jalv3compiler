@@ -11,7 +11,7 @@
 --    **`18f4620_compiler_regression_task.jal`** adds **`pragma task 2`** immediately after
 --    **`include regression_18f4620_device`**.
 --    **PIC18F4620 only.** Other MCUs use a **different** file (e.g. **`regression_18f26k22_device.jal`**,
---    **`regression_16f1825_device.jal`**, **`regression_12f1840_device.jal`**),
+--    **`regression_12f1840_device.jal`**; the 16F1825/16F877 bundles were retired 2026-11-05),
 --    not this one — each part gets its own **`regression_<device>_device.jal`** with matching
 --    **`include`**, **`pragma target`**, **`@config_expect`**, and SFR setup for that silicon.
 
