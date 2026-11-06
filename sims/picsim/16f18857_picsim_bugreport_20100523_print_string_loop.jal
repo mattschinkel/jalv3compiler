@@ -1,0 +1,60 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness (ported from the retired 16f877 gpsim suite)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Jallib **2.4n-beta** (May 2010): **`print_string`** of a **`const`** string inside
+--    **`forever`** broke both serial output and LED blink (**`bugreport 20100523/bugreport.txt`**).
+--    This uses the same **`print_string` + loop** idea with **`regression_checkpoint()`**
+--    after each call (three explicit pairs so static checkpoint counting in
+--    **`run_regression_suite.py`** matches **`expect byte v__check_step 3`**).
+--
+-- Notes:
+--    **`./tests/jal_gpsim_validate.sh tests/16f877_gpsim_bugreport_20100523_print_string_loop.jal`**
+--
+-- @picsim_validate begin
+-- 
+-- steps: 500000
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 3
+-- 
+-- @picsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f18857_device
+include regression
+
+-- the 18857 EUSART needs the PPS route + pin aliases the 16f877 device
+-- file used to provide (same prelude as 16f18857_picsim_uart.jal)
+include pps
+pps_control_lock(FALSE)
+RC6PPS = PPS_TX
+pps_control_lock(TRUE)
+alias pin_rx_direction is pin_c7_direction
+alias pin_tx_direction is pin_c6_direction
+
+const serial_hw_baudrate = 115_200
+include serial_hardware
+include print
+
+const byte str1[] = "\r\nHi\r\n"
+
+--------------------------------------------------------------------------------
+procedure _bug200523_run() is
+   regression_begin_run()
+   serial_hw_init()
+   print_string(serial_hw_data, str1)
+   regression_checkpoint()
+   print_string(serial_hw_data, str1)
+   regression_checkpoint()
+   print_string(serial_hw_data, str1)
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+_bug200523_run()
+
+forever loop
+end loop

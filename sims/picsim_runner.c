@@ -55,17 +55,26 @@ int main(int argc, char **argv) {
     int proc, i, pin = 0, apin = 0, flips = 0, prev = 0;
     long k, steps;
     const char *uart = NULL, *pinname = NULL, *apinspec = NULL;
+    const char *pokes[16];
+    int pokect = 0;
     float volts = 0.0f;
     FILE *ram;
 
     if (argc < 5) {
-        fprintf(stderr, "usage: %s DEVICE HEX STEPS RAMOUT [--uart PATH] [--pin RA0] [--apin RB3:VOLTS]\n", argv[0]);
+        fprintf(stderr, "usage: %s DEVICE HEX STEPS RAMOUT [--uart PATH] [--pin RA0] [--apin RB3:VOLTS] [--poke ADDR:VAL]\n", argv[0]);
         return 2;
     }
     for (i = 5; i < argc; i++) {
         if (!strcmp(argv[i], "--uart") && i + 1 < argc) uart = argv[++i];
         else if (!strcmp(argv[i], "--pin") && i + 1 < argc) pinname = argv[++i];
         else if (!strcmp(argv[i], "--apin") && i + 1 < argc) apinspec = argv[++i];
+        else if (!strcmp(argv[i], "--poke") && i + 1 < argc) {
+            if (pokect < (int)(sizeof(pokes) / sizeof(pokes[0]))) {
+                pokes[pokect++] = argv[++i];
+            } else {
+                ++i;
+            }
+        }
     }
 
     memset(&pic, 0, sizeof(pic));
@@ -73,6 +82,18 @@ int main(int argc, char **argv) {
     if (!proc) { fprintf(stderr, "picsim_runner: unknown device %s\n", argv[1]); return 3; }
     if (uart) pic_set_serial(&pic, 0, uart, 0, 0, 0);
     if (pic_init(&pic, proc, argv[2], 0, 4e6)) { fprintf(stderr, "picsim_runner: pic_init failed\n"); return 4; }
+
+    /* pre-run RAM pokes (poison a cell before the program runs, same
+     * contract as the gpsim harness) */
+    for (i = 0; i < pokect; i++) {
+        unsigned addr, val;
+        if (sscanf(pokes[i], "%x:%x", &addr, &val) == 2) {
+            if (addr < pic.RAMSIZE) pic.ram[addr] = (unsigned char) val;
+        } else {
+            fprintf(stderr, "picsim_runner: bad --poke %s\n", pokes[i]);
+            return 8;
+        }
+    }
 
     if (pinname) {
         pin = find_pin(&pic, pinname);

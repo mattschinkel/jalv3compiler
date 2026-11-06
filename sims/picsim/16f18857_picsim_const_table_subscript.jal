@@ -1,0 +1,28 @@
+-- ------------------------------------------------------
+-- Title: 16F18857 picsim witness (ported from the retired 16f877/16f1825 gpsim suites)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved
+-- Compiler: JALv2
+--
+-- Description:
+--    `arr[T[k]]` with a runtime k and a const ROM table T died on every
+--    classic core with "banked data op (MOVLB) for operand with unknown
+--    file address (T); 0xFFFF/256 is not a valid bank select" -- the
+--    element-size-1 path attached the unmaterialized lookup value as the
+--    destination's runtime baseofs. This is the reported 16F1825 part;
+--    the shared body pins store/read/wide-table/nested/checksum.
+--
+-- @picsim_validate begin
+-- 
+-- steps: 500000
+-- expect byte v__check_step 5
+-- expect byte v__gpsim_regression_flags 0
+-- expect byte v_ctb_sum 52
+-- 
+-- @picsim_validate end
+--
+-- ------------------------------------------------------
+
+include regression_16f18857_device
+include regression
+include _regression_const_table_subscript_body

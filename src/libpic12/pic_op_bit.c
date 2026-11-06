@@ -637,6 +637,7 @@ static boolean_t pic_assign_to_dynamic_bit(pfile_t *pf, value_t dst,
   pic_dynamic_bit_ref_t ref;
   boolean_t             rc;
 
+
   if (value_sz_get(dst) > 8) {
     pfile_log(pf, PFILE_LOG_ERR,
         "runtime-indexed bit*%u array elements are not supported yet "
@@ -689,6 +690,7 @@ static boolean_t pic_assign_to_dynamic_bit(pfile_t *pf, value_t dst,
 void pic_assign_to_bit(pfile_t *pf, value_t dst, value_t src)
 {
   unsigned dst_bit_ofs;
+
 
   if (pic_value_is_dynamic_bit_array_element(dst)) {
     (void) pic_assign_to_dynamic_bit(pf, dst, src);
@@ -1155,7 +1157,6 @@ void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
     variable_sz_t src_bit_ofs;
     variable_sz_t src_byte_sz;
     variable_sz_t src_byte_ofs;
-    unsigned      mask;
     value_t       tmp;
 
     src_bit_ofs  = value_bit_offset_get(src);
@@ -1182,13 +1183,17 @@ void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
       value_release(tmp);
     }
 
-    mask = ((1 << src_bit_sz) - 1);
-
+    /* per-byte masks: full bytes copy unchanged and only the final
+     * partial byte is masked. A single (1 << src_bit_sz) - 1 mask is
+     * undefined for widths of 32 bits or more (an N-bit array actual
+     * normalized into its byte image was ANDed with 0), and it applied
+     * the low-byte mask to every byte of 9-31 bit fields. */
     if (pic_value_is_w(dst)) {
       pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tdst,
         (tdst == src) ? src_byte_ofs : 0, PIC_OPDST_W);
-      if ((mask & 0xff) != 0xff) {
-        pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, mask & 0xff);
+      if (src_bit_sz < 8) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW,
+            (1 << src_bit_sz) - 1);
       }
     } else {
       variable_sz_t ii;
@@ -1201,14 +1206,19 @@ void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
       }
 
       for (ii = 0; ii < sz; ii++) {
-        if ((mask & 0xff) == 0xff) {
+        variable_sz_t rem;
+        unsigned      mask;
+
+        rem  = src_bit_sz - 8 * ii; /* bits valid at this byte */
+        mask = (rem >= 8) ? 0xff : ((1 << rem) - 1);
+        if (0xff == mask) {
           if (dst != tdst) {
             pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tdst, 
               ii + ((tdst == src) ? src_byte_ofs : 0), PIC_OPDST_W);
             pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
           }
         } else {
-          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, mask & 0xff);
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, mask);
           if (dst == tdst) {
             pic_instr_append_f_d(pf, PIC_OPCODE_ANDWF, dst, ii, PIC_OPDST_F);
           } else {

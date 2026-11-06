@@ -15,6 +15,17 @@
 #include "pf_proc.h"
 #include "pf_proca.h"
 #include "cmdarray.h"
+/* a lazily created string-flavored clone of a procedure: the mask names the
+ * open-array formals that are re-flavoured as dynamic-string handles (bit n
+ * is member n of the procedure definition), so one procedure can have one
+ * variant per flavour signature it is actually called with */
+typedef struct pfile_proc_strclone_ pfile_proc_strclone_t;
+struct pfile_proc_strclone_ {
+  pfile_proc_strclone_t *link;
+  struct pfile_proc_    *proc;
+  unsigned long          mask;
+};
+
 /* note: a procedure is simply something callable with
          an entry & exit point. it also contains its own
          local types and variables.
@@ -64,7 +75,7 @@ struct pfile_proc_ {
   pfile_pos_t         body_pos;
   boolean_t           body_pos_valid;
   boolean_t           clone_blocked;
-  struct pfile_proc_ *str_clone;
+  pfile_proc_strclone_t *str_clones;
 };
 
 

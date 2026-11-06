@@ -1,0 +1,82 @@
+-- Title: picsim 16F18857 — large bit array + 2D bit matrix
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of 16f877_gpsim_native_large_bit_array and
+--    native_bit_array_matrix: a 256-bit array filled by an element loop
+--    and counted through a formal, and a 4x8 bit matrix.
+--
+-- @picsim_validate begin
+-- steps: 1500000
+-- expect byte v_ok3 1
+-- expect byte v_ok4 1
+-- expect byte v_m00 1
+-- expect byte v_m33 1
+-- expect byte v_m01 0
+-- expect byte v_m23 0
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var bit big[256]
+var bit matrix[4][8]
+var volatile byte ok3 = 0
+var volatile byte ok4 = 0
+var byte i = 0
+var byte j = 0
+var byte ct = 0
+
+procedure countbits(bit in f[], word in n, byte out cts) is
+   var word k = 0
+   cts = 0
+   for n loop
+      if f[k] then
+         cts = cts + 1
+      end if
+      k = k + 1
+   end loop
+end procedure
+
+  for 256 loop
+     if (i & 1) == 1 then
+        big[i] = true
+     end if
+     i = i + 1
+  end loop
+  countbits(big, 256, ct)
+  if ct == 128 then
+     ok3 = 1
+  end if
+  i = 0
+  for 4 loop
+     j = 0
+     for 8 loop
+        matrix[i][j] = (i == j)
+        j = j + 1
+     end loop
+     i = i + 1
+  end loop
+  var volatile byte m00 = 0
+  var volatile byte m33 = 0
+  var volatile byte m01 = 9
+  var volatile byte m23 = 9
+  m00 = matrix[0][0]
+  m33 = matrix[3][3]
+  if matrix[0][1] then
+     m01 = 1
+  else
+     m01 = 0
+  end if
+  if matrix[2][3] then
+     m23 = 1
+  else
+     m23 = 0
+  end if
+  if (m00 == 1) & (m33 == 1) & (m01 == 0) & (m23 == 0) then
+     ok4 = 1
+  end if
+  forever loop
+    ok4 = ok4
+  end loop

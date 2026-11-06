@@ -283,7 +283,7 @@ procedure pintools_direction'put(byte in pinnum, bit in direction) is
          end if
       end if
    end if
-   if defined(portE) then
+   if defined(portE_direction) then
       if (portletter == "E") then
          if (direction == INPUT) then
             portE_direction = portE_direction | portmask
@@ -379,7 +379,7 @@ function pintools_direction'get(byte in pinnum) return bit is
          return _pintools_bit(portD_direction, pinoffset)
       end if
    end if
-   if defined(portE) then
+   if defined(portE_direction) then
       if (portletter == "E") then
          return _pintools_bit(portE_direction, pinoffset)
       end if

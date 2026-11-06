@@ -12,6 +12,9 @@ RAM, pins and UART text.
 -- expect byte v_a 0x13
 -- expect word v_ww 0x00A8
 -- expect dword_le v_d 0x0001B2C3
+-- expect bit_clear v__bitbucket 3
+-- expect bit_set v__bitbucket 5
+-- poke: v_poison 0x5C
 -- pin_flips: RA0 16
 -- apin: RB3 2.5
 -- uart_contains: ##PICSIM##
@@ -19,10 +22,29 @@ RAM, pins and UART text.
 ```
 
 * `expect` symbols are resolved against the compiled `.asm` `EQU` lines
-  (`v_<name>` for a JAL variable), byte/word/dword little-endian.
+  (`v_<name>` for a JAL variable), byte/word/dword little-endian; plain
+  `dword` is accepted as `dword_le` (gpsim-block parity); `bit_clear` /
+  `bit_set` take the BIT NUMBER as the value field.
+* `poke:` writes a byte into RAM after load and before the first step
+  (poison-a-cell-then-run proofs; `sym+N` offsets resolve like expects).
 * `pin_flips` counts level changes on a port pin over the run.
 * `apin` drives an analog input (volts) every step.
 * `uart_contains` captures the EUSART (pty) and asserts a substring.
+
+## Coverage
+
+127 tests: the 12F/16F1xxx compiler-regression bodies (30 `*_reg_*`
+wrappers), the full retired 16F1825/16F877 feature set ported 2026-11-06
+(all 155 deleted witnesses mapped -- the first sweep's list was built
+from `git show --stat`, whose path truncation hid 16 of them; the
+re-audit ported those too)
+(strings/pointers/text-casts/native arrays/open arrays/ISRs/whereis...),
+the bit-array and dynamic-store witnesses, and the 18857-specific
+core/bank64/adc/uart/blink bodies.  Port notes live in each file's
+header; the two Timer0-triggered 16f877/16f1825 witnesses
+(`timer0_pointer_irp`, `isr_tmr0`) latch the INT flag in software
+because picsim has no 18857 Timer0 model — the vector delivery, ISR
+context and pointer traffic they pin are unchanged.
 
 ## Dependencies
 

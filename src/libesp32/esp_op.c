@@ -138,6 +138,7 @@ static boolean_t esp_value_is_ptr_deref(const value_t val);
 static variable_t esp_bit_container(const value_t val);
 static void esp_load_address_of(pfile_t *pf, value_t val, unsigned reg);
 static void esp_wide_addr(pfile_t *pf, value_t val, unsigned reg);
+static void esp_emit_deref_addr(pfile_t *pf, value_t ptr);
 static void esp_emit_call_proc(pfile_t *pf, const cmd_t cmd);
 
 /* forward-label fixups: branch nodes waiting for their label's code.
@@ -2005,6 +2006,26 @@ static boolean_t esp_wide_value_branch(pfile_t *pf, const cmd_t cmd,
   return BOOLEAN_TRUE;
 }
 
+/* A value whose variable is an open-array FORMAL (a POINTER def) is an
+ * element reached THROUGH the formal's pointer value: the address is the
+ * pointer + baseofs, not the formal slot's own RAM.  fix_flat_wide_pointer_store.md */
+static boolean_t esp_wide_is_thru(value_t val)
+{
+  variable_t v;
+
+  if (!val || value_is_const(val)) {
+    return BOOLEAN_FALSE;
+  }
+  v = value_variable_get(val);
+  if (!v || (VARIABLE_NONE == v)) {
+    return BOOLEAN_FALSE;
+  }
+  return (variable_def_get(v)
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(
+            variable_def_get(v))))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
 static void esp_wide_addr(pfile_t *pf, value_t val, unsigned reg)
 {
   variable_t       v = value_variable_get(val);
@@ -2035,26 +2056,72 @@ static void esp_wide_addr(pfile_t *pf, value_t val, unsigned reg)
  * storage sign/zero fill (esp_wide_known_byte) */
 static void esp_wide_assign(pfile_t *pf, value_t dst, value_t src)
 {
-  unsigned sz = (unsigned) value_byte_sz_get(dst);
-  unsigned s_src = esp_wide_val_sz(src);
-  unsigned k;
+  unsigned  sz = (unsigned) value_byte_sz_get(dst);
+  unsigned  s_src = esp_wide_val_sz(src);
+  unsigned  k;
+  unsigned  dstreg;
 
-  UNUSED(pf);
-
+  if (esp_wide_is_thru(dst)) {
+    esp_emit_deref_addr(pf, dst);
+    (void) esp_code_alloc(ESP_OP_OR, ESP_REG_A6, ESP_REG_A4, ESP_REG_A4);
+    dstreg = ESP_REG_A6;
+  } else {
+    esp_wide_addr(pf, dst, ESP_REG_A5);
+    dstreg = ESP_REG_A5;
+  }
   if (value_is_const(src)) {
-    esp_wide_addr(pf, dst, ESP_REG_A4);
     for (k = 0; k < sz; k++) {
       (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A2, 0,
           (int) esp_wide_known_byte(src, k, s_src));
-      (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, ESP_REG_A4, (int) k);
+      (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, dstreg, (int) k);
     }
     return;
   }
-  esp_wide_addr(pf, src, ESP_REG_A4);
-  esp_wide_addr(pf, dst, ESP_REG_A5);
+  if (esp_wide_is_thru(src)) {
+    esp_emit_deref_addr(pf, src);
+  } else {
+    esp_wide_addr(pf, src, ESP_REG_A4);
+  }
   for (k = 0; k < sz; k++) {
     esp_wide_load_byte(src, k, s_src, ESP_REG_A2, ESP_REG_A4);
-    (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, ESP_REG_A5, (int) k);
+    (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, dstreg, (int) k);
+  }
+}
+
+/* wide store THROUGH a pointer (open-array formal element with a pointer
+ * actual, or any pointer deref whose pointee is >4 bytes): the plain
+ * store path loads only the low 32 bits and S32I drops the rest.  The
+ * address is the pointer VALUE + baseofs (esp_emit_deref_addr), and each
+ * destination byte is written individually; a wide deref SOURCE is read
+ * the same way.  fix_flat_wide_pointer_store.md */
+static void esp_wide_assign_deref(pfile_t *pf, value_t dst, value_t src)
+{
+  unsigned sz;
+  unsigned s_src;
+  unsigned k;
+
+  if (!dst || !src) {
+    return;
+  }
+  if (!esp_value_is_ptr_deref(dst)) {
+    esp_wide_assign(pf, dst, src);
+    return;
+  }
+  sz = (unsigned) value_byte_sz_get(dst);
+  s_src = esp_wide_val_sz(src);
+  esp_emit_deref_addr(pf, dst);              /* A4 = dst address */
+  (void) esp_code_alloc(ESP_OP_OR, ESP_REG_A6, ESP_REG_A4, ESP_REG_A4);
+  if (!value_is_const(src)) {
+    if (esp_value_is_ptr_deref(src)) {
+      esp_emit_deref_addr(pf, src);
+    } else {
+      esp_wide_addr(pf, src, ESP_REG_A4);
+    }
+    (void) esp_code_alloc(ESP_OP_OR, ESP_REG_A5, ESP_REG_A4, ESP_REG_A4);
+  }
+  for (k = 0; k < sz; k++) {
+    esp_wide_load_byte(src, k, s_src, ESP_REG_A2, ESP_REG_A5);
+    (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, ESP_REG_A6, (int) k);
   }
 }
 
@@ -4068,6 +4135,12 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
       unsigned sz;
 
       if (!dst || !v1) {
+        return;
+      }
+      if ((esp_value_is_ptr_deref(dst) || esp_value_is_ptr_deref(v1))
+          && ((value_byte_sz_get(dst) > 4U)
+              || (!value_is_const(v1) && (value_byte_sz_get(v1) > 4U)))) {
+        esp_wide_assign_deref(pf, dst, v1);
         return;
       }
       if (value_is_value(v1)) {

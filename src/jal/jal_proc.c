@@ -190,6 +190,50 @@ static void jal_opt_default_register(pfile_t *pf, variable_def_t proc_def,
   jal_opt_defaults  = entry;
 }
 
+/* give a clone def the original's optional-parameter defaults: the clone's
+ * member layout differs only by the dropped masked count slots, and the
+ * resolver walks the clone def to map declared ordinals to members */
+static void jal_opt_default_clone(pfile_t *pf, variable_def_t clone_def,
+  variable_def_t orig_def)
+{
+  jal_opt_default_t *src;
+  jal_opt_default_t *dst;
+  size_t             ii;
+
+  if (!clone_def || (VARIABLE_DEF_NONE == clone_def)
+      || !orig_def || (VARIABLE_DEF_NONE == orig_def)) {
+    return;
+  }
+  src = jal_opt_default_find(orig_def);
+  if (!src || jal_opt_default_find(clone_def)) {
+    return;
+  }
+  dst = CALLOC(1, sizeof(*dst));
+  if (!dst) {
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+  dst->fn_def    = clone_def;
+  dst->params_ct = src->params_ct;
+  dst->defs      = CALLOC(dst->params_ct ? dst->params_ct : 1,
+      sizeof(*dst->defs));
+  if (!dst->defs) {
+    FREE(dst);
+    pfile_log_syserr(pf, ENOMEM);
+    return;
+  }
+  for (ii = 0; ii < dst->params_ct; ii++) {
+    dst->defs[ii] = src->defs[ii];
+    if (dst->defs[ii]) {
+      value_lock(dst->defs[ii]);
+    }
+  }
+  dst->by_member   = 0;
+  dst->member_ct   = 0;
+  dst->link        = jal_opt_defaults;
+  jal_opt_defaults = dst;
+}
+
 /* Formal is a data pointer (not a procedure/function pointer). */
 static boolean_t jal_formal_def_is_data_pointer_non_callable(
   variable_def_t def)
@@ -480,6 +524,25 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
          * turn it into a pointer; add the _name_count so the COUNT()
          * operator will work as expected
          */
+        if (variable_is_array(var)
+            && ((variable_sz_t) -1 == variable_def_member_ct_get(
+                variable_def_member_get(variable_def_get(var))))
+            && variable_def_flag_test(variable_def_get(var),
+                 VARIABLE_DEF_FLAG_OUT)) {
+          variable_def_t elem;
+
+          elem = variable_def_member_def_get(
+            variable_def_member_get(variable_def_get(var)));
+          if (elem && variable_def_flag_test(elem, VARIABLE_DEF_FLAG_BIT)) {
+            /* an OPEN bit-array formal is a pointer to the actual's packed
+             * bits; the call-site normalize copy can hand reads over, but
+             * the callee's writes are never copied back (a fixed-size
+             * `bit in out x[N]` formal is a real array and does copy) */
+            pfile_log(pf, PFILE_LOG_ERR,
+              "an open `bit` array parameter cannot be `out` or `in out`: "
+              "its writes would not be copied back (give it a fixed size)");
+          }
+        }
         if (variable_dflag_test(var, VARIABLE_DEF_FLAG_BYREF)
             || (variable_is_array(var) 
               && ((variable_sz_t) -1 == variable_def_member_ct_get(
@@ -577,9 +640,37 @@ void jal_proc_body_guard_note(pfile_t *pf)
   }
 }
 
+/* a clone variant is keyed by the set of open-array formals re-flavoured as
+ * string handles: bit n names member n of the procedure definition */
+#define JAL_PROC_STRCLONE_MASK_BITS (8 * sizeof(unsigned long))
+
+static boolean_t jal_proc_strclone_mask_test(unsigned long mask, size_t bit)
+{
+  if (bit >= JAL_PROC_STRCLONE_MASK_BITS) {
+    return BOOLEAN_FALSE;
+  }
+  return (mask & (1UL << bit)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* may ORIG be re-parsed as a string-flavored clone at all?  (a forward or
+ * guarded body, a task/reentrant/indirect callee cannot) */
+static boolean_t jal_proc_strclone_eligible(pfile_proc_t *orig)
+{
+  if (!orig || (PFILE_PROC_NONE == orig) || !orig->body_pos_valid
+      || orig->clone_blocked
+      || !label_flag_test(pfile_proc_label_get(orig), LABEL_FLAG_DEFINED)
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_TASK)
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_REENTRANT)
+      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_INDIRECT)) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
 /* find or create the string-flavored clone (documented at the
  * definition) */
-static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig);
+static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig,
+    unsigned long mask);
 
 void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
   const pfile_pos_t *statement_start)
@@ -1064,11 +1155,14 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
   FREE(params);
 }
 
-/* build the clone's def: the original's members with every open
- * byte-array formal re-flavored as a dynamic-string handle (same member
- * count and tags -- the hidden count slot stays as an ignored dummy, so
- * the call-site parameter layout is unchanged) */
-static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
+/* build the clone's def: the original's members with every open byte-array
+ * formal whose bit is set in MASK re-flavored as a dynamic-string handle.
+ * The hidden count member of a re-flavored formal is DROPPED (the call site
+ * remaps its parameter array); every other member -- including open-array
+ * formals NOT in the mask -- is duplicated unchanged, so their pointer/view
+ * marshalling and count slot survive in the same variant. */
+static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig,
+    unsigned long mask)
 {
   variable_def_t       def;
   variable_def_t       odef;
@@ -1076,6 +1170,7 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
   char                *skip_tags[8];
   size_t               skip_ct = 0;
   size_t               si;
+  size_t               mi;
 
   odef = pfile_proc_def_get(orig);
   def  = variable_def_alloc(0, VARIABLE_DEF_TYPE_FUNCTION, 0, 0);
@@ -1083,11 +1178,12 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
     if (def) { variable_def_free(def); }
     return VARIABLE_DEF_NONE;
   }
-  /* first pass: collect the hidden count members ("_<formal>_count") of
-   * the formals being re-flavored -- the clone DROPS them (2 bytes of
-   * RAM each), and the call site remaps its parameter array */
-  for (mbr = variable_def_member_get(odef); mbr;
-       mbr = variable_def_member_link_get(mbr)) {
+  /* first pass: collect the hidden count members ("_<formal>_count") of the
+   * MASKED formals only -- the clone DROPS them (2 bytes of RAM each), and
+   * the call site remaps its parameter array.  The count member immediately
+   * precedes its pointer, so the pointer's member index is the mask bit. */
+  for (mbr = variable_def_member_get(odef), mi = 0; mbr;
+       mbr = variable_def_member_link_get(mbr), mi++) {
     variable_def_t mdef;
     const char    *tag;
 
@@ -1095,6 +1191,7 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
     if (mdef
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))
         && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)
+        && jal_proc_strclone_mask_test(mask, mi)
         && (skip_ct < COUNT(skip_tags))) {
       tag = variable_def_member_tag_get(mbr);
       if (tag) {
@@ -1106,8 +1203,8 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
       }
     }
   }
-  for (mbr = variable_def_member_get(odef); mbr;
-       mbr = variable_def_member_link_get(mbr)) {
+  for (mbr = variable_def_member_get(odef), mi = 0; mbr;
+       mbr = variable_def_member_link_get(mbr), mi++) {
     variable_def_t mdef;
     const char    *tag;
     boolean_t      skip;
@@ -1126,7 +1223,8 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
     }
     if (mdef
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))
-        && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
+        && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)
+        && jal_proc_strclone_mask_test(mask, mi)) {
       variable_def_t sdef;
 
       sdef = jal_string_dynamic_def_alloc(pf);
@@ -1166,51 +1264,72 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig)
   return def;
 }
 
+static void jal_proc_strclone_drop(pfile_proc_t *orig, pfile_proc_t *proc)
+{
+  pfile_proc_strclone_t **link;
+
+  for (link = &orig->str_clones; *link; link = &(*link)->link) {
+    if ((*link)->proc == proc) {
+      pfile_proc_strclone_t *dead;
+
+      dead  = *link;
+      *link = dead->link;
+      FREE(dead);
+      return;
+    }
+  }
+}
+
 /*
  * NAME
  *   jal_proc_strclone_get
  *
  * DESCRIPTION
- *   Find or create the string-flavored clone of ORIG: a hidden procedure
- *   whose open byte-array formals are re-flavored as dynamic-string
- *   handles (keeping the member layout -- the hidden count slot stays as
- *   an ignored dummy), with the body RE-PARSED from the recorded source
- *   position so every statement lowers through the string rules (the
- *   subscript append rule, live COUNT, per-access handle re-derivation).
+ *   Find or create the string-flavored clone of ORIG for the flavour MASK:
+ *   a hidden procedure whose open byte-array formals named by MASK are
+ *   dynamic-string handles (their hidden count member dropped), with the
+ *   body RE-PARSED from the recorded source position so every statement
+ *   lowers through the string rules (the subscript append rule, live
+ *   COUNT, per-access handle re-derivation).  Formals not in the mask keep
+ *   their pointer/view definition in the same variant.
  *
  * PARAMETERS
- *   pf : the compile
+ *   pf   : the compile
  *   orig : the procedure whose clone is requested
+ *   mask : the member-index bits of the formals to re-flavor
  *
  * RETURN
  *   the clone, or PFILE_PROC_NONE when the body cannot be cloned
- *   (forward, guarded, a function, task/reentrant/indirect) -- the
- *   caller then falls back to the payload view or the refusal
+ *   (forward, guarded, task/reentrant/indirect) -- the caller then falls
+ *   back to the payload view or the refusal
  */
-static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
+static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig,
+    unsigned long mask)
 {
-  pfile_proc_t   *proc;
-  variable_def_t  def;
-  char           *name;
-  const char     *tag;
-  pfile_source_t *save_src;
-  pfile_pos_t     stmt_start;
-  pfile_pos_t     tok_start;
-  char           *save_tok;
-  pfile_proc_t   *save_proc;
-  pfile_block_t  *save_blk;
-  pfile_proc_t   *save_owner;
-  const char     *cmd;
+  pfile_proc_t          *proc;
+  pfile_proc_strclone_t *node;
+  variable_def_t         def;
+  char                  *name;
+  const char            *tag;
+  pfile_source_t        *save_src;
+  pfile_pos_t            stmt_start;
+  pfile_pos_t            tok_start;
+  char                  *save_tok;
+  pfile_proc_t          *save_proc;
+  pfile_block_t         *save_blk;
+  pfile_proc_t          *save_owner;
+  const char            *cmd;
+  boolean_t              ok;
 
-  if (!orig || (PFILE_PROC_NONE == orig) || orig->str_clone) {
-    return (orig && (PFILE_PROC_NONE != orig)) ? orig->str_clone
-      : PFILE_PROC_NONE;
+  if (!orig || (PFILE_PROC_NONE == orig)) {
+    return PFILE_PROC_NONE;
   }
-  if (!orig->body_pos_valid || orig->clone_blocked
-      || !label_flag_test(pfile_proc_label_get(orig), LABEL_FLAG_DEFINED)
-      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_TASK)
-      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_REENTRANT)
-      || pfile_proc_flag_test(orig, PFILE_PROC_FLAG_INDIRECT)) {
+  for (node = orig->str_clones; node; node = node->link) {
+    if (node->mask == mask) {
+      return node->proc;
+    }
+  }
+  if (!jal_proc_strclone_eligible(orig)) {
     /* forward/guarded/task/reentrant/indirect bodies keep the
      * view/refusal; the return side needs nothing special -- a function's
      * return member is duped into the clone def like any other, and the
@@ -1218,13 +1337,13 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
     return PFILE_PROC_NONE;
   }
   tag  = pfile_proc_tag_get(orig);
-  name = MALLOC(strlen(tag) + 7);
+  name = MALLOC(strlen(tag) + 32);
   if (!name) {
     pfile_log_syserr(pf, ENOMEM);
     return PFILE_PROC_NONE;
   }
-  sprintf(name, "_strp_%s", tag);
-  def = jal_proc_strclone_def(pf, orig);
+  sprintf(name, "_strp_%s_%lx", tag, mask);
+  def = jal_proc_strclone_def(pf, orig, mask);
   if (VARIABLE_DEF_NONE == def) {
     FREE(name);
     return PFILE_PROC_NONE;
@@ -1234,6 +1353,15 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
   if (!proc) {
     return PFILE_PROC_NONE;
   }
+  node = MALLOC(sizeof(*node));
+  if (!node) {
+    pfile_log_syserr(pf, ENOMEM);
+    return PFILE_PROC_NONE;
+  }
+  node->mask       = mask;
+  node->proc       = proc;
+  node->link       = orig->str_clones;
+  orig->str_clones = node;
 
   /* the include machinery's save/switch/parse/restore pattern: push the
    * body's source again (pfile_source_set bypasses the once-only include
@@ -1251,14 +1379,14 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
     strcpy(save_tok, cmd);
   }
 
-  /* claim the memo BEFORE the re-parse: a call inside the re-parsed body
-   * (or a runaway re-parse) must not recurse into creating another clone
-   * of the same procedure */
-  orig->str_clone = proc;
+  /* the memo was claimed BEFORE the re-parse: a call inside the re-parsed
+   * body (or a runaway re-parse) must not recurse into creating another
+   * clone with the same mask */
+  ok = BOOLEAN_FALSE;
   if (RESULT_OK != pfile_source_set(pf,
         pfile_source_name_get(orig->body_pos.src))) {
     orig->clone_blocked = BOOLEAN_TRUE;
-    orig->str_clone   = PFILE_PROC_NONE;
+    jal_proc_strclone_drop(orig, proc);
   } else {
     unsigned want;
     unsigned seen;
@@ -1291,6 +1419,25 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
     if (RESULT_OK == pfile_proc_enter(pf, pfile_proc_tag_get(proc))) {
       pfile_block_enter(pf);
       pfile_proc_define(proc, def, pf);
+      /* every clone formal is part of the call-site layout: an unused one
+       * (typically an unmasked open-array formal's hidden count, which the
+       * clone body may never read) would otherwise be dropped by the
+       * variable-reduce pass AFTER the call was built against the full
+       * definition, shifting the parameter array -- the callee then reads
+       * the next slot's value (found as a null/0xff pointer on the first
+       * multi-formal witness) */
+      {
+        size_t pi;
+
+        for (pi = 0; pi < pfile_proc_param_ct_get(proc); pi++) {
+          value_t    pval = pfile_proc_param_get(proc, pi);
+          variable_t pvar = pval ? value_variable_get(pval) : VARIABLE_NONE;
+
+          if (pvar && (VARIABLE_NONE != pvar)) {
+            variable_use_ct_bump(pvar, CTR_BUMP_INCR);
+          }
+        }
+      }
       label_flag_set(pfile_proc_label_get(proc), LABEL_FLAG_DEFINED);
       jal_body_owner = proc;
       jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NO_BLOCK);
@@ -1304,11 +1451,12 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
       pfile_block_leave(pf);
       pfile_proc_leave(pf);
       pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
+      ok = BOOLEAN_TRUE;
     } else {
       pfile_log(pf, PFILE_LOG_ERR,
           "cannot enter the string clone of '%s'", tag);
       orig->clone_blocked = BOOLEAN_TRUE;
-      orig->str_clone   = PFILE_PROC_NONE;
+      jal_proc_strclone_drop(orig, proc);
     }
     pfile_source_restore(pf, save_src);
     if (save_tok) {
@@ -1320,7 +1468,13 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig)
     pfile_proc_active_set(pf, save_proc);
     pfile_proc_block_active_set(save_proc, save_blk);
   }
-  return orig->str_clone;
+  if (ok) {
+    /* a clone may be called with trailing optionals omitted: the defaults
+     * are registered against the original def, so register the same set for
+     * the clone def (the resolver walks the clone's shorter layout) */
+    jal_opt_default_clone(pf, def, pfile_proc_def_get(orig));
+  }
+  return ok ? proc : PFILE_PROC_NONE;
 }
 
 void jal_parse_procedure(pfile_t *pf, const pfile_pos_t *statement_start)
@@ -1618,7 +1772,7 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
 
 /* OUT formal: a PUT procedure (its 'put is called after the callee
  * returns, value in tow) or a plain lvalue */
-static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val, pfile_proc_t **strclone_out, boolean_t *clone_drop)
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val, unsigned long *clone_mask)
 {
   value_t val;
   boolean_t str_refused = BOOLEAN_FALSE;
@@ -1736,12 +1890,21 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       }
     }
   }
+  /* A STRING actual into an out/in-out open byte-array formal is a CLONE
+   * candidate: the body re-parsed with THIS formal as a string handle gets
+   * the full string semantics (the append rule at COUNT, live COUNT,
+   * growth through the handle).  The decision is PER FORMAL -- this
+   * formal's member bit goes into the call's flavour mask -- so a call may
+   * mix string and array actuals: only the masked formals are re-flavored
+   * and have their count slot dropped; every other formal keeps its
+   * pointer/view marshalling in the same clone variant
+   * (docs/investigations/string_clone_design_20261105.md). */
   if (val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
       && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
       && (jal_string_is_dynamic(val) || jal_string_pointer_is(val))
-      && strclone_out && !*strclone_out
+      && clone_mask && (ii < JAL_PROC_STRCLONE_MASK_BITS)
       && call_val
       && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
     pfile_proc_t *callee = value_proc_get(call_val);
@@ -1756,11 +1919,22 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
         && jal_string_formal_stored_get(callee,
              value_variable_get(pfile_proc_param_get(callee, ii))));
 
-    if (stored) {
-      pfile_proc_t *clone = jal_proc_strclone_get(pf, callee);
+    if (stored && jal_proc_strclone_eligible(callee)) {
+      value_t    fval = VALUE_NONE;
+      variable_t fvar = VARIABLE_NONE;
 
-      if (clone && (PFILE_PROC_NONE != clone)) {
-        *strclone_out = clone;
+      /* the clone's formal is a handle COPY: a callee that can move THIS
+       * string through another name (the actual variable itself, an
+       * unnamed pointer target, or another formal) would leave the copy
+       * stale and the next write through it corrupts the heap.  Such a
+       * callee is not cloned; the view/refusal below reports it
+       * (fixes/fix_string_arg_clone_alias.md). */
+      if ((ii > 0) && (ii <= pfile_proc_param_ct_get(callee))) {
+        fval = pfile_proc_param_get(callee, ii);
+        fvar = fval ? value_variable_get(fval) : VARIABLE_NONE;
+      }
+      if (!jal_string_grow_aliases_other(callee, fvar, val)) {
+        *clone_mask |= (1UL << ii);
         str_cloned = BOOLEAN_TRUE;
         if (jal_string_pointer_is(val)) {
           /* the clone's formal is a string handle: pass the designated
@@ -1816,7 +1990,8 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
       && val
       && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
       && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
-      && value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)) {
+      && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+          || jal_string_pointer_is(val))) {
     pfile_log(pf, PFILE_LOG_ERR,
       "cannot pass the string %s to an `out`/`in out` array parameter: "
       "writes through it would corrupt the string", value_name_get(val));
@@ -1852,10 +2027,56 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
           && val
           && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
           && (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
-              || jal_string_pointer_is(val))))) {
+              || jal_string_pointer_is(val)))
+      /* a user POINTER actual for an OPEN-ARRAY formal of the same
+       * pointee: the formal stores the ADDRESS VALUE, and the back end's
+       * PTR_LOOKUP store writes through it (linear pointer store) */
+      || (val
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && (VARIABLE_DEF_TYPE_POINTER
+              == variable_def_type_get(value_def_get(val)))
+          && !variable_def_flag_test(value_def_get(val),
+               VARIABLE_DEF_FLAG_OPENARRAY)
+          && !jal_string_pointer_is(val)
+          && !str_view && !str_cloned
+          && variable_def_member_get(def)
+          && variable_def_member_get(value_def_get(val))
+          && !variable_def_flag_test(
+               variable_def_member_def_get(
+                 variable_def_member_get(value_def_get(val))),
+               VARIABLE_DEF_FLAG_CONST)
+          /* a 32-bit target's indirect element store is 4 bytes wide:
+           * a >4-byte element stays refused there (the 16-bit cores take
+           * every width -- qword is witnessed) */
+          && variable_def_is_same(
+               variable_def_member_def_get(variable_def_member_get(def)),
+               variable_def_member_def_get(
+                 variable_def_member_get(value_def_get(val))))))) {
     pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
     value_release(val);
     val = VALUE_NONE;
+  } else if (val
+      && !str_refused && !str_view && !str_cloned
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(value_def_get(val)))
+      && !variable_def_flag_test(value_def_get(val), VARIABLE_DEF_FLAG_OPENARRAY)
+      && !jal_string_pointer_is(val)
+      && variable_def_member_get(value_def_get(val))
+      && !variable_def_flag_test(
+           variable_def_member_def_get(
+             variable_def_member_get(value_def_get(val))),
+           VARIABLE_DEF_FLAG_CONST)
+      ) {
+    pfile_proc_t *callee = value_proc_get(call_val);
+
+    if (callee) {
+      value_t    fval = pfile_proc_param_get(callee, ii);
+      variable_t fvar = fval ? value_variable_get(fval) : VARIABLE_NONE;
+
+      if (fvar && (VARIABLE_NONE != fvar)) {
+        variable_flag_set(fvar, VARIABLE_FLAG_PTR_LOOKUP);
+      }
+    }
   }
   if (val && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
       && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
@@ -1898,13 +2119,10 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
           str_rt_len = VALUE_NONE;
         }
         if (str_cloned) {
-          /* the clone DROPPED this count member: the tail rebuilds the
-           * parameter array without it */
+          /* the clone DROPPED this formal's count member: the tail rebuilds
+           * the parameter array without it (the mask names the formal) */
           value_release(ct_val);
           ct_val = VALUE_NONE;
-          if (clone_drop) {
-            clone_drop[ii - 1] = BOOLEAN_TRUE;
-          }
         }
         parms[ii - 1] = ct_val;
         FREE(ct_name);
@@ -2155,7 +2373,6 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
       || ((VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
           && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
           && variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
-          && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
           && !variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_OPENARRAY)
           && variable_def_member_get(def)
           && variable_def_member_get(vdef)
@@ -2166,7 +2383,6 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
         && variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
-        && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)
         && !variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
       pfile_proc_t *callee = value_proc_get(call_val);
 
@@ -2332,8 +2548,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
   const char           *param_open;
   const char           *param_close;
   size_t                ii;
-  pfile_proc_t         *strclone = PFILE_PROC_NONE;
-  boolean_t            *clone_drop = 0;
+  unsigned long         clone_mask = 0;
 
   is_put = flags & JAL_PARSE_CALL_FLAG_PUT;
   assert((VALUE_NONE == call_val)
@@ -2370,12 +2585,10 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
   }
   parms = CALLOC(param_ct, sizeof(*parms));
   put_parms = CALLOC(param_ct, sizeof(*put_parms));
-  clone_drop = CALLOC(param_ct, sizeof(*clone_drop));
   if (!parms || !put_parms) {
     pfile_log_syserr(pf, ENOMEM);
     FREE(parms);
     FREE(put_parms);
-    FREE(clone_drop);
     return VALUE_NONE;
   }
 
@@ -2473,7 +2686,7 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
                 &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
             jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
-                put_parms, need_ct, call_val, &strclone, clone_drop);
+                put_parms, need_ct, call_val, &clone_mask);
           } else {
             jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
                 need_ct, flags, call_val);
@@ -2486,50 +2699,94 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
       }
     }
   }
-  if (PFILE_PROC_NONE != strclone) {
-    /* a string-flavored clone took over one or more out/in-out sites:
-     * re-route the call to the clone and REBUILD the parameter array --
-     * the clone's def dropped the hidden count members of the string
-     * formals, so the marked slots go away (2 bytes of RAM per clone) */
-    value_t cv;
-    size_t  ci;
-    size_t  kept;
-    size_t  clone_ct;
-    value_t *nparms;
+  if (clone_mask) {
+    /* one or more out/in-out formals are clone candidates: re-route the
+     * call to the clone variant for this flavour mask and REBUILD the
+     * parameter array -- the clone's def dropped the hidden count member
+     * of every MASKED formal only, so exactly those slots go away; the
+     * other formals (array actuals, scalars, read-only string views) keep
+     * their slot and their marshalling */
+    pfile_proc_t *callee = PFILE_PROC_NONE;
+    pfile_proc_t *clone = PFILE_PROC_NONE;
+    value_t       cv;
+    size_t        ci;
+    size_t        kept;
+    size_t        clone_ct;
+    value_t      *nparms;
+    value_t      *nput;
 
-    cv = pfile_value_find(pf, PFILE_LOG_ERR, pfile_proc_tag_get(strclone));
-    if (cv) {
-      call_val = cv;
+    if (call_val && (VARIABLE_DEF_TYPE_FUNCTION == value_type_get(call_val))) {
+      callee = value_proc_get(call_val);
     }
-    clone_ct = pfile_proc_param_ct_get(strclone);
-    if (!clone_ct) {
-      clone_ct = 1;
+    if (callee && (PFILE_PROC_NONE != callee)) {
+      clone = jal_proc_strclone_get(pf, callee, clone_mask);
     }
-    nparms = CALLOC(clone_ct, sizeof(*nparms));
-    if (nparms) {
-      for (ci = 0, kept = 0; (ci < param_ct) && (kept < clone_ct); ci++) {
-        /* slot 0 is the return member (NONE for a procedure) -- it must
-         * be preserved even when empty, so the call's result handling
-         * and the clone's member walk stay aligned */
-        if ((0 == ci)
-            || (parms[ci] && !(clone_drop && clone_drop[ci]))) {
-          nparms[kept++] = parms[ci];
-          parms[ci] = VALUE_NONE;
-        }
+    if (clone && (PFILE_PROC_NONE != clone)) {
+      cv = pfile_value_find(pf, PFILE_LOG_ERR, pfile_proc_tag_get(clone));
+      if (cv) {
+        call_val = cv;
       }
-      for (ci = 0; ci < param_ct; ci++) {
-        if (parms[ci]) {
-          value_release(parms[ci]);
-          parms[ci] = VALUE_NONE;
-        }
+      clone_ct = pfile_proc_param_ct_get(clone);
+      if (!clone_ct) {
+        clone_ct = 1;
       }
-      FREE(parms);
-      parms = nparms;
-      param_ct = clone_ct;
-      /* every original argument was supplied (the clone call is only
-       * built for fully parsed calls) -- keep the optional-defaults and
-       * arity machinery consistent with the shorter layout */
-      ii = clone_ct;
+      nparms = CALLOC(clone_ct, sizeof(*nparms));
+      nput   = CALLOC(clone_ct, sizeof(*nput));
+      if (nparms && nput) {
+        for (ci = 0, kept = 0; (ci < param_ct) && (kept < clone_ct); ci++) {
+          boolean_t drop;
+
+          /* slot 0 is the return member (NONE for a procedure) -- it must
+           * be preserved even when empty, so the call's result handling
+           * and the clone's member walk stay aligned.  A count member
+           * immediately precedes its pointer, so slot ci is dropped when
+           * slot ci+1 is masked. */
+          drop = BOOLEAN_FALSE;
+          if (((ci + 1) < JAL_PROC_STRCLONE_MASK_BITS)
+              && (clone_mask & (1UL << (ci + 1)))) {
+            drop = BOOLEAN_TRUE;
+          }
+          if ((0 == ci) || (parms[ci] && !drop)) {
+            nparms[kept]  = parms[ci];
+            nput[kept]    = put_parms[ci];
+            kept++;
+            parms[ci]     = VALUE_NONE;
+            put_parms[ci] = VALUE_NONE;
+          }
+        }
+        for (ci = 0; ci < param_ct; ci++) {
+          if (parms[ci]) {
+            value_release(parms[ci]);
+            parms[ci] = VALUE_NONE;
+          }
+          if (put_parms[ci]) {
+            value_release(put_parms[ci]);
+            put_parms[ci] = VALUE_NONE;
+          }
+        }
+        FREE(parms);
+        FREE(put_parms);
+        parms     = nparms;
+        put_parms = nput;
+        param_ct  = clone_ct;
+        /* the kept slots map 1:1 to the clone's def members, so if trailing
+         * optionals were omitted the defaults fill starts at the clone's
+         * next member */
+        ii = kept;
+      } else {
+        FREE(nparms);
+        FREE(nput);
+        pfile_log_syserr(pf, ENOMEM);
+        call_val = VALUE_NONE;
+      }
+    } else {
+      /* the masked formals were already marshalled as string handles: a
+       * call against the un-cloned (pointer) body would bind them to the
+       * wrong representation, so fail the compile instead of miscompiling */
+      pfile_log(pf, PFILE_LOG_ERR,
+        "cannot create the string clone of '%s'",
+        callee ? pfile_proc_tag_get(callee) : "?");
+      call_val = VALUE_NONE;
     }
   }
   if (ii < param_ct) {
@@ -2608,7 +2865,6 @@ value_t jal_parse_call(pfile_t *pf, value_t call_val, flag_t flags)
     }
     FREE(put_parms);
   }
-  FREE(clone_drop);
 
   return val;
 }

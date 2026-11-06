@@ -1,0 +1,25 @@
+-- Title: picsim 16F18857 compiler regression -- dynamic bit-array stores
+-- Author: Matthew Schinkel
+-- Compiler: JALv2
+--
+-- Description: shared body: _regression_pic14_bit_dynamic_body.
+--    Runtime-indexed bit-array element stores through folded boolean ops
+--    and a 64-bit bit-array actual through a `bit in f[]` formal; guards
+--    watch for neighbour corruption.
+--
+-- @picsim_validate begin
+-- steps: 1500000
+-- expect byte v__check_step 8
+-- expect byte v_guard_a 0xAA
+-- expect byte v_guard_b 0x55
+-- @picsim_validate end
+--
+
+include regression_16f18857_device
+
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_pic14_bit_dynamic_body

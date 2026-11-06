@@ -45,7 +45,7 @@ def parse_block(text: str) -> dict:
         raise SystemExit("no @picsim_validate block found")
     spec: dict = {"expects": [], "steps": 20000, "device": "PIC16F18857",
                   "pin_flips": None, "apin": None, "uart_contains": None,
-                  "frequency_hz": None}
+                  "frequency_hz": None, "pokes": []}
     for raw in m.group(1).splitlines():
         line = raw.strip()
         if line.startswith("--"):
@@ -57,7 +57,9 @@ def parse_block(text: str) -> dict:
             if len(parts) != 4:
                 raise SystemExit(f"bad expect line: {line!r}")
             _, kind, sym, val = parts
-            if kind not in ("byte", "word", "dword_le"):
+            if kind == "dword":
+                kind = "dword_le"
+            if kind not in ("byte", "word", "dword_le", "bit_clear", "bit_set"):
                 raise SystemExit(f"bad expect type: {kind!r}")
             spec["expects"].append((kind, sym, int(val, 0)))
             continue
@@ -75,6 +77,13 @@ def parse_block(text: str) -> dict:
             spec["apin"] = (name, float(volts))
         elif key == "uart_contains":
             spec["uart_contains"] = val
+        elif key == "poke":
+            # poke byte v_sym+OFFS 0xVV -- address resolved like expects,
+            # written into RAM after load and before the first step
+            parts = val.split()
+            if len(parts) != 2:
+                raise SystemExit(f"bad poke line: {line!r}")
+            spec["pokes"].append((parts[0], int(parts[1], 0)))
     return spec
 
 
@@ -123,9 +132,14 @@ def read_ram(path: Path) -> dict:
 
 
 def run_runner(runner: Path, picsim: Path, spec: dict, hexf: Path,
-               builddir: Path) -> tuple[dict, bytes]:
+               builddir: Path, equs: dict = None) -> tuple[dict, bytes]:
     ramout = builddir / "ram.txt"
     args = [str(runner), spec["device"], str(hexf), str(spec["steps"]), str(ramout)]
+    for sym, val in spec.get("pokes", []):
+        addr = resolve(sym, equs or {})
+        if addr >= 0x1000:
+            raise SystemExit(f"poke {sym!r} resolves outside RAM (0x{addr:X})")
+        args += ["--poke", f"{addr:04X}:{val:02X}"]
     if spec["pin_flips"]:
         args += ["--pin", spec["pin_flips"][0]]
     if spec["apin"]:
@@ -225,7 +239,7 @@ def main() -> int:
     equs = equ_map(asm.read_text()) if asm.exists() else {}
 
     runner = build_runner(picsim, build)
-    info, uart = run_runner(runner, picsim, spec, hexf, build)
+    info, uart = run_runner(runner, picsim, spec, hexf, build, equs)
     ram = read_ram(build / "ram.txt")
 
     failures = []
@@ -233,6 +247,14 @@ def main() -> int:
         failures.append("unknown-opcode flag set")
     for kind, sym, want in spec["expects"]:
         addr = resolve(sym, equs)
+        if kind in ("bit_clear", "bit_set"):
+            # `want` is the BIT NUMBER; the expected state is in the kind
+            b = ram.get(addr, 0)
+            if ((b >> want) & 1) != (1 if kind == "bit_set" else 0):
+                failures.append(
+                    f"{sym}: bit{want} {'clear' if kind == 'bit_set' else 'set'}"
+                    f" (byte 0x{b:02X}, expected {kind.split('_')[1]})")
+            continue
         n = {"byte": 1, "word": 2, "dword_le": 4}[kind]
         got = sum(ram.get(addr + i, 0) << (8 * i) for i in range(n))
         if got != want:

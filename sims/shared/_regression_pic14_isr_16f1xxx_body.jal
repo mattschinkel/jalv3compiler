@@ -1,0 +1,79 @@
+-- Title: Shared PIC16F1xxx regression body — isr (external interrupt)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The pic14 isr body's 16F1xxx twin: the classic core's INTCON bits
+--    split across PIR0/PIE0 on 16F1xxx parts, so the flag spellings
+--    differ (INTCON_INTF -> PIR0_INTF, INTCON_INTE -> PIE0_INTE).  The
+--    scenario is unchanged: 3 INT pin edges each fire the ISR once.
+--
+-- ------------------------------------------------------
+
+var volatile byte _isr_cnt = 0
+
+--------------------------------------------------------------------------------
+procedure _ext_isr() is
+   pragma interrupt
+
+   if !PIR0_INTF then
+      return
+   end if
+   PIR0_INTF = off
+   _isr_cnt = _isr_cnt + 1
+end procedure
+
+--------------------------------------------------------------------------------
+procedure _run_isr_checks() is
+   var byte _i
+
+   regression_begin_run()
+
+   -- route the INT input to RA0 (PPS input 0x00; reset default is 0x02=RA2)
+   INTPPS = 0x00
+   INTCON_INTEDG = true
+   PIE0_INTE = off
+   PIR0_INTF = off
+   INTCON_GIE = off
+
+   pin_A0 = low
+
+   for 3 using _i loop
+      PIR0_INTF = off
+      PIE0_INTE = on
+      INTCON_GIE = on
+      pin_A0 = low
+      pin_A0 = high
+      while _isr_cnt != _i + 1 loop
+      end loop
+      INTCON_GIE = off
+      PIE0_INTE = off
+   end loop
+
+   if _isr_cnt != 3 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   if PIE0_INTE then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+
+   regression_pass_led_if_clean()
+   led = low
+end procedure
+
+_run_isr_checks()
+
+forever loop
+   if _bad then
+      led = ON
+      _usec_delay(10_000)
+      led = OFF
+      _usec_delay(10_000)
+   else
+      led = OFF
+      _usec_delay(400_000)
+   end if
+end loop

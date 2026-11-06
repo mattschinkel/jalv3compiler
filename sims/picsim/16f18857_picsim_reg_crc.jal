@@ -1,0 +1,23 @@
+-- Title: picsim 16F18857 compiler regression — crc
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: shared body: **_regression_crc_body**.
+--    Ported from the retired 16F1825 gpsim wrapper when the
+--    16F1825/16F877 suites were retired (2026-11-05).
+--
+-- @picsim_validate begin
+-- steps: 200000
+-- expect byte v__check_step 6
+-- @picsim_validate end
+--
+
+include regression_16f18857_device
+
+alias led is pin_A0
+alias led_pin is pin_A0              -- second alias to same pin (alias coverage)
+pin_A0_direction = OUTPUT
+
+include regression
+
+include _regression_crc_body

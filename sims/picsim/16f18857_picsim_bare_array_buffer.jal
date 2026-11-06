@@ -1,0 +1,44 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness (ported from the retired 16f877/16f1825 gpsim suites)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the bare byte-array operand in '&' chains (5+32 bytes verbatim past the old 16-element cast limit; chain form == cast form).
+--    Promoted from the 2026-10-06 fix tmp/witness into the suite
+--    (fixes/fix_bare_array_chain_concat.md).
+--
+-- Sources:
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- 
+-- steps: 60000
+-- expect byte v__check_step 1
+-- expect byte v__ck_cnt 37
+-- expect byte v__check_step 1
+-- expect byte v__ck_eq 1
+-- 
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+pragma target string_heap_size 64
+include strings_dynamic
+
+var byte rdbuf[32]
+var string v
+var volatile byte _ck_cnt = 0
+var volatile byte _ck_eq = 0
+var byte k
+
+for 32 using k loop
+   rdbuf[k] = k + 65
+end loop
+v = "got: " & rdbuf                 -- 5 + 32 bytes, verbatim
+_ck_cnt = COUNT(v)
+if string(rdbuf) == v & "" then     -- cast form == chain form (v & "" pins chain path)
+   _ck_eq = 1
+end if
+regression_checkpoint()

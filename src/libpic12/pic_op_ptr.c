@@ -233,6 +233,74 @@ void pic_assign_from_runtime_formal(pfile_t *pf, value_t dst, value_t src)
   value_release(ptr);
 }
 
+/* dst is an ELEMENT lvalue of an open-array formal whose storage holds the
+ * data pointer (PTR_LOOKUP set by the call coercion for a POINTER actual).
+ * Store the element through that pointer value: the linear read counterpart
+ * is pic_assign_from_ptr().  Mirrors its addressing -- load the formal's
+ * pointer slot, add the element base offset, then write each element byte
+ * through INDF; the pointer temp is bumped per byte with the same
+ * INCF low/high carry idiom the read uses. */
+static void pic_assign_to_ptr_linear(pfile_t *pf, value_t dst, value_t src)
+{
+  variable_sz_t  ii;
+  variable_sz_t  sz;
+  value_t        slot;
+  value_t        ptr;
+  value_t        baseofs;
+  value_t        stage;
+  value_t        indv;
+  variable_def_t slot_def;
+
+  /* the pointer scratch first: pic_op(ASSIGN) below must not need it */
+  ptr = pic_var_pointer_get(pf);
+  slot = value_clone(dst);
+  baseofs = value_baseofs_get(slot);
+  value_baseofs_set(slot, VALUE_NONE);
+  value_indirect_clear(slot);
+  slot_def = value_def_get(slot);
+  value_def_set(slot, value_def_get(ptr));
+  for (ii = 0; ii < value_sz_get(ptr); ii++) {
+    if (ii < value_sz_get(slot)) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, slot, ii, PIC_OPDST_W);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptr, ii);
+    } else {
+      pic_instr_append_f(pf, PIC_OPCODE_CLRF, ptr, ii);
+    }
+  }
+  value_def_set(slot, slot_def);
+  value_release(slot);
+  if (baseofs
+      && (!value_is_const(baseofs) || value_const_get(baseofs))) {
+    pic_op(pf, OPERATOR_ADD, ptr, ptr, baseofs);
+  }
+  /* stage the source (consts / indirect reads / wide values) */
+  sz = value_byte_sz_get(dst);
+  if (sz < 1) {
+    sz = 1;
+  }
+  /* the stage carries the ELEMENT's def, so a float element copies float
+   * bits instead of the int conversion the generic temp would force */
+  stage = pic_var_temp_get_def(pf, value_def_get(dst));
+  pic_op(pf, OPERATOR_ASSIGN, stage, src, VALUE_NONE);
+  indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+  for (ii = 0; ii < sz; ii++) {
+    if (ii) {
+      /* ptr++ ; INCF sets Z (not C) on wrap, exactly what the read uses */
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, ptr, 0, PIC_OPDST_F);
+      pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, ptr, 1, PIC_OPDST_F);
+    }
+    pic_fsr_setup(pf, ptr);
+    if (!pic_value_is_w(stage)) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, stage, ii, PIC_OPDST_W);
+    }
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indv, 0);
+  }
+  value_release(indv);
+  pic_var_temp_release(pf, stage);
+  pic_var_pointer_release(pf, ptr);
+}
+
 /* dst has one or more of the LOOKUP/EEPROM/FLASH bits set */
 void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
 {
@@ -291,6 +359,16 @@ void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
     pic_assign_array_to_pointer(pf, dst, src);
   } else {
     if (variable_flag_test(value_variable_get(dst),
+      VARIABLE_FLAG_PTR_LOOKUP) && value_is_indirect(dst)
+        && variable_def_get(value_variable_get(dst))
+        && variable_def_flag_test(
+             variable_def_get(value_variable_get(dst)),
+             VARIABLE_DEF_FLAG_OPENARRAY)) {
+      /* a write through an OPEN-ARRAY FORMAL whose storage holds the data
+       * pointer (a pointer actual): a linear store, not a lookup bind.  A
+       * user pointer bound to a const array keeps the refusal below. */
+      pic_assign_to_ptr_linear(pf, dst, src);
+    } else if (variable_flag_test(value_variable_get(dst),
       VARIABLE_FLAG_PTR_LOOKUP)) {
       pfile_log(pf, PFILE_LOG_ERR, 
         "Attempt to assign to a lookup table");

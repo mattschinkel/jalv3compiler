@@ -102,6 +102,13 @@ void pfile_proc_free(pfile_proc_t *proc, pfile_t *pf)
     }
     FREE(proc->params);
   }
+  while (proc->str_clones) {
+    pfile_proc_strclone_t *clone;
+
+    clone            = proc->str_clones;
+    proc->str_clones = clone->link;
+    FREE(clone);
+  }
   pfile_block_free(proc->block_root, pf);
   FREE(proc);
 }

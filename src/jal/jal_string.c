@@ -2026,6 +2026,47 @@ boolean_t jal_string_grow_aliases(pfile_proc_t *callee, value_t actual)
   return BOOLEAN_FALSE;
 }
 
+boolean_t jal_string_grow_aliases_other(pfile_proc_t *callee,
+    variable_t formal, value_t actual)
+{
+  variable_t av;
+  size_t ii;
+
+  if (!callee || (PFILE_PROC_NONE == callee)) {
+    return BOOLEAN_TRUE;
+  }
+  if (!pfile_proc_flag_test(callee, PFILE_PROC_FLAG_STRING_REALLOC)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!actual || jal_string_pointer_is(actual)) {
+    /* a pointer actual designates its string at run time: any growth in
+     * the callee could move it (same conservatism as the view gate) */
+    return BOOLEAN_TRUE;
+  }
+  av = value_variable_get(actual);
+  if (!av || (VARIABLE_NONE == av)) {
+    return BOOLEAN_TRUE;
+  }
+  for (ii = 0; ii < jal_string_state.grow_used; ii++) {
+    variable_t var;
+
+    if (jal_string_state.grow[ii].proc != callee) {
+      continue;
+    }
+    var = jal_string_state.grow[ii].var;
+    if ((VARIABLE_NONE == var) || (var == av)) {
+      /* unnamed (pointer/indexed) growth, or growth of the very variable
+       * passed here -- the clone's handle copy cannot see it */
+      return BOOLEAN_TRUE;
+    }
+    if ((var != formal) && jal_string_var_is_formal(callee, var)) {
+      /* growth of ANOTHER formal: it may be the same string re-passed */
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 value_t jal_string_arg_payload_ptr(pfile_t *pf, value_t str, value_t *len_out)
 {
   static unsigned ptr_no;

@@ -1,0 +1,119 @@
+--------------------------------------------------------------------------------
+-- Shared body: dynamic-index stores into native bit arrays
+--
+-- Covers two compiler defects (fixed 2026-11-06):
+--   1. a folded boolean op stored into a runtime-indexed bit-array element
+--      (m[i] = (i == 3)) wrote INDF0 bit 0 at byte base+i -- the element's
+--      BIT offset used as a byte offset -- corrupting every neighbouring
+--      variable (guard_a/guard_b watch for that);
+--   2. a bit-array actual of 32+ bits passed to a `bit in f[]` formal was
+--      normalized with a byte mask of (1 << bits) - 1 -- undefined past 31
+--      bits, masked to 0 -- so the callee always read zeroes.
+-- Eight **`regression_checkpoint()`** calls; wrappers **`expect byte
+-- v__check_step 8`** plus the two guards.
+--------------------------------------------------------------------------------
+
+var bit m[24]
+var bit big[64]
+var bit f1 = true
+var bit f2 = false
+var byte i = 0
+var byte ct = 0
+var volatile byte guard_a = 0xAA
+var volatile byte guard_b = 0x55
+
+procedure countbits(bit in f[], byte in n, byte out cts) is
+   var byte k = 0
+   cts = 0
+   for n loop
+      if f[k] then
+         cts = cts + 1
+      end if
+      k = k + 1
+   end loop
+end procedure
+
+regression_begin_run()
+
+-- dynamic store through a folded compare
+for 24 loop
+   m[i] = (i == 3)
+   i = i + 1
+end loop
+if m[3] == false then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- and the neighbours it used to corrupt
+if m[2] | m[4] then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- bit-to-bit store at a runtime index
+i = 7
+m[i] = f1
+if m[7] == false then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- dynamic read
+i = 3
+if m[i] == false then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- folded bitwise/logical stores
+i = 9
+m[i] = f1 & f2
+if m[9] then
+   _check_failed = true
+end if
+m[i] = f1 | f2
+if m[9] == false then
+   _check_failed = true
+end if
+m[i] = !! f1
+if m[9] == false then
+   _check_failed = true
+end if
+m[i] = f1 ^ f2
+if m[9] == false then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- const store at odd indices (packed set path)
+m[11] = true
+m[23] = true
+if (m[11] == false) | (m[23] == false) then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- a 64-bit bit-array actual through a bit formal (the normalize copy
+-- used to AND every byte with an undefined mask -- zero)
+i = 0
+for 64 loop
+   if (i & 1) == 1 then
+      big[i] = true
+   end if
+   i = i + 1
+end loop
+countbits(big, 64, ct)
+if ct != 32 then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+-- guards untouched by any of the above
+if (guard_a != 0xAA) | (guard_b != 0x55) then
+   _check_failed = true
+end if
+regression_checkpoint()
+
+forever loop
+end loop

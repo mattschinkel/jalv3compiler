@@ -139,6 +139,20 @@ void pic_op(pfile_t *pf, operator_t op, value_t dst, value_t val1,
         assert(0);
       } else if (!operator_fn_tbl[ii].fn) {
         assert(0);
+      } else if ((OPERATOR_ASSIGN != op) && (OPERATOR_POINTER_ASSIGN != op)
+          && pic_value_is_dynamic_bit_array_element(dst)) {
+        /* A runtime-indexed bit-array element cannot be a direct op
+         * destination: the op emitters store a single-bit result with
+         * direct bit addressing, or sock it away and walk FSR bytes
+         * scaled by the element's BIT offset. Compute the (boolean)
+         * result into a byte temp, then store through the packed
+         * dynamic-bit path. */
+        value_t tmp;
+
+        tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 1);
+        pic_op(pf, op, tmp, val1, val2);
+        pic_op(pf, OPERATOR_ASSIGN, dst, tmp, VALUE_NONE);
+        pic_var_temp_release(pf, tmp);
       } else {
         operator_fn_tbl[ii].fn(pf, op, dst, val1, val2);
       }

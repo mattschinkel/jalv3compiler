@@ -114,6 +114,10 @@ run_sh string_arg_chunk_map        unit-tests/test_string_arg_chunk_map.sh "$CC"
 run_sh openarray_user_array_percall unit-tests/test_openarray_user_array_percall.sh "$CC"
 # fixes/fix_openarray_out_formals.md
 run_sh openarray_out_params unit-tests/test_openarray_out_params.sh "$CC"
+# fixes/fix_openarray_pointer_store.md
+run_sh openarray_pointer_store unit-tests/test_openarray_pointer_store.sh "$CC"
+# fixes/fix_open_bit_formal_out.md
+run_sh open_bit_out_refused unit-tests/test_open_bit_out_refused.sh "$CC"
 run_sh error_hook                  unit-tests/test_error_hook.sh "$CC"
 run_sh optional_params_negative    unit-tests/test_optional_params_negative.sh "$CC"
 run_sh optional_empty_string       unit-tests/test_optional_empty_string.sh "$CC"

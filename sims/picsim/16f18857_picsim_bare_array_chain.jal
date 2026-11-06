@@ -1,0 +1,49 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness (ported from the retired 16f877/16f1825 gpsim suites)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the bare byte-array operand in '&' chains (the chain form must reproduce the string()-cast values exactly).
+--    Promoted from the 2026-10-06 fix tmp/witness into the suite
+--    (fixes/fix_bare_array_chain_concat.md).
+--
+-- Sources:
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- 
+-- steps: 30000
+-- expect byte v__check_step 1
+-- expect byte v__ck_ok 1
+-- expect byte v__check_step 1
+-- expect byte v__ck_len 9
+-- 
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+pragma target string_heap_size 96
+include strings_dynamic
+
+const byte NAME[3] = { 65, 86, 82 }   -- "AVR"
+var byte frame[3]
+var string s
+var string t
+var volatile byte _ck_ok = 0
+var volatile byte _ck_len = 0
+
+frame[0] = 72                         -- "Hi!"
+frame[1] = 105
+frame[2] = 33
+
+s = "chip: " & NAME           -- -> "chip: AVR"
+t = frame & "!"               -- -> "Hi!!"
+
+if (s == "chip: AVR") & (t == "Hi!!") then
+   _ck_ok = 1
+end if
+_ck_len = COUNT(s)
+
+regression_checkpoint()

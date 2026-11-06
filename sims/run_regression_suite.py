@@ -168,7 +168,7 @@ SUITES: dict[str, RegressionSuite] = {
 }
 
 # Order for --suite all / default (not alphabetical: 4620 first, then other PIC18, PIC14 enhanced, classic 877).
-SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "16f1825", "12f1840", "12f508", "12f509", "16f877", "16f887", "print_shadow", )
+SUITE_RUN_ORDER: tuple[str, ...] = ("18f4620", "18f4620_gpsim", "18f26k22", "12f1840", "12f508", "12f509", "16f887", "print_shadow", )
 
 
 def registered_suite_ids_ordered() -> list[str]:

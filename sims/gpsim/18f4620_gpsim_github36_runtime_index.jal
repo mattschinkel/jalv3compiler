@@ -12,7 +12,7 @@
 --    never adding index * record_stride).
 --
 -- Notes:
---    PIC18 (16-bit core) twin of 16f877_gpsim_github36_runtime_index. From Rob's 16f1823 retest (tmp/rob_issue36.jal), reduced to a
+--    PIC18 (16-bit core) twin of 16f18857_picsim_github36_runtime_index (was 16f877 gpsim). From Rob's 16f1823 retest (tmp/rob_issue36.jal), reduced to a
 --    RAM checksum witness. 3 checkpoints.
 --
 -- @gpsim_validate begin

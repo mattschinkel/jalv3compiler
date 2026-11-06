@@ -1,0 +1,24 @@
+-- Title: PIC16F18857 picsim regression — device defaults
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+--
+-- Description:
+--    PIC16F1xxx enhanced midrange under PICSIM (the fork with the 16F18857
+--    model): include 16f18857, internal 32 MHz HFINTOSC, WDT off so long
+--    step runs do not reset, digital I/O.  This is the device bundle for
+--    the shared compiler-regression bodies (regression.jal +
+--    _regression_pic14_*_body), replacing the retired 16F1825 bundle for
+--    the midrange gate (16F1825/16F877 suites retired 2026-11-05).
+--
+-- Notes: PIC16F18857 only.  No @config_expect (picsim does not run the
+--    check-config pass; fuse correctness is compile-pinned elsewhere).
+
+include 16f18857
+
+pragma target WDT DISABLED
+pragma target OSC      OFF
+pragma target RSTOSC   HFINT32
+pragma target CLKOUTEN DISABLED
+
+pragma target clock 4_000_000
+
+enable_digital_io()

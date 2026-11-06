@@ -1,0 +1,73 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — the string clone and UNRELATED string growth
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A callee that grows a DIFFERENT string keeps the string-flavored clone:
+--    the growth target is a different variable, so the clone's own handle is
+--    never stale.  Growth of the SAME string through another name (the
+--    actual's own variable, a pointer target, another formal) is the shape
+--    the clone cannot serve -- it is refused at the call site with
+--    "writes through it would corrupt the string"
+--    (fixes/fix_string_clone_alias.md).
+--
+--    This witness pins the ALLOWED side: an in-out callee that appends
+--    through the formal while it also grows an unrelated global string, and
+--    the same shape through a second call site with a different actual.
+--
+-- @gpsim_validate begin
+-- steps: 800000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_ok_grow 1
+-- expect byte v_ok_other 1
+-- expect byte v_ok_iso 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 64
+
+var string s
+var string u
+var string t
+var volatile byte ok_grow = 0
+var volatile byte ok_other = 0
+var volatile byte ok_iso = 0
+
+procedure grow_other(byte in out x[], byte in v) is
+   u = u & "?"
+   x[COUNT(x)] = v
+end procedure
+
+procedure put_in_place(byte in out x[], byte in k, byte in v) is
+   u = u & "!"
+   x[k] = v
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abc"
+   t = "xy"
+   u = "uu"
+   grow_other(s, "S")
+   grow_other(t, "T")
+   put_in_place(s, 0, "X")
+   if (COUNT(s) == 4) & (s[3] == "S") & (s[0] == "X") & (s[1] == "b") then
+      ok_grow = 1
+   end if
+   if (COUNT(u) == 5) & (u[2] == "?") & (u[3] == "?") & (u[4] == "!") then
+      ok_other = 1
+   end if
+   if (COUNT(s) == 4) & (COUNT(t) == 3) & (t[2] == "T") & (t[0] == "x") then
+      ok_iso = 1
+   end if
+   regression_checkpoint()
+   regression_checkpoint()
+end procedure
+
+run()

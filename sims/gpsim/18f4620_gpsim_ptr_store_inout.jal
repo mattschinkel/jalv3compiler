@@ -1,0 +1,117 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — pointer actual into an in out/out open array
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A user POINTER actual bound to an `in out` / `out` open-array formal
+--    (fixes/fix_openarray_pointer_store.md): the formal stores the ADDRESS
+--    VALUE, and the back end's linear pointer store writes the element
+--    through it.  Covers byte (static and runtime index), `out`, word and
+--    dword elements.
+--
+-- @gpsim_validate begin
+-- steps: 800000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_ok_b 1
+-- expect byte v_ok_bdyn 1
+-- expect byte v_ok_bout 1
+-- expect byte v_ok_w 1
+-- expect byte v_ok_d 1
+-- expect byte v_ok_q 1
+-- expect byte v_ok_f 1
+-- expect byte v_ok_qr 1
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+var byte ba[8]
+var word wa[4]
+var dword da[3]
+var qword qa[2]
+var float fa[2]
+var pointer pb as var byte
+var pointer pw as var word
+var pointer pd as var dword
+var pointer pq as var qword
+var pointer pf as var float
+var volatile byte ok_b = 0
+var volatile byte ok_bdyn = 0
+var volatile byte ok_bout = 0
+var volatile byte ok_w = 0
+var volatile byte ok_d = 0
+var volatile byte ok_q = 0
+var volatile byte ok_f = 0
+var volatile byte ok_qr = 0
+
+procedure fillb(byte in out x[]) is
+   x[0] = 0x11
+   x[1] = 0x22
+end procedure
+procedure fillbd(byte in out x[], byte in i, byte in v) is
+   x[i] = v
+end procedure
+procedure fillbo(byte out x[]) is
+   x[2] = 0x33
+end procedure
+procedure fillw(word in out x[]) is
+   x[1] = 0xABCD
+end procedure
+procedure filld(dword in out x[]) is
+   x[1] = 0x11223344
+end procedure
+procedure fillq(qword in out x[]) is
+   x[1] = 0x1122334455667788
+end procedure
+procedure rdq(qword in x[], qword out y) is
+   y = x[1]
+end procedure
+procedure fillf(float in out x[]) is
+   x[1] = 2.5
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   pb is ba[0]
+   fillb(pb)
+   if (ba[0] == 0x11) & (ba[1] == 0x22) then
+      ok_b = 1
+   end if
+   fillbd(pb, 3, 0x44)
+   if ba[3] == 0x44 then
+      ok_bdyn = 1
+   end if
+   fillbo(pb)
+   if ba[2] == 0x33 then
+      ok_bout = 1
+   end if
+   pw is wa[0]
+   fillw(pw)
+   if wa[1] == 0xABCD then
+      ok_w = 1
+   end if
+   pd is da[0]
+   filld(pd)
+   if da[1] == 0x11223344 then
+      ok_d = 1
+   end if
+   pq is qa[0]
+   fillq(pq)
+   if qa[1] == 0x1122334455667788 then
+      ok_q = 1
+   end if
+   pf is fa[0]
+   fillf(pf)
+   if (fa[1] > 2.4) & (fa[1] < 2.6) then
+      ok_f = 1
+   end if
+   var qword qv
+   rdq(pq, qv)
+   if qv == 0x1122334455667788 then
+      ok_qr = 1
+   end if
+   regression_checkpoint()
+end procedure
+run()

@@ -40,6 +40,13 @@ void      jal_string_note_realloc_dst(pfile_t *pf, value_t dst);
 void      jal_string_grow_propagate(pfile_t *pf, pfile_proc_t *caller,
     pfile_proc_t *callee, value_t *parms, size_t param_ct);
 boolean_t jal_string_grow_aliases(pfile_proc_t *callee, value_t actual);
+/* clone guard: the callee can move the ACTUAL through a name that is not
+ * the formal being cloned (the actual variable itself, an unnamed pointer
+ * target, or another formal).  The clone's formal is a handle COPY, so such
+ * a move is invisible to it -- the stale handle would then be used for a
+ * write (fixes/fix_string_arg_clone_alias.md) */
+boolean_t jal_string_grow_aliases_other(pfile_proc_t *callee,
+    variable_t formal, value_t actual);
 /* stores through open-array formals (clone-vs-view decision) */
 void      jal_string_formal_store_note(pfile_t *pf, variable_t var);
 boolean_t jal_string_formal_stored_get(pfile_proc_t *proc, variable_t var);

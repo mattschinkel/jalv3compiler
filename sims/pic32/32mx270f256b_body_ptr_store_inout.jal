@@ -1,0 +1,98 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC32MX270F256B compiler regression — pointer actual into an in out/out open array
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A user POINTER actual bound to an `in out` / `out` open-array formal
+--    (fixes/fix_openarray_pointer_store.md): the formal stores the ADDRESS
+--    VALUE, and the back end's linear pointer store writes the element
+--    through it.  Covers byte (static and runtime index), `out`, word and
+--    dword elements; v_r is 0x5A only when every check passes.
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_r 0x5A
+-- @sim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_32mx270f256b_device
+
+var volatile byte r
+var byte ba[8]
+var word wa[4]
+var dword da[3]
+var qword qa[2]
+var pointer pb as var byte
+var pointer pw as var word
+var pointer pd as var dword
+var pointer pq as var qword
+
+procedure fillb(byte in out x[]) is
+   x[0] = 0x11
+   x[1] = 0x22
+end procedure
+procedure fillbd(byte in out x[], byte in i, byte in v) is
+   x[i] = v
+end procedure
+procedure fillbo(byte out x[]) is
+   x[2] = 0x33
+end procedure
+procedure fillw(word in out x[]) is
+   x[1] = 0xABCD
+end procedure
+procedure filld(dword in out x[]) is
+   x[1] = 0x11223344
+end procedure
+procedure fillq(qword in out x[]) is
+   x[1] = 0x1122334455667788
+end procedure
+procedure rdq(qword in x[], qword out y) is
+   y = x[1]
+end procedure
+
+procedure p_run() is
+   var byte ok
+   ok = 0
+   pb is ba[0]
+   fillb(pb)
+   if (ba[0] == 0x11) & (ba[1] == 0x22) then
+      ok = ok + 1
+   end if
+   fillbd(pb, 3, 0x44)
+   if ba[3] == 0x44 then
+      ok = ok + 1
+   end if
+   fillbo(pb)
+   if ba[2] == 0x33 then
+      ok = ok + 1
+   end if
+   pw is wa[0]
+   fillw(pw)
+   if wa[1] == 0xABCD then
+      ok = ok + 1
+   end if
+   pd is da[0]
+   filld(pd)
+   if da[1] == 0x11223344 then
+      ok = ok + 1
+   end if
+   pq is qa[0]
+   fillq(pq)
+   if qa[1] == 0x1122334455667788 then
+      ok = ok + 1
+   end if
+   var qword qv
+   rdq(pq, qv)
+   if qv == 0x1122334455667788 then
+      ok = ok + 1
+   end if
+   if ok == 7 then
+      r = 0x5A
+   else
+      r = ok
+   end if
+end procedure
+r = 0
+p_run()

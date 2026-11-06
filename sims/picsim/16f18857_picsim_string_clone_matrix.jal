@@ -1,0 +1,155 @@
+-- Title: picsim 16F18857 string-clone matrix
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- Description: the string-flavored clone chosen PER FORMAL on the
+--    enhanced-midrange core.  A call may pass a string to one open-array
+--    formal and a byte array to another (or strings to two formals); only
+--    the formals that are stored through AND receive a string are
+--    re-flavored, and every other actual keeps its pointer/view
+--    marshalling.  Pre-fix only the first string actual was converted, so
+--    the later formals read the wrong representation (0 errors, wrong
+--    code).  (fixes/fix_string_arg_clone.md)
+--
+-- @picsim_validate begin
+-- steps: 900000
+-- expect byte v_ok1 1
+-- expect byte v_ok2 1
+-- expect byte v_ok3 1
+-- expect byte v_ok4 1
+-- expect byte v_ok5 1
+-- expect byte v_ok6 1
+-- expect byte v_ok7 1
+-- expect byte v_ok8 1
+-- expect byte v_ok9 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target string_heap_size 96
+--
+var string s
+var string t
+var string u
+var string wstr
+var string s2
+var string t2
+var string s3
+var string t3
+var string s4
+var string s5
+var string s6
+var byte arr[4]
+var byte arr2[4]
+var byte arr3[4]
+var byte arr4[4]
+var byte arr5[4]
+var volatile byte ok1 at 0x20
+var volatile byte ok2 at 0x21
+var volatile byte ok3 at 0x22
+var volatile byte ok4 at 0x23
+var volatile byte ok5 at 0x24
+var volatile byte ok6 at 0x25
+var volatile byte ok7 at 0x26
+var volatile byte ok8 at 0x27
+var volatile byte ok9 at 0x28
+--
+procedure mix(byte in out a[], byte in out b[]) is
+   a[0] = "X"
+   b[0] = "Y"
+end procedure
+
+procedure trio(byte in out a[], byte in out b[], byte in out c[]) is
+   a[0] = "A"
+   b[0] = "B"
+   c[0] = "C"
+end procedure
+
+function mixed_ro(byte in out a[], byte in x[]) return byte is
+   a[0] = "Z"
+   if COUNT(x) == 3 then
+      return x[0]
+   end if
+   return 0
+end function
+
+procedure pass_on(byte in out a[]) is
+   mix(a, arr4)
+end procedure
+
+procedure bump(byte in out x[], byte in k, byte in v) is
+   x[k] = v
+end procedure
+
+procedure bump_opt(byte in out x[], byte in k,
+   optional byte in v default 90) is
+   x[k] = v
+end procedure
+--
+  s = "abc"
+  arr[0] = 0
+  arr[1] = 7
+  mix(s, arr)
+  if (s[0] == "X") & (arr[0] == "Y") & (arr[1] == 7) then
+     ok1 = 1
+  end if
+
+  t = "def"
+  arr2[0] = 0
+  mix(arr2, t)
+  if (arr2[0] == "X") & (t[0] == "Y") then
+     ok2 = 1
+  end if
+
+  u = "ghi"
+  wstr = "jkl"
+  mix(u, wstr)
+  if (u[0] == "X") & (wstr[0] == "Y")
+     & (COUNT(u) == 3) & (COUNT(wstr) == 3) then
+     ok3 = 1
+  end if
+
+  s2 = "aaa"
+  t2 = "bbb"
+  arr3[0] = 0
+  trio(s2, arr3, t2)
+  if (s2[0] == "A") & (arr3[0] == "B") & (t2[0] == "C") then
+     ok4 = 1
+  end if
+
+  s3 = "xyz"
+  t3 = "pqr"
+  if (mixed_ro(s3, t3) == "p") & (s3[0] == "Z") & (COUNT(t3) == 3) then
+     ok5 = 1
+  end if
+
+  s4 = "mno"
+  arr4[0] = 0
+  pass_on(s4)
+  if (s4[0] == "X") & (arr4[0] == "Y") then
+     ok6 = 1
+  end if
+
+  s5 = "abc"
+  bump(s5, 3, "d")
+  if (COUNT(s5) == 4) & (s5[3] == "d") & (s5[0] == "a") then
+     ok7 = 1
+  end if
+
+  arr5[0] = 0
+  arr5[1] = 9
+  arr5[3] = 4
+  bump(arr5, 1, 5)
+  if (arr5[1] == 5) & (arr5[0] == 0) & (arr5[3] == 4) then
+     ok8 = 1
+  end if
+
+  s6 = "abc"
+  bump_opt(s6, 0)
+  if (s6[0] == "Z") & (COUNT(s6) == 3) then
+     ok9 = 1
+  end if
+  forever loop
+     ok8 = ok8
+  end loop

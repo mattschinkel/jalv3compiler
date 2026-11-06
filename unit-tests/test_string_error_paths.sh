@@ -264,7 +264,7 @@ include 18f4620
 pragma target string_heap_size 64
 var string s
 function grower(byte in out x[]) return bit is
-  s = s & "!"
+  x[COUNT(x)] = "!"
   x[0] = 1
   return true
 end function
@@ -291,11 +291,68 @@ include 18f4620
 pragma target string_heap_size 64
 var string s
 procedure grower(byte in out x[]) is
-  s = s & "!"
+  x[COUNT(x)] = "!"
   x[0] = 1
 end procedure
 s = "abcde"
 grower(s)'
+# a callee that moves THIS string through ANOTHER name (a global, a pointer
+# target, another formal) is not cloned: the clone's formal is a handle
+# copy and the stale handle would corrupt the heap on the next write
+check inout_same_global_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+procedure grower(byte in out x[]) is
+  s = s & "!"
+  x[0] = 1
+end procedure
+s = "abcde"
+grower(s)' "writes through it would corrupt the string"
+check out_same_global_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+procedure grower(byte out x[]) is
+  s = s & "!"
+  x[0] = 1
+end procedure
+s = "abcde"
+grower(s)' "writes through it would corrupt the string"
+check fn_same_global_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string s
+function grower(byte in out x[]) return bit is
+  s = s & "!"
+  x[0] = 1
+  return true
+end function
+s = "abcde"
+grower(s)' "writes through it would corrupt the string"
+check ptr_same_growth_refused '
+include 18f4620
+pragma target string_heap_size 64
+var string t
+var pointer p as var string
+procedure grower(byte in out x[]) is
+  p = p & "!"
+  x[0] = 1
+end procedure
+t = "abcde"
+p is t
+grower(p)' "writes through it would corrupt the string"
+check_ok ok_inout_ptr_clean_clone '
+include 18f4620
+pragma target string_heap_size 64
+var string t
+var pointer p as var string
+procedure grower(byte in out x[]) is
+  x[0] = 1
+end procedure
+t = "abcde"
+p is t
+grower(p)'
 # the taint is alias-aware: growing an UNRELATED string does not move the
 # view source, so the out view is granted (the blanket refusal is gone)
 check_ok ok_out_unrelated_growth '

@@ -5,7 +5,7 @@
 -- Compiler: JALv2
 --
 -- Description:
---    PIC32 counterpart of sims/gpsim/16f1825_gpsim_string_print_in_loop.jal.
+--    PIC32 counterpart of sims/picsim/16f18857_picsim_string_print_in_loop.jal (was 16f1825 gpsim).
 --    `print_string` of a heap `var string` through an open-array formal,
 --    inside a user loop: the compiler-generated marshalling copy loop is
 --    nested in the outer loop.  Two loop passes must both capture the

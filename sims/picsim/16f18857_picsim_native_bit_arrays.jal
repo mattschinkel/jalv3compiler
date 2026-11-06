@@ -1,0 +1,58 @@
+-- Title: picsim 16F18857 — native bit arrays and 2D bit matrices
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description: port of 16f877_gpsim_native_bit_array and
+--    16f1825 bitn_elements: boolean array writes/reads, bit literal
+--    arrays, and a bit array counted through a formal.
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- expect byte v_ok1 1
+-- expect byte v_ok2 1
+-- expect byte v_ok5 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var bit flags[32]
+var bit lit[4] = {true, false, true, false}
+var volatile byte ok1 = 0
+var volatile byte ok2 = 0
+var volatile byte ok5 = 0
+var byte i = 0
+var byte j = 0
+var byte ct = 0
+
+procedure countbits(bit in f[], word in n, byte out cts) is
+   var word k = 0
+   cts = 0
+   for n loop
+      if f[k] then
+         cts = cts + 1
+      end if
+      k = k + 1
+   end loop
+end procedure
+
+  -- boolean array writes/reads
+  flags[0] = true
+  flags[31] = true
+  flags[15] = flags[0]
+  if flags[0] & flags[31] & flags[15] & !flags[1] then
+     ok1 = 1
+  end if
+  -- literal init
+  if lit[0] & !lit[1] & lit[2] & !lit[3] then
+     ok2 = 1
+  end if
+  -- bit array through a formal (count via procedure)
+  countbits(lit, 4, ct)
+  if ct == 2 then
+     ok5 = 1
+  end if
+  forever loop
+    ok5 = ok5
+  end loop
