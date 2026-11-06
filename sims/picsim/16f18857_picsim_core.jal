@@ -1,0 +1,44 @@
+-- Title: picsim 16F18857 core validation
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- Description: arithmetic, table lookup, branching and loop codegen on the
+--              enhanced-midrange 16F18857 core, validated under picsim.
+--
+-- @picsim_validate begin
+-- steps: 20000
+-- expect byte v_a 0x13
+-- expect byte v_b 0x34
+-- expect word v_ww 0x00A8
+-- expect byte v_c 0x33
+-- expect byte v_e 0x0A
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+--
+var volatile byte a  at 0x20
+var volatile byte b  at 0x21
+var volatile word ww at 0x22
+var volatile byte c  at 0x24
+var volatile byte e  at 0x25
+--
+const byte tbl[] = { 0x11, 0x22, 0x33, 0x44 }
+--
+  a = 0x12
+  b = 0x34
+  ww = a * b
+  c = tbl[2]
+  if a < b then
+    a = a + 1
+  else
+    a = a - 1
+  end if
+  e = 0
+  for 5 loop
+    e = e + 2
+  end loop
+  forever loop
+    e = e
+  end loop

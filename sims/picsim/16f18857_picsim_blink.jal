@@ -1,0 +1,37 @@
+-- Title: picsim 16F18857 blink (pin toggle validation)
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- Description: runtime twin of demo_sample/16f18857_blink.jal -- the same
+--              blink-a-led body, validated by counting PORTA0 flips in the
+--              simulator (no RAM checkpoint involved).
+--
+-- @picsim_validate begin
+-- steps: 4000000
+-- pin_flips: RA0 16
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target OSC      OFF
+pragma target RSTOSC   HFINT32
+pragma target CLKOUTEN DISABLED
+pragma target WDT      DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target LVP      ENABLED
+pragma target MCLR     EXTERNAL
+--
+OSCFRQ_HFFRQ = 0b010
+--
+enable_digital_io()
+--
+alias led is pin_A0
+pin_A0_direction = OUTPUT
+--
+forever loop
+   led = ON
+   _usec_delay(100_000)
+   led = OFF
+   _usec_delay(400_000)
+end loop

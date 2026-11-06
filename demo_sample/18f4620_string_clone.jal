@@ -1,0 +1,127 @@
+-- Title: PIC18F4620 string clone feature demo
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: a dynamic string passed to a `byte in out x[]` /
+--              `byte out x[]` formal gets the ONE string rule through a
+--              string-flavored clone of the callee: writing below COUNT
+--              stores in place, writing AT COUNT appends one character
+--              (the block grows), past COUNT raises the range error, and
+--              COUNT is live. Array actuals keep the generic body -- one
+--              declared procedure, two compiled flavors.
+--              (fixes/fix_string_arg_clone.md)
+--
+-- Requires: 18f4620, serial_hardware, print, strings_dynamic
+--
+
+include 18f4620                      -- target PICmicro
+--
+pragma target clock 8_000_000       -- oscillator frequency
+--
+pragma target OSC      INTOSC_NOCLKOUT      -- internal oscillator
+pragma target WDT      CONTROL              -- watchdog
+WDTCON_SWDTEN = OFF                        -- disable WDT
+--
+-- The configuration bit settings above are a selection, sufficient
+-- for this program. Other programs may need more or different settings.
+--
+enable_digital_io()                 -- make all pins digital I/O
+
+const serial_hw_baudrate  = 115200
+include serial_hardware
+serial_hw_init()
+alias serial_data is serial_hw_data
+include print
+
+pragma target string_heap_size 128
+
+include strings_dynamic
+
+var string  buf
+var byte    arr[8]
+var byte    r
+var volatile byte checks = 0
+var volatile byte total  = 0
+
+-- ONE declared procedure serves BOTH flavors: byte arrays take the
+-- generic body; strings take the string-flavored clone.
+procedure bump(byte in out x[], byte in k, byte in v) is
+   x[k] = v
+end procedure
+
+-- a function clones the same way (its return binds to the clone's slot)
+function bump_get(byte in out x[], byte in k, byte in v) return byte is
+   x[k] = v
+   return x[0]
+end function
+
+-- a reads-only body keeps the payload view (no clone is created)
+function first(byte in out x[]) return byte is
+   return x[0]
+end function
+
+procedure check(bit in ok, string in n) is
+   if ok then
+      checks = checks + 1
+      print_string(serial_data, "check ")
+      print_string(serial_data, n)
+      print_string(serial_data, ": PASS\r\n")
+   else
+      print_string(serial_data, "check ")
+      print_string(serial_data, n)
+      print_string(serial_data, ": FAIL\r\n")
+   end if
+end procedure
+
+print_string(serial_data, "========================================\r\n")
+print_string(serial_data, "  JALv2 PIC18F4620 demo: string clones  \r\n")
+print_string(serial_data, "  x[k] = v through a byte in out formal:\r\n")
+print_string(serial_data, "  below COUNT in place, at COUNT append  \r\n")
+print_string(serial_data, "========================================\r\n")
+
+-- 1: below COUNT stores in place
+buf = "abc"
+bump(buf, 0, "X")
+check((buf[0] == "X") & (buf[1] == "b") & (COUNT(buf) == 3), "1 inplace")
+
+-- 2: at COUNT appends one character (grow)
+bump(buf, 3, "d")
+check((COUNT(buf) == 4) & (buf[3] == "d") & (buf[0] == "X"), "2 append")
+
+-- 3: append again across a moved block
+bump(buf, 4, "e")
+check((COUNT(buf) == 5) & (buf[4] == "e") & (buf[3] == "d"), "3 moved")
+
+-- 4: the array flavor: generic body, neighbours intact
+arr[0] = 9
+arr[3] = 7
+bump(arr, 1, 5)
+check((arr[1] == 5) & (arr[3] == 7) & (arr[0] == 9), "4 array")
+
+-- 5: a function clone returns and appends
+buf = "xyz"
+r = bump_get(buf, 3, "w")
+check((r == "x") & (COUNT(buf) == 4) & (buf[3] == "w"), "5 function")
+
+-- 6: a reads-only body keeps the view
+check((first(buf) == "x") & (COUNT(buf) == 4), "6 readonly")
+
+-- 7: COUNT is live on both flavors
+check((COUNT(buf) == 4) & (COUNT(arr) == 8), "7 count")
+
+total = 7
+print_string(serial_data, "checks passed: ")
+print_byte_dec(serial_data, checks)
+print_string(serial_data, " of ")
+print_byte_dec(serial_data, total)
+print_crlf(serial_data)
+if checks == total then
+   print_string(serial_data, "ALL STRING CLONE CHECKS PASSED")
+else
+   print_string(serial_data, "STRING CLONE CHECKS FAILED")
+end if
+print_crlf(serial_data)
+print_string(serial_data, "##DONE##\r\n")

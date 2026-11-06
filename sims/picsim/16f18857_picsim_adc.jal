@@ -1,0 +1,48 @@
+-- Title: picsim 16F18857 ADC stimulus validation
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- Description: reads the ADC on ANB3 with an externally driven 2.5 V
+--              stimulus (engine --apin) and checkpoints both resolutions.
+--
+-- @picsim_validate begin
+-- steps: 300000
+-- apin: RB3 2.5
+-- expect word v_wm 0x01FF
+-- expect byte v_bm 0x7F
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target OSC      OFF
+pragma target RSTOSC   HFINT32
+pragma target CLKOUTEN DISABLED
+pragma target WDT      DISABLED
+pragma target BROWNOUT DISABLED
+pragma target FCMEN    DISABLED
+pragma target CSWEN    ENABLED
+pragma target LVP      ENABLED
+pragma target MCLR     EXTERNAL
+--
+OSCFRQ_HFFRQ = 0b010
+--
+enable_digital_io()
+--
+pin_B3_direction = input
+ANSELB_ANSB3 = TRUE
+const byte channel = 11
+ADREF_ADPREF = 0b00
+ADREF_ADNREF = FALSE
+ADCLK_ADCCS = 0b000011
+--
+include adc
+adc_init()
+--
+var volatile word wm at 0x20
+var volatile byte bm at 0x22
+--
+  wm = adc_read_high_res(channel)
+  bm = adc_read_low_res(channel)
+  forever loop
+    wm = wm
+  end loop

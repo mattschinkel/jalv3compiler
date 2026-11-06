@@ -1,0 +1,75 @@
+-- Title: picsim 16F18857 string-clone validation
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- Description: the string-flavored clone on the enhanced-midrange core:
+--    a dynamic string passed to a `byte in out x[]` formal is routed to a
+--    re-parsed clone whose formal is a string handle, so `x[k] = v` follows
+--    the ONE string rule -- below COUNT stores in place, AT COUNT appends
+--    one character (the block grows), COUNT is live.  Array actuals keep
+--    the generic body, and a reads-only body keeps the payload view.
+--    (fixes/fix_string_arg_clone.md)
+--
+-- @picsim_validate begin
+-- steps: 300000
+-- expect byte v_ok1 1
+-- expect byte v_ok2 1
+-- expect byte v_ok3 1
+-- expect byte v_ok4 1
+-- expect byte v_ok5 1
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target string_heap_size 96
+--
+var string s
+var byte arr[8]
+var volatile byte ok1 at 0x20
+var volatile byte ok2 at 0x21
+var volatile byte ok3 at 0x22
+var volatile byte ok4 at 0x23
+var volatile byte ok5 at 0x24
+--
+-- ONE declared procedure serves BOTH flavors: arrays take the generic
+-- body, strings take the string-flavored clone
+procedure bump(byte in out x[], byte in k, byte in v) is
+   x[k] = v
+end procedure
+
+-- a reads-only body keeps the payload view (no clone is created)
+function first(byte in out x[]) return byte is
+   return x[0]
+end function
+--
+  s = "abc"
+  -- below COUNT: store in place
+  bump(s, 0, "X")
+  if (s[0] == "X") & (s[1] == "b") & (COUNT(s) == 3) then
+     ok1 = 1
+  end if
+  -- AT COUNT: append one character, the block grows
+  bump(s, 3, "d")
+  if (COUNT(s) == 4) & (s[3] == "d") & (s[0] == "X") then
+     ok2 = 1
+  end if
+  -- append again across a moved block
+  bump(s, 4, "e")
+  if (COUNT(s) == 5) & (s[4] == "e") & (s[3] == "d") then
+     ok3 = 1
+  end if
+  -- the array flavor: generic body, neighbours intact
+  arr[0] = 9
+  arr[3] = 7
+  bump(arr, 1, 5)
+  if (arr[1] == 5) & (arr[3] == 7) & (arr[0] == 9) then
+     ok4 = 1
+  end if
+  -- a reads-only body keeps the view
+  if (first(s) == "X") & (COUNT(s) == 5) & (COUNT(arr) == 8) then
+     ok5 = 1
+  end if
+  forever loop
+    ok5 = ok5
+  end loop

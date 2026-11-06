@@ -361,6 +361,8 @@ if (( DRY )); then
     (( SEL_PIC32 )) && echo "  L1 pic32 qemu"
     (( SEL_ESP32 )) && echo "  L1 esp32 qemu"
     echo "  L1 compile-pin regressions (unit-tests/run_compile_pin_tests.sh)"
+    echo "  L1 demo sample kit (compile)"
+    echo "  L1 picsim 16F18857 suite (when PICSIM_DIR is set)"
     (( SEL_GPSIM || SEL_PIC32 || SEL_ESP32 )) || echo "  L1 (no runtime suites for this change class)"
   fi
   if (( LEVEL >= 2 )); then
@@ -454,6 +456,16 @@ if (( LEVEL >= 1 )); then
   # the same script.
   gate "L1 demo sample kit (compile)" \
     "$ROOT/unit-tests/sample_kit_sweep.sh" "$COMPILER"
+  # Optional 16F18857 runtime suite on picsim (external, GPL-2.0).  It runs
+  # only when PICSIM_DIR points at a BUILT picsim tree (the fork carrying the
+  # PIC16F18857 model); otherwise it is skipped with a note.  The suite is
+  # tiny (5 tests) and validates RAM / pins / UART / ADC stimulus.
+  if [[ -n "${PICSIM_DIR:-}" ]] && { [[ -e "$PICSIM_DIR/src/libpicsim.a" ]] || [[ -e "$PICSIM_DIR/src/libpicsim.so" ]]; }; then
+    gate "L1 picsim 16F18857 suite" \
+      python3 sims/run_picsim_regression.py --picsim "$PICSIM_DIR" --compiler "$COMPILER"
+  else
+    skip "L1 picsim 16F18857 suite (set PICSIM_DIR to a built picsim tree)"
+  fi
 fi
 
 # ---------------------------------------------------------------- L2

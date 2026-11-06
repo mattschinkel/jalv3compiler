@@ -1,0 +1,40 @@
+-- Title: picsim 16F18857 64-bank data access
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- Description: array storage above bank 31 plus FSR linear-window access.
+--              Regression for the picsim 64-bank SFR mirror and FSR window
+--              fixes (banks 32..63 used to be mis-decoded / mis-mapped).
+--
+-- @picsim_validate begin
+-- steps: 20000
+-- expect byte v_c0 1
+-- expect byte v_c5 6
+-- expect byte v_c7 8
+-- expect byte v_sum 0x24
+-- @picsim_validate end
+--
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+--
+var volatile byte idx at 0x20
+var volatile byte big[8] at 0x1020
+var volatile byte c0  at 0x21
+var volatile byte c5  at 0x22
+var volatile byte c7  at 0x23
+var volatile byte sum at 0x24
+--
+  for 8 using idx loop
+    big[idx] = idx + 1
+  end loop
+  c0 = big[0]
+  c5 = big[5]
+  c7 = big[7]
+  sum = 0
+  for 8 using idx loop
+    sum = sum + big[idx]
+  end loop
+  forever loop
+    sum = sum
+  end loop
