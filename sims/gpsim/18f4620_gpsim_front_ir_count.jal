@@ -1,0 +1,56 @@
+-- Title: PIC18F4620 gpsim — semantic COUNT in the string clone and array body
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    `if (COUNT(x) == want)` in one declared `byte in out x[]` body.  Called
+--    with a heap string it lands in the string-flavored clone (COUNT is the
+--    live handle length, 3); called with a byte array it uses the generic
+--    body (COUNT is the array bound, 4).  Storing COUNT into a byte element
+--    is refused by the normal string rule (the count is word-width), so the
+--    witness compares instead -- that keeps the shape valid gate-off as well
+--    as gate-on.  With JALV2_FRONT_IR=1 the COUNT is a deferred semantic node
+--    lowered by the same count rules as the parser; the parity pin requires
+--    byte-identical HEX gate-off/on.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_ok_str 1
+-- expect byte v_ok_arr 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+pragma target string_heap_size 64
+var string s
+var byte a[4]
+var volatile byte ok = 0
+var volatile byte ok_str = 0
+var volatile byte ok_arr = 0
+
+procedure cnt(byte in out x[], byte in want) is
+   if (COUNT(x) == want) then ok = 1 end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+
+   s = "abc"
+   ok = 0
+   cnt(s, 3)
+   if (ok == 1) & (COUNT(s) == 3) then ok_str = 1 end if
+   regression_checkpoint()
+
+   a[0] = 1
+   a[1] = 2
+   a[2] = 3
+   a[3] = 4
+   ok = 0
+   cnt(a, 4)
+   if (ok == 1) then ok_arr = 1 end if
+   regression_checkpoint()
+end procedure
+
+run()

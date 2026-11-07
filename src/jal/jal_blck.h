@@ -39,4 +39,20 @@ variable_def_t jal_pointer_fnptr_def_get(pfile_t *pf);
  * indirect-call emission is wired through the fps[i](x) machinery) */
 boolean_t jal_pointer_slot_rt_enabled(void);
 
+/* spike: defer a string subscript load (base + index) to the post-parse
+ * semantic lowering pass */
+void jal_sem_str_load_emit(pfile_t *pf, value_t dst, value_t base,
+    value_t idx);
+
+/* the one value-aware JALV2_FRONT_IR switch (every semantic gate uses it) */
+boolean_t jal_sem_front_ir_enabled(void);
+
+/* phase 2: defer COUNT(formal) to the post-parse lowering pass */
+boolean_t jal_sem_count_wanted(pfile_t *pf, value_t val);
+void      jal_sem_count_emit(pfile_t *pf, value_t dst, value_t src);
+
+/* phase 2: defer a whole-string relation (== / !=) to the lowering pass */
+void jal_sem_relation_emit(pfile_t *pf, value_t dst, value_t lhs,
+    value_t rhs, operator_t op);
+
 #endif /* jal_blck_h__ */

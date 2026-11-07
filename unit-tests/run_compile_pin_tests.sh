@@ -94,6 +94,16 @@ echo "compile-pin gate: compiler=$CC"
 
 # String / parser diagnostics
 run_sh string_error_paths          unit-tests/test_string_error_paths.sh "$CC"
+# Phase-1 front-end semantic subscript layer (JALV2_FRONT_IR, default off):
+# clone witnesses must stay byte-identical gate-off/on, and the hard
+# subscript witness must run under gpsim with the gate on.
+run_sh front_ir_parity             unit-tests/test_front_ir_parity.sh "$CC"
+# The same sem-on runtime equivalence on the flat 32-bit (PIC32) back end.
+run_sh front_ir_pic32              unit-tests/test_front_ir_parity_pic32.sh "$CC"
+run_sh front_ir_esp32              unit-tests/test_front_ir_parity_esp32.sh "$CC"
+# The finer alias attribution: the distinct-global clone is allowed, the
+# same-string case is still refused.
+run_sh front_ir_clone_builtin      unit-tests/test_front_ir_clone_builtin.sh "$CC"
 # Public `string_*` helper calls are outlined through the strings_dynamic
 # forwarder (one shared body, ~21 words/site) instead of expanding the whole
 # builtin body (~740 words/site). fixes/fix_string_outline_calls.md.

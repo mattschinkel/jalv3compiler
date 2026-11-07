@@ -1,0 +1,49 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — front-IR COUNT
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The shared COUNT lowering on the flat 32-bit back end: COUNT(x) in a
+--    reads-only open-array body (the string view's length and the generic
+--    array's `_name_count`), COUNT(arr) on a fixed array and COUNT(p) on a
+--    pointer string.  Runs with JALV2_FRONT_IR off and on.
+--
+-- @sim_validate begin
+-- duration_s: 5.0
+-- machine: esp32
+-- expect byte v__check_step 1
+-- expect byte v_ok 1
+-- @sim_validate end
+
+include regression_esp32_device
+include regression_esp32
+pragma target string_heap_size 64
+
+var string s
+var byte arr[4]
+var pointer p as var string
+var volatile byte ok
+
+procedure cnt(byte in out x[], byte in want, byte in bitv) is
+   if (COUNT(x) == want) then ok = ok | bitv end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abc"
+   arr[0] = "a"
+   arr[1] = "b"
+   arr[2] = "c"
+   arr[3] = "d"
+   cnt(s, 3, 1)
+   cnt(arr, 4, 2)
+   if (COUNT(arr) == 4) then ok = ok | 4 end if
+   p is s
+   if (COUNT(p) == 3) then ok = ok | 8 end if
+   if (ok == 15) then ok = 1 end if
+   regression_checkpoint()
+end procedure
+
+run()

@@ -66,6 +66,8 @@ boolean_t jal_string_assignment_parse_emit(pfile_t *pf, value_t dst);
 boolean_t jal_string_is_fixed(value_t val);
 /* heap-string subscripts: str[i] reads/writes the i-th CHARACTER */
 boolean_t jal_string_subscript_value_is(value_t val);
+boolean_t jal_string_subscript_split_public(pfile_t *pf, value_t elem,
+    value_t *pbase, value_t *pidx);
 value_t   jal_string_subscript_read_emit(pfile_t *pf, value_t elem);
 boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst,
     value_t src);
@@ -97,6 +99,9 @@ boolean_t jal_string_cast_hard_is(const char *nm);
 value_t   jal_string_cast_parse_emit(pfile_t *pf);
 value_t   jal_string_concat_chain_emit(pfile_t *pf, value_t first);
 value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
+    operator_t op);
+value_t jal_string_relation_operand_parse(pfile_t *pf);
+value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
     operator_t op);
 boolean_t jal_string_builtin_is(const char *name);
 value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name);

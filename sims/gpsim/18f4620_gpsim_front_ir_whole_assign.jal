@@ -1,0 +1,51 @@
+-- Title: PIC18F4620 gpsim — semantic whole-formal assignment
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    `x = "abc"` in one declared `byte in out x[]` body.  A string actual
+--    lands in the string-flavored clone and performs the handle/block
+--    assign.  A byte array actual uses the generic body, where the assign
+--    only REBINDS the formal's local pointer -- the caller's array is
+--    untouched (verified gate-off and gate-on).  With JALV2_FRONT_IR=1 the
+--    whole-formal assign is a deferred semantic node lowered with the
+--    formal's actual flavor; the parity pin requires byte-identical HEX.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_ok_str 1
+-- expect byte v_ok_arr 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+pragma target string_heap_size 64
+var string s
+var byte a[8]
+var volatile byte ok_str = 0
+var volatile byte ok_arr = 0
+
+procedure bodyx(byte in out x[]) is
+   x = "abc"
+end procedure
+
+procedure run() is
+   regression_begin_run()
+
+   s = "xyz"
+   bodyx(s)
+   if (s == "abc") & (COUNT(s) == 3) then ok_str = 1 end if
+   regression_checkpoint()
+
+   a[0] = 0
+   a[1] = 0
+   a[2] = 0
+   a[3] = 0
+   bodyx(a)
+   if (a[0] == 0) & (a[1] == 0) & (a[2] == 0) then ok_arr = 1 end if
+   regression_checkpoint()
+end procedure
+
+run()

@@ -1,0 +1,28 @@
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_ok 1
+-- @gpsim_validate end
+include regression_18f4620_device
+include regression
+var byte arr1[3]
+var byte arr2[3]
+var volatile byte ok = 0
+procedure same_arr(byte in out x[], byte in out y[]) is
+   x[0] = x[0]
+   y[0] = y[0]
+   if (x == y) then ok = 1 end if
+end procedure
+procedure run() is
+   regression_begin_run()
+   arr1[0] = "a"
+   arr1[1] = "b"
+   arr1[2] = "c"
+   arr2[0] = "a"
+   arr2[1] = "b"
+   arr2[2] = "c"
+   same_arr(arr1, arr2)
+   regression_checkpoint()
+end procedure
+run()

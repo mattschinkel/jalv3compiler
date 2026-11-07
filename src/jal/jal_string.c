@@ -1776,6 +1776,13 @@ static boolean_t jal_string_subscript_split(pfile_t *pf, value_t elem,
   return BOOLEAN_TRUE;
 }
 
+/* spike: expose the base/index split to the front-end semantic layer */
+boolean_t jal_string_subscript_split_public(pfile_t *pf, value_t elem,
+    value_t *pbase, value_t *pidx)
+{
+  return jal_string_subscript_split(pf, elem, pbase, pidx);
+}
+
 /* record that PROC may grow VAR (VARIABLE_NONE = an unnamed string); the
  * boolean flag stays the cheap "grows something" summary */
 static void jal_string_grow_add(pfile_proc_t *proc, variable_t var)
@@ -3065,6 +3072,105 @@ static value_t jal_string_source_length_snapshot_get(pfile_t *pf, value_t src)
   return snap;
 }
 
+value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
+    operator_t op)
+{
+  value_t left_len;
+  value_t right_len;
+  value_t result;
+  value_t idx;
+  value_t one;
+  value_t zero;
+  label_t mismatch_lbl;
+  label_t done_lbl;
+  label_t loop_lbl;
+
+  if (!left || !right) {
+    return VALUE_NONE;
+  }
+  jal_string_core_gate(pf);
+  /* A one-character literal is a char code in a numeric comparison:
+   * `"a" == c` must keep working (and must not reach the byte walker).
+   * When the other operand IS a string source the literal is treated as
+   * a string and the normal string comparison below runs. */
+  if (jal_string_char_literal_is(left) && jal_string_is_numeric_value(right)) {
+    value_t cval;
+    value_t cmp_result;
+
+    cval = value_clone(left);
+    cmp_result = VALUE_NONE;
+    if (cval && pfile_expr_string_fix(pf, cval)) {
+      pfile_cmd_op_add(pf, op, &cmp_result, cval, right);
+      value_release(cval);
+      value_release(right);
+      return cmp_result;
+    }
+    value_release(cval);
+    value_release(right);
+    return VALUE_NONE;
+  }
+  /* `parse_operand` also accepts numeric values because `&` chains render
+   * them (stage 2a/2b).  A RELATION has no such coercion: `s == 5` used to
+   * reach the byte walker with a scalar and assert in value_dereference.
+   * Byte arrays are still valid string sources; scalar numbers are not. */
+  if (!jal_string_is_source(right) && !jal_string_pointer_is(right)
+      && !value_is_array(right)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "cannot compare a string with a non-string value");
+    value_release(right);
+    return VALUE_NONE;
+  }
+  left_len = jal_string_source_length_snapshot_get(pf, left);
+  right_len = jal_string_source_length_snapshot_get(pf, right);
+  result = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1);
+  idx = jal_string_temp_index_get(pf);
+  one = jal_string_const_get(pf, 1);
+  zero = jal_string_const_get(pf, 0);
+  mismatch_lbl = pfile_label_alloc(pf, 0);
+  done_lbl = pfile_label_alloc(pf, 0);
+  loop_lbl = pfile_label_alloc(pf, 0);
+
+  jal_string_assign_value(pf, result,
+      (OPERATOR_EQ == op) ? one : zero);
+  jal_string_branch_if_value_cmp(pf, OPERATOR_NE, left_len, right_len,
+      CMD_BRANCHCOND_TRUE, mismatch_lbl);
+  jal_string_assign_value(pf, idx, zero);
+
+  pfile_cmd_label_add(pf, loop_lbl);
+  jal_string_branch_if_value_cmp(pf, OPERATOR_GE, idx, left_len,
+      CMD_BRANCHCOND_TRUE, done_lbl);
+  {
+    value_t left_byte;
+    value_t right_byte;
+
+    left_byte = jal_string_source_byte_get(pf, left, idx);
+    right_byte = jal_string_source_byte_get(pf, right, idx);
+    jal_string_branch_if_value_cmp(pf, OPERATOR_NE, left_byte, right_byte,
+        CMD_BRANCHCOND_TRUE, mismatch_lbl);
+    value_release(right_byte);
+    value_release(left_byte);
+  }
+  pfile_cmd_op_add(pf, OPERATOR_ADD, &idx, idx, one);
+  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+      loop_lbl, VALUE_NONE, VALUE_NONE, 0);
+
+  pfile_cmd_label_add(pf, mismatch_lbl);
+  jal_string_assign_value(pf, result,
+      (OPERATOR_EQ == op) ? zero : one);
+  pfile_cmd_label_add(pf, done_lbl);
+
+  label_release(loop_lbl);
+  label_release(done_lbl);
+  label_release(mismatch_lbl);
+  value_release(zero);
+  value_release(one);
+  value_release(idx);
+  value_release(right_len);
+  value_release(left_len);
+  value_release(right);
+  return result;
+}
+
 value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
     operator_t op)
 {
@@ -3181,6 +3287,12 @@ value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
   value_release(left_len);
   value_release(right);
   return result;
+}
+
+value_t jal_string_relation_operand_parse(pfile_t *pf)
+{
+  jal_string_core_gate(pf);
+  return jal_string_parse_operand(pf);
 }
 
 static boolean_t jal_string_value_const_baseofs_get(value_t val,
@@ -4056,6 +4168,7 @@ static boolean_t jal_string_concat_outline_emit(pfile_t *pf, value_t dst,
       return BOOLEAN_FALSE;
     }
   }
+  jal_string_note_realloc_dst(pf, dst);
   proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_concat");
   if (!proc) {
     proc = jal_string_proc_find_deep(pf->proc_root, "string_concat");
@@ -4162,6 +4275,7 @@ static boolean_t jal_string_assign_outline_emit(pfile_t *pf, value_t dst,
       || jal_string_same_dynamic_storage(dst, src)) {
     return BOOLEAN_FALSE;
   }
+  jal_string_note_realloc_dst(pf, dst);
   proc = pfile_proc_find(pf, PFILE_LOG_NONE, "string_assign");
   if (!proc) {
     proc = jal_string_proc_find_deep(pf->proc_root, "string_assign");
@@ -4482,7 +4596,7 @@ boolean_t jal_string_store_outline_emit(pfile_t *pf, value_t dst, value_t src)
     FREE(parms);
     return BOOLEAN_FALSE;
   }
-  jal_string_note_realloc(pf);   /* the append path grows the block */
+  jal_string_note_realloc_dst(pf, base);   /* the append path grows the base */
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_CALL, CMD_BRANCHCOND_NONE,
       LABEL_NONE, VALUE_NONE, call_val, parms);
   value_release(idx);
@@ -7052,6 +7166,13 @@ static value_t jal_string_forwarder_call_emit(pfile_t *pf, const char *name,
     /* `string_heap_compact` outlines through its own path above. */
     return VALUE_NONE;
   }
+  if (is_append || is_append_truncate || is_truncate || is_from_array
+      || is_from_array_truncate) {
+    /* the outlined call grows/moves DST at the CALLER's site: record the
+     * destination actual, so the clone alias gate can compare it with the
+     * caller's string instead of seeing the unnamed catch-all */
+    jal_string_note_realloc_dst(pf, dst);
+  }
   if (is_to_array || is_to_array_truncate) {
     /* the wrapper writes through an `in` byte-array formal; a literal or
      * fixed string source would be marshalled through a chain cell, which
@@ -7246,7 +7367,6 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   /* `name` points into the token buffer and the argument parse below
    * overwrites it: keep a copy for the outline decision. */
   name_buf[0] = 0;
-  jal_string_note_realloc(pf);
   if (name) {
     strncpy(name_buf, name, sizeof(name_buf) - 1);
     name_buf[sizeof(name_buf) - 1] = 0;
@@ -7266,12 +7386,6 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   is_to_array = jal_string_builtin_pub_internal_eq(name, "string_to_array");
   is_to_array_truncate = jal_string_builtin_pub_internal_eq(name,
       "string_to_array_truncate");
-  /* These builtins allocate/grow (or shrink, which reallocates) a heap
-   * string; COUNT() and the comparisons do not. */
-  if (is_append || is_append_truncate || is_truncate || is_from_array
-      || is_from_array_truncate) {
-    jal_string_note_realloc(pf);
-  }
   is_heap_compact = jal_string_builtin_pub_internal_eq(name,
       "string_heap_compact");
   pf_token_get(pf, PF_TOKEN_NEXT);
@@ -7281,6 +7395,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   if (is_heap_compact) {
     cmd_t nopc;
 
+    jal_string_note_realloc(pf);   /* compaction can move any block */
     result = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1U);
     if (VALUE_NONE == result) {
       pfile_log_syserr(pf, ENOMEM);
@@ -7392,6 +7507,10 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
   }
   if (!jal_string_builtin_sep_get(pf, ")")) {
     goto done;
+  }
+  if (is_append || is_append_truncate || is_truncate || is_from_array
+      || is_from_array_truncate) {
+    jal_string_note_realloc_dst(pf, dst);
   }
 #if JALV2_STRING_OUTLINE_CALLS
   /*

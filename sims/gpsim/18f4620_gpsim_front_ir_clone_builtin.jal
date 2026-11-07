@@ -1,0 +1,28 @@
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_ok 1
+-- @gpsim_validate end
+include regression_18f4620_device
+include regression
+pragma target string_heap_size 64
+include strings_dynamic
+var string g
+var string s
+var volatile byte ok = 0
+procedure mix(byte in out x[]) is
+   x[0] = "Z"
+   string_append(g, "xy")
+end procedure
+procedure run() is
+   regression_begin_run()
+   g = "abc"
+   s = "abc"
+   mix(s)
+   if (s[0] == "Z") & (COUNT(s) == 3) & (g[0] == "a") & (COUNT(g) == 5) & (g[3] == "x") & (g[4] == "y") then
+      ok = 1
+   end if
+   regression_checkpoint()
+end procedure
+run()

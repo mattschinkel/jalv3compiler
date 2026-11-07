@@ -1,0 +1,19 @@
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_ok 1
+-- @gpsim_validate end
+include regression_18f4620_device
+include regression
+var byte arr[3]
+var volatile byte ok = 0
+procedure run() is
+   regression_begin_run()
+   arr[0] = "a"
+   arr[1] = "b"
+   arr[2] = "c"
+   if (_LENGTH(arr) == 3) & (arr[0] == "a") then ok = 1 end if
+   regression_checkpoint()
+end procedure
+run()

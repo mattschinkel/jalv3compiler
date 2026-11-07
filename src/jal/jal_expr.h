@@ -47,6 +47,9 @@ void   jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs);
 flag_t jal_parse_postfix(pfile_t *pf, value_t *pval,
     value_t opt_locked_jvals[JAL_VAL_TYPE_CT]);
 
+/* phase 2: the count lowering shared by the parser and the semantic pass */
+value_t jal_sem_count_value_get(pfile_t *pf, value_t val);
+
 #endif /* jal_expr_h__ */
 
 

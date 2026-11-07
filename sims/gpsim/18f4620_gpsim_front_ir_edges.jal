@@ -1,0 +1,81 @@
+-- Title: PIC18F4620 gpsim — front-end semantic layer edge cases
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    Phase-1 coverage beyond the clone formal: a global heap-string
+--    subscript read, a string POINTER subscript read, a read that feeds a
+--    store (`s[0] = s[2]`), a subscript read passed as a call argument, a
+--    subscript read in a condition, and a generic fixed-size array formal
+--    store.  With JALV2_FRONT_IR=1 the string reads go through the semantic
+--    base+index load; the fixed-size formal store uses the generic element
+--    store.  unit-tests/test_front_ir_parity.sh compiles this gate-off/on
+--    and requires byte-identical HEX; with the gate off it is the ordinary
+--    path.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 5
+-- expect byte v_ok_global 1
+-- expect byte v_ok_ptr 1
+-- expect byte v_ok_pair 1
+-- expect byte v_ok_arg 1
+-- expect byte v_ok_cond 1
+-- expect byte v_ok_fixed 1
+-- expect byte v_ok_fixed_count 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+pragma target string_heap_size 64
+var string g
+var string s
+var pointer p as var string
+var byte arr[4]
+var volatile byte ok_global = 0
+var volatile byte ok_ptr = 0
+var volatile byte ok_pair = 0
+var volatile byte ok_arg = 0
+var volatile byte ok_cond = 0
+var volatile byte ok_fixed = 0
+var volatile byte ok_fixed_count = 0
+
+procedure take(byte in v) is
+   if (v == "c") then ok_arg = 1 end if
+end procedure
+
+procedure fx(byte in out a[4]) is
+   if (COUNT(a) == 4) then ok_fixed_count = 1 end if
+   a[0] = 7
+end procedure
+
+procedure run() is
+   regression_begin_run()
+
+   g = "abc"
+   if (g[1] == "b") then ok_global = 1 end if
+   regression_checkpoint()
+
+   s = "abc"
+   p is s
+   if (p[2] == "c") then ok_ptr = 1 end if
+   regression_checkpoint()
+
+   s = "abc"
+   s[0] = s[2]
+   if (s[0] == "c") & (COUNT(s) == 3) then ok_pair = 1 end if
+   regression_checkpoint()
+
+   s = "abc"
+   take(s[2])
+   if (s[0] == "a") & (COUNT(s) == 3) then ok_cond = 1 end if
+   regression_checkpoint()
+
+   arr[0] = 1
+   fx(arr)
+   if (arr[0] == 7) then ok_fixed = 1 end if
+   regression_checkpoint()
+end procedure
+
+run()

@@ -1227,9 +1227,31 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
        * everything downstream (==, chains, call arguments). */
       if ((JAL_PARSE_VALUE_TYPE_RVALUE == type) && val
           && jal_string_subscript_value_is(val)) {
-        value_t byte_val;
+        value_t byte_val = VALUE_NONE;
 
-        byte_val = jal_string_subscript_read_emit(pf, val);
+        if (jal_sem_front_ir_enabled()) {
+          value_t sbase = VALUE_NONE;
+          value_t sidx  = VALUE_NONE;
+
+          if (jal_string_subscript_split_public(pf, val, &sbase, &sidx)) {
+            variable_def_t bdef;
+            value_t        dst;
+
+            bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+                VARIABLE_DEF_FLAG_NONE, 1);
+            dst = bdef ? pfile_value_temp_get_from_def(pf, bdef)
+              : VALUE_NONE;
+            if (dst) {
+              jal_sem_str_load_emit(pf, dst, sbase, sidx);
+              byte_val = dst;
+            }
+            value_release(sbase);
+            value_release(sidx);
+          }
+        }
+        if (!byte_val) {
+          byte_val = jal_string_subscript_read_emit(pf, val);
+        }
         if (byte_val) {
           value_release(val);
           val = byte_val;
@@ -1327,6 +1349,69 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
   return val;
 }
 
+/* the parse-time COUNT lowering: string length, array bound, or the
+ * backing _name_count of a pointer.  Shared with the semantic pass so a
+ * deferred COUNT node lowers exactly like the immediate path. */
+static value_t jal_value_count_lower(pfile_t *pf, value_t tmp,
+    boolean_t allow_scalar)
+{
+  value_t val;
+  value_t v;
+
+  val = VALUE_NONE;
+  v = tmp;
+  if (jal_pointer_var_is_pseudo_linked(pf, value_variable_get(v))) {
+    /* the pseudo array has no bound; the pointee [N] would lie */
+    pfile_log(pf, PFILE_LOG_ERR,
+        "COUNT() of a pointer bound to a pseudo array is not known");
+    v = VALUE_NONE;
+  } else if (jal_string_is_dynamic(v)) {
+    val = jal_string_length_value_get(pf, v);
+  } else if (value_is_array(v)) {
+    val = pfile_constant_get(pf,
+        variable_def_member_ct_get(
+          variable_def_member_get(
+            value_def_get(
+              v))),
+        VARIABLE_DEF_NONE);
+  } else if (value_is_pointer(v)
+      || (value_flag_test(v, VALUE_FLAG_POINTER)
+          && value_is_indirect(v))) {
+    const char *vname;
+    char       *ct_name;
+
+    /* `jal_parse_value`(RVALUE) derefs data pointers to the pointee type;
+     * COUNT still needs the backing `_name_count` slot. */
+    vname = value_name_get(v);
+    ct_name = MALLOC(8 + strlen(vname));
+    if (!ct_name) {
+      pfile_log_syserr(pf, ENOMEM);
+    } else {
+      sprintf(ct_name, "_%s_count", vname);
+      val = pfile_value_find(pf, PFILE_LOG_NONE, ct_name);
+      if (VALUE_NONE == val) {
+        val = jal_value_find_open_array_count_param(pf, ct_name);
+      }
+      FREE(ct_name);
+    }
+  }
+  if ((VALUE_NONE == val) && allow_scalar) {
+    val = pfile_constant_get(pf, value_byte_sz_get(v),
+        VARIABLE_DEF_NONE);
+  }
+  if (VALUE_NONE == val) {
+    pfile_log(pf, PFILE_LOG_ERR, "\"%s\" is not an array",
+        v ? value_name_get(v) : "?");
+  }
+  return val;
+}
+
+/* phase 2: the semantic pass lowers a deferred COUNT with the same rules */
+value_t jal_sem_count_value_get(pfile_t *pf, value_t val)
+{
+  return jal_value_count_lower(pf, val, BOOLEAN_TRUE);
+}
+
 static value_t value_get_length_common(pfile_t *pf, boolean_t allow_scalar)
 {
   value_t val;
@@ -1340,49 +1425,22 @@ static value_t value_get_length_common(pfile_t *pf, boolean_t allow_scalar)
     tmp = jal_parse_expr(pf);
     pfile_parse_count_operand_pop(pf);
     if (VALUE_NONE != tmp) {
-      if (jal_pointer_var_is_pseudo_linked(pf, value_variable_get(tmp))) {
-        /* the pseudo array has no bound; the pointee [N] would lie */
-        pfile_log(pf, PFILE_LOG_ERR,
-            "COUNT() of a pointer bound to a pseudo array is not known");
-        value_release(tmp);
-        tmp = VALUE_NONE;
-      } else if (jal_string_is_dynamic(tmp)) {
-        val = jal_string_length_value_get(pf, tmp);
-      } else if (value_is_array(tmp)) {
-        val = pfile_constant_get(pf,
-            variable_def_member_ct_get(
-              variable_def_member_get(
-                value_def_get(
-                  tmp))),
-            VARIABLE_DEF_NONE);
-      } else if (value_is_pointer(tmp)
-          || (value_flag_test(tmp, VALUE_FLAG_POINTER)
-              && value_is_indirect(tmp))) {
-        const char *vname;
-        char       *ct_name;
+      if (jal_sem_count_wanted(pf, tmp)) {
+        variable_def_t wdef;
+        value_t        dst;
 
-        /* `jal_parse_value`(RVALUE) derefs data pointers to the pointee type;
-         * COUNT still needs the backing `_name_count` slot. */
-        vname = value_name_get(tmp);
-        ct_name = MALLOC(8 + strlen(vname));
-        if (!ct_name) {
-          pfile_log_syserr(pf, ENOMEM);
+        wdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+            VARIABLE_DEF_FLAG_NONE, 2);
+        dst = wdef ? pfile_value_temp_get_from_def(pf, wdef)
+          : VALUE_NONE;
+        if (dst) {
+          jal_sem_count_emit(pf, dst, tmp);
+          val = dst;
         } else {
-          sprintf(ct_name, "_%s_count", vname);
-          val = pfile_value_find(pf, PFILE_LOG_NONE, ct_name);
-          if (VALUE_NONE == val) {
-            val = jal_value_find_open_array_count_param(pf, ct_name);
-          }
-          FREE(ct_name);
+          val = jal_value_count_lower(pf, tmp, allow_scalar);
         }
-      }
-      if ((VALUE_NONE == val) && allow_scalar) {
-        val = pfile_constant_get(pf, value_byte_sz_get(tmp),
-            VARIABLE_DEF_NONE);
-      }
-      if (VALUE_NONE == val) {
-        pfile_log(pf, PFILE_LOG_ERR, "\"%s\" is not an array",
-            value_name_get(tmp));
+      } else {
+        val = jal_value_count_lower(pf, tmp, allow_scalar);
       }
       value_release(tmp);
     }
@@ -1871,7 +1929,40 @@ value_t jal_parse_expr(pfile_t *pf)
       string_op = pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "==")
         ? OPERATOR_EQ : OPERATOR_NE;
       pf_token_get(pf, PF_TOKEN_NEXT);
-      rel = jal_string_relation_parse_emit(pf, val, string_op);
+      if (jal_sem_front_ir_enabled()) {
+        value_t right;
+
+        right = jal_string_relation_operand_parse(pf);
+        if (right
+            && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "&")) {
+          right = jal_string_concat_chain_emit(pf, right);
+        }
+        if (!right) {
+          rel = VALUE_NONE;
+        } else if (jal_string_is_dynamic(val)
+            || jal_string_is_dynamic(right)) {
+          /* The string clone's operands are strings at parse: compare now
+           * (the sem node exists for the generic array body's relation). */
+          rel = jal_string_relation_emit(pf, val, right, string_op);
+        } else {
+          variable_def_t bdef;
+          value_t        rel_dst;
+
+          bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
+              VARIABLE_DEF_FLAG_NONE, 1);
+          rel_dst = bdef ? pfile_value_temp_get_from_def(pf, bdef)
+            : VALUE_NONE;
+          if (rel_dst) {
+            jal_sem_relation_emit(pf, rel_dst, val, right, string_op);
+            rel = rel_dst;
+            value_release(right);
+          } else {
+            rel = jal_string_relation_emit(pf, val, right, string_op);
+          }
+        }
+      } else {
+        rel = jal_string_relation_parse_emit(pf, val, string_op);
+      }
       value_release(val);
       val = rel;
     }

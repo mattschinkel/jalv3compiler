@@ -1,0 +1,59 @@
+-- Title: PIC18F4620 gpsim — semantic whole-string relation
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    `if (x == y)` in a body that stores through BOTH formals, so the string
+--    clone re-flavors both x and y and the compare is a content compare.
+--    With JALV2_FRONT_IR=1 the relation is a deferred semantic node carrying
+--    both operands and the operator; the parity pin requires byte-identical
+--    HEX gate-off/on.
+--
+--    NOTE: the clone's string formal compared with an `in` array formal (the
+--    payload VIEW) or with a literal is still refused by the relation source
+--    check -- those shapes do not compile in the generic body either, so a
+--    clone can never be created for them.  The `in`-view compare is recorded
+--    as a pre-existing clone gap in the coverage matrix.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v_ok_same 1
+-- expect byte v_ok_diff 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+pragma target string_heap_size 64
+var string s
+var string t
+var volatile byte ok = 0
+var volatile byte ok_same = 0
+var volatile byte ok_diff = 0
+
+procedure same(byte in out x[], byte in out y[]) is
+   x[0] = x[0]
+   y[0] = y[0]
+   if (x == y) then ok = 1 end if
+end procedure
+
+procedure run() is
+   regression_begin_run()
+
+   s = "abc"
+   t = "abc"
+   ok = 0
+   same(s, t)
+   if (ok == 1) then ok_same = 1 end if
+   regression_checkpoint()
+
+   s = "abc"
+   t = "abd"
+   ok = 0
+   same(s, t)
+   if (ok == 0) then ok_diff = 1 end if
+   regression_checkpoint()
+end procedure
+
+run()

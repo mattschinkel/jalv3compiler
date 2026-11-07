@@ -79,6 +79,15 @@ typedef struct {
 #define CMD_FLAG_SPEED     0x0004 /* optimize for speed      */
 /* BLOCK_START from pfile_cmd_block_dup (pragma inline body); see pfile_temp_fixup */
 #define CMD_FLAG_INLINE_DUP_BLOCK 0x0008
+/* front-end semantic layer (JALV2_FRONT_IR): deferred formal-dependent
+ * operations; the front-end lowering pass replaces them before the
+ * optimizer/back end */
+#define CMD_FLAG_SEM_STORE         0x0010
+#define CMD_FLAG_SEM_STR_LOAD      0x0020
+#define CMD_FLAG_SEM_STR_STORE     0x0040
+#define CMD_FLAG_SEM_COUNT         0x0080
+#define CMD_FLAG_SEM_WHOLE_ASSIGN  0x0100
+#define CMD_FLAG_SEM_RELATION      0x0200
 cmd_t           cmd_alloc(cmd_type_t type, const cmd_vtbl_t *vtbl);
 void            cmd_free(cmd_t cmd);
 cmd_t           cmd_dup(const cmd_t cmd);

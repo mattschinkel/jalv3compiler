@@ -1,0 +1,66 @@
+-- Title: PIC18F4620 gpsim — semantic subscript load/store (JALV2_FRONT_IR)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    The phase-1 front-end semantic layer defers a heap-string subscript to
+--    the post-parse lowering pass, carrying the base string and the index
+--    instead of the already-lowered element view.  With JALV2_FRONT_IR=1 the
+--    clone's reads and stores must still produce the normal string rules:
+--    in-place stores below COUNT, an append AT COUNT, and a read that
+--    composes with an expression (`x[0] = x[1] + 1`).  The same witness is
+--    compiled with the gate off/on by unit-tests/test_front_ir_parity.sh and
+--    must be byte-identical; with the gate off it is the ordinary path.
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 3
+-- expect byte v_ok_read 1
+-- expect byte v_ok_append 1
+-- expect byte v_ok_store 1
+-- @gpsim_validate end
+--
+include regression_18f4620_device
+include regression
+pragma target string_heap_size 64
+var string s
+var volatile byte ok_read = 0
+var volatile byte ok_append = 0
+var volatile byte ok_store = 0
+
+-- read through the formal composes with an expression
+procedure cp(byte in out x[]) is
+   x[0] = x[1] + 1
+end procedure
+
+-- write AT COUNT appends one character
+procedure app(byte in out x[]) is
+   x[COUNT(x)] = "!"
+end procedure
+
+-- a runtime index below COUNT stores in place
+procedure st(byte in out x[], byte in k, byte in v) is
+   x[k] = v
+end procedure
+
+procedure run() is
+   regression_begin_run()
+
+   s = "abc"
+   cp(s)
+   if (s[0] == "c") & (COUNT(s) == 3) then ok_read = 1 end if
+   regression_checkpoint()
+
+   s = "abc"
+   app(s)
+   if (COUNT(s) == 4) & (s[3] == "!") then ok_append = 1 end if
+   regression_checkpoint()
+
+   s = "abc"
+   st(s, 1, 90)
+   if (s[1] == "Z") & (COUNT(s) == 3) then ok_store = 1 end if
+   regression_checkpoint()
+end procedure
+
+run()
