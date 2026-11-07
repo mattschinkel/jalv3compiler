@@ -4046,6 +4046,73 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
 }
 
 /* allocate variables but don't allow data space re-use */
+/*
+ * NAME
+ *   pic_variable_alloc_leftover
+ *
+ * DESCRIPTION
+ *   The reuse walk starts at the ROOT procedure and follows the CALL GRAPH,
+ *   and it stops descending from a procedure whose own variables were all
+ *   allocated already.  A procedure that is only reachable through a call
+ *   edge the walk never follows (a synthesised shared body, or a body whose
+ *   caller was pre-allocated by an earlier pass) therefore keeps every
+ *   AUTO variable at VARIABLE_BASE_UNKNOWN and codegen then fails with
+ *   "unknown file address".  Allocate those leftovers from the shared bank
+ *   list -- this only ever gives an address to a variable that had NONE, so
+ *   every existing layout stays byte-identical.
+ *
+ * PARAMETERS
+ *   pf : pfile handle
+ */
+static void pic_variable_alloc_leftover(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    pfile_block_t *blk;
+
+    for (blk = pfile_proc_block_root_get(proc); blk;
+        blk = pfile_block_next(blk)) {
+      variable_t vptr;
+
+      for (vptr = pfile_block_variable_list_head(blk); vptr;
+          vptr = variable_link_get(vptr)) {
+        variable_base_t base;
+        variable_sz_t   var_size;
+
+        if (!variable_is_auto(vptr) || variable_is_sticky(vptr)
+            || variable_flag_test(vptr, VARIABLE_FLAG_ALLOC_FAIL)) {
+          continue;
+        }
+        if (VARIABLE_BASE_UNKNOWN != variable_base_get(vptr, 0)) {
+          continue;
+        }
+        if (!variable_is_used(vptr) && !variable_is_assigned(vptr)) {
+          continue;
+        }
+        /* the per-procedure `_bitbucket` reservation is deliberately NOT
+         * given a bank address here (it is the gpsim RAM convention slot and
+         * the reuse walk places the one that is needed) */
+        {
+          const char *nm = variable_name_get(vptr);
+
+          if (nm && !strcmp(nm, PFILE_BITBUCKET_VARNAME)) {
+            continue;
+          }
+        }
+        var_size = pic_variable_storage_need_get(pf, vptr, 0);
+        if (!var_size) {
+          continue;
+        }
+        base = pic_data_alloc(pf, &pic_var.data_bank_list, var_size, 0);
+        if (VARIABLE_BASE_UNKNOWN != base) {
+          variable_base_set(vptr, base, 0);
+        }
+      }
+    }
+  }
+}
+
 static void pic_variable_alloc_no_reuse(pfile_t *pf)
 {
   pfile_proc_t *proc;
@@ -4479,6 +4546,7 @@ void pic_variable_alloc(pfile_t *pf)
   
   if (pfile_flag_test(pf, PFILE_FLAG_OPT_VARIABLE_REUSE)) {
     pic_variable_alloc_proc(pf, pfile_proc_root_get(pf));
+    pic_variable_alloc_leftover(pf);
     pic_variable_alloc_fixup(pf);
   } else {
     pic_variable_alloc_no_reuse(pf);

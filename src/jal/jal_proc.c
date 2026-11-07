@@ -1280,6 +1280,356 @@ static void jal_proc_strclone_drop(pfile_proc_t *orig, pfile_proc_t *proc)
   }
 }
 
+/* member IDX of PROC's definition (0 = the return slot) */
+static variable_def_t jal_proc_strclone_member_def(pfile_proc_t *proc,
+    size_t idx)
+{
+  variable_def_member_t mbr;
+  size_t                ii;
+
+  if (!proc || (PFILE_PROC_NONE == proc)) {
+    return VARIABLE_DEF_NONE;
+  }
+  for (mbr = variable_def_member_get(pfile_proc_def_get(proc)), ii = 0;
+       mbr;
+       mbr = variable_def_member_link_get(mbr), ii++) {
+    if (ii == idx) {
+      return variable_def_member_def_get(mbr);
+    }
+  }
+  return VARIABLE_DEF_NONE;
+}
+
+/* the member index of definition member TAG in PROC (the mask bit) */
+static boolean_t jal_proc_strclone_member_by_tag(pfile_proc_t *proc,
+    const char *tag, size_t *idx)
+{
+  size_t ii;
+
+  if (!proc || (PFILE_PROC_NONE == proc) || !tag || !idx) {
+    return BOOLEAN_FALSE;
+  }
+  for (ii = 0; ii < pfile_proc_param_ct_get(proc); ii++) {
+    const char *mtag = pfile_proc_member_tag_get(proc, ii);
+
+    if (mtag && !strcmp(mtag, tag)) {
+      *idx = ii;
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* a call parameter that names one of the CALLER's formals.  The match is by
+ * NAME: a pass-on actual is a body-level COPY of the formal (the parse
+ * materializes it), so the VARIABLE differs while the name is the formal's
+ * member tag. */
+static boolean_t jal_proc_strclone_param_formal(pfile_proc_t *proc,
+    value_t val, size_t *idx)
+{
+  const char *name;
+
+  if (!val) {
+    return BOOLEAN_FALSE;
+  }
+  name = value_name_get(val);
+  return jal_proc_strclone_member_by_tag(proc, name, idx);
+}
+
+/* the first command of PROC's body (after its PROC_ENTER), 0 when absent */
+static cmd_t jal_proc_body_cmd_head(pfile_t *pf, pfile_proc_t *proc)
+{
+  cmd_t cmd;
+
+  for (cmd = pfile_cmdlist_get(pf); cmd; cmd = cmd_link_get(cmd)) {
+    if ((CMD_TYPE_PROC_ENTER == cmd_type_get(cmd))
+        && (cmd_proc_get(cmd) == proc)) {
+      return cmd_link_get(cmd);
+    }
+  }
+  return CMD_NONE;
+}
+
+/*
+ * NAME
+ *   jal_proc_strclone_passon_mask
+ *
+ * DESCRIPTION
+ *   The pass-on formals of a call: for every parameter slot whose actual
+ *   names one of ORIG's formals that the flavour MASK re-flavors, the
+ *   matching bit of the CALLED procedure's own mask.  Slot N of a call is
+ *   member N of the callee's definition, which is also the callee clone's
+ *   mask bit, so the parameter array can be rebuilt by the clone's member
+ *   walk (a re-flavored formal has no count member in the clone).
+ *
+ * PARAMETERS
+ *   orig : the GENERIC procedure whose body is being cloned (member
+ *          numbering, and the mask's meaning)
+ *   mask : the caller's flavour mask
+ *   cmd  : the call
+ *
+ * RETURN
+ *   the callee mask (0 when this call passes no re-flavored formal on)
+ */
+static unsigned long jal_proc_strclone_passon_mask(pfile_proc_t *orig,
+    unsigned long mask, cmd_t cmd)
+{
+  value_t      *params;
+  size_t        ct;
+  size_t        j;
+  unsigned long cmask;
+
+  cmask  = 0;
+  params = cmd_brproc_params_get(cmd);
+  ct     = cmd_brproc_param_ct_get(cmd);
+  for (j = 1; params && (j < ct) && (j < JAL_PROC_STRCLONE_MASK_BITS); j++) {
+    variable_def_t mdef;
+    size_t         idx;
+
+    /* a whole formal only: a subscript of one is an element view, and the
+     * duplicated body cannot re-produce that against a string handle */
+    if (!params[j] || value_baseofs_get(params[j])) {
+      continue;
+    }
+    if (!jal_proc_strclone_param_formal(orig, params[j], &idx)
+        || !jal_proc_strclone_mask_test(mask, idx)) {
+      continue;
+    }
+    /* only the open-array pointer class is re-flavored (and only that class
+     * can be passed on as a string handle) */
+    mdef = jal_proc_strclone_member_def(orig, idx);
+    if (mdef
+        && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(mdef))
+        && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
+      cmask |= (1UL << j);
+    }
+  }
+  return cmask;
+}
+
+/*
+ * NAME
+ *   jal_proc_strclone_passon_ok
+ *
+ * DESCRIPTION
+ *   Can every pass-on call of ORIG's body be re-routed by formal
+ *   substitution?  A callee needs a clonable body and must not move the
+ *   string it receives (the clone's formal is a handle COPY; a callee that
+ *   grows it through another name would leave the copy stale -- the same
+ *   gate the call-site clone decision applies).  A re-flavored formal passed
+ *   as an ELEMENT VIEW cannot be re-produced at all.
+ *
+ * PARAMETERS
+ *   pf   : the compile
+ *   orig : the procedure whose body would be duplicated
+ *   mask : the caller's flavour mask
+ *
+ * RETURN
+ *   BOOLEAN_TRUE when every pass-on can be re-routed, else BOOLEAN_FALSE
+ */
+static boolean_t jal_proc_strclone_passon_ok(pfile_t *pf,
+    pfile_proc_t *orig, unsigned long mask)
+{
+  cmd_t cmd;
+
+  /* only ORIG's OWN body: a call in another procedure can name the same
+   * formals (the name match is scoped by the body walk) */
+  for (cmd = jal_proc_body_cmd_head(pf, orig); cmd;
+       cmd = cmd_link_get(cmd)) {
+    pfile_proc_t *callee;
+    unsigned long cmask;
+    value_t       procv;
+    value_t      *parms;
+    size_t        ct;
+    size_t        jj;
+
+    if (CMD_TYPE_PROC_LEAVE == cmd_type_get(cmd)) {
+      break;
+    }
+    if ((CMD_TYPE_BRANCH != cmd_type_get(cmd))
+        || (CMD_BRANCHTYPE_CALL != cmd_brtype_get(cmd))) {
+      continue;
+    }
+    procv = cmd_brproc_get(cmd);
+    if (!procv) {
+      continue;
+    }
+    cmask = jal_proc_strclone_passon_mask(orig, mask, cmd);
+    if (!cmask) {
+      /* a MASKED formal passed as an element view cannot be re-produced */
+      parms = cmd_brproc_params_get(cmd);
+      ct    = cmd_brproc_param_ct_get(cmd);
+      for (jj = 1; parms && (jj < ct); jj++) {
+        size_t idx;
+
+        if (parms[jj] && value_baseofs_get(parms[jj])
+            && jal_proc_strclone_param_formal(orig, parms[jj], &idx)
+            && jal_proc_strclone_mask_test(mask, idx)) {
+          return BOOLEAN_FALSE;
+        }
+      }
+      continue;
+    }
+    callee = value_proc_get(procv);
+    if (!callee || (PFILE_PROC_NONE == callee)
+        || !jal_proc_strclone_eligible(callee)
+        || pfile_proc_flag_test(callee, PFILE_PROC_FLAG_STRING_REALLOC)) {
+      return BOOLEAN_FALSE;
+    }
+  }
+  return BOOLEAN_TRUE;
+}
+
+/* the clone's parameter for definition member TAG, or VALUE_NONE */
+static value_t jal_proc_strclone_param_by_tag(pfile_proc_t *clone,
+    const char *tag)
+{
+  size_t ii;
+
+  if (!clone || (PFILE_PROC_NONE == clone) || !tag) {
+    return VALUE_NONE;
+  }
+  for (ii = 0; ii < pfile_proc_param_ct_get(clone); ii++) {
+    const char *mtag = pfile_proc_member_tag_get(clone, ii);
+
+    if (mtag && !strcmp(mtag, tag)) {
+      return pfile_proc_param_get(clone, ii);
+    }
+  }
+  return VALUE_NONE;
+}
+
+/* re-route one duplicated pass-on call: swap the called procedure, hand the
+ * clone's own formal for every re-flavored actual and rebuild the parameter
+ * array without the count slots of the masked formals (the clone's
+ * definition has no count member for a re-flavored formal).  The command is
+ * replaced in place. */
+static boolean_t jal_proc_strclone_passon_one(pfile_t *pf,
+    pfile_proc_t *orig, pfile_proc_t *clone, unsigned long mask, cmd_t cmd)
+{
+  pfile_proc_t *callee;
+  pfile_proc_t *cclone;
+  unsigned long cmask;
+  value_t       procv;
+  value_t       cv;
+  value_t      *params;
+  value_t      *nparms;
+  size_t        ct;
+  size_t        ci;
+  size_t        kept;
+  size_t        cct;
+  cmd_t         ncmd;
+
+  procv = cmd_brproc_get(cmd);
+  cmask = jal_proc_strclone_passon_mask(orig, mask, cmd);
+  if (!cmask) {
+    return BOOLEAN_TRUE;
+  }
+  callee = value_proc_get(procv);
+  if (!callee || (PFILE_PROC_NONE == callee)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "cannot re-route the pass-on call in '%s'",
+        pfile_proc_tag_get(clone));
+    return BOOLEAN_FALSE;
+  }
+  cclone = jal_proc_strclone_get(pf, callee, cmask);
+  cv     = cclone ? pfile_value_find(pf, PFILE_LOG_ERR,
+      pfile_proc_tag_get(cclone)) : VALUE_NONE;
+  if (!cv) {
+    pfile_log(pf, PFILE_LOG_ERR, "cannot create the string clone of '%s'",
+        pfile_proc_tag_get(callee));
+    return BOOLEAN_FALSE;
+  }
+  params = cmd_brproc_params_get(cmd);
+  ct     = cmd_brproc_param_ct_get(cmd);
+  cct    = pfile_proc_param_ct_get(cclone);
+  if (!cct) {
+    cct = 1;
+  }
+  nparms = CALLOC(cct, sizeof(*nparms));
+  if (!nparms) {
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  for (ci = 0, kept = 0; (ci < ct) && (kept < cct); ci++) {
+    boolean_t drop;
+    value_t   nval;
+
+    drop = BOOLEAN_FALSE;
+    nval = params ? params[ci] : VALUE_NONE;
+    if (((ci + 1) < JAL_PROC_STRCLONE_MASK_BITS)
+        && (cmask & (1UL << (ci + 1)))) {
+      drop = BOOLEAN_TRUE;          /* the count of a re-flavored formal */
+    }
+    if (nval && (cmask & (1UL << ci))) {
+      /* the actual is a copy of the caller's formal: hand the clone's own
+       * (string) formal instead -- the copied view variable is dead once
+       * the call stops using it */
+      value_t sub;
+
+      sub = jal_proc_strclone_param_by_tag(clone, value_name_get(nval));
+      if (!sub) {
+        FREE(nparms);
+        pfile_log(pf, PFILE_LOG_ERR,
+            "cannot substitute the pass-on formal of '%s'",
+            pfile_proc_tag_get(clone));
+        return BOOLEAN_FALSE;
+      }
+      nval = sub;
+    }
+    if ((0 == ci) || (nval && !drop)) {
+      nparms[kept] = nval;
+      if (nval) {
+        value_lock(nval);
+      }
+      kept++;
+    }
+  }
+  ncmd = cmd_branch_alloc(CMD_BRANCHTYPE_CALL,
+      cmd_brcond_get(cmd), LABEL_NONE, cmd_brval_get(cmd), cv, nparms);
+  if (!ncmd) {
+    FREE(nparms);
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  cmd_flag_set_all(ncmd, cmd_flag_get_all(cmd));
+  /* the CALL GRAPH edge: the data allocator walks the call list to decide
+   * which procedures' variables get storage, and the duplicated command was
+   * registered for the ORIGINAL callee -- re-point it at the clone (this is
+   * what pfile_cmd_branch_add does for a parse-built call) */
+  if (RESULT_OK != pfile_proc_call_add(clone, cclone)) {
+    pfile_log_syserr(pf, ENOMEM);
+  }
+  pfile_cmd_replace1_with_chain(pf, cmd, ncmd, ncmd);
+  return BOOLEAN_TRUE;
+}
+
+/* re-route every pass-on call in the duplicated body [head, tail] */
+static boolean_t jal_proc_strclone_passon_fix(pfile_t *pf,
+    pfile_proc_t *orig, pfile_proc_t *clone, unsigned long mask,
+    cmd_t head, cmd_t tail)
+{
+  cmd_t cmd;
+
+  cmd = head;
+  while (cmd) {
+    cmd_t next;
+
+    next = cmd_link_get(cmd);
+    if ((CMD_TYPE_BRANCH == cmd_type_get(cmd))
+        && (CMD_BRANCHTYPE_CALL == cmd_brtype_get(cmd))
+        && cmd_brproc_get(cmd)
+        && !jal_proc_strclone_passon_one(pf, orig, clone, mask, cmd)) {
+      return BOOLEAN_FALSE;
+    }
+    if (cmd == tail) {
+      break;
+    }
+    cmd = next;
+  }
+  return BOOLEAN_TRUE;
+}
+
 /*
  * NAME
  *   jal_proc_strclone_get
@@ -1311,14 +1661,7 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig,
   variable_def_t         def;
   char                  *name;
   const char            *tag;
-  pfile_source_t        *save_src;
-  pfile_pos_t            stmt_start;
-  pfile_pos_t            tok_start;
-  char                  *save_tok;
-  pfile_proc_t          *save_proc;
-  pfile_block_t         *save_blk;
   pfile_proc_t          *save_owner;
-  const char            *cmd;
   boolean_t              ok;
 
   if (!orig || (PFILE_PROC_NONE == orig)) {
@@ -1363,69 +1706,25 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig,
   node->link       = orig->str_clones;
   orig->str_clones = node;
 
-  /* the include machinery's save/switch/parse/restore pattern: push the
-   * body's source again (pfile_source_set bypasses the once-only include
-   * guard, which lives in jal_include_process), skip to the recorded
-   * line, re-parse the body, restore everything */
-  save_src   = pfile_source_get(pf);
-  save_proc  = pfile_proc_active_get(pf);
-  save_blk   = pfile_proc_block_active_get(save_proc);
   save_owner = jal_body_owner;
-  pfile_statement_start_get(pf, &stmt_start);
-  pfile_token_start_get(pf, &tok_start);
-  cmd = pf_token_get(pf, PF_TOKEN_CURRENT);
-  save_tok = MALLOC(1 + strlen(cmd));
-  if (save_tok) {
-    strcpy(save_tok, cmd);
-  }
 
-  /* the memo was claimed BEFORE the re-parse: a call inside the re-parsed
-   * body (or a runaway re-parse) must not recurse into creating another
-   * clone with the same mask */
+  /* The clone BODY is the already-parsed generic body, duplicated and then
+   * re-lowered per the clone's formals -- that is what makes the clone a
+   * first-class IR body rather than a second parse of the source.  It
+   * needs the semantic layer (the deferred nodes are what the copy
+   * re-lowers); with the layer off there is no clone and the call site
+   * keeps the payload view / the refusal.
+   *
+   * The memo was claimed BEFORE the body is produced: a call inside the
+   * duplicated body must not recurse into creating another clone with the
+   * same mask. */
   ok = BOOLEAN_FALSE;
-  if (RESULT_OK != pfile_source_set(pf,
-        pfile_source_name_get(orig->body_pos.src))) {
-    orig->clone_blocked = BOOLEAN_TRUE;
-    jal_proc_strclone_drop(orig, proc);
-  } else {
-    unsigned want;
-    unsigned seen;
-
-    /* skip at the TOKEN level: char-level consumption between the source
-     * switch and the first fetch is discarded by the tokenizer's
-     * initialization (both the stale line counter and a counted-newline
-     * skip landed on the file's first token) */
-    want = orig->body_pos.line;
-    pf_token_get(pf, PF_TOKEN_FIRST);
-    for (seen = 1; seen < want; ) {
-      pfile_pos_t tpos;
-
-      pfile_token_start_get(pf, &tpos);
-      if (tpos.line >= want) {
-        break;
-      }
-      if (!pf_token_get(pf, PF_TOKEN_NEXT)[0]) {
-        break;
-      }
-    }
-    if (getenv("JAL_DBG_CLONE")) {
-      fprintf(stderr, "'%s' (line now %u)\n",
-        pf_token_get(pf, PF_TOKEN_CURRENT),
-        pfile_source_line_get(pfile_source_get(pf)));
-    }
-
+  if (jal_proc_strclone_passon_ok(pf, orig, mask)) {
     pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
         pfile_proc_skip_label_get(proc), VALUE_NONE, VALUE_NONE, 0);
     if (RESULT_OK == pfile_proc_enter(pf, pfile_proc_tag_get(proc))) {
       pfile_block_enter(pf);
       pfile_proc_define(proc, def, pf);
-      /* every clone formal is part of the call-site layout: an unused one
-       * (typically an unmasked open-array formal's hidden count, which the
-       * clone body may never read) would otherwise be dropped by the
-       * variable-reduce pass AFTER the call was built against the full
-       * definition, shifting the parameter array -- the callee then reads
-       * the next slot's value (found as a null/0xff pointer on the first
-       * multi-formal witness) */
       {
         size_t pi;
 
@@ -1440,33 +1739,33 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig,
       }
       label_flag_set(pfile_proc_label_get(proc), LABEL_FLAG_DEFINED);
       jal_body_owner = proc;
-      jal_block_process(pf, JAL_BLOCK_PROCESS_FLAG_NO_BLOCK);
-      jal_body_owner = save_owner;
-      if (!jal_parse_aborted(pf)
-          && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "end")
-          && pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_NONE, "procedure")) {
-        pf_token_get(pf, PF_TOKEN_NEXT);
+      {
+        cmd_t mark = pfile_cmdlist_tail_get(pf);
+
+        ok = pfile_proc_body_dup(pf, orig, proc);
+        if (ok) {
+          cmd_t head = mark ? cmd_link_get(mark) : pfile_cmdlist_get(pf);
+
+          ok = jal_proc_strclone_passon_fix(pf, orig, proc, mask, head,
+              pfile_cmdlist_tail_get(pf));
+        }
       }
-      pfile_cmd_label_add(pf, pfile_proc_exit_label_get(proc));
-      pfile_block_leave(pf);
-      pfile_proc_leave(pf);
-      pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
-      ok = BOOLEAN_TRUE;
+      jal_body_owner = save_owner;
+      if (ok) {
+        pfile_cmd_label_add(pf, pfile_proc_exit_label_get(proc));
+        pfile_block_leave(pf);
+        pfile_proc_leave(pf);
+        pfile_cmd_label_add(pf, pfile_proc_skip_label_get(proc));
+      } else {
+        orig->clone_blocked = BOOLEAN_TRUE;
+        jal_proc_strclone_drop(orig, proc);
+      }
     } else {
       pfile_log(pf, PFILE_LOG_ERR,
           "cannot enter the string clone of '%s'", tag);
       orig->clone_blocked = BOOLEAN_TRUE;
       jal_proc_strclone_drop(orig, proc);
     }
-    pfile_source_restore(pf, save_src);
-    if (save_tok) {
-      pf_token_set(pf, save_tok);
-      FREE(save_tok);
-    }
-    pfile_token_start_set(pf, &tok_start);
-    pfile_statement_start_set(pf, &stmt_start);
-    pfile_proc_active_set(pf, save_proc);
-    pfile_proc_block_active_set(save_proc, save_blk);
   }
   if (ok) {
     /* a clone may be called with trailing optionals omitted: the defaults

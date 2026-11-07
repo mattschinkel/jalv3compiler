@@ -108,6 +108,13 @@ run_sh front_ir_clone_builtin      unit-tests/test_front_ir_clone_builtin.sh "$C
 # forwarder (one shared body, ~21 words/site) instead of expanding the whole
 # builtin body (~740 words/site). fixes/fix_string_outline_calls.md.
 run_sh string_outline_calls         unit-tests/test_string_outline_calls.sh "$CC"
+# Phase 4b: EVERY user-level string store must lower to the shared body (the
+# ~500-word inline expansion stays legal only inside the forwarder itself, per
+# the measurement recorded in docs/investigations/full_ir_phase4_decision_*).
+run_sh string_store_outline_coverage unit-tests/test_string_store_outline_coverage.sh "$CC"
+# A 'put/'get accessor used inside its own body compiles to a self-call (an
+# unbounded hardware-stack recursion, silently) -- refused with one message.
+run_sh accessor_self_recursion     unit-tests/test_accessor_self_recursion.sh "$CC"
 run_sh pic12_strings               unit-tests/test_pic12_strings.sh "$CC"
 run_sh string_heap_sizing          unit-tests/test_string_heap_sizing.sh "$CC"
 run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$CC"

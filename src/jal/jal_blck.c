@@ -601,6 +601,23 @@ static value_t jal_parse_pointer_assign_rhs(pfile_t *pf, value_t dst,
   return jal_parse_expr(pf);
 }
 
+/* Is VAL a 'put/'get ACCESSOR belonging to the procedure being parsed?  Its
+ * body must not resolve its own name back to itself: the store/read would be
+ * a self-call, i.e. an unbounded hardware-stack recursion with no other
+ * symptom.  The accessor's own PROC is what distinguishes this from an
+ * ordinary call of the accessor from somewhere else. */
+boolean_t jal_sem_accessor_self_call(pfile_t *pf, value_t val)
+{
+  pfile_proc_t *active;
+
+  if (!val || (VARIABLE_DEF_TYPE_FUNCTION != value_type_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  active = pfile_proc_active_get(pf);
+  return (active && (PFILE_PROC_NONE != active)
+      && (value_proc_get(val) == active)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
 /* jal_parse_assign decomposition: the phases below hand this state
  * through; every value_t handle moves with its reference exactly as the
  * original single function did (helpers alias in / write back out). */
@@ -618,42 +635,27 @@ typedef struct jal_assign_ctx_ {
   char      *ptr_rhs_dup;       /* 'is' RHS name duplicate */
 } jal_assign_ctx_t;
 
-/* ---- semantic-layer spike (JALV2_FRONT_IR, 2026-11-06) ----------------
+/* ---- the semantic layer (the front-end IR, 2026-11-06) -----------------
  *
- * Defer a subscripted store through an open-array/string FORMAL: instead of
- * lowering it during parse (string path here, pointer/array path in
- * jal_assign_assign_emit), emit a flagged placeholder command carrying the
- * resolved lvalue and RHS.  After the parse, jal_sem_lower() expands each
- * placeholder with the existing string/array emitters, using the formal's
- * actual definition in that body.  The default path is untouched unless the
- * environment flag is set.
+ * A representation-dependent operation (a subscripted store/load through an
+ * open-array or string FORMAL, a whole-formal assign, a relation, a COUNT) is
+ * not lowered during the parse: it becomes a flagged placeholder command
+ * carrying the resolved operands.  After the whole program is parsed,
+ * jal_sem_lower() expands each placeholder with the existing string/array
+ * emitters, using the formal's ACTUAL definition in that body -- that is what
+ * lets one generic body serve both an array and a string actual (and what the
+ * string clone re-lowers per its formals).
  */
-boolean_t jal_sem_front_ir_enabled(void)
-{
-  static int on = -1;
-
-  if (on < 0) {
-    const char *env = getenv("JALV2_FRONT_IR");
-
-    on = 0;
-    if (env && *env) {
-      on = 1;
-      if (!strcmp(env, "0") || !strcmp(env, "false")
-          || !strcmp(env, "no") || !strcmp(env, "off")) {
-        on = 0;
-      }
-    }
-  }
-  return on ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-}
-
-static boolean_t jal_sem_formal_subscript_p(pfile_t *pf, value_t val)
+/* is VAL's variable one of the active procedure's OPEN-ARRAY pointer
+ * formals (the class a string clone re-flavors, with or without a
+ * subscript)? */
+static boolean_t jal_sem_formal_openarray_p(pfile_t *pf, value_t val)
 {
   pfile_proc_t *proc;
   variable_t    var;
   size_t        ii;
 
-  if (!val || !value_baseofs_get(val)) {
+  if (!val) {
     return BOOLEAN_FALSE;
   }
   var = value_variable_get(val);
@@ -668,16 +670,44 @@ static boolean_t jal_sem_formal_subscript_p(pfile_t *pf, value_t val)
     value_t pval = pfile_proc_param_get(proc, ii);
 
     if (pval && (value_variable_get(pval) == var)) {
-      return BOOLEAN_TRUE;
+      variable_def_t        pdef = value_def_get(pval);
+      variable_def_type_t   type = variable_def_type_get(pdef);
+      variable_def_member_t mbr;
+      variable_def_t        elem;
+
+      /* only the OPEN-ARRAY pointer class is representation-dependent: a
+       * record/union member or a scalar formal subscript stores and reads
+       * the same way in every flavor */
+      if ((VARIABLE_DEF_TYPE_POINTER != type)
+          || !variable_def_flag_test(pdef, VARIABLE_DEF_FLAG_OPENARRAY)) {
+        return BOOLEAN_FALSE;
+      }
+      /* ...and only a BYTE element: that is the shape a string handle can
+       * bind to.  A bit or wide-element open array has no string flavor, and
+       * deferring its elements would lose the packed-bit / wide machinery
+       * the parse applies. */
+      mbr  = variable_def_member_get(pdef);
+      elem = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+      return (elem
+          && (VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(elem))
+          && (1 == variable_def_sz_get(elem))
+          && !variable_def_flag_test(elem, VARIABLE_DEF_FLAG_BIT))
+        ? BOOLEAN_TRUE : BOOLEAN_FALSE;
     }
   }
   return BOOLEAN_FALSE;
 }
 
-static boolean_t jal_sem_store_spike_wanted(pfile_t *pf, value_t val)
+static boolean_t jal_sem_formal_subscript_p(pfile_t *pf, value_t val)
 {
-  return (jal_sem_front_ir_enabled() && jal_sem_formal_subscript_p(pf, val))
-    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  return (val && value_baseofs_get(val)
+      && jal_sem_formal_openarray_p(pf, val)) ? BOOLEAN_TRUE
+    : BOOLEAN_FALSE;
+}
+
+static boolean_t jal_sem_store_wanted(pfile_t *pf, value_t val)
+{
+  return jal_sem_formal_subscript_p(pf, val);
 }
 
 static void jal_sem_store_emit(pfile_t *pf, value_t val, value_t expr)
@@ -688,14 +718,10 @@ static void jal_sem_store_emit(pfile_t *pf, value_t val, value_t expr)
   if (cmd) {
     cmd_flag_set(cmd, CMD_FLAG_SEM_STORE);
     pfile_cmd_add(pf, cmd);
-    if (getenv("JALV2_FRONT_IR_DEBUG")) {
-      fprintf(stderr, "SEM store deferred: %s\n",
-          value_name_get(val) ? value_name_get(val) : "?");
-    }
   }
 }
 
-/* spike: a string subscript store deferred as base + index + value */
+/* a string subscript store deferred as base + index + value */
 static void jal_sem_str_store_emit(pfile_t *pf, value_t base, value_t idx,
     value_t expr)
 {
@@ -705,15 +731,10 @@ static void jal_sem_str_store_emit(pfile_t *pf, value_t base, value_t idx,
   if (cmd) {
     cmd_flag_set(cmd, CMD_FLAG_SEM_STR_STORE);
     pfile_cmd_add(pf, cmd);
-    if (getenv("JALV2_FRONT_IR_DEBUG")) {
-      fprintf(stderr, "SEM string store deferred: %s[%s]\n",
-          value_name_get(base) ? value_name_get(base) : "?",
-          value_name_get(idx) ? value_name_get(idx) : "?");
-    }
   }
 }
 
-/* spike: a string subscript load deferred as base + index into DST */
+/* a string subscript load deferred as base + index into DST */
 void jal_sem_str_load_emit(pfile_t *pf, value_t dst, value_t base,
     value_t idx)
 {
@@ -723,16 +744,13 @@ void jal_sem_str_load_emit(pfile_t *pf, value_t dst, value_t base,
   if (cmd) {
     cmd_flag_set(cmd, CMD_FLAG_SEM_STR_LOAD);
     pfile_cmd_add(pf, cmd);
-    if (getenv("JALV2_FRONT_IR_DEBUG")) {
-      fprintf(stderr, "SEM string load deferred: %s[%s]\n",
-          value_name_get(base) ? value_name_get(base) : "?",
-          value_name_get(idx) ? value_name_get(idx) : "?");
-    }
   }
 }
 
-/* phase 2: the COUNT operand is the formal itself (not a subscript) */
-static boolean_t jal_sem_formal_value_p(pfile_t *pf, value_t val)
+/* the COUNT operand is the formal itself (not a subscript); also the
+ * relation's: a formal's representation is a property of the CALL, so any
+ * semantic node that names one is lowered per the active procedure */
+boolean_t jal_sem_formal_value_p(pfile_t *pf, value_t val)
 {
   pfile_proc_t *proc;
   variable_t    var;
@@ -761,7 +779,7 @@ static boolean_t jal_sem_formal_value_p(pfile_t *pf, value_t val)
 
 boolean_t jal_sem_count_wanted(pfile_t *pf, value_t val)
 {
-  if (!jal_sem_front_ir_enabled() || !jal_sem_formal_value_p(pf, val)) {
+  if (!jal_sem_formal_value_p(pf, val)) {
     return BOOLEAN_FALSE;
   }
   return (jal_string_is_dynamic(val) || value_is_array(val)
@@ -777,10 +795,6 @@ void jal_sem_count_emit(pfile_t *pf, value_t dst, value_t src)
   if (cmd) {
     cmd_flag_set(cmd, CMD_FLAG_SEM_COUNT);
     pfile_cmd_add(pf, cmd);
-    if (getenv("JALV2_FRONT_IR_DEBUG")) {
-      fprintf(stderr, "SEM count deferred: %s\n",
-          value_name_get(src) ? value_name_get(src) : "?");
-    }
   }
 }
 
@@ -790,7 +804,7 @@ void jal_sem_count_emit(pfile_t *pf, value_t dst, value_t src)
 static boolean_t jal_sem_whole_assign_wanted(pfile_t *pf, value_t dst,
     value_t src)
 {
-  if (!jal_sem_front_ir_enabled() || !dst || !src) {
+  if (!dst || !src) {
     return BOOLEAN_FALSE;
   }
   if (value_baseofs_get(dst) || !jal_sem_formal_value_p(pf, dst)) {
@@ -812,10 +826,6 @@ static void jal_sem_whole_assign_emit(pfile_t *pf, value_t dst, value_t src)
   if (cmd) {
     cmd_flag_set(cmd, CMD_FLAG_SEM_WHOLE_ASSIGN);
     pfile_cmd_add(pf, cmd);
-    if (getenv("JALV2_FRONT_IR_DEBUG")) {
-      fprintf(stderr, "SEM whole assign deferred: %s\n",
-          value_name_get(dst) ? value_name_get(dst) : "?");
-    }
   }
 }
 
@@ -825,17 +835,168 @@ void jal_sem_relation_emit(pfile_t *pf, value_t dst, value_t lhs,
 {
   cmd_t cmd;
 
-  cmd = cmd_op_alloc(op, dst, lhs, rhs);
+  cmd = cmd_op_alloc(OPERATOR_CT, dst, lhs, rhs);
   if (cmd) {
     cmd_flag_set(cmd, CMD_FLAG_SEM_RELATION);
+    if (OPERATOR_NE == op) {
+      cmd_flag_set(cmd, CMD_FLAG_SEM_RELATION_NE);
+    }
     pfile_cmd_add(pf, cmd);
-    if (getenv("JALV2_FRONT_IR_DEBUG")) {
-      fprintf(stderr, "SEM relation deferred: %s %s %s\n",
-          (lhs && value_name_get(lhs)) ? value_name_get(lhs) : "?",
-          (OPERATOR_EQ == op) ? "==" : "!=",
-          (rhs && value_name_get(rhs)) ? value_name_get(rhs) : "?");
+  }
+}
+
+/* a semantic node defers a FORMAL-dependent operation, so it must not carry
+ * a representation frozen at the parse: a block-duplicated body is re-lowered
+ * with the clone's formals, where a `byte in out x[]` formal is a dynamic
+ * string handle.  Adopt the enclosing procedure's CURRENT formal definition
+ * for a whole-formal operand (an element view keeps its element def). */
+/* Is VAL a whole formal whose REPRESENTATION a clone can change (the
+ * open-array/pointer class: `byte in out x[]` vs a string handle)?  The
+ * value's own cached def can be missing (a bare name carries its def on the
+ * variable), so the FORMAL's definition is the authority. */
+boolean_t jal_sem_formal_reflavor_p(pfile_t *pf, value_t val)
+{
+  pfile_proc_t *proc;
+  variable_t    var;
+  size_t        ii;
+
+  if (!val || value_baseofs_get(val)) {
+    return BOOLEAN_FALSE;
+  }
+  var = value_variable_get(val);
+  if (!var || (VARIABLE_NONE == var)) {
+    return BOOLEAN_FALSE;
+  }
+  proc = pfile_proc_active_get(pf);
+  if (!proc || (PFILE_PROC_NONE == proc)) {
+    return BOOLEAN_FALSE;
+  }
+  for (ii = 0; ii < pfile_proc_param_ct_get(proc); ii++) {
+    value_t pval = pfile_proc_param_get(proc, ii);
+
+    if (pval && (value_variable_get(pval) == var)) {
+      variable_def_type_t type = variable_def_type_get(value_def_get(pval));
+
+      return ((VARIABLE_DEF_TYPE_POINTER == type)
+          || (VARIABLE_DEF_TYPE_ARRAY == type)) ? BOOLEAN_TRUE
+        : BOOLEAN_FALSE;
     }
   }
+  return BOOLEAN_FALSE;
+}
+
+static boolean_t jal_sem_def_is_ptr_or_array(variable_def_t def)
+{
+  variable_def_type_t type;
+
+  if (!def) {
+    return BOOLEAN_FALSE;
+  }
+  type = variable_def_type_get(def);
+  return ((VARIABLE_DEF_TYPE_POINTER == type)
+      || (VARIABLE_DEF_TYPE_ARRAY == type)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+static void jal_sem_formal_refresh(pfile_t *pf, value_t val)
+{
+  pfile_proc_t  *proc;
+  variable_t     var;
+  size_t         ii;
+
+  if (!val || value_baseofs_get(val)) {
+    return;
+  }
+  var = value_variable_get(val);
+  if (!var || (VARIABLE_NONE == var)) {
+    return;
+  }
+  proc = pfile_proc_active_get(pf);
+  if (!proc || (PFILE_PROC_NONE == proc)) {
+    return;
+  }
+  for (ii = 0; ii < pfile_proc_param_ct_get(proc); ii++) {
+    value_t pval = pfile_proc_param_get(proc, ii);
+
+    if (pval && (value_variable_get(pval) == var)) {
+      variable_def_t pdef = value_def_get(pval);
+      variable_def_t cur  = value_def_get(val);
+
+      /* only the pointer/array representations are re-flavorable, so a
+       * de-referenced formal (an element def) is left alone */
+      if (pdef && (pdef != cur)
+          && (jal_sem_def_is_ptr_or_array(pdef)
+            || jal_sem_def_is_ptr_or_array(cur))) {
+        value_def_set(val, pdef);
+      }
+      return;
+    }
+  }
+}
+
+/* A formal subscript in RVALUE position.  The generic body's read is an
+ * element view over the formal's ARRAY representation, but a clone whose
+ * formal is a string handle must read the PAYLOAD -- so the read is a
+ * semantic node like the store, lowered per the active procedure.  Returns
+ * the read's destination temp, or VALUE_NONE when the value is not a formal
+ * subscript (or is already a string handle, which the string path owns). */
+value_t jal_sem_str_load_emit_formal(pfile_t *pf, value_t val)
+{
+  value_t        base;
+  value_t        idx;
+  value_t        dst;
+  variable_def_t bdef;
+
+  if (!val) {
+    return VALUE_NONE;
+  }
+  if (!value_baseofs_get(val) || !jal_sem_formal_openarray_p(pf, val)) {
+    return VALUE_NONE;
+  }
+  if (jal_string_subscript_value_is(val)) {
+    return VALUE_NONE;
+  }
+  base = value_clone(val);
+  if (!base) {
+    return VALUE_NONE;
+  }
+  value_baseofs_set(base, VALUE_NONE);
+  idx = value_clone(value_baseofs_get(val));
+  if (!idx) {
+    value_release(base);
+    return VALUE_NONE;
+  }
+  /* the destination carries the ELEMENT's type and width (a `word[]` formal
+   * reads a word -- a byte temp would silently truncate it) */
+  bdef = variable_def_alloc(0, value_type_get(val), VARIABLE_DEF_FLAG_NONE,
+      value_sz_get(val));
+  dst = bdef ? pfile_value_temp_get_from_def(pf, bdef) : VALUE_NONE;
+  if (dst) {
+    jal_sem_str_load_emit(pf, dst, base, idx);
+  }
+  value_release(base);
+  value_release(idx);
+  return dst;
+}
+
+/* The parse may have narrowed the node's destination in place (a cast:
+ * `byte(count(x))` sets the VALUE's own definition to the target type).  A
+ * deferred node carries that narrowed value as its destination, so the
+ * lowering must reproduce the narrowing -- assigning the full-width result
+ * into it would re-widen the value (and warn about a truncation the source
+ * already asked for). */
+static value_t jal_sem_fit_to_dst(value_t dst, value_t val)
+{
+  value_t fit;
+
+  fit = VALUE_NONE;
+  if (dst && val && !value_is_const(val)
+      && (value_sz_get(dst) < value_sz_get(val))) {
+    fit = value_clone(val);
+    if (fit) {
+      value_def_set(fit, value_def_get(dst));
+    }
+  }
+  return fit;
 }
 
 static void jal_sem_lower(pfile_t *pf)
@@ -845,9 +1006,6 @@ static void jal_sem_lower(pfile_t *pf)
   pfile_proc_t  *save_proc;
   pfile_block_t *save_blk;
 
-  if (!jal_sem_front_ir_enabled()) {
-    return;
-  }
   save_proc = pfile_proc_active_get(pf);
   save_blk  = pfile_proc_block_active_get(save_proc);
   for (cmd = pf->cmd_head; cmd; cmd = next) {
@@ -861,7 +1019,8 @@ static void jal_sem_lower(pfile_t *pf)
       }
     } else if ((CMD_TYPE_OPERATOR == cmd_type_get(cmd))
         && cmd_flag_test(cmd, CMD_FLAG_SEM_RELATION)) {
-      operator_t op = cmd_optype_get(cmd);
+      operator_t op = cmd_flag_test(cmd, CMD_FLAG_SEM_RELATION_NE)
+        ? OPERATOR_NE : OPERATOR_EQ;
       value_t    dst = cmd_opdst_get(cmd);
       value_t    lhs = cmd_opval1_get(cmd);
       value_t    rhs = cmd_opval2_get(cmd);
@@ -869,25 +1028,33 @@ static void jal_sem_lower(pfile_t *pf)
       cmd_t      nh;
       cmd_t      nt;
 
+      jal_sem_formal_refresh(pf, lhs);
+      jal_sem_formal_refresh(pf, rhs);
       cmd_pos_get(cmd, &pos);
       pfile_statement_start_set(pf, &pos);
       pfile_cmd_bld_start(pf);
       if (dst && lhs && rhs) {
-        value_t result = jal_string_relation_emit(pf, lhs, rhs, op);
+        /* a heap string (or a string pointer) compares CONTENT, straight
+         * into the node's destination (the back end fuses a relation with
+         * the branch that tests it); every other representation is the
+         * ordinary value relation -- the same one the parse would have
+         * built, including the array-to-first-element coercion (which is
+         * what `x == y` means for two byte arrays) */
+        if (!(jal_string_is_dynamic(lhs) || jal_string_is_dynamic(rhs)
+              || jal_string_pointer_is(lhs) || jal_string_pointer_is(rhs)
+              || (value_is_array(lhs) && value_is_string(lhs))
+              || (value_is_array(rhs) && value_is_string(rhs)))
+            || !jal_string_relation_emit_into(pf, dst, lhs, rhs, op)) {
+          value_t d   = dst;
+          value_t fl  = jal_sem_fit_to_dst(dst, lhs);
+          value_t fr  = jal_sem_fit_to_dst(dst, rhs);
 
-        if (result) {
-          value_t d = dst;
-
-          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d, result, VALUE_NONE);
-          value_release(result);
-        } else if (getenv("JALV2_FRONT_IR_DEBUG")) {
-          fprintf(stderr, "SEM relation lower failed\n");
+          pfile_cmd_op_add(pf, op, &d, fl ? fl : lhs, fr ? fr : rhs);
+          value_release(fl);
+          value_release(fr);
         }
       }
       pfile_cmd_bld_end(pf, &nh, &nt);
-      if (getenv("JALV2_FRONT_IR_DEBUG")) {
-        fprintf(stderr, "SEM relation lowered\n");
-      }
       if (nh) {
         pfile_cmd_replace1_with_chain(pf, cmd, nh, nt);
       }
@@ -899,15 +1066,14 @@ static void jal_sem_lower(pfile_t *pf)
       cmd_t       nh;
       cmd_t       nt;
 
+      jal_sem_formal_refresh(pf, dst);
+      jal_sem_formal_refresh(pf, src);
       cmd_pos_get(cmd, &pos);
       pfile_statement_start_set(pf, &pos);
       pfile_cmd_bld_start(pf);
       if (dst && src) {
         if (jal_string_is_dynamic(dst)) {
-          if (!jal_string_assignment_emit(pf, dst, src)
-              && getenv("JALV2_FRONT_IR_DEBUG")) {
-            fprintf(stderr, "SEM whole assign lower failed\n");
-          }
+          (void) jal_string_assignment_emit(pf, dst, src);
         } else {
           value_t d = dst;
 
@@ -915,10 +1081,6 @@ static void jal_sem_lower(pfile_t *pf)
         }
       }
       pfile_cmd_bld_end(pf, &nh, &nt);
-      if (getenv("JALV2_FRONT_IR_DEBUG")) {
-        fprintf(stderr, "SEM whole assign lowered: %s\n",
-            (dst && value_name_get(dst)) ? value_name_get(dst) : "?");
-      }
       if (nh) {
         pfile_cmd_replace1_with_chain(pf, cmd, nh, nt);
       }
@@ -930,6 +1092,7 @@ static void jal_sem_lower(pfile_t *pf)
       cmd_t       nh;
       cmd_t       nt;
 
+      jal_sem_formal_refresh(pf, src);
       cmd_pos_get(cmd, &pos);
       pfile_statement_start_set(pf, &pos);
       pfile_cmd_bld_start(pf);
@@ -937,19 +1100,16 @@ static void jal_sem_lower(pfile_t *pf)
         value_t result = jal_sem_count_value_get(pf, src);
 
         if (result) {
-          value_t d = dst;
+          value_t d   = dst;
+          value_t fit = jal_sem_fit_to_dst(dst, result);
 
-          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d, result, VALUE_NONE);
+          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d,
+              fit ? fit : result, VALUE_NONE);
+          value_release(fit);
           value_release(result);
-        } else if (getenv("JALV2_FRONT_IR_DEBUG")) {
-          fprintf(stderr, "SEM count lower failed\n");
         }
       }
       pfile_cmd_bld_end(pf, &nh, &nt);
-      if (getenv("JALV2_FRONT_IR_DEBUG")) {
-        fprintf(stderr, "SEM count lowered: %s\n",
-            (src && value_name_get(src)) ? value_name_get(src) : "?");
-      }
       if (nh) {
         pfile_cmd_replace1_with_chain(pf, cmd, nh, nt);
       }
@@ -987,6 +1147,7 @@ static void jal_sem_lower(pfile_t *pf)
         idx  = b;
         expr = c;
       }
+      jal_sem_formal_refresh(pf, base);
       elem = (base && idx) ? value_clone(base) : VALUE_NONE;
       if (elem) {
         value_baseofs_set(elem, idx);
@@ -995,29 +1156,32 @@ static void jal_sem_lower(pfile_t *pf)
       pfile_statement_start_set(pf, &pos);
       pfile_cmd_bld_start(pf);
       if (elem && is_load) {
-        value_t result = jal_string_subscript_read_emit(pf, elem);
+        if (jal_string_is_dynamic(base) || jal_string_pointer_is(base)) {
+          value_t result = jal_string_subscript_read_emit(pf, elem);
 
-        if (result) {
-          value_t d = dst;
+          if (result) {
+            value_t d = dst;
 
-          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d, result, VALUE_NONE);
-          value_release(result);
-        } else if (getenv("JALV2_FRONT_IR_DEBUG")) {
-          fprintf(stderr, "SEM string load failed\n");
+            pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d, result, VALUE_NONE);
+            value_release(result);
+          }
+        } else {
+          /* the formal is not a string here: the read is the ordinary
+           * element view of its array representation, exactly what the
+           * parse would have used (the generic body's indirect element) */
+          value_t d  = dst;
+          value_t ev = value_clone(elem);
+
+          if (ev && (value_is_pointer(ev) || value_is_array(ev))) {
+            value_dereference(ev);
+          }
+          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d, ev, VALUE_NONE);
+          value_release(ev);
         }
       } else if (elem) {
-        if (!jal_string_subscript_write_emit(pf, elem, expr)
-            && getenv("JALV2_FRONT_IR_DEBUG")) {
-          fprintf(stderr, "SEM string store failed\n");
-        }
+        (void) jal_string_subscript_write_emit(pf, elem, expr);
       }
       pfile_cmd_bld_end(pf, &nh, &nt);
-      if (getenv("JALV2_FRONT_IR_DEBUG")) {
-        fprintf(stderr, "SEM string %s lowered: %s[%s]\n",
-            is_load ? "load" : "store",
-            (base && value_name_get(base)) ? value_name_get(base) : "?",
-            (idx && value_name_get(idx)) ? value_name_get(idx) : "?");
-      }
       if (nh) {
         pfile_cmd_replace1_with_chain(pf, cmd, nh, nt);
       }
@@ -1035,24 +1199,12 @@ static void jal_sem_lower(pfile_t *pf)
 
       cmd_pos_get(cmd, &pos);
       pfile_statement_start_set(pf, &pos);
-      if (getenv("JALV2_FRONT_IR_DEBUG")) {
-        pfile_proc_t *ap = pfile_proc_active_get(pf);
-        value_t       bv = value_baseofs_get(val);
-
-        fprintf(stderr,
-            "LOWER dst=%s type=%d dyn=%d ptr=%d base=%s/%d proc=%s\n",
-            value_name_get(val) ? value_name_get(val) : "?",
-            (int) value_type_get(val),
-            jal_string_is_dynamic(val) ? 1 : 0,
-            jal_string_pointer_is(val) ? 1 : 0,
-            (bv && value_name_get(bv)) ? value_name_get(bv) : "?",
-            bv ? (int) value_type_get(bv) : -1,
-            (ap && (PFILE_PROC_NONE != ap)
-              && pfile_proc_tag_get(ap)) ? pfile_proc_tag_get(ap) : "?");
-      }
       pfile_cmd_bld_start(pf);
-      ok = (jal_string_subscript_write_emit(pf, val, expr)
-          || jal_string_store_outline_emit(pf, val, expr))
+      /* the parse-time chain's order: the OUTLINED store (one call to the
+       * shared `string_put` body) first, the inline expansion only when the
+       * outline declines (pointer target, non-byte element, ...) */
+      ok = (jal_string_store_outline_emit(pf, val, expr)
+          || jal_string_subscript_write_emit(pf, val, expr))
         ? BOOLEAN_TRUE : BOOLEAN_FALSE;
       if (!ok) {
         cmd_t assign;
@@ -1063,11 +1215,6 @@ static void jal_sem_lower(pfile_t *pf)
         }
       }
       pfile_cmd_bld_end(pf, &nh, &nt);
-      if (getenv("JALV2_FRONT_IR_DEBUG")) {
-        fprintf(stderr, "SEM store lowered%s: %s\n",
-            ok ? "" : " (array fallback)",
-            value_name_get(val) ? value_name_get(val) : "?");
-      }
       if (nh) {
         pfile_cmd_replace1_with_chain(pf, cmd, nh, nt);
       }
@@ -1096,7 +1243,21 @@ static void jal_assign_lhs_resolve(jal_assign_ctx_t *ctx)
       value_dereference(val);
     }
     assert(VARIABLE_DEF_TYPE_FUNCTION == value_type_get(val));
-    is_put = BOOLEAN_TRUE;
+    if (jal_sem_accessor_self_call(pf, val)) {
+      /* `procedure x 'put(...) is x = v` -- the name resolves back to this
+       * accessor, so the "store" would call itself: an unbounded hardware
+       * stack recursion with no other symptom (the simulator reports a
+       * stack-overflow reset and RAM looks untouched).  Refuse it; the
+       * implementation is a backing variable plus the accessor. */
+      pfile_log(pf, PFILE_LOG_ERR,
+          "the accessor '%s' is assigned inside its own body: that call "
+          "would recurse forever (write the backing variable instead)",
+          (value_name_get(val)) ? value_name_get(val) : "?");
+      val     = VALUE_NONE;
+      success = BOOLEAN_FALSE;
+    } else {
+      is_put = BOOLEAN_TRUE;
+    }
   } else if (jval[JAL_VAL_TYPE_BASE]) {
     val = jval[JAL_VAL_TYPE_BASE];
     if (value_vflag_test(val, VARIABLE_FLAG_READ)
@@ -1353,22 +1514,7 @@ static void jal_assign_rhs_refusals(jal_assign_ctx_t *ctx)
   value_t    sidx  = VALUE_NONE;
   boolean_t  sem_str;
 
-  if ((assign_op == OPERATOR_ASSIGN) && expr
-      && getenv("JALV2_FRONT_IR_DEBUG")
-      && (jal_string_is_dynamic(val) || jal_string_pointer_is(val))) {
-    variable_t sv = value_variable_get(val);
-    value_t    bv = value_baseofs_get(val);
-    variable_t bvar = bv ? value_variable_get(bv) : VARIABLE_NONE;
-
-    fprintf(stderr, "STR val=%s var=%s base=%s formal=%d\n",
-        value_name_get(val) ? value_name_get(val) : "?",
-        (sv && (VARIABLE_NONE != sv) && variable_name_get(sv))
-          ? variable_name_get(sv) : "?",
-        (bvar && (VARIABLE_NONE != bvar) && variable_name_get(bvar))
-          ? variable_name_get(bvar) : "?",
-        jal_sem_formal_subscript_p(pf, val) ? 1 : 0);
-  }
-  sem_str = ((assign_op == OPERATOR_ASSIGN) && expr && jal_sem_front_ir_enabled()
+  sem_str = ((assign_op == OPERATOR_ASSIGN) && expr
       && jal_string_subscript_value_is(val)
       && jal_sem_formal_subscript_p(pf, val))
     ? jal_string_subscript_split_public(pf, val, &sbase, &sidx)
@@ -1382,7 +1528,7 @@ static void jal_assign_rhs_refusals(jal_assign_ctx_t *ctx)
     value_release(val);
     val = VALUE_NONE;
   } else if ((assign_op == OPERATOR_ASSIGN) && expr
-      && jal_sem_store_spike_wanted(pf, val)) {
+      && jal_sem_store_wanted(pf, val)) {
     jal_sem_store_emit(pf, val, expr);
     value_release(expr);
     expr = VALUE_NONE;
@@ -1395,7 +1541,7 @@ static void jal_assign_rhs_refusals(jal_assign_ctx_t *ctx)
     expr = VALUE_NONE;
     value_release(val);
     val = VALUE_NONE;
-  } else if ((assign_op == OPERATOR_ASSIGN) && expr && jal_sem_front_ir_enabled()
+  } else if ((assign_op == OPERATOR_ASSIGN) && expr
       && jal_string_is_dynamic(val) && !value_baseofs_get(val)
       && jal_sem_formal_value_p(pf, val)) {
     jal_sem_whole_assign_emit(pf, val, expr);
@@ -2107,7 +2253,7 @@ static void jal_assign_assign_emit(jal_assign_ctx_t *ctx)
       && jal_sem_whole_assign_wanted(pf, val, expr)) {
     jal_sem_whole_assign_emit(pf, val, expr);
   } else if ((OPERATOR_ASSIGN == assign_op) && expr
-      && jal_sem_store_spike_wanted(pf, val)) {
+      && jal_sem_store_wanted(pf, val)) {
     jal_sem_store_emit(pf, val, expr);
   } else {
     pfile_cmd_op_add(pf, assign_op, &val, expr, VALUE_NONE);
@@ -2710,7 +2856,7 @@ void jal_file_process(pfile_t *pf, char *pre_inc)
     pre_inc = next;
   }
   jal_source_process(pf);
-  /* semantic-layer spike: expand the deferred formal-dependent stores with
+  /* the semantic layer: expand the deferred formal-dependent operations with
    * the body's actual formal definitions before the heap sizing report */
   jal_sem_lower(pf);
   /* end-of-parse diagnostics over the complete program (Option A:

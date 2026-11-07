@@ -1062,7 +1062,8 @@ void pfile_cmd_op_add(pfile_t *pf,
       return;
     }
     /* Equality with a string operand is only meaningful against another
-     * string, which the front end routes to jal_string_relation_parse_emit
+     * string, which the front end routes to jal_string_relation_emit (or to
+     * the deferred semantic node for a whole formal)
      * before it reaches this generic operator.  Anything that still has a
      * STRING flag here (e.g. `5 == s`, `5 == "ab"`) is a number-vs-string
      * comparison; allowing it compared the handle bytes with the number. */

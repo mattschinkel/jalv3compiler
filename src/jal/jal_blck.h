@@ -39,17 +39,26 @@ variable_def_t jal_pointer_fnptr_def_get(pfile_t *pf);
  * indirect-call emission is wired through the fps[i](x) machinery) */
 boolean_t jal_pointer_slot_rt_enabled(void);
 
-/* spike: defer a string subscript load (base + index) to the post-parse
+/* defer a string subscript load (base + index) to the post-parse
  * semantic lowering pass */
 void jal_sem_str_load_emit(pfile_t *pf, value_t dst, value_t base,
     value_t idx);
+/* defer an RVALUE read of a formal subscript; returns the read's temp */
+value_t jal_sem_str_load_emit_formal(pfile_t *pf, value_t val);
 
-/* the one value-aware JALV2_FRONT_IR switch (every semantic gate uses it) */
-boolean_t jal_sem_front_ir_enabled(void);
+/* is VAL a 'put/'get accessor of the procedure being parsed?  (its body must
+ * not resolve its own name back to itself -- that is a self-call) */
+boolean_t jal_sem_accessor_self_call(pfile_t *pf, value_t val);
 
 /* phase 2: defer COUNT(formal) to the post-parse lowering pass */
 boolean_t jal_sem_count_wanted(pfile_t *pf, value_t val);
 void      jal_sem_count_emit(pfile_t *pf, value_t dst, value_t src);
+
+/* is VAL a whole formal of the active procedure?  (a semantic node that
+ * names one is re-lowered with that procedure's formal representation) */
+boolean_t jal_sem_formal_value_p(pfile_t *pf, value_t val);
+/* a whole formal whose representation a clone can change (pointer/array) */
+boolean_t jal_sem_formal_reflavor_p(pfile_t *pf, value_t val);
 
 /* phase 2: defer a whole-string relation (== / !=) to the lowering pass */
 void jal_sem_relation_emit(pfile_t *pf, value_t dst, value_t lhs,

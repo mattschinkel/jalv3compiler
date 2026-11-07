@@ -1465,6 +1465,83 @@ static variable_sz_t pfile_temp_group_place(
   return top;
 }
 
+/* Grow V's definition to the slot VAL observes.  A `_temp` slot is
+ * identified by its base-offset CONST, and one slot can be observed through
+ * several variables once a body is DUPLICATED (pfile_cmd_block_dup copies
+ * the body's `_temp` variable, and the copies keep the shared offset const):
+ * the placement pass sees one entry per slot and records only the FIRST
+ * variable, so the duplicate's variable kept its old definition while the
+ * code addressed the same offsets -- an under-sized temp area that the
+ * allocator then overlaid with live variables. */
+static void pfile_temp_slot_grow(value_t val)
+{
+  variable_t     var;
+  value_t        baseofs;
+  variable_sz_t  need;
+  variable_def_t def;
+
+  if (!val || !value_is_temp(val) || value_is_boolean(val)) {
+    return;
+  }
+  baseofs = value_baseofs_get(val);
+  if (!baseofs || !value_is_const(baseofs)) {
+    return;
+  }
+  var = value_variable_get(val);
+  if (!var || (VARIABLE_NONE == var)
+      || !variable_name_get(var)
+      || strcmp(variable_name_get(var), PFILE_TMP_VARNAME)) {
+    return;
+  }
+  need = (variable_sz_t) value_const_get(baseofs) + value_sz_get(val);
+  if (variable_sz_get(var) >= need) {
+    return;
+  }
+  def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, need);
+  if (def) {
+    variable_def_set(var, def);
+  }
+}
+
+/* every variable that observes a placed temp slot must be big enough --
+ * see pfile_temp_slot_grow */
+static void pfile_temp_slot_fix_vars(pfile_t *pf)
+{
+  cmd_t cmd;
+
+  for (cmd = pf->cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    switch (cmd_type_get(cmd)) {
+      case CMD_TYPE_OPERATOR:
+        pfile_temp_slot_grow(cmd_opdst_get(cmd));
+        pfile_temp_slot_grow(cmd_opval1_get(cmd));
+        pfile_temp_slot_grow(cmd_opval2_get(cmd));
+        break;
+      case CMD_TYPE_BRANCH:
+        {
+          size_t        ct;
+          value_t      *params;
+
+          params = cmd_brproc_params_get(cmd);
+          ct     = cmd_brproc_param_ct_get(cmd);
+          while (params && ct--) {
+            pfile_temp_slot_grow(params[ct]);
+          }
+        }
+        pfile_temp_slot_grow(cmd_brval_get(cmd));
+        break;
+      case CMD_TYPE_ASSERT:
+        pfile_temp_slot_grow(cmd_assert_value_get(cmd));
+        break;
+      case CMD_TYPE_ASM:
+        pfile_temp_slot_grow(cmd_asm_val_get(cmd));
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 void pfile_temp_fixup(pfile_t *pf)
 {
   struct pfile_temp_set_ set;
@@ -1791,6 +1868,7 @@ void pfile_temp_fixup(pfile_t *pf)
       variable_def_set(set.ents[ii].var, def);
     }
   }
+  pfile_temp_slot_fix_vars(pf);
   FREE(set.ents);
   FREE(set.htab);
   /* a `_temp` variable is created lazily but its def is only grown by

@@ -88,6 +88,7 @@ typedef struct {
 #define CMD_FLAG_SEM_COUNT         0x0080
 #define CMD_FLAG_SEM_WHOLE_ASSIGN  0x0100
 #define CMD_FLAG_SEM_RELATION      0x0200
+#define CMD_FLAG_SEM_RELATION_NE   0x0400 /* relation operator is != */
 cmd_t           cmd_alloc(cmd_type_t type, const cmd_vtbl_t *vtbl);
 void            cmd_free(cmd_t cmd);
 cmd_t           cmd_dup(const cmd_t cmd);

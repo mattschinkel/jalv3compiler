@@ -98,11 +98,16 @@ boolean_t jal_string_cast_hard_is(const char *nm);
  * resolution has already failed for it; only `name(` is the cast */
 value_t   jal_string_cast_parse_emit(pfile_t *pf);
 value_t   jal_string_concat_chain_emit(pfile_t *pf, value_t first);
-value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
-    operator_t op);
 value_t jal_string_relation_operand_parse(pfile_t *pf);
+/* silent speculative capture for the formal-relation deferral (refuses the
+ * shapes that need the expression path, consuming nothing) */
+value_t jal_string_relation_operand_probe(pfile_t *pf);
 value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
     operator_t op);
+/* the semantic lowering owns the node's destination: write the comparison
+ * result straight into DST (no `dst = temp` copy) */
+boolean_t jal_string_relation_emit_into(pfile_t *pf, value_t dst,
+    value_t left, value_t right, operator_t op);
 boolean_t jal_string_builtin_is(const char *name);
 value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name);
 /* Expand deferred `string_heap_compact` NOPs after the pfile handle registry. */

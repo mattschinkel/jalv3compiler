@@ -1776,7 +1776,7 @@ static boolean_t jal_string_subscript_split(pfile_t *pf, value_t elem,
   return BOOLEAN_TRUE;
 }
 
-/* spike: expose the base/index split to the front-end semantic layer */
+/* expose the base/index split to the front-end semantic layer */
 boolean_t jal_string_subscript_split_public(pfile_t *pf, value_t elem,
     value_t *pbase, value_t *pidx)
 {
@@ -2287,6 +2287,13 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
   label_t   alloc_fail_lbl;
   label_t   done_lbl;
 
+  if (getenv("JALV2_DBG_OL") && jal_string_subscript_value_is(dst)) {
+    pfile_proc_t *dbg_proc = pfile_proc_active_get(pf);
+
+    fprintf(stderr, "OL inline_string_store proc=%s\n",
+        (dbg_proc && pfile_proc_tag_get(dbg_proc))
+          ? pfile_proc_tag_get(dbg_proc) : "?");
+  }
   if (!src || !jal_string_subscript_value_is(dst)
       || value_is_bit(src)
       || (value_is_string(src) && !value_is_const(src))) {
@@ -3072,8 +3079,14 @@ static value_t jal_string_source_length_snapshot_get(pfile_t *pf, value_t src)
   return snap;
 }
 
-value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
-    operator_t op)
+/* DST == VALUE_NONE allocates the result temp (the parse-time caller owns
+ * it); a caller that already owns the destination -- the semantic lowering
+ * of a deferred relation node -- passes it, so the emitted assignments write
+ * it directly and no `dst = temp` copy is needed (a copy would hide the
+ * value from the back end's test/branch fusion: the fused branch needs the
+ * RELATION to be the command before it). */
+static value_t jal_string_relation_emit_dst(pfile_t *pf, value_t dst,
+    value_t left, value_t right, operator_t op)
 {
   value_t left_len;
   value_t right_len;
@@ -3098,7 +3111,7 @@ value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
     value_t cmp_result;
 
     cval = value_clone(left);
-    cmp_result = VALUE_NONE;
+    cmp_result = dst;
     if (cval && pfile_expr_string_fix(pf, cval)) {
       pfile_cmd_op_add(pf, op, &cmp_result, cval, right);
       value_release(cval);
@@ -3122,7 +3135,7 @@ value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
   }
   left_len = jal_string_source_length_snapshot_get(pf, left);
   right_len = jal_string_source_length_snapshot_get(pf, right);
-  result = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1);
+  result = dst ? dst : pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1);
   idx = jal_string_temp_index_get(pf);
   one = jal_string_const_get(pf, 1);
   zero = jal_string_const_get(pf, 0);
@@ -3171,122 +3184,32 @@ value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
   return result;
 }
 
-value_t jal_string_relation_parse_emit(pfile_t *pf, value_t left,
+value_t jal_string_relation_emit(pfile_t *pf, value_t left, value_t right,
     operator_t op)
 {
-  value_t right;
-  value_t left_len;
-  value_t right_len;
+  return jal_string_relation_emit_dst(pf, VALUE_NONE, left, right, op);
+}
+
+/* emit the comparison INTO an existing destination; TRUE when it was a
+ * string comparison (the caller already owns DST) */
+boolean_t jal_string_relation_emit_into(pfile_t *pf, value_t dst,
+    value_t left, value_t right, operator_t op)
+{
   value_t result;
-  value_t idx;
-  value_t one;
-  value_t zero;
-  label_t mismatch_lbl;
-  label_t done_lbl;
-  label_t loop_lbl;
 
-  if (!jal_string_is_source(left)
-      || ((OPERATOR_EQ != op) && (OPERATOR_NE != op))) {
-    return VALUE_NONE;
+  if (!dst) {
+    return BOOLEAN_FALSE;
   }
-  jal_string_core_gate(pf);
-  right = jal_string_parse_operand(pf);
-  if (!right) {
-    return VALUE_NONE;
-  }
-  /* A one-character literal is a char code in a numeric comparison:
-   * `"a" == c` must keep working (and must not reach the byte walker).
-   * When the other operand IS a string source the literal is treated as
-   * a string and the normal string comparison below runs. */
-  if (jal_string_char_literal_is(left) && jal_string_is_numeric_value(right)) {
-    value_t cval;
-    value_t cmp_result;
-
-    cval = value_clone(left);
-    cmp_result = VALUE_NONE;
-    if (cval && pfile_expr_string_fix(pf, cval)) {
-      pfile_cmd_op_add(pf, op, &cmp_result, cval, right);
-      value_release(cval);
-      value_release(right);
-      return cmp_result;
+  /* the worker CONSUMES its right operand; this caller keeps it */
+  value_lock(right);
+  result = jal_string_relation_emit_dst(pf, dst, left, right, op);
+  if (result) {
+    if (result != dst) {
+      value_release(result);
     }
-    value_release(cval);
-    value_release(right);
-    return VALUE_NONE;
+    return BOOLEAN_TRUE;
   }
-  /* `parse_operand` also accepts numeric values because `&` chains render
-   * them (stage 2a/2b).  A RELATION has no such coercion: `s == 5` used to
-   * reach the byte walker with a scalar and assert in value_dereference.
-   * Byte arrays are still valid string sources; scalar numbers are not. */
-  if (!jal_string_is_source(right) && !jal_string_pointer_is(right)
-      && !value_is_array(right)) {
-    pfile_log(pf, PFILE_LOG_ERR,
-        "cannot compare a string with a non-string value");
-    value_release(right);
-    return VALUE_NONE;
-  }
-  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "&")) {
-    /* `greeting == "a" & name` — the comparison operand is a chain;
-     * evaluate it into a heap cell first (the chain takes ownership
-     * of `right`).  Relations whose LEFT is not a string never get
-     * here, so the `cond1 & cond2` idiom keeps its ANDB parse. */
-    value_t temp;
-
-    temp = jal_string_concat_chain_emit(pf, right);
-    right = temp;
-  }
-  if (!right) {
-    return VALUE_NONE;
-  }
-  left_len = jal_string_source_length_snapshot_get(pf, left);
-  right_len = jal_string_source_length_snapshot_get(pf, right);
-  result = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1);
-  idx = jal_string_temp_index_get(pf);
-  one = jal_string_const_get(pf, 1);
-  zero = jal_string_const_get(pf, 0);
-  mismatch_lbl = pfile_label_alloc(pf, 0);
-  done_lbl = pfile_label_alloc(pf, 0);
-  loop_lbl = pfile_label_alloc(pf, 0);
-
-  jal_string_assign_value(pf, result,
-      (OPERATOR_EQ == op) ? one : zero);
-  jal_string_branch_if_value_cmp(pf, OPERATOR_NE, left_len, right_len,
-      CMD_BRANCHCOND_TRUE, mismatch_lbl);
-  jal_string_assign_value(pf, idx, zero);
-
-  pfile_cmd_label_add(pf, loop_lbl);
-  jal_string_branch_if_value_cmp(pf, OPERATOR_GE, idx, left_len,
-      CMD_BRANCHCOND_TRUE, done_lbl);
-  {
-    value_t left_byte;
-    value_t right_byte;
-
-    left_byte = jal_string_source_byte_get(pf, left, idx);
-    right_byte = jal_string_source_byte_get(pf, right, idx);
-    jal_string_branch_if_value_cmp(pf, OPERATOR_NE, left_byte, right_byte,
-        CMD_BRANCHCOND_TRUE, mismatch_lbl);
-    value_release(right_byte);
-    value_release(left_byte);
-  }
-  pfile_cmd_op_add(pf, OPERATOR_ADD, &idx, idx, one);
-  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
-      loop_lbl, VALUE_NONE, VALUE_NONE, 0);
-
-  pfile_cmd_label_add(pf, mismatch_lbl);
-  jal_string_assign_value(pf, result,
-      (OPERATOR_EQ == op) ? zero : one);
-  pfile_cmd_label_add(pf, done_lbl);
-
-  label_release(loop_lbl);
-  label_release(done_lbl);
-  label_release(mismatch_lbl);
-  value_release(zero);
-  value_release(one);
-  value_release(idx);
-  value_release(right_len);
-  value_release(left_len);
-  value_release(right);
-  return result;
+  return BOOLEAN_FALSE;
 }
 
 value_t jal_string_relation_operand_parse(pfile_t *pf)
@@ -3539,7 +3462,7 @@ static void jal_string_concat_emit(pfile_t *pf, value_t dst,
   label_release(fail_lbl);
 }
 
-static value_t jal_string_parse_operand(pfile_t *pf)
+static value_t jal_string_parse_operand_log(pfile_t *pf, pfile_log_t plog)
 {
   value_t   val;
   boolean_t neg_lit;
@@ -3559,7 +3482,7 @@ static value_t jal_string_parse_operand(pfile_t *pf)
       variable_def_t sdef;
       variable_const_t n;
 
-      val = jal_token_to_constant(pf, PFILE_LOG_ERR);
+      val = jal_token_to_constant(pf, plog);
       if (val) {
         pf_token_get(pf, PF_TOKEN_NEXT);
         if (VARIABLE_DEF_TYPE_FLOAT == value_type_get(val)) {
@@ -3593,7 +3516,7 @@ static value_t jal_string_parse_operand(pfile_t *pf)
         }
       }
     } else {
-      val = jal_token_to_constant(pf, PFILE_LOG_ERR);
+      val = jal_token_to_constant(pf, plog);
       if (val) {
         pf_token_get(pf, PF_TOKEN_NEXT);
       }
@@ -3605,11 +3528,28 @@ static value_t jal_string_parse_operand(pfile_t *pf)
   if (val && !jal_string_is_source(val)
       && !jal_string_is_numeric_value(val)
       && !value_is_array(val)) {
-    pfile_log(pf, PFILE_LOG_ERR, "string value expected");
+    pfile_log(pf, plog, "string value expected");
     value_release(val);
     val = VALUE_NONE;
   }
   return val;
+}
+
+static value_t jal_string_parse_operand(pfile_t *pf)
+{
+  return jal_string_parse_operand_log(pf, PFILE_LOG_ERR);
+}
+
+/* Speculative relation operand: the same capture as the relation-operand
+ * parse but SILENT, and it refuses (without consuming) the shapes it cannot
+ * take in one value -- the caller then lets the ordinary expression
+ * machinery build the relation instead of deferring it. */
+value_t jal_string_relation_operand_probe(pfile_t *pf)
+{
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "-")) {
+    return VALUE_NONE;   /* a unary minus needs the expression path */
+  }
+  return jal_string_parse_operand_log(pf, PFILE_LOG_NONE);
 }
 
 /* Integer scalars/constants (stage 2a/2b: byte..oword, signed and
@@ -4374,6 +4314,9 @@ static pfile_proc_t *jal_string_shared_put_ensure(pfile_t *pf)
   value_t         ret;
   value_t         tval;
   boolean_t       entered;
+  unsigned        save_bld;
+  cmd_t           save_bld_head;
+  cmd_t           save_bld_tail;
 
   proc = jal_string_proc_find_deep(pf->proc_root, "_string_put");
   if (proc) {
@@ -4407,6 +4350,20 @@ static pfile_proc_t *jal_string_shared_put_ensure(pfile_t *pf)
   variable_def_member_add(def, "d", ddef, 1);
   variable_def_member_add(def, "i", idef, 1);
   variable_def_member_add(def, "c", cdef, 1);
+
+  /* The body synthesis emits a whole PROCEDURE: its commands belong to the
+   * main list even when an enclosing semantic lowering is building a chain.
+   * A nested build is not supported (pfile_cmd_bld_start clears the outer
+   * head/tail), and letting this land in that chain made the splice replace
+   * the store node with a chain that ended before the call -- orphaning the
+   * statement that followed it (`x[0] = v` inside a function clone lost the
+   * `return`). */
+  save_bld      = pf->cmd_bld;
+  save_bld_head = pf->cmd_bld_head;
+  save_bld_tail = pf->cmd_bld_tail;
+  pf->cmd_bld      = 0;
+  pf->cmd_bld_head = CMD_NONE;
+  pf->cmd_bld_tail = CMD_NONE;
 
   /* Create it at FILE SCOPE: the call can come from any procedure, and the
    * body must be emitted in the root block (the accessor synthesis does the
@@ -4460,6 +4417,9 @@ static pfile_proc_t *jal_string_shared_put_ensure(pfile_t *pf)
   }
   pfile_proc_active_set(pf, save_proc);
   pfile_proc_block_active_set(save_proc, save_blk);
+  pf->cmd_bld      = save_bld;
+  pf->cmd_bld_head = save_bld_head;
+  pf->cmd_bld_tail = save_bld_tail;
   return entered ? proc : 0;
 }
 

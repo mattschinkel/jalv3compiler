@@ -1145,6 +1145,19 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
         if (VARIABLE_DEF_TYPE_POINTER == value_type_get(val)) {
           value_dereference(val);
         }
+        if (jal_sem_accessor_self_call(pf, val)) {
+          /* `function x 'get ... is return x` -- the read resolves back to
+           * this accessor, so it would call itself forever (the compiled
+           * body was `call _x_get` inside `_x_get`; nothing else reports
+           * it).  Refuse it; the implementation is a backing variable. */
+          pfile_log(pf, PFILE_LOG_ERR,
+              "the accessor '%s' is read inside its own body: that call "
+              "would recurse forever (read the backing variable instead)",
+              (value_name_get(val)) ? value_name_get(val) : "?");
+        }
+        /* the tokens are still consumed as the call this becomes -- the
+         * error above already stopped the build, and leaving the stream
+         * unconsumed would bury it under follow-on syntax diagnostics */
         parse_flags = JAL_PARSE_CALL_FLAG_GET;
       } else if (jvals[JAL_VAL_TYPE_BASE]) {
         val = jvals[JAL_VAL_TYPE_BASE];
@@ -1229,7 +1242,7 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
           && jal_string_subscript_value_is(val)) {
         value_t byte_val = VALUE_NONE;
 
-        if (jal_sem_front_ir_enabled()) {
+        {
           value_t sbase = VALUE_NONE;
           value_t sidx  = VALUE_NONE;
 
@@ -1255,6 +1268,19 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
         if (byte_val) {
           value_release(val);
           val = byte_val;
+        }
+      }
+      /* RVALUE formal subscript: the read is deferred too.  A generic body
+       * reads the formal's ARRAY element, but a clone re-flavored to a
+       * string handle must read the heap PAYLOAD -- one node, lowered per
+       * the active procedure (see jal_sem_lower). */
+      if ((JAL_PARSE_VALUE_TYPE_RVALUE == type) && val) {
+        value_t formal_byte;
+
+        formal_byte = jal_sem_str_load_emit_formal(pf, val);
+        if (formal_byte) {
+          value_release(val);
+          val = formal_byte;
         }
       }
       /* RVALUE: data pointer without a pseudo-GET reads through the slot (like *p in C).
@@ -1929,11 +1955,12 @@ value_t jal_parse_expr(pfile_t *pf)
       string_op = pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "==")
         ? OPERATOR_EQ : OPERATOR_NE;
       pf_token_get(pf, PF_TOKEN_NEXT);
-      if (jal_sem_front_ir_enabled()) {
+      {
         value_t right;
 
         right = jal_string_relation_operand_parse(pf);
         if (right
+            && (jal_string_is_source(right) || jal_string_is_dynamic(right))
             && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "&")) {
           right = jal_string_concat_chain_emit(pf, right);
         }
@@ -1941,32 +1968,56 @@ value_t jal_parse_expr(pfile_t *pf)
           rel = VALUE_NONE;
         } else if (jal_string_is_dynamic(val)
             || jal_string_is_dynamic(right)) {
-          /* The string clone's operands are strings at parse: compare now
-           * (the sem node exists for the generic array body's relation). */
+          /* the clone's operands are heap handles at parse: compare now
+           * (`jal_string_relation_emit`); the deferred node exists for the
+           * generic array body's relation, whose representation is unknown
+           * until the lowering pass */
           rel = jal_string_relation_emit(pf, val, right, string_op);
         } else {
-          variable_def_t bdef;
-          value_t        rel_dst;
-
-          bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
-              VARIABLE_DEF_FLAG_NONE, 1);
-          rel_dst = bdef ? pfile_value_temp_get_from_def(pf, bdef)
-            : VALUE_NONE;
-          if (rel_dst) {
-            jal_sem_relation_emit(pf, rel_dst, val, right, string_op);
-            rel = rel_dst;
-            value_release(right);
-          } else {
-            rel = jal_string_relation_emit(pf, val, right, string_op);
-          }
+          /* neither operand is a heap handle, so the representation is
+           * known here: compare NOW (a deferred node for a formless
+           * relation only re-ran the operand type check later, doubling
+           * its diagnostic).  A whole FORMAL relation is still deferred--
+           * by the `jal_sem_formal_reflavor_p` capture below. */
+          rel = jal_string_relation_emit(pf, val, right, string_op);
         }
-      } else {
-        rel = jal_string_relation_parse_emit(pf, val, string_op);
       }
       value_release(val);
       val = rel;
     }
     op = operator_get(pf);
+    /* A relation whose LEFT operand is a whole FORMAL is deferred: its
+     * semantics follow the formal's representation in the lowering
+     * procedure (`x == y` compares heap strings CONTENT-wise in a string
+     * clone but only the first byte in a generic array body).  The capture
+     * happens AFTER the operator is consumed, so an operand this cannot
+     * take as one value (`x == y + 1`) simply keeps the ordinary operator
+     * path -- the expression machinery has not been bypassed. */
+    if (val && ((OPERATOR_EQ == op) || (OPERATOR_NE == op))
+        && !jal_string_is_dynamic(val)
+        && jal_sem_formal_reflavor_p(pf, val)) {
+      value_t right;
+
+      right = jal_string_relation_operand_probe(pf);
+      if (right) {
+        variable_def_t bdef;
+        value_t        rel_dst;
+
+        bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
+            VARIABLE_DEF_FLAG_NONE, 1);
+        rel_dst = bdef ? pfile_value_temp_get_from_def(pf, bdef)
+          : VALUE_NONE;
+        if (rel_dst) {
+          jal_sem_relation_emit(pf, rel_dst, val, right, op);
+          value_release(val);
+          value_release(right);
+          val = rel_dst;
+          op  = operator_get(pf);
+        } else {
+          value_release(right);
+        }
+      }
+    }
     if (val) {
       pfile_expr_push(pf, &exprstk, val, op);
       value_release(val);

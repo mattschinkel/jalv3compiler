@@ -1,0 +1,82 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — a PUT accessor as an OUT actual at a clone call
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A call's parameter arrays are built twice: `parms` for the callee and
+--    `put_parms` for the write-side accessor of every OUT/in-out formal whose
+--    actual is a `procedure <name> 'put` accessor -- that accessor is CALLED
+--    with the callee's value after the call (jal_proc.c's post-call loop).
+--    The string clone's tail REBUILDS those arrays (it drops the count slots
+--    of the re-flavored formals), so a clone call site must still name the
+--    right accessor and hand it the right value.  This witness is that shape:
+--
+--      mix(string, slot)   -> _strp_mix (string clone) + `_slot_put(7)`
+--      mix2(array,  slot)  -> the generic body            + `_slot_put(9)`
+--
+--    The accessor's storage is a SEPARATE variable (`slot_st`): the accessor
+--    name is a pseudo-value, so writing `slot` inside its own body would
+--    recurse (the first probe did exactly that and overflowed the hardware
+--    stack -- worth knowing, the compiler had no diagnostic for it).
+--
+-- @gpsim_validate begin
+-- steps: 800000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_seen 7
+-- expect byte v_first 90
+-- expect byte v_calls 2
+-- expect byte v_ok_array 1
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 64
+
+var string s
+var byte arr[4]
+var byte slot_st = 0
+var byte calls = 0
+var volatile byte seen = 0
+var volatile byte first = 0
+var volatile byte ok_array = 0
+
+function slot 'get return byte is
+   return slot_st
+end function
+
+procedure slot 'put(byte in v) is
+   slot_st = v
+   calls = calls + 1
+end procedure
+
+-- the string flavor: x is a heap handle in the clone
+procedure mix(byte in out x[], byte out c) is
+   c = 7
+   x[0] = "Z"
+end procedure
+
+-- the generic flavor: x is a byte array
+procedure mix2(byte in out x[], byte out c) is
+   c = 9
+   x[1] = "Y"
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abc"
+   mix(s, slot)
+   seen = slot
+   first = byte(s[0])
+   arr[1] = 1
+   mix2(arr, slot)
+   if byte(arr[1]) == "Y" then
+      ok_array = 1
+   end if
+   regression_checkpoint()
+end procedure
+run()

@@ -264,12 +264,6 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
         }
 
         map->var_map.used++;
-        if (getenv("JALV2_DBG_DUP") && variable_name_get(new)) {
-          fprintf(stderr, "DUPSET %s old=%s oldbase=0x%04X\n",
-              variable_name_get(new),
-              variable_name_get(var) ? variable_name_get(var) : "?",
-              (unsigned) variable_base_get(var, 0));
-        }
       }
     }
   }
@@ -376,6 +370,214 @@ static cmd_t pfile_cmd_block_dup(pfile_t *pf, pfile_proc_t *proc,
   }
   (void) pfile_block_leave(pf);
   return (failed || !cmd) ? CMD_NONE : cmd_link_get(cmd);
+}
+
+const char *pfile_proc_member_tag_get(pfile_proc_t *proc, size_t idx)
+{
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  size_t                ii;
+
+  def = pfile_proc_def_get(proc);
+  if (!def) {
+    return 0;
+  }
+  for (mbr = variable_def_member_get(def), ii = 0; mbr;
+       mbr = variable_def_member_link_get(mbr), ii++) {
+    if (ii == idx) {
+      return variable_def_member_tag_get(mbr);
+    }
+  }
+  return 0;
+}
+
+/* duplicate SRC's parsed body into the ACTIVE block (DST's), substituting
+ * SRC's formals with DST's by member tag.  This is the phase-3 clone body:
+ * the same machinery as the pragma-inline block duplication, but the target
+ * is the clone's own proc and the replacement is the clone's formals. */
+boolean_t pfile_proc_body_dup(pfile_t *pf, pfile_proc_t *src,
+    pfile_proc_t *dst)
+{
+  pfile_block_t *root;
+  pfile_block_t *blk;
+  map_info_t     map;
+  value_map_t    vmap;
+  variable_map_t rmap;
+  cmd_t          cmd;
+  cmd_t          start;
+  cmd_t          tail;
+  cmd_t          nh;
+  size_t         ii;
+  size_t         jj;
+  size_t         var_ct;
+  boolean_t      failed;
+
+  if (!src || (PFILE_PROC_NONE == src) || !dst || (PFILE_PROC_NONE == dst)) {
+    return BOOLEAN_FALSE;
+  }
+  root = pfile_proc_block_root_get(src);
+  if (!root) {
+    return BOOLEAN_FALSE;
+  }
+  map.lbl_map.alloc = 0;
+  map.lbl_map.used  = 0;
+  map.lbl_map.map   = 0;
+  map.var_map.alloc = 0;
+  map.var_map.used  = 0;
+  map.var_map.map   = 0;
+  vmap.alloc = 0;
+  vmap.used  = 0;
+  vmap.map   = 0;
+  rmap.alloc = 0;
+  rmap.used  = 0;
+  rmap.map   = 0;
+  failed = BOOLEAN_FALSE;
+
+  /* capacity for the duplicated locals (all of SRC's blocks) */
+  for (blk = root, var_ct = 0; blk; blk = pfile_block_next(blk)) {
+    variable_t var;
+
+    for (var = pfile_block_variable_list_head(blk);
+         var;
+         var = variable_link_get(var)) {
+      if (!variable_is_const(var)) {
+        var_ct++;
+      }
+    }
+  }
+  blk = root;   /* the body block is the proc's root block */
+  if (var_ct) {
+    map.var_map.map = CALLOC(var_ct, sizeof(*map.var_map.map));
+    if (!map.var_map.map) {
+      failed = BOOLEAN_TRUE;
+    } else {
+      map.var_map.alloc = var_ct;
+    }
+  }
+  /* the formal replacement by member tag: SRC param i -> DST param j */
+  {
+    size_t sct = pfile_proc_param_ct_get(src);
+    size_t dct = pfile_proc_param_ct_get(dst);
+
+    if (!failed && sct) {
+      vmap.map = MALLOC(sct * sizeof(*vmap.map));
+      rmap.map = MALLOC(sct * sizeof(*rmap.map));
+      if (!vmap.map || !rmap.map) {
+        failed = BOOLEAN_TRUE;
+      } else {
+        vmap.alloc = sct;
+        rmap.alloc = sct;
+      }
+    }
+    for (ii = 0; !failed && (ii < sct); ii++) {
+      const char *tag;
+      size_t      didx;
+      value_t     sval;
+      variable_t  svar;
+
+      /* member 0 is the RETURN slot: it carries no tag, and both definitions
+       * put it first, so it maps by index (a function's `return expr` binds
+       * the clone's own return slot; the flat back ends pass the value back
+       * in that variable, so an unmapped one returned the generic body's) */
+      if (0 == ii) {
+        didx = (dct > 0) ? 0 : (size_t) -1;
+        tag  = 0;
+      } else {
+        tag = pfile_proc_member_tag_get(src, ii);
+        if (!tag) {
+          continue;
+        }
+        didx = (size_t) -1;
+        for (jj = 0; jj < dct; jj++) {
+          const char *dtag = pfile_proc_member_tag_get(dst, jj);
+
+          if (dtag && !strcmp(tag, dtag)) {
+            didx = jj;
+            break;
+          }
+        }
+      }
+      if ((size_t) -1 == didx) {
+        continue;   /* the dropped count member has no clone counterpart */
+      }
+      sval = pfile_proc_param_get(src, ii);
+      svar = sval ? value_variable_get(sval) : VARIABLE_NONE;
+      /* member 0 (the return slot) is a value with a definition but no
+       * VARIABLE, so it must pass this guard to be mapped at all */
+      if (sval && ((0 == ii) || (svar && (VARIABLE_NONE != svar)))) {
+        value_t    dval;
+        variable_t dvar;
+
+        dval = pfile_proc_param_get(dst, didx);
+        dvar = dval ? value_variable_get(dval) : VARIABLE_NONE;
+        /* The RETURN slot (member 0) is a value with a DEFINITION but no
+         * VARIABLE (pfile_proc_define): it still has to map, because a
+         * `return expr` in the duplicated body must bind the CLONE's return
+         * slot -- the flat back ends pass the value back through the
+         * active procedure's slot, so an unmapped one wrote a variable-less
+         * value and the caller read 0. */
+        if (dval && sval && ((0 == ii)
+            || (dvar && (VARIABLE_NONE != dvar)))) {
+          vmap.map[vmap.used].old = sval;
+          vmap.map[vmap.used].new = dval;
+          vmap.used++;
+          if (dvar && svar && (VARIABLE_NONE != dvar)
+              && (VARIABLE_NONE != svar)) {
+            rmap.map[rmap.used].old = svar;
+            rmap.map[rmap.used].new = dvar;
+            rmap.used++;
+          }
+        }
+      }
+    }
+  }
+
+  if (failed) {
+    goto done;
+  }
+  cmd = label_cmd_get(pfile_proc_label_get(src));
+  if (!cmd || (CMD_TYPE_PROC_ENTER != cmd_type_get(cmd))) {
+    failed = BOOLEAN_TRUE;
+    goto done;
+  }
+  cmd = cmd_link_get(cmd);
+  if (!cmd || (CMD_TYPE_BLOCK_START != cmd_type_get(cmd))) {
+    failed = BOOLEAN_TRUE;
+    goto done;
+  }
+  start = pfile_cmdlist_tail_get(pf);
+  nh = pfile_cmd_block_dup(pf, PFILE_PROC_NONE, 0, blk, &map, cmd, &rmap);
+  if (!nh) {
+    failed = BOOLEAN_TRUE;
+    goto done;
+  }
+  tail = pfile_cmdlist_tail_get(pf);
+  for (cmd = start ? cmd_link_get(start) : pfile_cmdlist_get(pf);
+       cmd;
+       cmd = cmd_link_get(cmd)) {
+    cmd_value_remap(cmd, &vmap);
+    cmd_variable_remap(cmd, &rmap);
+    cmd_label_remap(cmd, &map.lbl_map);
+    cmd_variable_remap(cmd, &map.var_map);
+    if (cmd == tail) {
+      break;
+    }
+  }
+
+done:
+  /* the inline path's cleanup contract: the duplication holds one
+   * reference to every variable and label it created */
+  for (ii = 0; ii < map.var_map.used; ii++) {
+    variable_release(map.var_map.map[ii].new);
+  }
+  for (ii = 0; ii < map.lbl_map.used; ii++) {
+    label_release(map.lbl_map.map[ii].new);
+  }
+  FREE(vmap.map);
+  FREE(rmap.map);
+  FREE(map.var_map.map);
+  FREE(map.lbl_map.map);
+  return !failed;
 }
 
 /*

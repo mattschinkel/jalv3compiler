@@ -34,6 +34,14 @@ void   pfile_cmd_dump(pfile_t *pf, const char *prog_name,
     size_t argc, char **argv);
 cmd_t pfile_cmdlist_get(pfile_t *pf);
 cmd_t pfile_cmdlist_tail_get(pfile_t *pf);
+/* duplicate SRC's parsed body into DST's active block, substituting SRC's
+ * formals with DST's (matched by member tag); returns FALSE when the body
+ * cannot be duplicated.  The semantic nodes are carried over and lowered
+ * per DST by the normal semantic pass. */
+boolean_t pfile_proc_body_dup(pfile_t *pf, pfile_proc_t *src,
+    pfile_proc_t *dst);
+/* member tag (the formal's name) of definition member IDX, 0 when absent */
+const char *pfile_proc_member_tag_get(pfile_proc_t *proc, size_t idx);
 void pfile_cmdlist_check(cmd_t cmd);
 boolean_t pfile_cmd_remove_unreachable(pfile_t *pf);
 boolean_t pfile_cmd_remove_assignments(pfile_t *pf);
