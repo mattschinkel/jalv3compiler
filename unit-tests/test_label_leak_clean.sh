@@ -43,7 +43,7 @@ else
   fails=$((fails + 1))
 fi
 
-if grep -q "errors," "$WORK/out"; then
+if grep -qE "errors?, " "$WORK/out"; then
   echo "ok   error summary line present"
 else
   echo "FAIL: no 'N errors, M warnings' summary on stdout"

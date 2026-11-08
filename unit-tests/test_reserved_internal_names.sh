@@ -47,7 +47,7 @@ expect_one_error() { # name source message
     bad "$name: missing diagnostic '$want'" "$(grep -E 'reserved|heap_size' "$out")"
     return
   fi
-  if ! grep -qE '^1 errors, 0 warnings$' "$out"; then
+  if ! grep -qE '^1 errors?, 0 warnings?$' "$out"; then
     bad "$name: error count is not exactly 1" \
       "$(grep -E '^[0-9]+ errors,' "$out")"
     return

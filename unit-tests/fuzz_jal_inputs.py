@@ -219,7 +219,10 @@ def batch_status(rc: int, blocks, expected):
     done = []
     bad = None
     for path, text in blocks:
-        if "errors," in text and "warnings" in text:
+        # the summary is "N error(s), M warning(s)" -- the singular forms are
+        # what a one-error / one-warning program prints
+        if ("error," in text or "errors," in text) \
+                and ("warning" in text):
             done.append((path, "ok", ""))
         else:
             if bad is None:
@@ -308,7 +311,7 @@ def run_in_process(args, seed_blobs, rng, deadline, out_dir, crashes_dir):
 def classify(rc: int, out: str):
     """(status, detail). ok = compiled or clean diagnostics."""
     if rc == 0 or rc == 1:
-        if "errors," in out and "warnings" in out:
+        if ("error," in out or "errors," in out) and "warning" in out:
             return "ok", ""
         # exit 1 without the summary: still a clean stop if a diagnostic printed
         if "error" in out.lower():

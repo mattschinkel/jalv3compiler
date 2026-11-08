@@ -457,9 +457,21 @@ if (( LEVEL >= 1 )); then
   gate "L1 demo sample kit (compile)" \
     "$ROOT/unit-tests/sample_kit_sweep.sh" "$COMPILER"
   # Optional 16F18857 runtime suite on picsim (external, GPL-2.0).  It runs
-  # only when PICSIM_DIR points at a BUILT picsim tree (the fork carrying the
-  # PIC16F18857 model); otherwise it is skipped with a note.  The suite is
-  # tiny (5 tests) and validates RAM / pins / UART / ADC stimulus.
+  # when PICSIM_DIR points at a BUILT picsim tree (the fork carrying the
+  # PIC16F18857 model); otherwise it is skipped with a note.  The suite
+  # validates RAM / pins / UART / ADC stimulus and is the midrange runtime
+  # gate for the string/heap work (there is no gpsim model for the 1885x).
+  #
+  # When PICSIM_DIR is unset, fall back to the fork checkout's conventional
+  # sibling location (the private notes' `~/tmp/picsim-try/picsim`, i.e.
+  # `$ROOT/../tmp/picsim-try/picsim`), so a machine that HAS the fork lights
+  # the gate up without exporting anything.  A path that does not exist is
+  # simply skipped -- nothing here is required to build the compiler.
+  if [[ -z "${PICSIM_DIR:-}" ]] \
+      && { [[ -e "$ROOT/../tmp/picsim-try/picsim/src/libpicsim.a" ]] \
+        || [[ -e "$ROOT/../tmp/picsim-try/picsim/src/libpicsim.so" ]]; }; then
+    PICSIM_DIR="$ROOT/../tmp/picsim-try/picsim"
+  fi
   if [[ -n "${PICSIM_DIR:-}" ]] && { [[ -e "$PICSIM_DIR/src/libpicsim.a" ]] || [[ -e "$PICSIM_DIR/src/libpicsim.so" ]]; }; then
     gate "L1 picsim 16F18857 suite" \
       python3 sims/run_picsim_regression.py --picsim "$PICSIM_DIR" --compiler "$COMPILER"

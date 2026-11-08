@@ -53,7 +53,7 @@ check_err1() { # name source wanted substring -- EXACTLY one error
   out="$("$COMPILER" -s "$LIBS" -no-codfile -no-hex "$body" 2>&1)"
   rc=$?
   if [ $rc -eq 1 ] \
-      && printf '%s\n' "$out" | tail -1 | grep -Eq '^1 errors, [0-9]+ warnings?$' \
+      && printf '%s\n' "$out" | tail -1 | grep -Eq '^1 errors?, [0-9]+ warnings?$' \
       && printf '%s\n' "$out" | grep -qF "$want"; then
     pass=$((pass + 1)); echo "PASS $name"
   else

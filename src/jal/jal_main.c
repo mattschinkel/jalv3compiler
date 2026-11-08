@@ -1410,8 +1410,14 @@ int main(int argc, char **argv)
         } else {
           pfile_log(pf, PFILE_LOG_ERR, PFILE_MSG_CANNOT_OPEN, jal_name);
         }
-        pfile_log(pf, PFILE_LOG_INFO, "%u errors, %u warnings",
-            pfile_errct_get(pf), pfile_warnct_get(pf));
+        /* the counts are nouns: "1 error, 0 warnings", not "1 errors" --
+         * every harness accepts the plural (`errors?`) so the singular is
+         * backward compatible, and the reader sees the real count shape */
+        pfile_log(pf, PFILE_LOG_INFO, "%u error%s, %u warning%s",
+            pfile_errct_get(pf),
+            (1U == pfile_errct_get(pf)) ? "" : "s",
+            pfile_warnct_get(pf),
+            (1U == pfile_warnct_get(pf)) ? "" : "s");
         err = pfile_errct_get(pf);
         pfile_close(pf);
       }

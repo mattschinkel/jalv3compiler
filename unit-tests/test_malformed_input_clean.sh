@@ -42,7 +42,7 @@ check_fails_clean() { # name file [expected-substring]
     fails=$((fails + 1))
     return
   fi
-  if ! grep -qE '^[0-9]+ errors, [0-9]+ warnings' <<<"$out"; then
+  if ! grep -qE '^[0-9]+ errors?, [0-9]+ warnings?' <<<"$out"; then
     echo "FAIL $name: no 'N errors, M warnings' summary (compiler abort?)"
     echo "$out" | tail -4 | sed 's/^/     /'
     fails=$((fails + 1))

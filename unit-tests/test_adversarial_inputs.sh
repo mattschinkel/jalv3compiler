@@ -67,7 +67,7 @@ check() {
     fails=$((fails + 1))
     return
   fi
-  if [[ "$rc" -ne 0 ]] && ! grep -qE '^[0-9]+ errors, [0-9]+ warnings' <<<"$out"; then
+  if [[ "$rc" -ne 0 ]] && ! grep -qE '^[0-9]+ errors?, [0-9]+ warnings?' <<<"$out"; then
     echo "FAIL $name: no 'N errors, M warnings' summary (compiler abort?)"
     echo "$out" | tail -4 | sed 's/^/     /'
     fails=$((fails + 1))

@@ -178,7 +178,7 @@ def compile_one(compiler, path):
         out = r.stdout + r.stderr
     except subprocess.TimeoutExpired:
         return -1, "TIMEOUT"
-    m = re.findall(r"(\d+) errors", out)
+    m = re.findall(r"(\d+) errors?", out)
     errs = int(m[-1]) if m else -1
     return errs, out
 

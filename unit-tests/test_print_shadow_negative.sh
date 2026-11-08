@@ -24,7 +24,7 @@ expect_error() { # name file substring
   local name=$1 file=$2 want=$3 out
   out=$(run "$file")
   if echo "$out" | grep -q "$want"; then
-    if echo "$out" | grep -qE "[1-9][0-9]* errors"; then
+    if echo "$out" | grep -qE "[1-9][0-9]* errors?"; then
       echo "ok   $name"
     else
       echo "FAIL $name: matched '$want' but no error count > 0:"

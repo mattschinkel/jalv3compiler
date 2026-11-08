@@ -87,7 +87,7 @@ def main():
             print("FAIL %-24s did not compile (process died before it?)" % name)
             fails += 1
             continue
-        m = re.search(r"(\d+) errors, (\d+) warnings", body)
+        m = re.search(r"(\d+) errors?, (\d+) warnings?", body)
         if not m:
             print("FAIL %-24s no summary line" % name)
             fails += 1
