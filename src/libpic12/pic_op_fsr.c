@@ -364,17 +364,21 @@ variable_sz_t pic_dynamic_index_byte_sz_get(value_t idx)
 void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
     value_t array_val)
 {
-  variable_sz_t idx_sz;
-  variable_t    walk_var;
+  variable_sz_t     idx_sz;
+  variable_t        walk_var;
+  pic_access_plan_t plan;
 
+  /* U3-3: the walk classification comes from the plan (the FSR helpers take
+   * a variable, so this is the variable-based fill). */
   walk_var = value_variable_get(array_val);
-  if (pic_var_openarray_pair_formal_runtime_get(walk_var)) {
+  pic_access_plan_fill_var(walk_var, &plan);
+  if (plan.runtime_map) {
     pic_fsr_chunk_walk_emit_globals(pf, walk_var, idx, 0);
     return;
   }
-  if (!pic_variable_chunks_holed(walk_var)) {
+  if (!plan.holed) {
     /* unescaped pointer bind: walk the TARGET's chunks */
-    walk_var = pic_var_pointer_bind_walk_target(walk_var);
+    walk_var = plan.bind_walk;
   }
   if (pic_variable_chunks_holed(walk_var)) {
     pic_fsr_chunk_walk_emit(pf, walk_var, idx, BOOLEAN_TRUE);
@@ -894,12 +898,14 @@ static void pic_strview_classic_base_add(pfile_t *pf, variable_t var,
 void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
     value_t idx, size_t offset, boolean_t hybrid)
 {
-  variable_sz_t  idx_sz;
-  unsigned       t_wide;
-  value_t        t;
-  boolean_t      sv_classic;
+  variable_sz_t     idx_sz;
+  unsigned          t_wide;
+  value_t           t;
+  boolean_t         sv_classic;
+  pic_access_plan_t plan;
 
-  if (pic_var_openarray_pair_formal_runtime_get(var)) {
+  pic_access_plan_fill_var(var, &plan);
+  if (plan.runtime_map) {
     pic_fsr_chunk_walk_emit_globals(pf, var, idx, offset);
     return;
   }
@@ -907,9 +913,7 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
    * chunk map, and the payload base rides the per-formal cell -- added
    * into the scratch below (the FSR0 cores took their base from the
    * runtime map and returned above) */
-  sv_classic = (pic_var_openarray_formal_strview_fed(var)
-      && (VARIABLE_NONE != pic_var_strview_formal_base_get(var)))
-    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  sv_classic = plan.sv_view;
   if ((!idx || value_is_const(idx))
       && (pic_mem_object_is_chunked(var) || sv_classic)) {
     /* CONSTANT subscript through a compile-time chunk map (e.g.
@@ -1003,18 +1007,19 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
     variable_t var, variable_base_t base, value_t idx,
     variable_sz_t idx_range)
 {
-  variable_sz_t idx_sz;
-  boolean_t     wide16;
-  boolean_t     sv_classic;
+  variable_sz_t     idx_sz;
+  boolean_t         wide16;
+  boolean_t         sv_classic;
+  pic_access_plan_t plan;
 
+  /* U3-3: the walk classification comes from the plan. */
+  pic_access_plan_fill_var(var, &plan);
   /* a CLASSIC-core string-view formal always walks (its payload base is
    * runtime data the linear forms cannot carry), even when the baked copy
    * of the heap's map is a single chunk */
-  sv_classic = (pic_var_openarray_formal_strview_fed(var)
-      && (VARIABLE_NONE != pic_var_strview_formal_base_get(var)))
-    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-  if (!pic_variable_chunks_holed(var) && !sv_classic) {
-    var = pic_var_pointer_bind_walk_target(var);
+  sv_classic = plan.sv_view;
+  if (!plan.holed && !sv_classic) {
+    var = plan.bind_walk;
   }
   if (pic_variable_chunks_holed(var) || sv_classic) {
     /* the ladder must take the FSR0 staging on the 16-bit and 14H cores;

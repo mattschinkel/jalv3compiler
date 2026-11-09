@@ -17,7 +17,11 @@
 #      without this arm the rest of the pin could pass on a no-op checker;
 #   5. it is READ-ONLY: the image with the audit enabled is byte-identical to
 #      the image without it;
-#   6. it is SILENT by default (no audit output when the env is unset).
+#   6. it is SILENT by default (no audit output when the env is unset);
+#   7. U4: it runs on EVERY compile -- the JALV2_ALLOC_AUDIT_FAULT test hook
+#      (one injected violation, no other env set) must produce the
+#      placement-verdict warning, which is impossible if the audit were still
+#      gated behind JALV2_ALLOC_AUDIT.
 #
 # A pre-fix compiler has no audit at all, so arm 1 fails there: the pin is
 # discriminating (jaldbg pin-check: new=PASS, old=FAIL).
@@ -33,9 +37,9 @@ INC=(-s "$REPO/demo_lib" -s "$REPO/third_party/jallib/lib" -s "$REPO/sims/shared
 W1="$REPO/sims/picsim/16f18857_picsim_pointer_array_200.jal"
 W2="$REPO/sims/picsim/16f18857_picsim_fat_pointer.jal"
 
-mkdir -p "$WORK/plain" "$WORK/audit" "$WORK/fat" "$WORK/self"
+mkdir -p "$WORK/plain" "$WORK/audit" "$WORK/fat" "$WORK/self" "$WORK/fault"
 cp "$W1" "$WORK/plain/"; cp "$W1" "$WORK/audit/"; cp "$W2" "$WORK/fat/"
-cp "$W1" "$WORK/self/"
+cp "$W1" "$WORK/self/"; cp "$W1" "$WORK/fault/"
 
 ( cd "$WORK/plain" && "$CC" "${INC[@]}" 16f18857_picsim_pointer_array_200.jal \
     >log 2>&1 )
@@ -50,6 +54,9 @@ rc_fat=$?
 ( cd "$WORK/self" && JALV2_ALLOC_AUDIT_SELFTEST=1 \
     "$CC" "${INC[@]}" 16f18857_picsim_pointer_array_200.jal >log 2>&1 )
 rc_self=$?
+( cd "$WORK/fault" && JALV2_ALLOC_AUDIT_FAULT=1 \
+    "$CC" "${INC[@]}" 16f18857_picsim_pointer_array_200.jal >log 2>&1 )
+rc_fault=$?
 
 field() { # $1 = log, $2 = field name -> last value
   grep -o "$2=[0-9]*" "$1" 2>/dev/null | tail -1 | cut -d= -f2
@@ -60,6 +67,16 @@ if [ $rc_plain -eq 0 ] && ! grep -q "jal alloc audit:" "$WORK/plain/log"; then
   echo "ok   the audit is silent by default"
 else
   echo "FAIL: the audit printed without JALV2_ALLOC_AUDIT"
+  fails=$((fails + 1))
+fi
+
+# 7. always-on: the FAULT hook fires without JALV2_ALLOC_AUDIT
+if [ $rc_fault -eq 0 ] \
+    && grep -q "placement invariant violation" "$WORK/fault/log"; then
+  echo "ok   the audit runs without JALV2_ALLOC_AUDIT (fault verdict printed)"
+else
+  echo "FAIL: the always-on audit did not print the fault verdict (rc=$rc_fault)"
+  sed 's/^/     /' "$WORK/fault/log" | tail -10
   fails=$((fails + 1))
 fi
 

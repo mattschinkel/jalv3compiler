@@ -191,6 +191,8 @@ run_sh fat_pointer_tags           unit-tests/test_fat_pointer_tags.sh "$CC"
 run_sh fat_pointer_deref          unit-tests/test_fat_pointer_deref.sh "$CC"
 run_sh alloc_segment_audit        unit-tests/test_alloc_segment_audit.sh "$CC"
 run_sh alloc_capacity             unit-tests/test_alloc_capacity.sh "$CC"
+run_sh access_audit               unit-tests/test_access_audit.sh "$CC"
+run_sh openarray_pair_over_cap    unit-tests/test_openarray_pair_over_cap.sh "$CC"
 run_sh pic12_indirect_refusal     unit-tests/test_pic12_indirect_refusal.sh "$CC"
 run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
 # Header dependency tracking (the mixed-object lesson): a header edit must

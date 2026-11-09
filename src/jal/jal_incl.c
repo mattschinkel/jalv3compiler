@@ -642,6 +642,46 @@ static void jal_parse_pragma_pic32_mclr(pfile_t *pf)
   jal_parse_pragma_flag(pf, "target_mclr", "MCLR", 1, 0);
 }
 
+/* `pragma target fat_pointers on|off` -- program-level opt-in for the
+ * fat-pointer engine (F0's JALV2_FAT_POINTERS is a testing override; a pragma,
+ * when present, is authoritative because it lives with the program).  The
+ * backend reads the value as `target_fat_pointers`. */
+static void jal_parse_pragma_target_fat_pointers(pfile_t *pf)
+{
+  long want;
+
+  want = -1;
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "on")) {
+    want = 1;
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "off")) {
+    want = 0;
+  }
+  if (want < 0) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "pragma target fat_pointers expects on or off (got '%s')",
+        pf_token_ptr_get(pf));
+    return;
+  }
+  pf_token_get(pf, PF_TOKEN_NEXT);
+  {
+    value_t cexpr;
+
+    cexpr = pfile_constant_get(pf, (variable_const_t) want, VARIABLE_DEF_NONE);
+    if (cexpr) {
+      jal_variable_info_t inf;
+
+      jal_variable_info_init(&inf);
+      inf.name      = "target_fat_pointers";
+      inf.ct        = 0;
+      inf.def_flags = VARIABLE_DEF_FLAG_CONST;
+      variable_release(
+          jal_variable_alloc(pf, &inf, BOOLEAN_FALSE, 1, &cexpr,
+            PFILE_VARIABLE_ALLOC_GLOBAL));
+      value_release(cexpr);
+    }
+  }
+}
+
 /* `pragma target oscillator <hz>` -- the external source frequency
  * (crystal or clock module); jallib readability: full words, no
  * datasheet abbreviations in sample files. */
@@ -738,6 +778,7 @@ static void jal_parse_pragma_target(pfile_t *pf)
       } pic32_pragmas[] = {
         {"osc",        jal_parse_pragma_target_osc},
         {"oscillator", jal_parse_pragma_target_oscillator},
+    {"fat_pointers", jal_parse_pragma_target_fat_pointers},
         {"wdt",   jal_parse_pragma_pic32_wdt},
         {"dmt",   jal_parse_pragma_pic32_dmt},
         {"debug", jal_parse_pragma_pic32_debug},

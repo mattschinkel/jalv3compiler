@@ -15,6 +15,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <math.h>
 
@@ -41,8 +42,11 @@ static value_t pic_indirect_value_get(value_t val1, value_t val2, value_t val3);
 /* True array-of-pointers (e.g. **`var pointer var pointer var byte x[N]`**):
  * outer def is ARRAY of POINTER; FSR must load from the pointer *slot* words,
  * not linear *slot+i pointee math (MOVLW-on-indirect **`v__ind`** bug on PIC14).
- * Folded **`var pointer var byte p[N]`** is POINTER→ARRAY (one pointer slot). */
-boolean_t pic_value_variable_is_array_of_pointers(const value_t val)
+ * Folded **`var pointer var byte p[N]`** is POINTER→ARRAY (one pointer slot).
+ *
+ * U3: internal to the plan.  U2b-2 migrated the last five outside callers to
+ * `plan.aop`; keeping the predicate exported would invite a sixth. */
+static boolean_t pic_value_variable_is_array_of_pointers(const value_t val)
 {
   variable_t              v;
   variable_def_t        vd;
@@ -232,6 +236,98 @@ static void pic_pointer_slot_deref_stage(pfile_t *pf)
   value_release(indv);
 }
 
+/* U4-4: the plan must be internally consistent.  The audit sweep over the
+ * corpus (864 programs, 75,037 accesses) found no violation; this keeps it
+ * that way -- an edit that breaks the kind/facts relation is reported the
+ * moment the audit is on, instead of waiting for a witness to notice. */
+static boolean_t pic_access_plan_consistent(const pic_access_plan_t *p)
+{
+  if (p->aop) {
+    return (PIC_ACCESS_RESOLVE == p->kind) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  }
+  if (p->fat_candidate) {
+    return (PIC_ACCESS_FAT == p->kind) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  }
+  switch (p->kind) {
+  case PIC_ACCESS_WALK_BAKED:
+    return p->value_map ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  case PIC_ACCESS_WALK_RUNTIME:
+    return p->runtime_map ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  case PIC_ACCESS_DIRECT:
+    return (p->value_map || p->runtime_map || p->chunked)
+      ? BOOLEAN_FALSE : BOOLEAN_TRUE;
+  default:
+    return BOOLEAN_TRUE;
+  }
+}
+
+/* the project rule: unset/empty/0/false/no/off are OFF */
+static boolean_t pic_env_on(const char *name)
+{
+  const char *v;
+
+  v = getenv(name);
+  if ((0 == v) || (0 == *v)
+      || (0 == strcmp(v, "0")) || (0 == strcmp(v, "false"))
+      || (0 == strcmp(v, "no")) || (0 == strcmp(v, "off"))) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
+static boolean_t pic_access_audit_on(void)
+{
+  static int state = -1;
+
+  if (state < 0) {
+    state = pic_env_on("JALV2_ACCESS_AUDIT") ? 1 : 0;
+  }
+  return state ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/*
+ * NAME
+ *   pic_access_plan_fill_var
+ *
+ * DESCRIPTION
+ *   U3-3: fill the VARIABLE-derived half of the access plan.  The FSR walk
+ *   helpers hold a variable_t, not a value_t, so they use this entry point
+ *   directly; pic_access_plan_get() calls it after computing the value-only
+ *   facts.  The value-derived fields (aop, kind) are left zero here.
+ *
+ *   chunked     : the object view says more than one segment.
+ *   runtime_map : an open-array formal fed a runtime chunk map.
+ *   holed       : the object is split across the data area.
+ *   sv_view     : a classic string-view formal (its base rides a cell).
+ *   value_map   : the OR of holed/runtime_map/sv_view -- the walk question.
+ *   bind_walk   : the unescaped bind target, or VARIABLE_NONE.
+ *   ptr_lookup / ptr_read_call: the two pointer-storage-class answers.
+ */
+void pic_access_plan_fill_var(variable_t var, pic_access_plan_t *plan)
+{
+  memset(plan, 0, sizeof(*plan));
+  if ((VARIABLE_NONE == var) || !var) {
+    return;
+  }
+  plan->chunked = pic_mem_object_is_chunked(var);
+  plan->runtime_map = pic_var_openarray_pair_formal_runtime_get(var);
+  plan->holed = pic_variable_chunks_holed(var);
+  plan->sv_view = pic_var_strview_classic_formal(var);
+  /* U2b (walk family): a value walks when its own object is holed, when it is
+   * a runtime-map formal, when it is a classic string-view formal (the
+   * payload base rides a per-formal cell), or when it is an unescaped bind
+   * whose target is chunked.  The first three were OR'd inline in the
+   * indirect setup; the fourth looked the same target up at four branches. */
+  plan->value_map = (boolean_t) (plan->holed || plan->runtime_map
+      || plan->sv_view);
+  plan->bind_walk = pic_var_pointer_bind_walk_target(var);
+  plan->ptr_lookup = variable_flag_test(var, VARIABLE_FLAG_PTR_LOOKUP);
+  plan->ptr_read_call = (boolean_t) ((plan->ptr_lookup
+        && variable_flag_test(var, VARIABLE_FLAG_PTR_PTR))
+      || variable_flag_test(var, VARIABLE_FLAG_PTR_EEPROM)
+      || variable_flag_test(var, VARIABLE_FLAG_PTR_FLASH));
+}
+
 /*
  * NAME
  *   pic_access_plan_get
@@ -250,27 +346,71 @@ static void pic_pointer_slot_deref_stage(pfile_t *pf)
  *             single decision behind the five "do not walk" branches.
  *   chunked : the object has more than one segment (the object view's
  *             answer, not a second reading of the chunk map -- U0c).
+ *
+ *   The value-only facts (aop, kind) are decided here; the rest comes from
+ *   pic_access_plan_fill_var().
  */
 void pic_access_plan_get(pfile_t *pf, const value_t val,
     pic_access_plan_t *plan)
 {
-  variable_t var;
+  boolean_t      aop;
+  variable_t     var;
+  variable_def_t def;
 
-  (void) pf;   /* F2's tag dispatch will need it; today the plan is static */
-
-  plan->aop = pic_value_variable_is_array_of_pointers(val);
+  aop = pic_value_variable_is_array_of_pointers(val);
   var = value_variable_get(val);
-  plan->chunked = (VARIABLE_NONE != var)
-    ? pic_mem_object_is_chunked(var) : BOOLEAN_FALSE;
+  pic_access_plan_fill_var(var, plan);
+  plan->aop = aop;
+  /* U4-3: the fat family's guard, asked once (the emitter used to test all of
+   * these itself).  `value_is_pointer()` is false at the deref site, so the
+   * DEFINITION answers -- this is the same test the emitter applied. */
+  plan->fat_candidate = BOOLEAN_FALSE;
+  if (!aop && (VARIABLE_NONE != var) && (0 != var)
+      && pic_fat_pointers_enabled(pf) && (0 != pic_fat_object_ct())) {
+    def = variable_def_get(var);
+    plan->fat_candidate = ((0 != def)
+        && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def)))
+      ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  }
 
+  /* U4-2: `kind` answers how the OBJECT is addressed, so the walk
+   * classification wins over LINEAR -- an indirect value into a chunked
+   * object is still walked (the audit printed `kind=2 chunked=1 vmap=1`
+   * before this, which described the value, not the access).  `kind` has no
+   * behavioural consumer yet; this makes it truthful for when it gets one. */
   if (plan->aop) {
     plan->kind = PIC_ACCESS_RESOLVE;
+  } else if (plan->fat_candidate) {
+    /* a fat deref overrides the staging: the tag decides at run time */
+    plan->kind = PIC_ACCESS_FAT;
+  } else if (plan->runtime_map) {
+    plan->kind = PIC_ACCESS_WALK_RUNTIME;
+  } else if (plan->chunked || plan->value_map) {
+    plan->kind = PIC_ACCESS_WALK_BAKED;
   } else if (value_is_indirect(val)) {
     plan->kind = PIC_ACCESS_LINEAR;
-  } else if (plan->chunked) {
-    plan->kind = PIC_ACCESS_WALK_BAKED;
   } else {
     plan->kind = PIC_ACCESS_DIRECT;
+  }
+  if (pic_access_audit_on()) {
+    if (pic_env_on("JALV2_ACCESS_AUDIT_FAULT")) {
+      /* test hook: break kind so the checker below must fire */
+      plan->kind = PIC_ACCESS_DIRECT;
+    }
+    if (!pic_access_plan_consistent(plan)) {
+      /* once per compile: the point is that it fired, not how often */
+      static int reported = 0;
+
+      if (!reported) {
+        reported = 1;
+        fprintf(stderr,
+            "jal access audit: INCONSISTENT plan kind=%u aop=%u vmap=%u rt=%u"
+            " fat=%u\n",
+            (unsigned) plan->kind, (unsigned) plan->aop,
+            (unsigned) plan->value_map, (unsigned) plan->runtime_map,
+            (unsigned) plan->fat_candidate);
+      }
+    }
   }
 }
 
@@ -279,12 +419,12 @@ void pic_access_plan_get(pfile_t *pf, const value_t val,
  * path stays byte-identical.  A 2-byte pointer packs the tag into the
  * offset's top byte, so its high offset byte is masked before the carry add
  * (ANDLW leaves the carry alone). */
-static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
+static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset,
+    const pic_access_plan_t *plan)
 {
   pic_fat_target_t kind;
   variable_ct_t    id;
   variable_t       var;
-  variable_def_t   def;
   value_t          t;
   label_t          done;
   unsigned         top;
@@ -292,29 +432,39 @@ static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
   unsigned         mask;
   unsigned         ofs_mask;
   variable_sz_t    psz;
+  value_t          pv;
+  value_t          baseofs;
+  size_t           ofs_total;
+  boolean_t        pv_owned;
 
-  if (!pic_fat_pointers_enabled(pf)) {
+  /* U4-3: the plan answered every guard (fat engine on, an object id exists,
+   * not a slot element, the variable is a pointer).  A non-candidate leaves
+   * the linear staging that already ran as the answer. */
+  if (!plan->fat_candidate) {
     return;
   }
-  if (0 == pic_fat_object_ct()) {
-    return;
-  }
-  if (pic_value_variable_is_array_of_pointers(val)) {
-    return;
-  }
-  /* "this value may be fat": any pointer-typed value in a program that has a
-   * fat object.  Tag 0 falls through to the linear staging, so this is safe
-   * for every linear pointer -- and it covers the ESCAPED case, where the
-   * pointer is dereferenced through a copy (a formal, or another pointer)
-   * that has no bind record.  `value_is_pointer()` is false here, so ask the
-   * DEFINITION. */
   var = value_variable_get(val);
-  if ((0 == var) || (VARIABLE_NONE == var)) {
-    return;
-  }
-  def = variable_def_get(var);
-  if ((0 == def) || (VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(def))) {
-    return;
+  /* A SUBSCRIPTED pointer (`q[37]`) arrives as an indirect value with the
+   * subscript as its base offset; the tag lives in the POINTER's high byte,
+   * not at q+37 (the dispatch used to read INDF through the data pointer and
+   * decoded the data byte as a tag -- 14H measured got=0x00).  Use the base
+   * variable directly and fold the base offset into the access offset. */
+  pv       = val;
+  pv_owned = BOOLEAN_FALSE;
+  baseofs  = value_baseofs_get(val);
+  ofs_total = offset;
+  if ((VALUE_NONE != baseofs) || value_is_indirect(val)) {
+    if (VALUE_NONE != baseofs) {
+      ofs_total = offset + (size_t) value_const_get(baseofs);
+    }
+    if ((0 != var) && (VARIABLE_NONE != var)) {
+      pv = value_alloc(var);
+      if (pv) {
+        pv_owned = BOOLEAN_TRUE;
+      } else {
+        pv = val;
+      }
+    }
   }
   kind = pic_fat_target_kind(pf);
   psz = pic_pointer_size_get(pf);
@@ -330,7 +480,7 @@ static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
   done = pfile_label_alloc(pf, 0);
 
   /* tag 0: the linear staging that already ran is the answer */
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, (variable_sz_t) top,
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, pv, (variable_sz_t) top,
       PIC_OPDST_W);
   pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (uchar) mask);
   pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
@@ -346,7 +496,7 @@ static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
     }
     idv = (unsigned) (id + 1);
     next = pfile_label_alloc(pf, 0);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, (variable_sz_t) top,
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, pv, (variable_sz_t) top,
         PIC_OPDST_W);
     pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (uchar) mask);
     pic_instr_append_w_kn(pf, PIC_OPCODE_XORLW, (uchar) (idv << shift));
@@ -354,18 +504,18 @@ static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
     pic_instr_append_n(pf, PIC_OPCODE_GOTO, next);
     /* t = pointer offset + access offset (the add is always emitted, so the
      * carry into the high byte is this ADD's, never a stale one) */
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 0, PIC_OPDST_W);
-    pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, (uchar) (offset & 0xFF));
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, pv, 0, PIC_OPDST_W);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, (uchar) (ofs_total & 0xFF));
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 1, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, pv, 1, PIC_OPDST_W);
     if (0xFFU != ofs_mask) {
       pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (uchar) ofs_mask);
     }
     pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
     pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
-    if (offset >> 8) {
+    if (ofs_total >> 8) {
       pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW,
-          (uchar) ((offset >> 8) & 0xFF));
+          (uchar) ((ofs_total >> 8) & 0xFF));
     }
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
     pic_fat_ladder_call(pf, var, t);
@@ -386,9 +536,17 @@ static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
   }
   pic_instr_append_label(pf, done);
   label_release(done);
+  if (pv_owned) {
+    value_release(pv);
+  }
   pic_var_temp_release(pf, t);
 }
 
+/* U4-2: the access audit.  Under JALV2_ACCESS_AUDIT every indirect access
+ * prints the plan it was classified by, so a pin can assert the planner's
+ * decisions on a witness and catch classification drift even when the image
+ * happens to be unchanged.  Off by default; the switch is read once, and the
+ * OFF values follow the project rule (unset/0/false/no/off are OFF). */
 /*
  * NAME
  *   pic_indirect_setup
@@ -411,6 +569,16 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
   pic_access_plan_t plan;
 
   pic_access_plan_get(pf, val, &plan);
+  if (pic_access_audit_on()) {
+    fprintf(stderr,
+        "jal access audit: kind=%u aop=%u chunked=%u vmap=%u rt=%u"
+        " bind=%u fat=%u\n",
+        (unsigned) plan.kind, (unsigned) plan.aop,
+        (unsigned) plan.chunked, (unsigned) plan.value_map,
+        (unsigned) plan.runtime_map,
+        (unsigned) (VARIABLE_NONE != plan.bind_walk),
+        (unsigned) plan.fat_candidate);
+  }
 
   pic_stvar_fsr_mark(pf);
   baseofs = value_baseofs_get(val);
@@ -478,28 +646,24 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
        * walk the target's chunks) -- the flat home base / linear
        * base+index cannot address across the holes */
       variable_t walk_var;
-      boolean_t  formal_map;
 
-      formal_map = pic_variable_chunks_holed(value_variable_get(val))
-        || pic_var_openarray_pair_formal_runtime_get(value_variable_get(val))
-        /* a CLASSIC string-view formal walks even when the heap placed
-         * contiguously: the payload base rides the per-formal cell, so
-         * no subscript (const or dynamic) can address linearly */
-        || pic_var_strview_classic_formal(value_variable_get(val));
+      /* U2b (walk family): the plan already answered "does this value carry
+       * a walk map" (holed object, runtime-map formal, or classic string-view
+       * formal -- the last walks even when the heap placed contiguously,
+       * because its payload base rides a per-formal cell) and resolved the
+       * unescaped bind target once; the setup no longer re-derives either. */
       /* a runtime-map formal has no compile-time layout at all, so even a
        * CONSTANT subscript must walk the map the call site handed over */
       if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
-          && pic_var_openarray_pair_formal_runtime_get(
-               value_variable_get(val))) {
+          && plan.runtime_map) {
         pic_fsr_chunk_walk_emit_runtime(pf, value_variable_get(val),
             VALUE_NONE, offset + (size_t) value_const_get(baseofs));
         value_release(tmp);
         return;
       }
-      if (!formal_map
+      if (!plan.value_map
           && (VALUE_NONE != baseofs) && value_is_const(baseofs)
-          && (pic_var_pointer_bind_walk_target(
-                value_variable_get(val)) != VARIABLE_NONE)) {
+          && (VARIABLE_NONE != plan.bind_walk)) {
         /* const subscript through an unescaped walked bind: resolve
          * the linear offset through the TARGET's chunk map and load
          * the absolute address (the home-slot base path below would
@@ -508,7 +672,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
         variable_base_t linear;
         variable_base_t phys;
 
-        wt = pic_var_pointer_bind_walk_target(value_variable_get(val));
+        wt = plan.bind_walk;
         linear = variable_base_get(wt, 0)
           + (variable_base_t) value_const_get(baseofs)
           + (variable_base_t) offset;
@@ -527,14 +691,11 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
       }
       if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
           && !plan.aop
-          && (formal_map
-            || (pic_var_pointer_bind_walk_target(
-                  value_variable_get(val)) != VARIABLE_NONE))) {
+          && (plan.value_map || (VARIABLE_NONE != plan.bind_walk))) {
         /* const baseofs on a map-carrying formal falls through to the
          * const path below, which resolves through the chunk map */
-        walk_var = formal_map
-          ? value_variable_get(val)
-          : pic_var_pointer_bind_walk_target(value_variable_get(val));
+        walk_var = plan.value_map
+          ? value_variable_get(val) : plan.bind_walk;
         pic_fsr_chunk_walk_emit_ofs(pf, walk_var, baseofs, offset,
             pic_is_16bit(pf) || pic_is_14bit_hybrid(pf));
         value_release(tmp);
@@ -620,20 +781,24 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
        * address.  Walk the map instead (no index register: the offset is a
        * constant, exactly like the runtime-formal const case above). */
       {
-        variable_t walk;
-        boolean_t  sv_view;
+        variable_t        walk;
+        boolean_t         sv_view;
+        pic_access_plan_t wplan;
 
+        /* U3-3: the plan already classified this value (the walk helpers used
+         * to re-derive it); the bind target gets its own fill so the test
+         * below is the same question on the same variable.  sv_view stays the
+         * ORIGINAL variable's answer, exactly as before the rebind. */
         walk = value_variable_get(tmp);
-        sv_view = pic_var_strview_classic_formal(walk);
-        if (!pic_variable_chunks_holed(walk) && !sv_view) {
-          walk = pic_var_pointer_bind_walk_target(walk);
+        sv_view = plan.sv_view;
+        if (!plan.holed && !sv_view) {
+          walk = plan.bind_walk;
         }
+        pic_access_plan_fill_var(walk, &wplan);
         if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
             && !plan.aop
             && walk && (VARIABLE_NONE != walk)
-            && (pic_variable_chunks_holed(walk)
-              || pic_var_openarray_pair_formal_runtime_get(walk)
-              || sv_view)) {
+            && (wplan.holed || wplan.runtime_map || sv_view)) {
           /* the offset/rare entry picks the runtime map walk for a formal
            * that has one and the baked ladder for a compile-time map */
           pic_fsr_chunk_walk_emit_ofs(pf, walk, VALUE_NONE,
@@ -865,7 +1030,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
     }
     value_release(fsr);
   }
-  pic_fat_deref_emit(pf, val, offset);
+  pic_fat_deref_emit(pf, val, offset, &plan);
 }
 
 /*

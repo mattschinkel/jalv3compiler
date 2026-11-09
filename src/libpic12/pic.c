@@ -6533,11 +6533,8 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
                   && (VARIABLE_DEF_TYPE_ARRAY
                     == variable_def_type_get(
                         variable_def_get(avar)))) {
-                pfile_pos_t call_pos;
-
-                cmd_pos_get(mark_cmd, &call_pos);
                 pic_var_openarray_pair_record(avar,
-                    value_variable_get(fval), &call_pos, BOOLEAN_FALSE);
+                    value_variable_get(fval), BOOLEAN_FALSE);
                 /* a string payload-view actual (the heap array value with a
                  * staged base offset): the formal's map needs the base word */
                 if (VARIABLE_NONE != pic_var_strview_site_get(params[ii])) {
@@ -6552,11 +6549,8 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
                  * Recorded as a pair; pic_var_chunk_prepare_emit copies the
                  * source's runtime map (or hands over its compile-time one)
                  * and blocks the formal only when neither exists. */
-                pfile_pos_t call_pos;
-
-                cmd_pos_get(mark_cmd, &call_pos);
                 pic_var_openarray_pair_record(avar,
-                    value_variable_get(fval), &call_pos, BOOLEAN_TRUE);
+                    value_variable_get(fval), BOOLEAN_TRUE);
               } else {
                 /* non-array actual reaching a non-array formal (a plain
                  * value): nothing to hand over */
@@ -7091,8 +7085,18 @@ value_t pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which)
 boolean_t pic_fat_pointers_enabled(pfile_t *pf)
 {
   const char *env;
+  value_t      pragma;
 
-  (void) pf;
+  /* the program's own switch wins when present (it ships with the source);
+   * the env var stays the testing override */
+  pragma = pfile_value_find(pf, PFILE_LOG_NONE, "target_fat_pointers");
+  if (pragma) {
+    boolean_t on;
+
+    on = (0 != value_const_get(pragma)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+    value_release(pragma);
+    return on;
+  }
   env = getenv("JALV2_FAT_POINTERS");
   if ((0 == env) || (0 == env[0])) {
     return BOOLEAN_FALSE;

@@ -36,6 +36,39 @@ static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
 static void pic_assign_from_label_offset(pfile_t *pf, value_t dst, label_t lbl,
     variable_const_t offset);
 static void pic_assign_from_label2(pfile_t *pf, value_t dst, label_t lbl);
+/* F3 fix (2026-11-09): a copy between two POINTER VARIABLES must move the
+ * pointer VALUE.  JAL decays a pointer-to-array to the array in a value
+ * context, so the generic copy read THROUGH the source (FSR0 = its value,
+ * INDF) and stored the pointee's first bytes -- an escaped fat pointer then
+ * carried garbage.  Both sides must be plain direct variables: a subscripted
+ * or indirect source is a genuine read, not a copy. */
+static boolean_t pic_assign_ptr_var_copy(value_t dst, value_t src)
+{
+  variable_t dv;
+  variable_t sv;
+
+  /* a pointer-to-array value arrives marked INDIRECT (the front end models
+   * the decay as a dereference); pic_assign_ptr_to_ptr clears both flags and
+   * copies the value bytes, which is exactly what a pointer copy needs.  A
+   * real subscript read carries a base offset, so that stays excluded. */
+  if ((VALUE_NONE != value_baseofs_get(src))
+      || (VALUE_NONE != value_baseofs_get(dst))) {
+    return BOOLEAN_FALSE;
+  }
+  dv = value_variable_get(dst);
+  sv = value_variable_get(src);
+  if ((0 == dv) || (0 == sv) || (VARIABLE_NONE == dv) || (VARIABLE_NONE == sv)) {
+    return BOOLEAN_FALSE;
+  }
+  if ((VARIABLE_DEF_TYPE_POINTER
+        != variable_def_type_get(variable_def_get(dv)))
+      || (VARIABLE_DEF_TYPE_POINTER
+        != variable_def_type_get(variable_def_get(sv)))) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
 static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src);
 static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
     value_t src);
@@ -525,11 +558,15 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
 static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
     value_t src)
 {
-  variable_sz_t   ii;
-  variable_t      src_var;
-  value_t         rt_baseofs;
-  boolean_t       slot_rt;
+  variable_sz_t     ii;
+  variable_t        src_var;
+  value_t           rt_baseofs;
+  boolean_t         slot_rt;
+  pic_access_plan_t plan;
 
+  /* U2b (slots family): the plan already says whether this destination is an
+   * array-of-pointers element and whether its object is segmented. */
+  pic_access_plan_get(pf, dst, &plan);
   src_var = value_variable_get(src);
   if (src_var) {
     variable_use_ct_bump(src_var, CTR_BUMP_INCR);
@@ -562,7 +599,7 @@ static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
      * slot elements (it would dereference the slot) -- and store each
      * byte through INDF with a carry-safe increment on wide cores. */
     rt_baseofs = value_baseofs_get(dst);
-    slot_rt = pic_value_variable_is_array_of_pointers(dst)
+    slot_rt = plan.aop
       && (VALUE_NONE != rt_baseofs) && !value_is_const(rt_baseofs);
     if (slot_rt) {
       value_t   indv;
@@ -635,8 +672,7 @@ static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
      * beyond the first chunk were never written (the G3 defect).  Stage FSR
      * at the element's CHUNK-RESOLVED address and store each byte through
      * INDF, exactly like the runtime-indexed sibling above. */
-    if (pic_value_variable_is_array_of_pointers(dst)
-        && pic_mem_object_is_chunked(value_variable_get(dst))) {
+    if (plan.aop && plan.chunked) {
       value_t         indv;
       value_t         fsrv;
       boolean_t       wide16;
@@ -847,6 +883,35 @@ static void pic_assign_from_function(pfile_t *pf, value_t dst,
 }
 
 /* note: dst or src can be W */
+/* U3-4: the pointer-class routing decisions come from the access plan (the
+ * same answer as the VARIABLE_FLAG_PTR_* bits, computed once per value).  Each
+ * helper is only evaluated when the chain reaches its branch, so the plan fill
+ * is paid on the pointer-class tail, not on every assignment. */
+static boolean_t pic_assign_dst_is_ptr_class(value_t dst)
+{
+  pic_access_plan_t plan;
+
+  pic_access_plan_fill_var(value_variable_get(dst), &plan);
+  return (boolean_t) (plan.ptr_lookup || plan.ptr_read_call);
+}
+
+static boolean_t pic_assign_src_is_ptr_class(value_t src)
+{
+  pic_access_plan_t plan;
+
+  pic_access_plan_fill_var(value_variable_get(src), &plan);
+  return (boolean_t) (plan.ptr_lookup || plan.ptr_read_call);
+}
+
+static boolean_t pic_assign_src_is_runtime_ptr_class(value_t src)
+{
+  pic_access_plan_t plan;
+
+  pic_access_plan_fill_var(value_variable_get(src), &plan);
+  return (boolean_t) (plan.runtime_map
+      && (plan.ptr_lookup || plan.ptr_read_call));
+}
+
 void pic_op_assign(pfile_t *pf, operator_t op, value_t dst, 
     value_t src, value_t val2)
 {
@@ -982,31 +1047,21 @@ void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
     }
   } else if (value_is_label(src)) {
     pic_assign_from_label(pf, dst, src);
+  } else if (pic_assign_ptr_var_copy(dst, src)) {
+    pic_assign_ptr_to_ptr(pf, dst, src);
   } else if (value_is_value(src)) {
     pic_assign_from_value(pf, dst, src);
-  } else if (/* value_flag_test(dst, VALUE_FLAG_INDIRECT) && */
-      (variable_flags_get_all(value_variable_get(dst))
-        & (VARIABLE_FLAG_PTR_LOOKUP
-          | VARIABLE_FLAG_PTR_EEPROM
-          | VARIABLE_FLAG_PTR_FLASH))) {
+  } else if (pic_assign_dst_is_ptr_class(dst)) {
     pic_assign_to_ptr(pf, dst, src);
   } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
-      && pic_var_openarray_pair_formal_runtime_get(
-           value_variable_get(src))
-      && (variable_flags_get_all(value_variable_get(src))
-        & (VARIABLE_FLAG_PTR_LOOKUP
-          | VARIABLE_FLAG_PTR_EEPROM
-          | VARIABLE_FLAG_PTR_FLASH))) {
+      && pic_assign_src_is_runtime_ptr_class(src)) {
     /* open-array formal addressed through the runtime chunk map: the value
      * may be a RAM buffer split across banks (walk) or a ROM const array
      * (linear lookup read) -- decide from the pointer at run time */
     pic_assign_from_runtime_formal(pf, dst, src);
   } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
       && /*value_flag_test(src, VALUE_FLAG_INDIRECT) && */
-      (variable_flags_get_all(value_variable_get(src))
-        & (VARIABLE_FLAG_PTR_LOOKUP
-          | VARIABLE_FLAG_PTR_EEPROM
-          | VARIABLE_FLAG_PTR_FLASH))) {
+      pic_assign_src_is_ptr_class(src)) {
     pic_assign_from_ptr(pf, dst, src);
   } else if (value_is_indirect(dst) && value_is_indirect(src)) {
     /* src must move to a temporary */

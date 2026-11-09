@@ -102,7 +102,8 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
 void pic_fsr_chunk_walk_emit_runtime(pfile_t *pf, variable_t formal,
     value_t idx, size_t offset);
 void pic_lookup_index_load_w(pfile_t *pf, value_t baseofs);
-boolean_t pic_value_variable_is_array_of_pointers(const value_t val);
+/* U3: pic_value_variable_is_array_of_pointers is now internal to the access
+ * plan (pic_op_indirect.c) -- no emitter may re-derive it. */
 void pic_indirect_setup3(pfile_t *pf, value_t val1, value_t val2,
   value_t val3, variable_sz_t ofs, variable_sz_t *ipos);
 void pic_indirect_bump3(pfile_t *pf, value_t val1, value_t val2,

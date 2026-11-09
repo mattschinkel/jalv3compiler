@@ -164,9 +164,8 @@ void pic_var_trial_install(pfile_t *pf, int window);
 boolean_t pic_var_refusal_get(variable_t *var, variable_sz_t *sz,
     variable_sz_t *best);
 void pic_var_refusal_report(pfile_t *pf);
-variable_ct_t pic_variable_chunk_ct_get(variable_t var);
-variable_base_t pic_variable_chunk_base_get(variable_t var, variable_ct_t ix);
-variable_sz_t pic_variable_chunk_sz_get(variable_t var, variable_ct_t ix);
+/* U3: the pre-object chunk accessors are gone -- the chunk map is read
+ * through pic_mem_object_get() only. */
 /* Layer 2 chunk-walking linear arrays: compile-time const-offset
  * resolution through the chunk map, and the pointer-target registry
  * (linear pointer arithmetic cannot walk -- holed placement refused) */
@@ -258,10 +257,34 @@ typedef struct pic_access_plan_ {
   pic_access_kind_t kind;
   boolean_t         aop;      /* array-of-pointers element: never walk     */
   boolean_t         chunked;  /* the object has more than one segment      */
+  /* U2b: the WALK classification.  The indirect setup used to OR three
+   * predicates inline and look the bind target up at every branch; the plan
+   * now answers "does this value walk, and through what". */
+  boolean_t         value_map;   /* the value itself carries a walk map    */
+  boolean_t         runtime_map; /* ...and the call site hands it over     */
+  variable_t        bind_walk;   /* unescaped walked bind target, or NONE  */
+  /* U2b-3: the pointer STORAGE class.  These are the two decisions the
+   * pointer read/write dispatch makes from the VARIABLE_FLAG_PTR_* bits;
+   * the plan answers them once, so an emitter need not re-read the flags. */
+  boolean_t         ptr_lookup;    /* PTR_LOOKUP: const table / open-array  */
+  boolean_t         ptr_read_call; /* read needs the helper: proc/eeprom/
+                                    * flash (PTR_PTR+LOOKUP, EEPROM, FLASH) */
+  /* U3-3: the raw facts a VARIABLE-based emitter needs (the FSR walk
+   * helpers take a variable_t, not a value).  pic_access_plan_fill_var
+   * computes the variable-derived fields only; the value-derived ones
+   * (aop, kind) stay zero. */
+  boolean_t         holed;    /* the object is split across segments  */
+  boolean_t         sv_view;  /* classic string-view formal           */
+  /* U4-3: the fat family's question.  TRUE when the fat engine is on, an
+   * object id exists, the value is not a slot element and the VARIABLE is
+   * a pointer (the emitter's own test) -- the deref then dispatches on the
+   * tag, so `kind` reports FAT for it. */
+  boolean_t         fat_candidate;
 } pic_access_plan_t;
 
 void pic_access_plan_get(pfile_t *pf, const value_t val,
     pic_access_plan_t *plan);
+void pic_access_plan_fill_var(variable_t var, pic_access_plan_t *plan);
 
 /* back-end descriptor (pic_backend.h): the per-target delegation seam.
  * A NULL descriptor selects the classic PIC12/14/14H/18/SX

@@ -21,6 +21,10 @@
 #include "pic_stvar.h"
 #include "pic_var.h"
 
+/* U3-5: file-local now (it had no external user); pic_var_reset() calls it
+ * before the definition, so the prototype lives here. */
+static void pic_fat_object_reset(void);
+
 #undef BLIST_DEBUG
 
 
@@ -77,8 +81,6 @@ typedef struct pic_var_openarray_pair_ {
   variable_t actual;
   variable_t formal;
   boolean_t                   reported;
-  pfile_pos_t                  pos;   /* call site */
-  boolean_t                    pos_valid;
   /* PASS-ON pair: the actual is another procedure's open-array formal, so all
    * this call site knows is the pointer.  When that formal has a runtime map
    * of its own the CALL SITE copies it here (the layout is only known at run
@@ -100,6 +102,10 @@ typedef struct pic_var_openarray_pair_ {
   variable_ct_t                chunk_ct;
   variable_sz_t                chunk_sz[PIC_CHUNK_MAP_MAX];
   variable_base_t              chunk_base[PIC_CHUNK_MAP_MAX];
+  /* the actual's placement is chunked wider than the runtime map can
+   * describe; the pair cannot carry that layout (found 2026-11-09: two
+   * different >cap layouts through one formal silently used one baked map) */
+  boolean_t                    over_cap;
 } pic_var_openarray_pair_t;
 
 /* a variable placed after placement ran, and the placement generation its
@@ -362,30 +368,6 @@ static pic_variable_chunk_map_t *pic_variable_chunk_map_find(variable_t var)
   return 0;
 }
 
-variable_ct_t pic_variable_chunk_ct_get(variable_t var)
-{
-  pic_variable_chunk_map_t *map;
-
-  map = pic_variable_chunk_map_find(var);
-  return map ? map->ct : 0;
-}
-
-variable_base_t pic_variable_chunk_base_get(variable_t var, variable_ct_t ix)
-{
-  pic_variable_chunk_map_t *map;
-
-  map = pic_variable_chunk_map_find(var);
-  return (map && ix < map->ct) ? map->base[ix] : VARIABLE_BASE_UNKNOWN;
-}
-
-variable_sz_t pic_variable_chunk_sz_get(variable_t var, variable_ct_t ix)
-{
-  pic_variable_chunk_map_t *map;
-
-  map = pic_variable_chunk_map_find(var);
-  return (map && ix < map->ct) ? map->sz[ix] : 0;
-}
-
 /* U0: fill the object view (see pic_var.h).  `stride` mirrors the holed
  * placement's element-size rule: a non-bit array's element def, and 1 when
  * the element is a bit (packed) or the size is not a whole multiple. */
@@ -441,7 +423,7 @@ boolean_t pic_mem_object_get(variable_t var, pic_mem_object_t *obj)
   return BOOLEAN_TRUE;
 }
 
-variable_base_t pic_mem_object_phys_of(const pic_mem_object_t *obj,
+static variable_base_t pic_mem_object_phys_of(const pic_mem_object_t *obj,
     variable_sz_t ofs)
 {
   variable_ct_t ii;
@@ -480,7 +462,7 @@ static variable_t    pic_fat_objects[PIC_FAT_MAX_OBJECTS];
 static variable_ct_t pic_fat_objects_used;
 static boolean_t     pic_fat_cap_reported;   /* refuse once, not per pass */
 
-void pic_fat_object_reset(void)
+static void pic_fat_object_reset(void)
 {
   pic_fat_objects_used = 0;
   pic_fat_cap_reported = BOOLEAN_FALSE;
@@ -682,7 +664,7 @@ void pic_var_pointer_bind_escape(variable_t pvar)
 
 /* does any ESCAPED pointer bind this target? (drives the holed
  * placement refusal; unescaped binds walk instead) */
-boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar)
+static boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar)
 {
   size_t ii;
 
@@ -1240,7 +1222,7 @@ void pic_var_openarray_pair_strview_mark(variable_t actual, variable_t formal)
 }
 
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    const pfile_pos_t *pos, boolean_t passon)
+    boolean_t passon)
 {
   size_t ii;
 
@@ -1271,16 +1253,12 @@ void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].actual   = actual;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].formal   = formal;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].reported = BOOLEAN_FALSE;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos_valid = BOOLEAN_FALSE;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].passon   = passon;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_src = VARIABLE_NONE;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_sz  = 0;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].strview  = BOOLEAN_FALSE;
   pic_var.openarray_pairs[pic_var.openarray_pairs_used].chunk_ct = 0;
-  if (pos) {
-    pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos       = *pos;
-    pic_var.openarray_pairs[pic_var.openarray_pairs_used].pos_valid = BOOLEAN_TRUE;
-  }
+  pic_var.openarray_pairs[pic_var.openarray_pairs_used].over_cap = BOOLEAN_FALSE;
   pic_var.openarray_pairs_used++;
 }
 
@@ -1451,6 +1429,35 @@ static variable_sz_t pic_var_formal_map_need(pfile_t *pf, variable_t formal)
       }
     }
   }
+  {
+    boolean_t over;
+    size_t    oi;
+    unsigned  calls;
+
+    over  = (max_ct > PIC_CHUNK_MAP_MAX) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+    calls = 0;
+    for (oi = 0; oi < pic_var.openarray_pairs_used; oi++) {
+      if (pic_var.openarray_pairs[oi].formal != formal) {
+        continue;
+      }
+      calls++;
+      if (pic_var.openarray_pairs[oi].over_cap) {
+        over = BOOLEAN_TRUE;
+      }
+    }
+    if (over && (calls >= 2)) {
+      /* Two call sites need a runtime map, but a layout is wider than the
+       * map can hold.  Baking either layout silently misaddresses the other
+       * call site, so refuse (the same policy as the emitted-map size
+       * check). */
+      pfile_log(pf, PFILE_LOG_ERR,
+          "the runtime chunk map holds %u chunks but open-array formal '%s' "
+          "sees more than one layout and one is wider; reduce the buffers "
+          "(e.g. _string_heap_size) so each needs fewer RAM bank pieces",
+          (unsigned) PIC_CHUNK_MAP_MAX,
+          variable_name_get(formal) ? variable_name_get(formal) : "?");
+    }
+  }
   if (chunked && differ && (max_ct <= PIC_CHUNK_MAP_MAX)) {
     need = (variable_sz_t) (1 + 3 * max_ct);
   }
@@ -1570,6 +1577,10 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
         pair->chunk_sz[cix]   = m->sz[cix];
         pair->chunk_base[cix] = m->base[cix];
       }
+    } else if (m && (m->ct > PIC_CHUNK_MAP_MAX)) {
+      /* not "linear": the actual IS chunked, just wider than the map */
+      pair->chunk_ct = 0;
+      pair->over_cap = BOOLEAN_TRUE;
     } else if (pair->passon) {
       pair->chunk_ct = 0;
     } else {
@@ -4747,10 +4758,8 @@ static void pic_var_segment_audit(pfile_t *pf)
   unsigned                  shared_free;
   unsigned                  shared_largest;
 
-  if ((0 == getenv("JALV2_ALLOC_AUDIT"))
-      && (0 == getenv("JALV2_ALLOC_AUDIT_SELFTEST"))) {
-    return;
-  }
+  /* U4: the invariants are checked on EVERY compile; the report and the
+   * selftest stay behind their switches (a check, not a report). */
   if (getenv("JALV2_ALLOC_AUDIT_SELFTEST")) {
     unsigned selftest;
 
@@ -4762,6 +4771,10 @@ static void pic_var_segment_audit(pfile_t *pf)
   segments   = 0;
   owned      = 0;
   violations = 0;
+  if (getenv("JALV2_ALLOC_AUDIT_FAULT")) {
+    /* test hook: prove the always-on verdict path without a real defect */
+    violations++;
+  }
   for (map = pic_var.chunk_maps; map; map = map->link) {
     const char   *name;
     boolean_t     is_owned;
@@ -4773,10 +4786,14 @@ static void pic_var_segment_audit(pfile_t *pf)
     }
     objects++;
     segments += (size_t) map->ct;
-    if ((0 == map->ct) || (map->ct > PIC_CHUNK_MAP_MAX)) {
+    /* U4-1: the placement map's base/sz are DYNAMICALLY sized (ct has no
+     * static cap; PIC_CHUNK_MAP_MAX bounds the emitted RUNTIME map variable
+     * of an open-array formal, not this one -- using it here was a false
+     * invariant that fired on a legitimate 11-segment word[400]). */
+    if ((0 == map->ct) || (0 == map->base) || (0 == map->sz)) {
       fprintf(stderr,
-          "jal alloc audit: %s: segment count %u is outside 1..%u\n",
-          name, (unsigned) map->ct, (unsigned) PIC_CHUNK_MAP_MAX);
+          "jal alloc audit: %s: segment map is empty or has no arrays\n",
+          name);
       violations++;
       continue;
     }
@@ -4899,6 +4916,12 @@ static void pic_var_segment_audit(pfile_t *pf)
     shared_largest = pic_var_list_largest(pic_var.map.shared);
     shared_used   = (shared_total >= shared_free)
       ? shared_total - shared_free : 0;
+  }
+  if (violations) {
+    pfile_log(pf, PFILE_LOG_WARN,
+        "alloc: %u placement invariant violation(s) (objects=%u segments=%u);"
+        " the image may place storage across a boundary",
+        (unsigned) violations, (unsigned) objects, (unsigned) segments);
   }
   if (getenv("JALV2_ALLOC_AUDIT")) {
     fprintf(stderr,

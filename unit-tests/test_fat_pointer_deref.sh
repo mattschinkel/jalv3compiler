@@ -199,8 +199,242 @@ else
   echo "FAIL: classic 14 tag/dispatch (tag=$c14_tag x=$c14_x)"; fails=$((fails + 1))
 fi
 
-# runtime arm, when the engine is present
+# --- F4a: `pragma target fat_pointers on|off` is packaged with the program -
+# A program can opt in without an environment variable, and a pragma is
+# AUTHORITATIVE (off wins even with JALV2_FAT_POINTERS=1 set).
+mkdir -p "$WORK/pragma"
+cat > "$WORK/pragma/body.jal" <<'JAL'
+include 16f887
+var volatile byte big[200]
+var byte i
+var volatile byte bad = 0
+var pointer p as var byte[200]
+procedure check is
+  var pointer q as var byte[200]
+  q = p
+  if q[37] != 38 then bad = 1 end if
+end procedure
+for 200 using i loop
+  big[i] = i + 1
+end loop
+p is big
+check()
+i = 100
+if p[i] != 101 then bad = 1 end if
+forever loop
+end loop
+JAL
+{ echo "pragma target fat_pointers on"; cat "$WORK/pragma/body.jal"; } > "$WORK/pragma/on.jal"
+{ echo "pragma target fat_pointers off"; cat "$WORK/pragma/body.jal"; } > "$WORK/pragma/off.jal"
+cp "$WORK/pragma/body.jal" "$WORK/pragma/none.jal"
+cp "$WORK/pragma/body.jal" "$WORK/pragma/bad.jal"
+sed -i '1i pragma target fat_pointers maybe' "$WORK/pragma/bad.jal"
+
+( cd "$WORK/pragma" && env -u JALV2_FAT_POINTERS "$CC" "${INC[@]}" on.jal >on.log 2>&1 )
+if grep -q "0 errors" "$WORK/pragma/on.log" \
+    && [ "$(grep -c xorlw "$WORK/pragma/on.asm" 2>/dev/null)" -ge 2 ]; then
+  echo "ok   pragma fat_pointers on: fat without any environment variable"
+else
+  echo "FAIL: the pragma did not enable the engine"
+  tail -4 "$WORK/pragma/on.log" | sed 's/^/     /'; fails=$((fails + 1))
+fi
+
+if ( cd "$WORK/pragma" && JALV2_FAT_POINTERS=1 "$CC" "${INC[@]}" off.jal >off.log 2>&1 ); then
+  echo "FAIL: pragma off was overridden by JALV2_FAT_POINTERS=1"
+  fails=$((fails + 1))
+else
+  echo "ok   pragma fat_pointers off wins over the environment"
+fi
+
+if ( cd "$WORK/pragma" && env -u JALV2_FAT_POINTERS "$CC" "${INC[@]}" none.jal >none.log 2>&1 ); then
+  echo "FAIL: the escaped shape compiled with no gate at all"
+  fails=$((fails + 1))
+else
+  echo "ok   no pragma, no env: the escaped shape is still refused"
+fi
+
+if ( cd "$WORK/pragma" && JALV2_FAT_POINTERS=1 "$CC" "${INC[@]}" none.jal >env.log 2>&1 ) \
+    && [ "$(grep -c xorlw "$WORK/pragma/none.asm" 2>/dev/null)" -ge 2 ]; then
+  echo "ok   no pragma + JALV2_FAT_POINTERS=1 still enables the engine"
+else
+  echo "FAIL: the env path no longer works"; fails=$((fails + 1))
+fi
+
+if ( cd "$WORK/pragma" && env -u JALV2_FAT_POINTERS "$CC" "${INC[@]}" bad.jal >bad.log 2>&1 ); then
+  echo "FAIL: a bad pragma value was accepted"
+  fails=$((fails + 1))
+elif grep -q "pragma target fat_pointers expects on or off" "$WORK/pragma/bad.log"; then
+  echo "ok   a bad pragma value is reported"
+else
+  echo "FAIL: no diagnostic for a bad pragma value"; fails=$((fails + 1))
+fi
+
+# --- F4: a ROM const pointer alongside a fat RAM pointer -------------------
+# The ROM marker is bit 7 of the pointer; the tag mask (0x60 on 14H) clears it,
+# so a ROM pointer reads as tag 0 and takes the linear/PTR_READ path.  This arm
+# proves that coexistence: one chunked RAM object (so ids exist) plus a
+# const-table pointer, both measured.
+mkdir -p "$WORK/rom"
+cat > "$WORK/rom/rom.jal" <<'JAL'
+-- @picsim_validate begin
+-- steps: 3000000
+-- frequency_hz: auto
+-- expect byte v_rom 51
+-- expect byte v_ram 38
+-- @picsim_validate end
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+const byte table[4] = {0x11, 0x22, 0x33, 0x44}
+var volatile byte big[120]
+var byte i
+var volatile byte rom = 0
+var volatile byte ram = 0
+var pointer t as const byte[4]
+var pointer p as var byte[120]
+for 120 using i loop
+  big[i] = i + 1
+end loop
+p is big
+t is table
+rom = t[2]
+ram = p[37]
+forever loop
+end loop
+JAL
+sed 's/expect byte v_rom 51/expect byte v_rom 52/' "$WORK/rom/rom.jal" \
+    > "$WORK/rom/rom_neg.jal"
+ROM_PICSIM="${PICSIM_DIR:-$REPO/../tmp/picsim-try/picsim}"
+if [ -x "$ROM_PICSIM" ] && [ -f "$REPO/sims/picsim_validate_engine.py" ]; then
+  if ( cd "$REPO" && JALV2_FAT_POINTERS=1 JALV2_FAT_FORCE=1 \
+      python3 sims/picsim_validate_engine.py "$WORK/rom/rom.jal" \
+      --picsim "$ROM_PICSIM" --compiler "$CC" > "$WORK/rom/pos.log" 2>&1 ); then
+    echo "ok   a ROM const pointer coexists with a fat RAM pointer"
+  else
+    echo "FAIL: ROM + fat RAM coexistence"; tail -10 "$WORK/rom/pos.log" | sed 's/^/     /'
+    fails=$((fails + 1))
+  fi
+  if ( cd "$REPO" && JALV2_FAT_POINTERS=1 JALV2_FAT_FORCE=1 \
+      python3 sims/picsim_validate_engine.py "$WORK/rom/rom_neg.jal" \
+      --picsim "$ROM_PICSIM" --compiler "$CC" > "$WORK/rom/neg.log" 2>&1 ); then
+    echo "FAIL: the ROM arm's negative control PASSED"
+    fails=$((fails + 1))
+  else
+    echo "ok   ROM arm: negative control fails as it must"
+  fi
+else
+  echo "skip picsim engine not available"
+fi
+
+# --- classic 14 ESCAPED deref: a MEASUREMENT under gpsim + negative control -
+mkdir -p "$WORK/esc14"
+cat > "$WORK/esc14/esc.jal" <<'JAL'
+-- @gpsim_validate begin
+-- steps: 400000
+-- expect byte v_got 38
+-- @gpsim_validate end
+include 16f887
+var volatile byte big[40]
+var byte i
+var volatile byte got = 0
+var pointer p as var byte[40]
+procedure check is
+  var pointer q as var byte[40]
+  q = p
+  got = q[37]
+end procedure
+for 40 using i loop
+  big[i] = i + 1
+end loop
+p is big
+check()
+forever loop
+end loop
+JAL
+sed 's/expect byte v_got 38/expect byte v_got 39/' "$WORK/esc14/esc.jal" \
+    > "$WORK/esc14/esc_neg.jal"
+if command -v gpsim >/dev/null 2>&1; then
+  if ( cd "$WORK/esc14" && JALV2_FAT_POINTERS=1 \
+      bash "$REPO/sims/jal_gpsim_validate.sh" --compiler "$CC" --quiet \
+      -s "$REPO/demo_lib;$REPO/third_party/jallib/lib;$REPO/sims/shared" \
+      "$WORK/esc14/esc.jal" > pos.log 2>&1 ); then
+    echo "ok   classic 14 escaped deref: got = 38 (measurement)"
+  else
+    echo "FAIL: classic 14 escaped deref measurement"; tail -10 "$WORK/esc14/pos.log" | sed 's/^/     /'
+    fails=$((fails + 1))
+  fi
+  if ( cd "$WORK/esc14" && JALV2_FAT_POINTERS=1 \
+      bash "$REPO/sims/jal_gpsim_validate.sh" --compiler "$CC" --quiet \
+      -s "$REPO/demo_lib;$REPO/third_party/jallib/lib;$REPO/sims/shared" \
+      "$WORK/esc14/esc_neg.jal" > neg.log 2>&1 ); then
+    echo "FAIL: the classic 14 negative control PASSED (the arm cannot fail)"
+    fails=$((fails + 1))
+  else
+    echo "ok   classic 14 escaped deref: negative control fails as it must"
+  fi
+else
+  echo "skip gpsim not available"
+fi
+
+# --- 14H ESCAPED deref: a MEASUREMENT, not a guard, and a negative control -
+# The witness lives here because the picsim suite compiles with a clean
+# environment (the escaped shape is then refused).  NOTE the `pragma target
+# clock`: without it the picsim engine does not execute the program at all and
+# every measurement silently reads zero -- the mistake that produced a false
+# "the fat deref is broken" conclusion on 2026-11-09.
+mkdir -p "$WORK/esc14h"
+cat > "$WORK/esc14h/esc.jal" <<'JAL'
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_got 38
+-- @picsim_validate end
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+var volatile byte big[200]
+var byte i
+var volatile byte got = 0
+var pointer p as var byte[200]
+procedure check is
+  var pointer q as var byte[200]
+  q = p
+  got = q[37]
+end procedure
+for 200 using i loop
+  big[i] = i + 1
+end loop
+p is big
+check()
+forever loop
+end loop
+JAL
+sed 's/expect byte v_got 38/expect byte v_got 39/' "$WORK/esc14h/esc.jal" \
+    > "$WORK/esc14h/esc_neg.jal"
+
 PICSIM="${PICSIM_DIR:-$REPO/../tmp/picsim-try/picsim}"
+if [ -x "$PICSIM" ] && [ -f "$REPO/sims/picsim_validate_engine.py" ]; then
+  if ( cd "$REPO" && JALV2_FAT_POINTERS=1 \
+      python3 sims/picsim_validate_engine.py "$WORK/esc14h/esc.jal" \
+      --picsim "$PICSIM" --compiler "$CC" > "$WORK/esc14h/pos.log" 2>&1 ); then
+    echo "ok   14H escaped deref: got = 38 (measurement)"
+  else
+    echo "FAIL: 14H escaped deref measurement"; tail -10 "$WORK/esc14h/pos.log" | sed 's/^/     /'
+    fails=$((fails + 1))
+  fi
+  if ( cd "$REPO" && JALV2_FAT_POINTERS=1 \
+      python3 sims/picsim_validate_engine.py "$WORK/esc14h/esc_neg.jal" \
+      --picsim "$PICSIM" --compiler "$CC" > "$WORK/esc14h/neg.log" 2>&1 ); then
+    echo "FAIL: the 14H negative control PASSED (the arm cannot fail)"
+    fails=$((fails + 1))
+  else
+    echo "ok   14H escaped deref: negative control fails as it must"
+  fi
+else
+  echo "skip picsim engine not available"
+fi
+
+# runtime arm, when the engine is present
 if [ -x "$PICSIM" ] && [ -f "$REPO/sims/picsim_validate_engine.py" ]; then
   if ( cd "$REPO" && JALV2_FAT_POINTERS=1 JALV2_FAT_FORCE=1 \
       python3 sims/picsim_validate_engine.py "$WIT" --picsim "$PICSIM" \
@@ -208,13 +442,6 @@ if [ -x "$PICSIM" ] && [ -f "$REPO/sims/picsim_validate_engine.py" ]; then
     echo "ok   the fat deref passes picsim (const + dynamic subscripts)"
   else
     echo "FAIL: picsim run failed"; tail -20 "$WORK/picsim.log" | sed 's/^/     /'; fails=$((fails + 1))
-  fi
-  if ( cd "$REPO" && JALV2_FAT_POINTERS=1 \
-      python3 sims/picsim_validate_engine.py "$ESC" --picsim "$PICSIM" \
-      --compiler "$CC" > "$WORK/picsim-esc.log" 2>&1 ); then
-    echo "ok   the escaped fat deref passes picsim"
-  else
-    echo "FAIL: picsim escape run failed"; tail -20 "$WORK/picsim-esc.log" | sed 's/^/     /'; fails=$((fails + 1))
   fi
 else
   echo "skip picsim engine not available"

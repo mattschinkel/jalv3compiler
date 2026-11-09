@@ -46,8 +46,6 @@ boolean_t pic_mem_object_get(variable_t var, pic_mem_object_t *obj);
  * objects walk their segments; a contiguous object is base + ofs.  Out of
  * range clamps to the last segment's end - 1 for segmented objects (so
  * diagnostics keep pointing at the object). */
-variable_base_t pic_mem_object_phys_of(const pic_mem_object_t *obj,
-    variable_sz_t ofs);
 
 /* TRUE when the object is placed in more than one segment (the chunk maps
  * the walk emitters consult).  A map-less variable is single-segment. */
@@ -63,7 +61,6 @@ boolean_t pic_mem_object_is_chunked(variable_t var);
  * what the target's tag can encode: a program with more fat objects than the
  * tag holds is outside the feature's regime and gets a diagnostic.
  */
-void          pic_fat_object_reset(void);
 boolean_t     pic_fat_object_register(pfile_t *pf, variable_t var,
                   unsigned *id);
 variable_ct_t pic_fat_object_ct(void);
@@ -111,11 +108,10 @@ void pic_var_pointer_bind_record(variable_t pvar, variable_t tvar);
 void pic_var_pointer_bind_escape(variable_t pvar);
 boolean_t pic_var_pointer_bind_escaped_var(variable_t pvar);
 boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar);
-boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar);
 variable_t pic_var_pointer_bind_walk_target(variable_t pvar);
 void pic_var_pointer_bind_check_escaped(pfile_t *pf);
 void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    const pfile_pos_t *pos, boolean_t passon);
+    boolean_t passon);
 /* mark a recorded (actual, formal) pair as a string payload view (the
  * formal's runtime map gains the base-word format) */
 void pic_var_openarray_pair_strview_mark(variable_t actual,

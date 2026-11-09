@@ -176,6 +176,8 @@ UPDATE_MANIFEST=0
 COMPILER="$ROOT/bin/beta/jalv3-x86-64"
 WITNESSES=()
 LEGACY_QUICK=0
+FAST=0
+NO_PINS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -189,6 +191,8 @@ while [[ $# -gt 0 ]]; do
     --witness)         WITNESSES+=("$2"); shift 2 ;;
     --update-manifest) UPDATE_MANIFEST=1; shift ;;
     --quick)           LEGACY_QUICK=1; shift ;;
+    --fast)            FAST=1; shift ;;
+    --no-pins)         NO_PINS=1; shift ;;
     -h|--help)         awk '/^set /{exit} NR>=2{print}' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -196,6 +200,17 @@ done
 
 if [[ "$LEGACY_QUICK" == "1" && "$LEVEL_EXPLICIT" != "1" ]]; then
   LEVEL=1
+fi
+# --fast: the ITERATION loop.  Level 1 with the change-class suite selection
+# (`--auto`) and without the demo sweep or the (slow) picsim suite; the
+# landing run (L3) is unchanged.  `--no-pins` drops the compile-pin suite too,
+# for the tightest loop while a fix is being developed -- never for a landing.
+if (( FAST )); then
+  AUTO=1
+  if [[ "$LEVEL_EXPLICIT" != "1" ]]; then
+    LEVEL=1
+    LEVEL_EXPLICIT=1
+  fi
 fi
 
 case "$LEVEL" in
@@ -206,6 +221,13 @@ esac
 # default as the unit/gpsim/QEMU suite runners; CLI flags always win)
 # (e.g. share the host: JALV2_TEST_JOBS=8 unit-tests/run_gates.sh ...)
 JOBS="${JALV2_TEST_JOBS:-16}"
+# The ESP32 QEMU gates are WALL-CLOCK budgeted: each guest free-runs for a
+# fixed number of seconds and is then dumped.  At the compile parallelism
+# they starve each other under host load -- 16 concurrent QEMU guests on a
+# loaded box miss their checkpoints and dump zeroed RAM (measured: 14-17/59
+# at jobs=16 vs 59/59 at jobs=2, with BYTE-IDENTICAL images).  They get
+# their own small default; JALV2_ESP32_JOBS overrides.
+ESP32_JOBS="${JALV2_ESP32_JOBS:-2}"
 
 if [[ ! -x "$COMPILER" ]]; then
   echo "error: compiler not found: $COMPILER" >&2
@@ -292,14 +314,16 @@ print_summary() {
   printf '%s\n' "${SUMMARY[@]}"
   echo "=============================================================="
   if [[ "$FAILED" != "0" ]]; then
-    echo "RESULT: FAIL"
+    echo "RESULT: FAIL (${SECONDS}s total)"
   else
-    echo "RESULT: ALL GATES PASS (level $LEVEL)"
+    echo "RESULT: ALL GATES PASS (level $LEVEL, ${SECONDS}s total)"
   fi
 }
 
 gate() {  # gate <name> <command...>
   local name="$1"; shift
+  local t0=$SECONDS
+  local secs
   echo ""
   echo "=============================================================="
   echo "=== gate: $name"
@@ -310,11 +334,13 @@ gate() {  # gate <name> <command...>
   "$@" &
   GATE_CHILD=$!
   if wait "$GATE_CHILD"; then
-    SUMMARY+=("PASS  $name")
+    secs=$((SECONDS - t0))
+    SUMMARY+=("PASS  $name (${secs}s)")
   else
-    SUMMARY+=("FAIL  $name")
+    secs=$((SECONDS - t0))
+    SUMMARY+=("FAIL  $name (${secs}s)")
     FAILED=1
-    echo "gate FAILED: $name — stopping (fix this before the next level)" >&2
+    echo "gate FAILED: $name after ${secs}s — stopping (fix this before the next level)" >&2
     print_summary
     exit 1
   fi
@@ -436,7 +462,8 @@ if (( LEVEL >= 1 )); then
   fi
   if (( SEL_ESP32 )); then
     gate "L1 esp32 qemu" \
-      python3 sims/run_esp32_regression.py --run --compiler "$COMPILER"
+      python3 sims/run_esp32_regression.py --jobs "$ESP32_JOBS" --run \
+        --compiler "$COMPILER"
     RAN_ESP32=1
   fi
   if (( !SEL_GPSIM && !SEL_PIC32 && !SEL_ESP32 )); then
@@ -447,15 +474,23 @@ if (( LEVEL >= 1 )); then
   # a compile-clean run proves nothing about behavior.  This gate is what
   # actually executes the scripts documented as "pins" in fixes/ (nothing
   # did before 2026-10-22 -- see fixes/fix_test_suite_gap_audit.md).
-  gate "L1 compile-pin regressions" \
-    "$ROOT/unit-tests/run_compile_pin_tests.sh" "$COMPILER"
+  if (( NO_PINS )); then
+    skip "L1 compile-pin regressions (--no-pins)"
+  else
+    gate "L1 compile-pin regressions" \
+      "$ROOT/unit-tests/run_compile_pin_tests.sh" "$COMPILER"
+  fi
   # The demo kit is compile-only everywhere (no runtime gate touches it), so
   # the compile check is its whole safety net.  It used to run only at L3,
   # and a sample that stopped fitting its part (12f508_wide_math, after the
   # RAM-exhaustion diagnostic) sat broken for a day.  16 s, so L1 and CI run
   # the same script.
-  gate "L1 demo sample kit (compile)" \
-    "$ROOT/unit-tests/sample_kit_sweep.sh" "$COMPILER"
+  if (( FAST )); then
+    skip "L1 demo sample kit (--fast)"
+  else
+    gate "L1 demo sample kit (compile)" \
+      "$ROOT/unit-tests/sample_kit_sweep.sh" "$COMPILER"
+  fi
   # Optional 16F18857 runtime suite on picsim (external, GPL-2.0).  It runs
   # when PICSIM_DIR points at a BUILT picsim tree (the fork carrying the
   # PIC16F18857 model); otherwise it is skipped with a note.  The suite
@@ -472,7 +507,9 @@ if (( LEVEL >= 1 )); then
         || [[ -e "$ROOT/../tmp/picsim-try/picsim/src/libpicsim.so" ]]; }; then
     PICSIM_DIR="$ROOT/../tmp/picsim-try/picsim"
   fi
-  if [[ -n "${PICSIM_DIR:-}" ]] && { [[ -e "$PICSIM_DIR/src/libpicsim.a" ]] || [[ -e "$PICSIM_DIR/src/libpicsim.so" ]]; }; then
+  if (( FAST )); then
+    skip "L1 picsim 16F18857 suite (--fast)"
+  elif [[ -n "${PICSIM_DIR:-}" ]] && { [[ -e "$PICSIM_DIR/src/libpicsim.a" ]] || [[ -e "$PICSIM_DIR/src/libpicsim.so" ]]; }; then
     gate "L1 picsim 16F18857 suite" \
       python3 sims/run_picsim_regression.py --picsim "$PICSIM_DIR" --compiler "$COMPILER"
   else
@@ -516,7 +553,8 @@ if (( LEVEL >= 3 )); then
   if (( SEL_PIC32 && !RAN_ESP32 )) || (( SEL_ESP32 && !RAN_PIC32 )); then
     if (( SEL_PIC32 && !RAN_ESP32 )); then
       gate "L3 esp32 qemu (second suite)" \
-        python3 sims/run_esp32_regression.py --run --compiler "$COMPILER"
+        python3 sims/run_esp32_regression.py --jobs "$ESP32_JOBS" --run \
+          --compiler "$COMPILER"
     else
       gate "L3 pic32 qemu (second suite)" \
         python3 sims/run_pic32_regression.py --run --compiler "$COMPILER"

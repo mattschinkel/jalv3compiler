@@ -34,7 +34,8 @@
  * tag instead of a linear file address. */
 boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src)
 {
-  variable_t var;
+  variable_t        var;
+  pic_access_plan_t plan;
 
   if (!pic_fat_pointers_enabled(pf)) {
     return BOOLEAN_FALSE;
@@ -42,7 +43,10 @@ boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src)
   if (!value_is_pointer(dst)) {
     return BOOLEAN_FALSE;
   }
-  if (pic_value_variable_is_array_of_pointers(dst)) {
+  /* U2b (slots family): a slot store is never a fat bind; the plan owns the
+   * array-of-pointers answer. */
+  pic_access_plan_get(pf, dst, &plan);
+  if (plan.aop) {
     return BOOLEAN_FALSE;
   }
   var = value_variable_get(src);
@@ -385,11 +389,14 @@ static void pic_assign_to_ptr_linear(pfile_t *pf, value_t dst, value_t src)
 /* dst has one or more of the LOOKUP/EEPROM/FLASH bits set */
 void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
 {
-  variable_t      dvar;
-  variable_t      svar;
-  variable_def_t  sdef;
-  boolean_t       src_array_like;
+  variable_t        dvar;
+  variable_t        svar;
+  variable_def_t    sdef;
+  boolean_t         src_array_like;
+  pic_access_plan_t plan;
 
+  /* U2b-3: the destination's pointer STORAGE class comes from the plan. */
+  pic_access_plan_get(pf, dst, &plan);
   /* PTR_LOOKUP is set on the pointer when a const array is bound for reads, but
    * `p is buf` is still "store buf's address in p" — not the lookup-label loop
    * below (which treats dst as an INDF destination). */
@@ -439,8 +446,7 @@ void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
   } else if (value_is_array(src)) {
     pic_assign_array_to_pointer(pf, dst, src);
   } else {
-    if (variable_flag_test(value_variable_get(dst),
-      VARIABLE_FLAG_PTR_LOOKUP) && value_is_indirect(dst)
+    if (plan.ptr_lookup && value_is_indirect(dst)
         && variable_def_get(value_variable_get(dst))
         && variable_def_flag_test(
              variable_def_get(value_variable_get(dst)),
@@ -449,8 +455,7 @@ void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
        * pointer (a pointer actual): a linear store, not a lookup bind.  A
        * user pointer bound to a const array keeps the refusal below. */
       pic_assign_to_ptr_linear(pf, dst, src);
-    } else if (variable_flag_test(value_variable_get(dst),
-      VARIABLE_FLAG_PTR_LOOKUP)) {
+    } else if (plan.ptr_lookup) {
       pfile_log(pf, PFILE_LOG_ERR, 
         "Attempt to assign to a lookup table");
     } else {
@@ -465,12 +470,16 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
   if (value_is_pointer(dst)) {
     pic_assign_ptr_to_ptr(pf, dst, src);
   } else {
-    variable_t     svar;
-    value_t        tmp;
-    value_t        baseofs;
-    variable_sz_t  ii;
-    variable_def_t src_def;
+    variable_t        svar;
+    value_t           tmp;
+    value_t           baseofs;
+    variable_sz_t     ii;
+    variable_def_t    src_def;
+    pic_access_plan_t plan;
 
+    /* U2b (slots family): classify the source once (the predicate reads the
+     * variable's def, so the clone/def swap below does not change it). */
+    pic_access_plan_get(pf, src, &plan);
     src     = value_clone(src);
     baseofs = value_baseofs_get(src);
     value_baseofs_set(src, VALUE_NONE);
@@ -486,10 +495,9 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
     value_def_set(src, value_def_get(tmp));
 
     svar = value_variable_get(src);
-    if ((variable_flag_test(svar, VARIABLE_FLAG_PTR_PTR)
-          && variable_flag_test(svar, VARIABLE_FLAG_PTR_LOOKUP))
-        || variable_flag_test(svar, VARIABLE_FLAG_PTR_EEPROM)
-        || variable_flag_test(svar, VARIABLE_FLAG_PTR_FLASH)) {
+    /* U2b-3: the plan already resolved the read's storage class (procedure
+     * pointer, EEPROM or FLASH needs the helper call). */
+    if (plan.ptr_read_call) {
       /* this will necessitate a function call */
       variable_sz_t sz;
       variable_sz_t ipos;
@@ -513,7 +521,7 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
             pic_instr_append_f(pf, PIC_OPCODE_CLRF, tmp, ii);
           }
         }
-      } else if (pic_value_variable_is_array_of_pointers(src)) {
+      } else if (plan.aop) {
         /* ARRAY-of-pointers element read at a runtime index: DOUBLE
          * indirection -- FSR = &slot[k], load the slot's pointer into
          * tmp, and the existing PTR_READ flow dereferences tmp (the
