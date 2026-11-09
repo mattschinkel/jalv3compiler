@@ -460,11 +460,16 @@ void pic_classic_irp_set_from_w(pfile_t *pf)
 static void pic_fsr_chunk_ladder(pfile_t *pf, variable_t var, value_t t,
     boolean_t t_wide, boolean_t hybrid)
 {
+  pic_mem_object_t obj;
   variable_ct_t  ct;
   variable_ct_t  ii;
   label_t        done;
 
-  ct = pic_variable_chunk_ct_get(var);
+  /* U0b: one object lookup instead of one chunk-map lookup per segment.
+   * A variable with NO chunk map has the object's inline single segment
+   * (seg_base == NULL); the old accessor reported ct == 0 for it, so keep
+   * the ladder empty in that case. */
+  ct = (pic_mem_object_get(var, &obj) && obj.seg_base) ? obj.seg_ct : 0;
   done = pfile_label_alloc(pf, 0);
   for (ii = 0; ii < ct; ii++) {
     variable_sz_t    sz;
@@ -472,8 +477,8 @@ static void pic_fsr_chunk_ladder(pfile_t *pf, variable_t var, value_t t,
     label_t          next;
     value_t          cval;
 
-    sz = pic_variable_chunk_sz_get(var, ii);
-    cb = pic_variable_chunk_base_get(var, ii);
+    sz = obj.seg_len[ii];
+    cb = obj.seg_base[ii];
     next = LABEL_NONE;
     if (ii + 1 < ct) {
       next = pfile_label_alloc(pf, 0);
@@ -543,6 +548,52 @@ static void pic_fsr_chunk_ladder(pfile_t *pf, variable_t var, value_t t,
   }
   pic_instr_append_label(pf, done);
   label_release(done);
+}
+
+static label_t pic_chunk_walk_helper_find(pfile_t *pf, variable_t var);
+
+/* F2b: a fat pointer carries the object-relative offset, so the baked ladder
+ * applies unchanged -- expose the entry with the core's flags. */
+void pic_fat_ladder_emit(pfile_t *pf, variable_t var, value_t t)
+{
+  pic_fsr_chunk_ladder(pf, var, t,
+      (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) ? BOOLEAN_TRUE
+        : BOOLEAN_FALSE,
+      pic_is_14bit_hybrid(pf));
+}
+
+/* The CALL form: the same ladder, but through the shared per-variable helper
+ * (one body per chunked variable, emitted once) instead of inlining it at
+ * every fat deref site.  The index travels in the compiler-owned
+ * `_pic_chunk_t`, exactly like every other call site of the helper. */
+void pic_fat_ladder_call(pfile_t *pf, variable_t var, value_t t)
+{
+  boolean_t wide;
+  variable_t arg;
+  label_t    lbl;
+  value_t    argval;
+
+  wide = (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  lbl = pic_chunk_walk_helper_find(pf, var);
+  arg = pic_var_chunk_walk_arg_get();
+  if ((LABEL_NONE == lbl) || (0 == arg) || (VARIABLE_NONE == arg)) {
+    /* no shared helper (should not happen for a chunked object): inline */
+    pic_fsr_chunk_ladder(pf, var, t, wide, pic_is_14bit_hybrid(pf));
+    return;
+  }
+  argval = value_alloc(arg);
+  if (!argval) {
+    return;
+  }
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, argval, 0);
+  if (wide) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, argval, 1);
+  }
+  pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
+  value_release(argval);
 }
 
 /* ---- SHARED STATIC CHUNK WALK (2026-11-02) ----------------------------
@@ -752,17 +803,18 @@ void pic_chunk_walk_helpers_create(pfile_t *pf)
  * Contiguous multi-node runs (PIC18 bank splits) are still linear. */
 boolean_t pic_variable_chunks_holed(variable_t var)
 {
-  variable_ct_t ct;
-  variable_ct_t ii;
+  pic_mem_object_t obj;
+  variable_ct_t    ii;
 
-  ct = var ? pic_variable_chunk_ct_get(var) : 0;
-  if (ct <= 1) {
+  /* U0b: the object view is the single description (U0a); the same
+   * segments the old chunk-map accessors returned. */
+  if (!pic_mem_object_get(var, &obj) || (obj.seg_ct <= 1)) {
     return BOOLEAN_FALSE;
   }
-  for (ii = 1; ii < ct; ii++) {
-    if (pic_variable_chunk_base_get(var, ii)
-        != (variable_base_t) (pic_variable_chunk_base_get(var, ii - 1)
-          + pic_variable_chunk_sz_get(var, ii - 1))) {
+  for (ii = 1; ii < obj.seg_ct; ii++) {
+    if (obj.seg_base[ii]
+        != (variable_base_t) (obj.seg_base[ii - 1]
+          + obj.seg_len[ii - 1])) {
       return BOOLEAN_TRUE;
     }
   }
@@ -859,7 +911,7 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
       && (VARIABLE_NONE != pic_var_strview_formal_base_get(var)))
     ? BOOLEAN_TRUE : BOOLEAN_FALSE;
   if ((!idx || value_is_const(idx))
-      && ((pic_variable_chunk_ct_get(var) > 1) || sv_classic)) {
+      && (pic_mem_object_is_chunked(var) || sv_classic)) {
     /* CONSTANT subscript through a compile-time chunk map (e.g.
      * `data[149]` inside a procedure fed one multi-bank buffer): there is
      * no index register to copy -- fold idx and the offset into the
@@ -965,7 +1017,12 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
     var = pic_var_pointer_bind_walk_target(var);
   }
   if (pic_variable_chunks_holed(var) || sv_classic) {
-    pic_fsr_chunk_walk_emit(pf, var, idx, BOOLEAN_FALSE);
+    /* the ladder must take the FSR0 staging on the 16-bit and 14H cores;
+     * passing FALSE here made a 14H chunked slot load emit the classic
+     * _fsr/IRP sequence ("_irp not found", P2b-2) */
+    pic_fsr_chunk_walk_emit(pf, var, idx,
+        (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+          ? BOOLEAN_TRUE : BOOLEAN_FALSE);
     return;
   }
   idx_sz = pic_dynamic_index_byte_sz_get(idx);

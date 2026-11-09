@@ -88,6 +88,7 @@ typedef struct pic_state_ {
   pic_reentrancy_scan_t *reentrancy_scan;
   size_t                 reentrancy_scan_n;
   boolean_t              reentrancy_scan_valid;
+  boolean_t              indirect_refused;  /* P3c: 12-bit capability said once */
   unsigned               flag;
 } pic_state_t;
 
@@ -918,7 +919,7 @@ static boolean_t pic_value_is_dynamic_bit_array_element(value_t val)
   return value_is_bit(val)
     && value_flag_test(val, VALUE_FLAG_ARRAY)
     && ((baseofs && !value_is_const(baseofs))
-      || (var && (pic_variable_chunk_ct_get(var) > 1)));
+      || (var && pic_mem_object_is_chunked(var)));
 }
 
 static boolean_t pic_formal_is_pointer_to_bit(value_t formal)
@@ -6877,6 +6878,28 @@ boolean_t pic_is_12bit(pfile_t *pf)
   return (PIC_TARGET_CPU_12BIT == pic_target_cpu_get(pf));
 }
 
+/*
+ * P3c: a 12-bit core has no FSR/IRP indirect addressing.  The limit first
+ * bites in the flag emitter, which looks `_irp' up by name and used to bury
+ * the user under "'_irp' not found" (twice for one dynamic store).  Refuse
+ * the CAPABILITY here instead: one diagnostic per compile, naming the limit
+ * and the way out.  Returns TRUE when the target cannot do it, so the
+ * caller must not emit the instruction.
+ */
+boolean_t pic_refuse_no_indirect(pfile_t *pf)
+{
+  if (!pic_is_12bit(pf)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!pic_state.indirect_refused) {
+    pic_state.indirect_refused = BOOLEAN_TRUE;
+    pfile_log(pf, PFILE_LOG_ERR,
+        "12-bit core: no indirect addressing (no FSR/IRP); a pointer or a "
+        "runtime index needs a 14-bit part -- use a constant index here");
+  }
+  return BOOLEAN_TRUE;
+}
+
 boolean_t pic_is_14bit(pfile_t *pf)
 {
   return (PIC_TARGET_CPU_14BIT == pic_target_cpu_get(pf));
@@ -7059,6 +7082,57 @@ value_t pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which)
     val = pfile_value_find(pf, plog, name);
   }
   return val;
+}
+
+/* Fat pointers (F0): OFF by default.  The env switch mirrors the front-end
+ * IR switch: unset/0/false/no/off are off, anything else is on.  F0 only
+ * establishes the representation and the parity gate -- nothing emits a
+ * non-zero tag yet, so ON is still byte-identical. */
+boolean_t pic_fat_pointers_enabled(pfile_t *pf)
+{
+  const char *env;
+
+  (void) pf;
+  env = getenv("JALV2_FAT_POINTERS");
+  if ((0 == env) || (0 == env[0])) {
+    return BOOLEAN_FALSE;
+  }
+  if (('0' == env[0]) || !strcmp(env, "false") || !strcmp(env, "no")
+      || !strcmp(env, "off")) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
+/* F2b/F3a phase gate: force every plain chunked bind to be a fat pointer and
+ * let its target take the normal (chunked) placement, so the dispatch can be
+ * witnessed before the escape analysis exists.  OFF by default; F3 deletes
+ * it. */
+boolean_t pic_fat_force_enabled(pfile_t *pf)
+{
+  const char *env;
+
+  (void) pf;
+  env = getenv("JALV2_FAT_FORCE");
+  if ((0 == env) || (0 == env[0])) {
+    return BOOLEAN_FALSE;
+  }
+  if (('0' == env[0]) || !strcmp(env, "false") || !strcmp(env, "no")
+      || !strcmp(env, "off")) {
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
+
+pic_fat_target_t pic_fat_target_kind(pfile_t *pf)
+{
+  if (pic_is_16bit(pf)) {
+    return PIC_FAT_TARGET_18;
+  }
+  if (pic_is_14bit_hybrid(pf)) {
+    return PIC_FAT_TARGET_14H;
+  }
+  return PIC_FAT_TARGET_CLASSIC;
 }
 
 variable_sz_t pic_pointer_size_get(pfile_t *pf)

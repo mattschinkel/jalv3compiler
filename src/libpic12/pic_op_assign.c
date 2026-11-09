@@ -629,6 +629,96 @@ static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
       return;
     }
 
+    /* Const-index ARRAY-of-pointers element in a CHUNKED array (P2b): the
+     * plain MOVWF dst,ii below is a linear symbol+offset store, which for a
+     * segmented array writes past the chunk end -- the initializer's slots
+     * beyond the first chunk were never written (the G3 defect).  Stage FSR
+     * at the element's CHUNK-RESOLVED address and store each byte through
+     * INDF, exactly like the runtime-indexed sibling above. */
+    if (pic_value_variable_is_array_of_pointers(dst)
+        && pic_mem_object_is_chunked(value_variable_get(dst))) {
+      value_t         indv;
+      value_t         fsrv;
+      boolean_t       wide16;
+      variable_base_t addr;
+      variable_sz_t   loff;
+      value_t         bo;
+
+      wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+      indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+      fsrv = pic_fsr_get(pf);
+      loff = 0;
+      bo = value_baseofs_get(dst);
+      if ((VALUE_NONE != bo) && value_is_const(bo)) {
+        loff = (variable_sz_t) value_const_get(bo);
+      }
+      addr = pic_var_chunk_addr_resolve(value_variable_get(dst),
+          value_base_get(dst) + loff);
+      if (wide16) {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, addr & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (addr >> 8) & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+      } else {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, addr & 0xff);
+        pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+        pic_instr_append(pf, (addr >= 256)
+            ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
+      }
+      if (src_var) {
+        for (ii = 0; ii < dst_sz; ii++) {
+          pic_code_t code;
+          unsigned   flag;
+
+          code = pic_instr_append(pf, PIC_OPCODE_MOVLW);
+          pic_code_value_set(code, src);
+          flag = PIC_CODE_FLAG_NONE;
+          switch (ii) {
+            case 0: break;
+            case 1: flag = PIC_CODE_FLAG_LABEL_HIGH;  break;
+            case 2: flag = PIC_CODE_FLAG_LABEL_UPPER; break;
+          }
+          pic_code_flag_set(code, flag);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indv, 0);
+          if (ii + 1 < dst_sz) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+              PIC_OPDST_F);
+            if (wide16) {
+              pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
+                "_status", "_z");
+              pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+            }
+          }
+        }
+      } else {
+        variable_base_t base;
+
+        for (ii = 0, base = value_base_get(src);
+            ii < dst_sz;
+            ii++, base >>= 8) {
+          if (base & 0xff) {
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+              (uchar) (base & 0xff));
+            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indv, 0);
+          } else {
+            pic_instr_append_f(pf, PIC_OPCODE_CLRF, indv, 0);
+          }
+          if (ii + 1 < dst_sz) {
+            pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
+              PIC_OPDST_F);
+            if (wide16) {
+              pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
+                "_status", "_z");
+              pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+            }
+          }
+        }
+      }
+      value_release(fsrv);
+      value_release(indv);
+      return;
+    }
+
     if (src_var) {
       /* Do not use `if (value_base_get(src))`: the low byte of the address may be
        * 0 (e.g. 0x100), and bases can be unknown during early passes — still emit

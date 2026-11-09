@@ -815,6 +815,12 @@ pic_code_t pic_instr_append_reg_flag(pfile_t *pf, pic_opcode_t op,
   pic_code_t code;
 
   code = PIC_CODE_NONE;
+  /* P3c: the 12-bit family has no IRP, and the lookup below would report
+   * "'_irp' not found" once per instruction.  Refuse the capability once
+   * and skip the instruction; the compile already fails with the message. */
+  if ((0 == strcmp(flag, "_irp")) && pic_refuse_no_indirect(pf)) {
+    return PIC_CODE_NONE;
+  }
   vreg = pfile_value_find(pf, PFILE_LOG_ERR, reg);
   if (vreg) {
     value_t vflag;

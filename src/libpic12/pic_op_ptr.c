@@ -29,6 +29,82 @@
 #include "pic_op.h"
 #include "pic_op_priv.h"
 
+/* F2b: a fat bind.  Forced by JALV2_FAT_FORCE until F3's escape analysis.
+ * A fat bind stores the OBJECT-RELATIVE offset and the object's id in the
+ * tag instead of a linear file address. */
+boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src)
+{
+  variable_t var;
+
+  if (!pic_fat_pointers_enabled(pf)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!value_is_pointer(dst)) {
+    return BOOLEAN_FALSE;
+  }
+  if (pic_value_variable_is_array_of_pointers(dst)) {
+    return BOOLEAN_FALSE;
+  }
+  var = value_variable_get(src);
+  if ((0 == var) || (VARIABLE_NONE == var)) {
+    return BOOLEAN_FALSE;
+  }
+  if (!pic_mem_object_is_chunked(var)) {
+    return BOOLEAN_FALSE;
+  }
+  /* F3: fat when the bind ESCAPES (the deref no longer knows the object), or
+   * when the phase gate forces the unescaped case for the F2 witnesses. */
+  if (pic_fat_force_enabled(pf)) {
+    return BOOLEAN_TRUE;
+  }
+  return pic_var_pointer_bind_escaped_var(value_variable_get(dst));
+}
+
+void pic_fat_bind_emit(pfile_t *pf, value_t dst, value_t src)
+{
+  pic_fat_target_t kind;
+  variable_t       var;
+  variable_sz_t    psz;
+  variable_sz_t    ii;
+  unsigned         id;
+  unsigned long    ofs;
+  value_t          bo;
+
+  var = value_variable_get(src);
+  if (!pic_fat_object_register(pf, var, &id)) {
+    return;
+  }
+  /* a fat pointer carries no linear base, so the deref must not use the
+   * compile-time walk target: mark the bind escaped (F3's analysis makes
+   * this decision for real; the knob is the phase gate) */
+  if ((0 != value_variable_get(dst)) && (VARIABLE_NONE != value_variable_get(dst))) {
+    pic_var_pointer_bind_escape(value_variable_get(dst));
+  }
+  ofs = 0;
+  bo = value_baseofs_get(src);
+  if ((VALUE_NONE != bo) && value_is_const(bo)) {
+    ofs = (unsigned long) value_const_get(bo);
+  }
+  kind = pic_fat_target_kind(pf);
+  psz = pic_pointer_size_get(pf);
+  for (ii = 0; ii < psz; ii++) {
+    unsigned byte;
+
+    if ((unsigned) ii + 1U == (unsigned) psz) {
+      byte = ((unsigned) id << PIC_FAT_TAG_SHIFT(kind))
+        & ((unsigned) PIC_FAT_TAG_MAX(kind) << PIC_FAT_TAG_SHIFT(kind));
+    } else {
+      byte = (unsigned) ((ofs >> (8U * (unsigned) ii)) & 0xFFUL);
+    }
+    if (0 == byte) {
+      pic_instr_append_f(pf, PIC_OPCODE_CLRF, dst, ii);
+    } else {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (uchar) byte);
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
+    }
+  }
+}
+
 void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
 {
   /* Set up member definition for array pointer */
@@ -50,6 +126,11 @@ void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
     }
   }
   
+  if (pic_fat_bind_forced(pf, dst, src)) {
+    pic_fat_bind_emit(pf, dst, src);
+    return;
+  }
+
   {
     variable_t sv0;
 

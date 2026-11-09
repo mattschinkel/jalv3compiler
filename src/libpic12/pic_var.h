@@ -19,6 +19,75 @@ extern unsigned pic_blist_total; /* total available */
 extern unsigned pic_blist_placed; /* bytes reserved by explicit `at` placements */
 unsigned pic_data_bank_free_bytes_get(void); /* bytes still free on the data bank list */
 
+/*
+ * U0 of the segmented memory model: ONE description of an object's memory
+ * layout.  This is a VIEW, not a registry -- it borrows the chunk map's
+ * arrays when the object is segmented and uses an inline single segment
+ * otherwise, so it cannot disagree with the allocator and has no lifetime
+ * of its own.  Consumers migrate to it one at a time (U0b); U3 deletes the
+ * parallel accessors once every consumer reads the object.
+ */
+typedef struct pic_mem_object_ {
+  variable_t             var;
+  variable_sz_t          size;      /* def size: bytes (bits for bit arrays) */
+  variable_sz_t          stride;    /* element size in bytes, 1 for scalars */
+  variable_ct_t          seg_ct;    /* number of physical segments */
+  variable_base_t        one_base;  /* contiguous case: segment 0 base */
+  variable_sz_t          one_len;   /* contiguous case: segment 0 length */
+  const variable_base_t *seg_base;  /* segmented case: borrowed from the map */
+  const variable_sz_t   *seg_len;
+} pic_mem_object_t;
+
+/* Fill `obj` from `var`'s current placement.  FALSE when the variable is
+ * unplaced and has no chunk map (nothing to describe). */
+boolean_t pic_mem_object_get(variable_t var, pic_mem_object_t *obj);
+
+/* Physical file address of byte offset `ofs` inside the object.  Segmented
+ * objects walk their segments; a contiguous object is base + ofs.  Out of
+ * range clamps to the last segment's end - 1 for segmented objects (so
+ * diagnostics keep pointing at the object). */
+variable_base_t pic_mem_object_phys_of(const pic_mem_object_t *obj,
+    variable_sz_t ofs);
+
+/* TRUE when the object is placed in more than one segment (the chunk maps
+ * the walk emitters consult).  A map-less variable is single-segment. */
+boolean_t pic_mem_object_is_chunked(variable_t var);
+
+/*
+ * F2b: the fat-object registry.  An object that a fat pointer may address
+ * needs a stable id for the lifetime of the compilation (the deref dispatches
+ * on it), so ids are assigned on first demand and never change.  Id 0 is
+ * reserved for "linear"; ids are 1..PIC_FAT_TAG_MAX(target).
+ *
+ * The registry is intentionally small and refuses rather than growing past
+ * what the target's tag can encode: a program with more fat objects than the
+ * tag holds is outside the feature's regime and gets a diagnostic.
+ */
+void          pic_fat_object_reset(void);
+boolean_t     pic_fat_object_register(pfile_t *pf, variable_t var,
+                  unsigned *id);
+variable_ct_t pic_fat_object_ct(void);
+variable_t    pic_fat_object_get(unsigned id);   /* id is 1-based */
+
+/*
+ * U1: the one memory map.  U1a makes the four free/declared lists fields of
+ * one object (mechanical, behaviour unchanged); U1b adds the region table and
+ * the free-segment invariants; U1c moves the allocator onto it.
+ *
+ *   data          free GPR segments (mutable; the allocator's free list)
+ *   data_pragma   the DATA area as the device declared it (immutable, for
+ *                 containment queries only)
+ *   shared        free segments inside `pragma shared` (mutable; the
+ *                 access-window/fallback free list)
+ *   shared_pragma the declared shared ranges (immutable)
+ */
+typedef struct pic_mem_map_ {
+  pic_bank_info_t *data;
+  pic_bank_info_t *data_pragma;
+  pic_bank_info_t *shared;
+  pic_bank_info_t *shared_pragma;
+} pic_mem_map_t;
+
 void pic_variable_alloc(pfile_t *pf);
 /* total storage bytes of a def (arrays: ct * element size) */
 variable_sz_t pic_variable_def_storage_need_get(pfile_t *pf,
@@ -40,6 +109,7 @@ void pic_var_call_actual_bump(variable_t var);
 boolean_t pic_var_pointer_target_get(size_t ix, variable_t *var);
 void pic_var_pointer_bind_record(variable_t pvar, variable_t tvar);
 void pic_var_pointer_bind_escape(variable_t pvar);
+boolean_t pic_var_pointer_bind_escaped_var(variable_t pvar);
 boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar);
 boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar);
 variable_t pic_var_pointer_bind_walk_target(variable_t pvar);

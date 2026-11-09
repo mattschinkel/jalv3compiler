@@ -183,6 +183,15 @@ run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$C
 run_sh pointer_bind_signature      unit-tests/test_pointer_bind_signature.sh "$CC"
 run_sh pointer_pseudo_binds        unit-tests/test_pointer_pseudo_binds.sh "$CC"
 run_sh multibank_array_errors      unit-tests/test_multibank_array_errors.sh "$CC"
+run_sh pic_data_alloc_padding      unit-tests/test_pic_data_alloc_padding.sh "$CC"
+run_sh pic_shared_window_pins      unit-tests/test_pic_shared_window_pins.sh "$CC"
+run_sh pointer_array_capacity      unit-tests/test_pointer_array_capacity.sh "$CC"
+run_sh pointer_array_chunk_init    unit-tests/test_pointer_array_chunk_init.sh "$CC"
+run_sh fat_pointer_tags           unit-tests/test_fat_pointer_tags.sh "$CC"
+run_sh fat_pointer_deref          unit-tests/test_fat_pointer_deref.sh "$CC"
+run_sh alloc_segment_audit        unit-tests/test_alloc_segment_audit.sh "$CC"
+run_sh alloc_capacity             unit-tests/test_alloc_capacity.sh "$CC"
+run_sh pic12_indirect_refusal     unit-tests/test_pic12_indirect_refusal.sh "$CC"
 run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
 # Header dependency tracking (the mixed-object lesson): a header edit must
 # rebuild the CURRENT flavor's object, and building another flavor must not

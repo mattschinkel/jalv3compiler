@@ -214,6 +214,7 @@
     <ClCompile Include="pic_code.c" />
     <ClCompile Include="pic_daop.c" />
     <ClCompile Include="pic_emu.c" />
+    <ClCompile Include="pic_fat.c" />
     <ClCompile Include="pic_gop.c" />
     <ClCompile Include="pic_inst.c" />
     <ClCompile Include="pic_op.c" />

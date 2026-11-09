@@ -1,0 +1,267 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — 200-slot pointer array (always-normal placement)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    P2 (2026-11-08): pointer types are volatile, and the volatile
+--    pre-placement used to force every pointer array through the
+--    single-window path -- 61 slots was the 18F4620 capacity (64 after the
+--    padding fix).  Arrays now take the normal group/holed placement:
+--    contiguous first (this witness is ONE 600-byte run), segments after.
+--    The checks read back every bound slot across the 0x100 bank boundary.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect bit_clear v__bitbucket 0
+-- expect byte v__check_step 2
+-- expect byte v__gpsim_regression_flags 0
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var byte a0 = 10
+var byte a1 = 20
+var byte a2 = 30
+var byte a3 = 40
+var byte a4 = 50
+var byte a5 = 60
+var byte a6 = 70
+var byte a7 = 80
+var byte bad = 0
+var pointer pa[200] as var byte
+pa[0] is a0
+pa[1] is a1
+pa[2] is a2
+pa[3] is a3
+pa[4] is a4
+pa[5] is a5
+pa[6] is a6
+pa[7] is a7
+pa[8] is a0
+pa[9] is a1
+pa[10] is a2
+pa[11] is a3
+pa[12] is a4
+pa[13] is a5
+pa[14] is a6
+pa[15] is a7
+pa[16] is a0
+pa[17] is a1
+pa[18] is a2
+pa[19] is a3
+pa[20] is a4
+pa[21] is a5
+pa[22] is a6
+pa[23] is a7
+pa[24] is a0
+pa[25] is a1
+pa[26] is a2
+pa[27] is a3
+pa[28] is a4
+pa[29] is a5
+pa[30] is a6
+pa[31] is a7
+pa[32] is a0
+pa[33] is a1
+pa[34] is a2
+pa[35] is a3
+pa[36] is a4
+pa[37] is a5
+pa[38] is a6
+pa[39] is a7
+pa[40] is a0
+pa[41] is a1
+pa[42] is a2
+pa[43] is a3
+pa[44] is a4
+pa[45] is a5
+pa[46] is a6
+pa[47] is a7
+pa[48] is a0
+pa[49] is a1
+pa[50] is a2
+pa[51] is a3
+pa[52] is a4
+pa[53] is a5
+pa[54] is a6
+pa[55] is a7
+pa[56] is a0
+pa[57] is a1
+pa[58] is a2
+pa[59] is a3
+pa[60] is a4
+pa[61] is a5
+pa[62] is a6
+pa[63] is a7
+pa[64] is a0
+pa[65] is a1
+pa[66] is a2
+pa[67] is a3
+pa[68] is a4
+pa[69] is a5
+pa[70] is a6
+pa[71] is a7
+pa[72] is a0
+pa[73] is a1
+pa[74] is a2
+pa[75] is a3
+pa[76] is a4
+pa[77] is a5
+pa[78] is a6
+pa[79] is a7
+pa[80] is a0
+pa[81] is a1
+pa[82] is a2
+pa[83] is a3
+pa[84] is a4
+pa[85] is a5
+pa[86] is a6
+pa[87] is a7
+pa[88] is a0
+pa[89] is a1
+pa[90] is a2
+pa[91] is a3
+pa[92] is a4
+pa[93] is a5
+pa[94] is a6
+pa[95] is a7
+pa[96] is a0
+pa[97] is a1
+pa[98] is a2
+pa[99] is a3
+pa[100] is a4
+pa[101] is a5
+pa[102] is a6
+pa[103] is a7
+pa[104] is a0
+pa[105] is a1
+pa[106] is a2
+pa[107] is a3
+pa[108] is a4
+pa[109] is a5
+pa[110] is a6
+pa[111] is a7
+pa[112] is a0
+pa[113] is a1
+pa[114] is a2
+pa[115] is a3
+pa[116] is a4
+pa[117] is a5
+pa[118] is a6
+pa[119] is a7
+pa[120] is a0
+pa[121] is a1
+pa[122] is a2
+pa[123] is a3
+pa[124] is a4
+pa[125] is a5
+pa[126] is a6
+pa[127] is a7
+pa[128] is a0
+pa[129] is a1
+pa[130] is a2
+pa[131] is a3
+pa[132] is a4
+pa[133] is a5
+pa[134] is a6
+pa[135] is a7
+pa[136] is a0
+pa[137] is a1
+pa[138] is a2
+pa[139] is a3
+pa[140] is a4
+pa[141] is a5
+pa[142] is a6
+pa[143] is a7
+pa[144] is a0
+pa[145] is a1
+pa[146] is a2
+pa[147] is a3
+pa[148] is a4
+pa[149] is a5
+pa[150] is a6
+pa[151] is a7
+pa[152] is a0
+pa[153] is a1
+pa[154] is a2
+pa[155] is a3
+pa[156] is a4
+pa[157] is a5
+pa[158] is a6
+pa[159] is a7
+pa[160] is a0
+pa[161] is a1
+pa[162] is a2
+pa[163] is a3
+pa[164] is a4
+pa[165] is a5
+pa[166] is a6
+pa[167] is a7
+pa[168] is a0
+pa[169] is a1
+pa[170] is a2
+pa[171] is a3
+pa[172] is a4
+pa[173] is a5
+pa[174] is a6
+pa[175] is a7
+pa[176] is a0
+pa[177] is a1
+pa[178] is a2
+pa[179] is a3
+pa[180] is a4
+pa[181] is a5
+pa[182] is a6
+pa[183] is a7
+pa[184] is a0
+pa[185] is a1
+pa[186] is a2
+pa[187] is a3
+pa[188] is a4
+pa[189] is a5
+pa[190] is a6
+pa[191] is a7
+pa[192] is a0
+pa[193] is a1
+pa[194] is a2
+pa[195] is a3
+pa[196] is a4
+pa[197] is a5
+pa[198] is a6
+pa[199] is a7
+var byte i
+
+procedure _run_checks() is
+   var byte expect
+   regression_begin_run()
+   expect = 10
+   for 200 using i loop
+      if pa[i] != expect then
+         bad = 1
+      end if
+      expect = expect + 10
+      if expect == 90 then
+         expect = 10
+      end if
+   end loop
+   if bad != 0 then
+      _check_failed = true
+   end if
+   regression_checkpoint()
+   if pa[0] != 10 then _check_failed = true end if
+   if pa[39] != 80 then _check_failed = true end if
+   if pa[40] != 10 then _check_failed = true end if
+   if pa[199] != 80 then _check_failed = true end if
+   regression_checkpoint()
+end procedure
+
+_run_checks()
+regression_pass_led_if_clean()
+
+forever loop
+end loop

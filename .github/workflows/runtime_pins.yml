@@ -1,0 +1,56 @@
+name: 'Runtime pins (self-hosted)'
+
+# The compile gate deliberately runs no runtime checks: GitHub's hosted
+# runners have no PIC simulators.  This workflow runs those checks where the
+# simulators ARE -- the self-hosted runner registered on the build host
+# (gpsim, the PIC32 QEMU build and the ESP32 QEMU build live there).
+#
+# Schedule-only (plus manual dispatch).  Keep that property: the repository is
+# public, and a self-hosted runner executes the workflow file carried by a
+# pull request, so a `pull_request` trigger here would hand arbitrary code
+# execution on the build host to anyone who can open a PR.
+on:
+  schedule:
+    # 10:00 UTC = 05:00 EST.  GitHub's cron is UTC and knows nothing about
+    # DST, so in summer this fires at 06:00 EDT.
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+jobs:
+  runtime-pins:
+    name: runtime pins (gpsim + PIC32/ESP32 QEMU)
+    # The labels are the runner's `--labels` plus its automatic self-hosted /
+    # linux / x64.  A missing runner leaves the job QUEUED (and eventually
+    # failed), it does not silently pass.
+    runs-on: [self-hosted, linux, x64, jalv3-sim]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          cc --version | head -1
+          gpsim --version 2>&1 | head -1
+          ls -l /opt/qemu-pic32/mipsel-softmmu/qemu-system-mipsel
+
+      - name: Fetch the pinned jallib corpus
+        run: unit-tests/fetch_jallib.sh
+
+      # Build from the checked-out source rather than trusting the committed
+      # binary: the point of this job is the code on the branch.
+      - name: Build (strict C89, -Werror)
+        run: make -C src ARCH=x86-64
+
+      # Three groups, all reported even when one fails (a single green signal
+      # for a red group is exactly what the hosted runner could not give).
+      - name: Front-end IR runtime pins
+        run: |
+          fail=0
+          for p in test_front_ir_parity \
+                   test_front_ir_parity_pic32 \
+                   test_front_ir_parity_esp32; do
+            echo "::group::$p"
+            "unit-tests/$p.sh" ./bin/beta/jalv3-x86-64 || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail

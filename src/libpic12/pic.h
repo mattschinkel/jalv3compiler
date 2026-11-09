@@ -207,6 +207,9 @@ void             pic_target_page_size_set(pfile_t *pf, unsigned sz);
 pic_target_instr_set_t pic_target_instruction_set_get(pfile_t* pf);
 void             pic_target_instruction_set_set(pfile_t* pf, pic_target_instr_set_t instruction_set);
 boolean_t        pic_is_12bit(pfile_t *pf);
+/* P3c: TRUE when a 12-bit core cannot do indirect addressing; logs the one
+ * capability diagnostic on the first call. */
+boolean_t        pic_refuse_no_indirect(pfile_t *pf);
 boolean_t        pic_is_14bit(pfile_t *pf);
 boolean_t        pic_is_14bit_hybrid(pfile_t *pf);
 boolean_t        pic_is_16bit(pfile_t *pf);
@@ -227,6 +230,38 @@ char *pic_chip_name_get(pfile_t *pf);
 boolean_t        pic_in_isr(pfile_t *pf); /* TRUE when generating ISR code */
 value_t          pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which);
 variable_sz_t    pic_pointer_size_get(pfile_t *pf);
+
+/* fat pointers (F0): the switch and the per-target tag layout.  The switch
+ * is OFF by default (unset/0/false/no/off) so the default build is
+ * byte-identical; the encoding lives in pic_fat.h. */
+#include "pic_fat.h"
+boolean_t     pic_fat_pointers_enabled(pfile_t *pf);
+pic_fat_target_t pic_fat_target_kind(pfile_t *pf);
+boolean_t     pic_fat_force_enabled(pfile_t *pf);
+
+/* The access plan (U2a): ONE classification of how a value is reached, so an
+ * emitter asks a single question instead of re-deriving the answer from the
+ * object view, the chunk map and the pointer flags.  U2a establishes the
+ * type and the first consumer (pic_indirect_setup); the remaining emitter
+ * families migrate in U2b, and U3 deletes the parallel mechanisms. */
+typedef enum pic_access_kind_ {
+  PIC_ACCESS_DIRECT = 0,  /* static address inside the object              */
+  PIC_ACCESS_RESOLVE,     /* static address computed from the value        */
+  PIC_ACCESS_LINEAR,      /* FSR = pointer value + offset, no walk         */
+  PIC_ACCESS_WALK_BAKED,  /* walk a compile-time chunk map                 */
+  PIC_ACCESS_WALK_RUNTIME,/* walk a runtime chunk map (formal / string view)*/
+  PIC_ACCESS_FAT,         /* fat pointer: dispatch on the tag (F2)         */
+  PIC_ACCESS_REFUSE       /* no legal access (diagnostic already logged)   */
+} pic_access_kind_t;
+
+typedef struct pic_access_plan_ {
+  pic_access_kind_t kind;
+  boolean_t         aop;      /* array-of-pointers element: never walk     */
+  boolean_t         chunked;  /* the object has more than one segment      */
+} pic_access_plan_t;
+
+void pic_access_plan_get(pfile_t *pf, const value_t val,
+    pic_access_plan_t *plan);
 
 /* back-end descriptor (pic_backend.h): the per-target delegation seam.
  * A NULL descriptor selects the classic PIC12/14/14H/18/SX

@@ -137,17 +137,21 @@ typedef struct pic_var_strview_formal_ {
   variable_t                   base;
 } pic_var_strview_formal_t;
 
+/* P3: one explicit `at` placement.  The pins are recorded during the
+ * placement pass so the segment audit can prove that no allocator-owned
+ * segment touches one.  Pins are removed from every free list (P1b), so an
+ * overlap would mean the free list and the allocation disagree. */
+typedef struct pic_var_pin_ {
+  variable_t      var;
+  variable_base_t base;
+  variable_sz_t   need;
+} pic_var_pin_t;
+
 struct pic_var_layout_snap_;
 
 typedef struct pic_var_state_ {
   unsigned                     auto_mem_reg;
-  pic_bank_info_t             *data_bank_list;
-  pic_bank_info_t             *shared_bank_list;
-  pic_bank_info_t             *shared_pragma_list;
-  pic_bank_info_t             *data_pragma_list; /* the DATA area as the
-                                                  * device declared it; never
-                                                  * consumed -- containment
-                                                  * queries only */
+  pic_mem_map_t                map;   /* U1: the one memory map */
   pic_variable_chunk_map_t    *chunk_maps;
   pic_var_banked_edge_t       *banked_edges;
   size_t                       banked_edges_used;
@@ -189,6 +193,11 @@ typedef struct pic_var_state_ {
   size_t                       late_used;
   size_t                       late_alloc;
   size_t                       place_gen;
+  /* P3: the explicit `at` placements of the latest placement pass (the
+   * segment audit's pin set); rebuilt by every pass, freed by the reset */
+  pic_var_pin_t               *pins;
+  size_t                       pins_used;
+  size_t                       pins_alloc;
   /* compiler-owned walk scratch (chunk count / base / span) for the runtime
    * chunk walk; never the caller's temp area.  Created on first use. */
   variable_t                   chunk_g_cnt;    /* walk scratch (never the
@@ -245,6 +254,8 @@ void pic_var_reset(void)
   FREE(pic_var.strview_formals);
   FREE(pic_var.openarray_blocked);
   FREE(pic_var.late);
+  FREE(pic_var.pins);
+  pic_fat_object_reset();
   memset(&pic_var, 0, sizeof(pic_var));
   pic_var.auto_mem_reg = 1;              /* the only non-zero initial value */
 }
@@ -375,6 +386,162 @@ variable_sz_t pic_variable_chunk_sz_get(variable_t var, variable_ct_t ix)
   return (map && ix < map->ct) ? map->sz[ix] : 0;
 }
 
+/* U0: fill the object view (see pic_var.h).  `stride` mirrors the holed
+ * placement's element-size rule: a non-bit array's element def, and 1 when
+ * the element is a bit (packed) or the size is not a whole multiple. */
+boolean_t pic_mem_object_get(variable_t var, pic_mem_object_t *obj)
+{
+  variable_def_t        def;
+  variable_def_member_t mbr;
+
+  memset(obj, 0, sizeof(*obj));
+  if (!var || (VARIABLE_NONE == var)) {
+    return BOOLEAN_FALSE;
+  }
+  obj->var    = var;
+  obj->size   = variable_sz_get(var);
+  obj->stride = 1;
+  def = variable_def_get(var);
+  if (def && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def))) {
+    mbr = variable_def_member_get(def);
+    if (mbr) {
+      variable_def_t edef;
+      variable_sz_t  esz;
+
+      edef = variable_def_member_def_get(mbr);
+      if (edef
+          && !variable_def_flag_test(edef, VARIABLE_DEF_FLAG_BIT)) {
+        esz = variable_def_byte_sz_get(edef);
+        if ((esz >= 1) && (0 == (obj->size % esz))) {
+          obj->stride = esz;
+        }
+      }
+    }
+  }
+  {
+    pic_variable_chunk_map_t *map;
+
+    map = pic_variable_chunk_map_find(var);
+    if (map && (map->ct >= 1)) {
+      /* the map is the authority when one exists -- even a single-chunk map
+       * must expose its segment (the walk emitters address segment 0), and
+       * the consumers that treat `ct <= 1` as linear say so themselves */
+      obj->seg_ct   = map->ct;
+      obj->seg_base = map->base;
+      obj->seg_len  = map->sz;
+      return BOOLEAN_TRUE;
+    }
+  }
+  obj->seg_ct = 1;
+  if (VARIABLE_BASE_UNKNOWN == variable_base_get(var, 0)) {
+    return BOOLEAN_FALSE;
+  }
+  obj->one_base = variable_base_get(var, 0);
+  obj->one_len  = obj->size;
+  return BOOLEAN_TRUE;
+}
+
+variable_base_t pic_mem_object_phys_of(const pic_mem_object_t *obj,
+    variable_sz_t ofs)
+{
+  variable_ct_t ii;
+
+  if (!obj) {
+    return VARIABLE_BASE_UNKNOWN;
+  }
+  if (!obj->seg_base || !obj->seg_len) {
+    return (variable_base_t) (obj->one_base + ofs);
+  }
+  for (ii = 0; ii < obj->seg_ct; ii++) {
+    if (ofs < obj->seg_len[ii]) {
+      return (variable_base_t) (obj->seg_base[ii] + ofs);
+    }
+    ofs = (variable_sz_t) (ofs - obj->seg_len[ii]);
+  }
+  /* past the end (out-of-range const subscript): clamp to the last
+   * chunk's end-1 so diagnostics keep pointing at this variable */
+  return (variable_base_t) (obj->seg_base[obj->seg_ct - 1]
+      + obj->seg_len[obj->seg_ct - 1] - 1);
+}
+
+boolean_t pic_mem_object_is_chunked(variable_t var)
+{
+  pic_mem_object_t obj;
+
+  return (pic_mem_object_get(var, &obj) && (obj.seg_ct > 1))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* ---- F2b: the fat-object registry -------------------------------------- */
+
+/* File-static rather than a `pic_var` field so that adding the registry cannot
+ * move anything in the compiler's data layout; pic_var_reset() clears it. */
+static variable_t    pic_fat_objects[PIC_FAT_MAX_OBJECTS];
+static variable_ct_t pic_fat_objects_used;
+static boolean_t     pic_fat_cap_reported;   /* refuse once, not per pass */
+
+void pic_fat_object_reset(void)
+{
+  pic_fat_objects_used = 0;
+  pic_fat_cap_reported = BOOLEAN_FALSE;
+  memset(pic_fat_objects, 0, sizeof(pic_fat_objects));
+}
+
+/* Assign (or find) the id of an object a fat pointer may address.  Ids are
+ * 1-based and stable for the compilation; 0 is "linear".  The cap is what the
+ * target's tag can encode, so a program past it gets a diagnostic instead of
+ * silently sharing an id. */
+boolean_t pic_fat_object_register(pfile_t *pf, variable_t var, unsigned *id)
+{
+  variable_ct_t ii;
+  unsigned      cap;
+
+  for (ii = 0; ii < pic_fat_objects_used; ii++) {
+    if (pic_fat_objects[ii] == var) {
+      if (0 != id) {
+        *id = (unsigned) (ii + 1);
+      }
+      return BOOLEAN_TRUE;
+    }
+  }
+  cap = PIC_FAT_TAG_MAX(pic_fat_target_kind(pf));
+  if (cap + 1U > (unsigned) PIC_FAT_MAX_OBJECTS) {
+    cap = (unsigned) PIC_FAT_MAX_OBJECTS - 1U;
+  }
+  if (pic_fat_objects_used >= cap) {
+    /* the producer asks once per emission pass: report once */
+    if (!pic_fat_cap_reported) {
+      pic_fat_cap_reported = BOOLEAN_TRUE;
+      pfile_log(pf, PFILE_LOG_ERR,
+          "too many address-taken multi-segment objects for fat pointers "
+          "(%u ids on this core): '%s' does not fit",
+          cap, variable_name_get(var) ? variable_name_get(var) : "?");
+    }
+    return BOOLEAN_FALSE;
+  }
+  if (pic_fat_objects_used >= (variable_ct_t) PIC_FAT_MAX_OBJECTS) {
+    return BOOLEAN_FALSE;
+  }
+  pic_fat_objects[pic_fat_objects_used++] = var;
+  if (0 != id) {
+    *id = (unsigned) pic_fat_objects_used;
+  }
+  return BOOLEAN_TRUE;
+}
+
+variable_ct_t pic_fat_object_ct(void)
+{
+  return pic_fat_objects_used;
+}
+
+variable_t pic_fat_object_get(unsigned id)
+{
+  if ((id < 1U) || (id > (unsigned) pic_fat_objects_used)) {
+    return VARIABLE_NONE;
+  }
+  return pic_fat_objects[id - 1U];
+}
+
 /* Layer 2 (chunk-walking linear arrays): resolve a LINEAR byte address
  * (array base + const offset -- const subscripts, direct addressing)
  * through the chunk map to its physical address. Contiguous (and
@@ -383,31 +550,20 @@ variable_sz_t pic_variable_chunk_sz_get(variable_t var, variable_ct_t ix)
 variable_base_t pic_var_chunk_addr_resolve(variable_t var,
     variable_base_t linear)
 {
-  pic_variable_chunk_map_t *map;
-  variable_sz_t             off;
+  pic_mem_object_t obj;
 
-  if (!var || (VARIABLE_NONE == var)) {
+  /* U0: the first consumer of the object view.  Same result as the old
+   * inline map walk (kept through the byte-identical gate): a contiguous
+   * (or single-chunk, or unplaced) object is linear, and a segmented one
+   * resolves through pic_mem_object_phys_of. */
+  if (!pic_mem_object_get(var, &obj)) {
     return linear;
   }
-  map = pic_variable_chunk_map_find(var);
-  if (!map || (map->ct <= 1)) {
+  if (obj.seg_ct <= 1) {
     return linear;
   }
-  off = (variable_sz_t) (linear - variable_base_get(var, 0));
-  {
-    variable_ct_t ii;
-
-    for (ii = 0; ii < map->ct; ii++) {
-      if (off < map->sz[ii]) {
-        return (variable_base_t) (map->base[ii] + off);
-      }
-      off = (variable_sz_t) (off - map->sz[ii]);
-    }
-  }
-  /* past the end (out-of-range const subscript): clamp to the last
-   * chunk's end-1 so diagnostics keep pointing at this variable */
-  return (variable_base_t) (map->base[map->ct - 1]
-      + map->sz[map->ct - 1] - 1);
+  return pic_mem_object_phys_of(&obj,
+      (variable_sz_t) (linear - variable_base_get(var, 0)));
 }
 
 /* Variables that are the TARGET of a pointer bind (`p is arr`) or an
@@ -546,6 +702,14 @@ void pic_var_pointer_bind_check_escaped(pfile_t *pf)
 {
   size_t ii;
 
+  /* F2b/F3a: with fat pointers on, an escaped bind to a chunked target is
+   * the shape the tag exists for -- the deref dispatches on the id instead
+   * of walking a compile-time map, so it is not a refusal (F3 removes the
+   * knob and keeps the dispatch). */
+  if (pic_fat_pointers_enabled(pf)) {
+    return;
+  }
+
   for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
     if (pic_var.ptr_binds[ii].escaped
         && pic_variable_chunk_map_find(pic_var.ptr_binds[ii].tvar)) {
@@ -559,6 +723,21 @@ void pic_var_pointer_bind_check_escaped(pfile_t *pf)
             ? variable_name_get(pic_var.ptr_binds[ii].pvar) : "?");
     }
   }
+}
+
+/* TRUE when this pointer variable has an ESCAPED bind (the fat-pointer
+ * case: the value, not a compile-time map, carries the address). */
+boolean_t pic_var_pointer_bind_escaped_var(variable_t pvar)
+{
+  size_t ii;
+
+  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
+    if ((pic_var.ptr_binds[ii].pvar == pvar)
+        && pic_var.ptr_binds[ii].escaped) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
 }
 
 /* the unescaped bind target for a pointer variable, if the target
@@ -1335,11 +1514,43 @@ static variable_sz_t pic_var_formal_map_need(pfile_t *pf, variable_t formal)
   return need;
 }
 
+/* P3: defined after the placement helpers it consumes (see the block
+ * comment at the definition). */
+static void pic_var_segment_audit(pfile_t *pf);
+
 void pic_var_chunk_prepare_emit(pfile_t *pf)
 {
+  /* F2b/F3a: a fat-bound target owns an id and must not use a compile-time
+   * walk, so register it (and mark the bind escaped) before any body is
+   * emitted -- ids have to be stable across every emission pass. */
   size_t   pi;
   size_t   pj;
   unsigned round;
+  size_t   fbi;
+
+  /* F2b/F3a: a fat-bound target owns an id and must not use a compile-time
+   * walk, so register it (and mark the bind escaped) before any body is
+   * emitted -- ids have to be stable across every emission pass. */
+  if (pic_fat_pointers_enabled(pf)) {
+    for (fbi = 0; fbi < pic_var.ptr_binds_used; fbi++) {
+      variable_t tvar;
+
+      tvar = pic_var.ptr_binds[fbi].tvar;
+      if ((0 == tvar) || (VARIABLE_NONE == tvar)
+          || !pic_mem_object_is_chunked(tvar)) {
+        continue;
+      }
+      /* F3: an ESCAPED bind is the case fat pointers exist for -- the deref
+       * no longer knows the object, so the value carries the id.  The phase
+       * gate still forces the unescaped case (the F2 witnesses need it). */
+      if (pic_var.ptr_binds[fbi].escaped || pic_fat_force_enabled(pf)) {
+        unsigned id;
+
+        (void) pic_fat_object_register(pf, tvar, &id);
+        pic_var.ptr_binds[fbi].escaped = BOOLEAN_TRUE;
+      }
+    }
+  }
 
   /* 1. capture every pair's layout.  A PASS-ON pair only knows a pointer, so
    * it has a layout only when the source formal carries a COMPILE-TIME chunk
@@ -1591,7 +1802,7 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
 
         for (var = pfile_block_variable_list_head(blk); var;
              var = variable_link_get(var)) {
-          if (pic_variable_chunk_ct_get(var) > 1) {
+          if (pic_mem_object_is_chunked(var)) {
             need = BOOLEAN_TRUE;
             break;
           }
@@ -1606,6 +1817,9 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
       (void) pic_var_chunk_walk_globals_get(pf, &gc, &gb, &gs);
     }
   }
+  /* P3: placement is final here (the map is the last piece of it), so this
+   * is the one point where the whole object model can be checked. */
+  pic_var_segment_audit(pf);
 }
 
 static void pic_var_chunk_map_propagate(pfile_t *pf, variable_t var)
@@ -1883,14 +2097,14 @@ void pic_blist_add(pfile_t *pf, pic_bank_info_t **pblist,
 
 void pic_data_bank_list_add(pfile_t *pf, size_t lo, size_t hi)
 {
-  pic_blist_add(pf, &pic_var.data_bank_list, lo, hi);
-  pic_blist_add(pf, &pic_var.data_pragma_list, lo, hi);
+  pic_blist_add(pf, &pic_var.map.data, lo, hi);
+  pic_blist_add(pf, &pic_var.map.data_pragma, lo, hi);
 }
 
 void pic_shared_bank_list_add(pfile_t *pf, size_t lo, size_t hi)
 {
-  pic_blist_add(pf, &pic_var.shared_bank_list, lo, hi);
-  pic_blist_add(pf, &pic_var.shared_pragma_list, lo, hi);
+  pic_blist_add(pf, &pic_var.map.shared, lo, hi);
+  pic_blist_add(pf, &pic_var.map.shared_pragma, lo, hi);
 }
 
 boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr)
@@ -1898,7 +2112,7 @@ boolean_t pic_shared_bank_list_covers_byte(pfile_t *pf, unsigned long file_addr)
   pic_bank_info_t *bank;
 
   UNUSED(pf);
-  for (bank = pic_var.shared_pragma_list; bank; bank = bank->link) {
+  for (bank = pic_var.map.shared_pragma; bank; bank = bank->link) {
     if (file_addr >= (unsigned long) bank->lo
         && file_addr <= (unsigned long) bank->hi) {
       return BOOLEAN_TRUE;
@@ -1973,7 +2187,7 @@ void pic_data_bank_list_remove_range(pfile_t *pf, size_t lo, size_t hi)
 
   assert(lo <= hi);
   sz = hi - lo + 1;
-  pic_blist_remove(pf, &pic_var.data_bank_list, lo, sz);
+  pic_blist_remove(pf, &pic_var.map.data, lo, sz);
 }
 
 /* Silent cross-bank optimization */
@@ -2163,7 +2377,17 @@ static variable_base_t pic_data_alloc(pfile_t *pf, pic_bank_info_t **blist,
     size_t          cand_sz;
     size_t          alloc_end;
 
-    cand = pic_data_first_single_bank_lo(bank, need, bank_size, bank_mask);
+    /*
+     * The search must use the full REMOVAL span (`rm` = need + pointer-slot
+     * padding), not `need`: acceptance below requires [cand, cand+rm-1] to
+     * fit one bank window.  With `need` a candidate that fits the object but
+     * not its padding is returned, rejected by the `alloc_end` check, and the
+     * whole node is abandoned instead of advancing to the next window -- a
+     * pointer array of 64 slots (need 192 + padding 64 = 256) was refused on
+     * an 18F4620 with 3966 bytes free.  (P1, 2026-11-08.)
+     */
+    cand = pic_data_first_single_bank_lo(bank,
+        (variable_sz_t) rm, bank_size, bank_mask);
     if (VARIABLE_BASE_UNKNOWN == cand) {
       continue;
     }
@@ -2276,7 +2500,7 @@ static void pic_analyze_memory_fragmentation(pfile_t *pf)
   
   pfile_log(pf, PFILE_LOG_DEBUG, "Silent cross-bank optimization analysis:");
   
-  for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
+  for (bank = pic_var.map.data; bank; bank = bank->link) {
     unsigned bank_free = bank->hi - bank->lo + 1;
     unsigned bank_used = bank_size - bank_free;
     
@@ -2322,8 +2546,67 @@ static variable_sz_t pic_data_biggest(const pic_bank_info_t *blist)
 }
 
 /* returns BOOLEAN_TRUE if a new base was set, else BOOLEAN_FALSE */
-static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc, 
-  pic_bank_info_t **blist, variable_t vptr)
+/* U1b: the allocator entry point is region-aware.  The free lists are still
+ * per-region (U1c merges them); callers ask the MAP for a region instead of
+ * naming a list, which is what lets U1c change the representation without
+ * touching them. */
+typedef enum pic_mem_region_ {
+  PIC_MEM_REGION_DATA = 0,
+  PIC_MEM_REGION_SHARED
+} pic_mem_region_t;
+
+static pic_bank_info_t **pic_mem_map_list(pic_mem_map_t *map,
+    pic_mem_region_t region)
+{
+  return (PIC_MEM_REGION_SHARED == region) ? &map->shared : &map->data;
+}
+
+static variable_base_t pic_mem_map_alloc(pfile_t *pf, pic_mem_map_t *map,
+    pic_mem_region_t region, variable_sz_t need, variable_ct_t pointer_slots)
+{
+  return pic_data_alloc(pf, pic_mem_map_list(map, region), need,
+      pointer_slots);
+}
+
+static unsigned pic_mem_map_free_bytes(const pic_mem_map_t *map,
+    pic_mem_region_t region)
+{
+  const pic_bank_info_t *bank;
+  const pic_bank_info_t *list;
+  unsigned               free_bytes;
+
+  list = (PIC_MEM_REGION_SHARED == region) ? map->shared : map->data;
+  for (bank = list, free_bytes = 0; bank; bank = bank->link) {
+    free_bytes += (unsigned) (bank->hi - bank->lo + 1);
+  }
+  return free_bytes;
+}
+
+static unsigned pic_mem_map_segments(const pic_mem_map_t *map,
+    pic_mem_region_t region)
+{
+  const pic_bank_info_t *bank;
+  const pic_bank_info_t *list;
+  unsigned               ct;
+
+  list = (PIC_MEM_REGION_SHARED == region) ? map->shared : map->data;
+  for (bank = list, ct = 0; bank; bank = bank->link) {
+    ct++;
+  }
+  return ct;
+}
+
+static unsigned pic_mem_map_largest_run(const pic_mem_map_t *map,
+    pic_mem_region_t region)
+{
+  const pic_bank_info_t *list;
+
+  list = (PIC_MEM_REGION_SHARED == region) ? map->shared : map->data;
+  return (unsigned) pic_data_biggest(list);
+}
+
+static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
+  pic_mem_map_t *map, pic_mem_region_t region, variable_t vptr)
 {
   variable_sz_t   need;
   variable_ct_t   pointer_slots;
@@ -2335,7 +2618,7 @@ static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
   /* first we'll see if the entire thing can fit in a bank.
      If so, good! */
 
-  base = pic_data_alloc(pf, blist, need, pointer_slots);
+  base = pic_mem_map_alloc(pf, map, region, need, pointer_slots);
   if (getenv("JALV2_DBG_REFUSAL")) {
     fprintf(stderr, "DBG first %-18s need=%u base=0x%x\n",
         variable_name_get(vptr) ? variable_name_get(vptr) : "?",
@@ -2343,10 +2626,34 @@ static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
   }
   rc   = BOOLEAN_FALSE;
   if (VARIABLE_BASE_UNKNOWN == base) {
-    pfile_log(pf, PFILE_LOG_ERR, "no space for %s:%s (need=%u available=%u)",
-        (proc) ? pfile_proc_tag_get(proc) : "",
-        variable_name_get(vptr),
-        need, pic_data_biggest(*blist));
+    char                   padmsg[32];
+    char                   where[96];
+    variable_sz_t          padding;
+    unsigned               regions;
+
+    padding = pic_pointer_slot_padding_get(pf, pointer_slots);
+    padmsg[0] = '\0';
+    if (padding) {
+      sprintf(padmsg, " + %u slot padding", (unsigned) padding);
+    }
+    where[0] = '\0';
+    if (proc && pfile_proc_tag_get(proc)) {
+      sprintf(where, "%s:", pfile_proc_tag_get(proc));
+    }
+    regions = pic_mem_map_segments(map, region);
+    /* Say what the numbers mean: `available` used to print only the largest
+     * single run, which reads like total free RAM (a 192-byte array was
+     * refused with "available=3966"), and it never said that the allocation
+     * must fit ONE bank window. */
+    pfile_log(pf, PFILE_LOG_ERR,
+        "no space for %s%s (need=%u%s; must fit one %u-byte bank window; "
+        "%u bytes free in %u region%s, largest run %u)",
+        where, variable_name_get(vptr),
+        (unsigned) need, padmsg,
+        (unsigned) pic_target_bank_size_get(pf),
+        (unsigned) pic_mem_map_free_bytes(map, region), regions,
+        (1 == regions) ? "" : "s",
+        (unsigned) pic_mem_map_largest_run(map, region));
     variable_flag_set(vptr, VARIABLE_FLAG_ALLOC_FAIL);
   } else {
     assert(VARIABLE_BASE_UNKNOWN == variable_base_get(vptr, 0));
@@ -2359,7 +2666,8 @@ static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
 boolean_t pic_variable_alloc_one(pfile_t *pf, pfile_proc_t *proc,
     variable_t var)
 {
-  return pic_variable_base_set(pf, proc, &pic_var.data_bank_list, var);
+  return pic_variable_base_set(pf, proc, &pic_var.map,
+      PIC_MEM_REGION_DATA, var);
 }
 
 /* find all variables that the user has placed & make sure these
@@ -2368,7 +2676,7 @@ static void blist_total(void)
 {
   const pic_bank_info_t *binfo;
 
-  for (pic_blist_total = 0, binfo = pic_var.data_bank_list; 
+  for (pic_blist_total = 0, binfo = pic_var.map.data; 
        binfo; 
        pic_blist_total += binfo->hi - binfo->lo + 1, binfo = binfo->link)
     ;
@@ -2522,7 +2830,7 @@ static void pic_variable_alloc_indirect_proc(pfile_t *pf, pfile_proc_t *proc)
   pfile_proc_t   *cproc;
 
   if (pfile_proc_frame_sz_get(proc)) {
-    base = pic_data_alloc(pf, &pic_var.data_bank_list, 
+    base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, 
       pfile_proc_frame_sz_get(proc), 0);
     pic_block_data_alloc(pf, pfile_proc_block_root_get(proc), base);
     pfile_proc_frame_set(proc, base, pf);
@@ -2578,7 +2886,7 @@ static void pic_variable_alloc_isr(pfile_t *pf)
   }
 
   isr_block = (sz)
-    ? pic_data_alloc(pf, &pic_var.data_bank_list, sz, 0)
+    ? pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, sz, 0)
     : VARIABLE_BASE_UNKNOWN;
 
   for (proc = pfile_proc_root_get(pf);
@@ -2638,7 +2946,16 @@ static void pic_variable_alloc_volatile(pfile_t *pf)
               (int) (variable_base_get(var, 0) != VARIABLE_BASE_UNKNOWN),
               (int) variable_is_used(var), (int) variable_is_assigned(var));
           }
-          if (variable_is_volatile(var) && variable_is_auto(var)) {
+          /* P2: ARRAYS are not pre-placed through the single-window path.
+           * A volatile type (every pointer type is volatile by default, see
+           * the pointer definitions) used to drag its array here, where the
+           * single-bank window refused anything over one bank -- a 64-slot
+           * pointer array on 18F4620, capacity 61 before the padding fix.
+           * Arrays go through the normal group/holed placement instead, which
+           * tries contiguous first and then segments; the VOLATILE flag stays
+           * (it is the optimizer barrier and the overlay exclusion). */
+          if (variable_is_volatile(var) && variable_is_auto(var)
+              && !variable_is_array(var)) {
             if (variable_is_volatile(var)
                 && (VARIABLE_BASE_UNKNOWN == variable_base_get(var, 0))
                 && (variable_is_used(var) || variable_is_assigned(var))) {
@@ -2764,7 +3081,7 @@ void pic_var_refusal_report(pfile_t *pf)
   if (getenv("JALV2_DBG_REFUSAL")) {
     fprintf(stderr, "DBG refusal free=%u data_nodes=%d\n",
         (unsigned) pic_data_bank_free_bytes_get(),
-        (int) (pic_var.data_bank_list ? 1 : 0));
+        (int) (pic_var.map.data ? 1 : 0));
   }
   if (pic_var.refused) {
     const char *name;
@@ -2884,17 +3201,17 @@ static boolean_t pic_variable_group_place_shared(pfile_t *pf,
    * refused (the driver turns a refusal in the final install into a clean
    * "no room" error). */
   for (;;) {
-    base = pic_data_alloc(pf, &pic_var.shared_bank_list, sz_reqd,
+    base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_SHARED, sz_reqd,
         pointer_slots_reqd);
     if (VARIABLE_BASE_UNKNOWN == base) {
       return BOOLEAN_FALSE;
     }
-    if (!pic_blist_range_dataspace(pic_var.data_pragma_list, base, rm_reqd)
-        || pic_blist_range_free(pic_var.data_bank_list, base, rm_reqd)) {
+    if (!pic_blist_range_dataspace(pic_var.map.data_pragma, base, rm_reqd)
+        || pic_blist_range_free(pic_var.map.data, base, rm_reqd)) {
       break;
     }
   }
-  pic_blist_remove(pf, &pic_var.data_bank_list, base, rm_reqd);
+  pic_blist_remove(pf, &pic_var.map.data, base, rm_reqd);
   pfile_log(pf, PFILE_LOG_DEBUG,
       "Allocated %u bytes from shared memory at 0x%04X",
       (unsigned) sz_reqd, (unsigned) base);
@@ -2932,7 +3249,7 @@ static variable_ct_t pic_node_chunk_segments_get(pfile_t *pf,
   if (pic_is_16bit(pf)) {
     reserved = 0;
   } else {
-    reserved = pic_var.shared_pragma_list;
+    reserved = pic_var.map.shared_pragma;
   }
   for (;;) {
     variable_base_t          s_hi;
@@ -2983,7 +3300,7 @@ static void pic_software_stack_calc(pfile_t *pf)
   const pic_bank_info_t *bank;
 
   UNUSED(pf);
-  for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
+  for (bank = pic_var.map.data; bank; bank = bank->link) {
     size_t sz;
 
     sz = (bank->hi - bank->lo + 1);
@@ -3190,7 +3507,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
       }
       fprintf(stderr, "\n");
     }
-    base = pic_data_alloc(pf, &pic_var.data_bank_list, sz_reqd,
+    base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, sz_reqd,
         pointer_slots_reqd);
     if (getenv("JALV2_DBG_REFUSAL")) {
       fprintf(stderr, "DBG place %-16s sz=%u base=0x%x free=%u\n",
@@ -3244,7 +3561,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
         chunk_alloc = 0;
         chunk_base = 0;
         chunk_sz = 0;
-        for (current_bank = pic_var.data_bank_list; current_bank;
+        for (current_bank = pic_var.map.data; current_bank;
             current_bank = current_bank->link) {
           chunk_alloc++;
         }
@@ -3328,7 +3645,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
                 }
               }
             }
-            for (current_bank = pic_var.data_bank_list; current_bank && remaining > 0; current_bank = current_bank->link) {
+            for (current_bank = pic_var.map.data; current_bank && remaining > 0; current_bank = current_bank->link) {
               /* walk the node in NON-reserved segments: the shared /
                * access-window bytes inside the node are reserved for
                * access-window residents and must become holes for the
@@ -3394,6 +3711,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
                * error on the final install). */
               if ((1 == passno)
                 && !pic_variable_is_bit_array(data[ii])
+                && !pic_fat_pointers_enabled(pf)
                 && (pic_var_pointer_bind_escaped_target(data[ii])
                   || pic_var_escapes_to_call(data[ii]))
                 && (chunk_ct > 1)) {
@@ -3443,7 +3761,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
             variable_ct_t ci;
 
             for (ci = 0; ci < chunk_ct; ci++) {
-              pic_blist_remove(pf, &pic_var.data_bank_list, chunk_base[ci],
+              pic_blist_remove(pf, &pic_var.map.data, chunk_base[ci],
                 chunk_sz[ci]);
             }
           }
@@ -3715,8 +4033,8 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
   if (pic_is_14bit_hybrid(pf)) {
     const pic_bank_info_t *shared;
 
-    for (shared = pic_var.shared_pragma_list; shared; shared = shared->link) {
-      for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
+    for (shared = pic_var.map.shared_pragma; shared; shared = shared->link) {
+      for (bank = pic_var.map.data; bank; bank = bank->link) {
         size_t lo;
         size_t hi;
 
@@ -3728,7 +4046,7 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
       }
     }
   } else {
-    for (bank = pic_var.data_bank_list; bank; bank = bank->link) {
+    for (bank = pic_var.map.data; bank; bank = bank->link) {
       size_t lo;
       size_t hi;
 
@@ -3828,7 +4146,7 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
         size_t k;
 
         /* the general free list must not hand the same bytes out */
-        pic_blist_remove(pf, &pic_var.data_bank_list, base, grp[g].rm);
+        pic_blist_remove(pf, &pic_var.map.data, base, grp[g].rm);
         pic_fixup_varalloc_log(pf, data, grp[g].start, grp[g].sz,
             grp[g].slots, grp[g].rm, grp[g].virt, base, "accesswin");
         for (k = grp[g].start; k < grp[g].start + grp[g].ct; k++) {
@@ -3869,11 +4187,11 @@ void pic_var_trial_install(pfile_t *pf, int window)
     return;
   }
   /* restore the pre-placement state */
-  pic_accesswin_list_free(pic_var.data_bank_list);
-  pic_var.data_bank_list = pic_accesswin_list_clone(pic_var.snap->data_list);
-  pic_accesswin_list_free(pic_var.shared_bank_list);
-  pic_var.shared_bank_list = pic_accesswin_list_clone(pic_var.snap->shared_list);
-  if (!pic_var.data_bank_list || !pic_var.shared_bank_list) {
+  pic_accesswin_list_free(pic_var.map.data);
+  pic_var.map.data = pic_accesswin_list_clone(pic_var.snap->data_list);
+  pic_accesswin_list_free(pic_var.map.shared);
+  pic_var.map.shared = pic_accesswin_list_clone(pic_var.snap->shared_list);
+  if (!pic_var.map.data || !pic_var.map.shared) {
     pfile_log_syserr(pf, ENOMEM);
     return;
   }
@@ -3966,8 +4284,8 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
     pic_var_trials_free();
     snap = MALLOC(sizeof(*snap));
     if (snap) {
-      snap->data_list   = pic_accesswin_list_clone(pic_var.data_bank_list);
-      snap->shared_list = pic_accesswin_list_clone(pic_var.shared_bank_list);
+      snap->data_list   = pic_accesswin_list_clone(pic_var.map.data);
+      snap->shared_list = pic_accesswin_list_clone(pic_var.map.shared);
       snap->virt        = MALLOC(vinfo.used * sizeof(*snap->virt));
       snap->data        = vinfo.data;
       snap->used        = vinfo.used;
@@ -4104,7 +4422,7 @@ static void pic_variable_alloc_leftover(pfile_t *pf)
         if (!var_size) {
           continue;
         }
-        base = pic_data_alloc(pf, &pic_var.data_bank_list, var_size, 0);
+        base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, var_size, 0);
         if (VARIABLE_BASE_UNKNOWN != base) {
           variable_base_set(vptr, base, 0);
         }
@@ -4143,7 +4461,7 @@ static void pic_variable_alloc_no_reuse(pfile_t *pf)
             continue;
           }
           var_size = pic_variable_storage_need_get(pf, vptr, &pointer_slots);
-          base = pic_data_alloc(pf, &pic_var.data_bank_list, 
+          base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, 
             var_size, pointer_slots);
           if (VARIABLE_BASE_UNKNOWN == base) {
             unsigned bank_size = pic_target_bank_size_get(pf);
@@ -4202,7 +4520,7 @@ static void pic_variable_shared_set(pfile_t *pf)
             variable_sz_t    need;
 
             need = pic_variable_storage_need_get(pf, vptr, 0);
-            for (bank = pic_var.shared_pragma_list;
+            for (bank = pic_var.map.shared_pragma;
                  bank && !((bank->lo <= base) && (base <= bank->hi));
                  bank = bank->link)
               ;
@@ -4270,7 +4588,7 @@ boolean_t pic_variable_late_alloc(pfile_t *pf, variable_t var)
   sz = pic_variable_storage_need_get(pf, var, &pointer_slots);
   base = variable_base_get(var, 0);
   if (VARIABLE_BASE_UNKNOWN != base) {
-    pic_blist_add(pf, &pic_var.data_bank_list, base, base + sz - 1);
+    pic_blist_add(pf, &pic_var.map.data, base, base + sz - 1);
     pic_blist_max -= sz;
     variable_base_set(var, VARIABLE_BASE_UNKNOWN, 0);
   }
@@ -4282,6 +4600,315 @@ boolean_t pic_variable_late_alloc(pfile_t *pf, variable_t var)
       pic_var_late_track(var);
     }
     return rc;
+  }
+}
+
+/* ======================================================================
+ * P3: the placement invariant audit.
+ *
+ * A first-class allocator is one whose memory state can be CHECKED, not
+ * merely trusted.  The chunk maps are the only record of a segmented
+ * placement, so they are the audit's input: every entry is one object the
+ * allocator placed.
+ *
+ * The invariants:
+ *   1. geometry    -- a real base, a positive length, ascending and
+ *                     pairwise-disjoint segments;
+ *   2. containment -- an allocator-owned segment lies inside the declared
+ *                     DATA or SHARED area;
+ *   3. pins        -- no allocator-owned segment touches an explicit `at`
+ *                     placement (P1b removed pins from every free list, so
+ *                     an overlap means the free list and the allocation
+ *                     disagree);
+ *   4. disjointness-- two allocator-owned objects never share a byte
+ *                     (group members share one allocation by design, and a
+ *                     formal's map is a COPY of its actual's layout);
+ *   5. coverage    -- the segments cover the object's storage need.
+ *
+ * "Owned" means the map describes the variable's OWN placement: the owner
+ * is NONE (not a copy) and the variable's base is the map's first base.  A
+ * formal's runtime map, a string-view map and a copied map all point at
+ * SOMEBODY ELSE's storage; they are checked for geometry only, because
+ * overlap with their source is the design.
+ *
+ * Runs at the end of pic_var_chunk_prepare_emit (placement is final there).
+ * Silent unless JALV2_ALLOC_AUDIT is set; JALV2_ALLOC_AUDIT_SELFTEST feeds
+ * the geometry checker a deliberately broken layout so a pin can prove the
+ * audit is not vacuous.
+ * ====================================================================== */
+static boolean_t pic_var_ranges_overlap(variable_base_t a,
+    variable_sz_t alen, variable_base_t b, variable_sz_t blen)
+{
+  return ((a < (variable_base_t) (b + blen))
+      && (b < (variable_base_t) (a + alen)))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+static unsigned pic_var_seg_geometry(const char *name,
+    const variable_base_t *base, const variable_sz_t *sz, variable_ct_t ct)
+{
+  unsigned      violations;
+  variable_ct_t ii;
+  variable_ct_t jj;
+
+  violations = 0;
+  for (ii = 0; ii < ct; ii++) {
+    if (VARIABLE_BASE_UNKNOWN == base[ii]) {
+      fprintf(stderr, "jal alloc audit: %s: segment %u has no base\n",
+          name, (unsigned) ii);
+      violations++;
+    }
+    if (0 == sz[ii]) {
+      fprintf(stderr, "jal alloc audit: %s: segment %u has zero length\n",
+          name, (unsigned) ii);
+      violations++;
+    }
+  }
+  for (ii = 0; ii < ct; ii++) {
+    for (jj = (variable_ct_t) (ii + 1); jj < ct; jj++) {
+      if (base[ii] >= base[jj]) {
+        fprintf(stderr,
+            "jal alloc audit: %s: segments %u and %u are not ascending\n",
+            name, (unsigned) ii, (unsigned) jj);
+        violations++;
+      } else if ((variable_base_t) (base[ii] + sz[ii]) > base[jj]) {
+        fprintf(stderr,
+            "jal alloc audit: %s: segments %u (0x%04X+%u) and %u"
+            " (0x%04X+%u) overlap\n",
+            name, (unsigned) ii, (unsigned) base[ii], (unsigned) sz[ii],
+            (unsigned) jj, (unsigned) base[jj], (unsigned) sz[jj]);
+        violations++;
+      }
+    }
+  }
+  return violations;
+}
+
+static unsigned pic_var_seg_selftest(void)
+{
+  variable_base_t base[3];
+  variable_sz_t   sz[3];
+
+  base[0] = 0x0100; sz[0] = 16;
+  base[1] = 0x0108; sz[1] = 16;   /* overlaps segment 0 */
+  base[2] = 0x0200; sz[2] = 0;    /* zero length */
+  return pic_var_seg_geometry("selftest", base, sz, 3);
+}
+
+static boolean_t pic_var_map_owned(const pic_variable_chunk_map_t *map)
+{
+  if ((VARIABLE_NONE != map->owner) || (0 == map->ct)) {
+    return BOOLEAN_FALSE;
+  }
+  return (variable_base_get(map->var, 0) == map->base[0])
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* P3b: the bytes a bank list describes, and its largest single node (the
+ * largest run a new allocation could take without segmenting). */
+static unsigned pic_var_list_bytes(const pic_bank_info_t *list)
+{
+  unsigned total;
+
+  total = 0;
+  for (; list; list = list->link) {
+    total += (unsigned) (list->hi - list->lo + 1);
+  }
+  return total;
+}
+
+static unsigned pic_var_list_largest(const pic_bank_info_t *list)
+{
+  unsigned largest;
+
+  largest = 0;
+  for (; list; list = list->link) {
+    unsigned sz;
+
+    sz = (unsigned) (list->hi - list->lo + 1);
+    if (sz > largest) {
+      largest = sz;
+    }
+  }
+  return largest;
+}
+
+static void pic_var_segment_audit(pfile_t *pf)
+{
+  pic_variable_chunk_map_t *map;
+  size_t                    objects;
+  size_t                    segments;
+  size_t                    owned;
+  size_t                    violations;
+  unsigned                  data_used;
+  unsigned                  data_free;
+  unsigned                  data_largest;
+  unsigned                  shared_used;
+  unsigned                  shared_free;
+  unsigned                  shared_largest;
+
+  if ((0 == getenv("JALV2_ALLOC_AUDIT"))
+      && (0 == getenv("JALV2_ALLOC_AUDIT_SELFTEST"))) {
+    return;
+  }
+  if (getenv("JALV2_ALLOC_AUDIT_SELFTEST")) {
+    unsigned selftest;
+
+    selftest = pic_var_seg_selftest();
+    fprintf(stderr, "jal alloc audit: selftest violations=%u (expect 2)\n",
+        selftest);
+  }
+  objects    = 0;
+  segments   = 0;
+  owned      = 0;
+  violations = 0;
+  for (map = pic_var.chunk_maps; map; map = map->link) {
+    const char   *name;
+    boolean_t     is_owned;
+    variable_ct_t ii;
+
+    name = variable_name_get(map->var);
+    if (!name) {
+      name = "?";
+    }
+    objects++;
+    segments += (size_t) map->ct;
+    if ((0 == map->ct) || (map->ct > PIC_CHUNK_MAP_MAX)) {
+      fprintf(stderr,
+          "jal alloc audit: %s: segment count %u is outside 1..%u\n",
+          name, (unsigned) map->ct, (unsigned) PIC_CHUNK_MAP_MAX);
+      violations++;
+      continue;
+    }
+    violations += (size_t) pic_var_seg_geometry(name, map->base, map->sz,
+        map->ct);
+    is_owned = pic_var_map_owned(map);
+    if (!is_owned) {
+      continue;
+    }
+    owned++;
+    /* 2. containment, where the target declares a mirror */
+    if (pic_var.map.data_pragma || pic_var.map.shared_pragma) {
+      for (ii = 0; ii < map->ct; ii++) {
+        if (!pic_blist_range_dataspace(pic_var.map.data_pragma,
+              map->base[ii], map->sz[ii])
+            && !pic_blist_range_dataspace(pic_var.map.shared_pragma,
+              map->base[ii], map->sz[ii])) {
+          fprintf(stderr,
+              "jal alloc audit: %s: segment %u 0x%04X+%u is outside the"
+              " declared data/shared area\n",
+              name, (unsigned) ii, (unsigned) map->base[ii],
+              (unsigned) map->sz[ii]);
+          violations++;
+        }
+      }
+    }
+    /* 3. pins */
+    for (ii = 0; ii < map->ct; ii++) {
+      size_t pi;
+
+      for (pi = 0; pi < pic_var.pins_used; pi++) {
+        if ((pic_var.pins[pi].var == map->var)
+            || !pic_var_ranges_overlap(map->base[ii], map->sz[ii],
+                 pic_var.pins[pi].base, pic_var.pins[pi].need)) {
+          continue;
+        }
+        fprintf(stderr,
+            "jal alloc audit: %s: segment %u 0x%04X+%u overlaps pinned"
+            " %s 0x%04X+%u\n",
+            name, (unsigned) ii, (unsigned) map->base[ii],
+            (unsigned) map->sz[ii],
+            variable_name_get(pic_var.pins[pi].var)
+              ? variable_name_get(pic_var.pins[pi].var) : "?",
+            (unsigned) pic_var.pins[pi].base,
+            (unsigned) pic_var.pins[pi].need);
+        violations++;
+      }
+    }
+    /* 5. coverage */
+    {
+      variable_sz_t need;
+      variable_sz_t covered;
+
+      need = pic_variable_storage_need_get(pf, map->var, 0);
+      covered = 0;
+      for (ii = 0; ii < map->ct; ii++) {
+        covered = (variable_sz_t) (covered + map->sz[ii]);
+      }
+      if ((0 != need) && !pic_variable_is_bit_array(map->var)
+          && (covered < need)) {
+        fprintf(stderr,
+            "jal alloc audit: %s: segments cover %u of %u bytes\n",
+            name, (unsigned) covered, (unsigned) need);
+        violations++;
+      }
+    }
+  }
+  /* 4. disjointness among allocator-owned objects.  Two maps with the same
+   * first base are one GROUP allocation by design; a formal/copy map is
+   * excluded by the owned predicate. */
+  {
+    pic_variable_chunk_map_t *a;
+    pic_variable_chunk_map_t *b;
+
+    for (a = pic_var.chunk_maps; a; a = a->link) {
+      if (!pic_var_map_owned(a)) {
+        continue;
+      }
+      for (b = a->link; b; b = b->link) {
+        variable_ct_t i;
+        variable_ct_t j;
+
+        if (!pic_var_map_owned(b) || (a->base[0] == b->base[0])) {
+          continue;
+        }
+        for (i = 0; i < a->ct; i++) {
+          for (j = 0; j < b->ct; j++) {
+            if (!pic_var_ranges_overlap(a->base[i], a->sz[i],
+                  b->base[j], b->sz[j])) {
+              continue;
+            }
+            fprintf(stderr,
+                "jal alloc audit: %s segment %u (0x%04X+%u) overlaps"
+                " %s segment %u (0x%04X+%u)\n",
+                variable_name_get(a->var) ? variable_name_get(a->var) : "?",
+                (unsigned) i, (unsigned) a->base[i], (unsigned) a->sz[i],
+                variable_name_get(b->var) ? variable_name_get(b->var) : "?",
+                (unsigned) j, (unsigned) b->base[j], (unsigned) b->sz[j]);
+            violations++;
+          }
+        }
+      }
+    }
+  }
+  /* P3b: the capacity side of the report.  `used' is declared minus free,
+   * so it includes the pins and every reservation, not just user objects;
+   * `largest' is the biggest free run, i.e. the biggest object that can be
+   * placed without segmenting. */
+  {
+    unsigned data_total;
+    unsigned shared_total;
+
+    data_total    = pic_var_list_bytes(pic_var.map.data_pragma);
+    data_free     = pic_mem_map_free_bytes(&pic_var.map, PIC_MEM_REGION_DATA);
+    data_largest  = pic_var_list_largest(pic_var.map.data);
+    data_used     = (data_total >= data_free) ? data_total - data_free : 0;
+    shared_total  = pic_var_list_bytes(pic_var.map.shared_pragma);
+    shared_free   = pic_mem_map_free_bytes(&pic_var.map,
+                        PIC_MEM_REGION_SHARED);
+    shared_largest = pic_var_list_largest(pic_var.map.shared);
+    shared_used   = (shared_total >= shared_free)
+      ? shared_total - shared_free : 0;
+  }
+  if (getenv("JALV2_ALLOC_AUDIT")) {
+    fprintf(stderr,
+        "jal alloc audit: objects=%u segments=%u owned=%u violations=%u"
+        " data_used=%u data_free=%u data_largest=%u"
+        " shared_used=%u shared_free=%u shared_largest=%u\n",
+        (unsigned) objects, (unsigned) segments, (unsigned) owned,
+        (unsigned) violations,
+        data_used, data_free, data_largest,
+        shared_used, shared_free, shared_largest);
   }
 }
 
@@ -4386,7 +5013,17 @@ void pic_variable_alloc(pfile_t *pf)
                   }
                 }
               }
-              pic_blist_remove(pf, &pic_var.data_bank_list, base,
+              pic_blist_remove(pf, &pic_var.map.data, base,
+                need + pic_pointer_slot_padding_get(pf, pointer_slots));
+              /*
+               * A PINNED byte is not free in the shared window either: the
+               * device file parks the SFRs at 0xF80+ inside `pragma shared`,
+               * and without this the shared FALLBACK could hand a user
+               * variable those bytes.  The mp3/sd_card sample's storage
+               * landed on PORTA (0xF80) that way.  Pins inside the data
+               * area are no-ops here (the data list already excludes them).
+               */
+              pic_blist_remove(pf, &pic_var.map.shared, base,
                 need + pic_pointer_slot_padding_get(pf, pointer_slots));
             }
           }
@@ -4456,6 +5093,29 @@ void pic_variable_alloc(pfile_t *pf)
             (unsigned) placed[jj].need);
         }
       }
+      /* P3: keep the pins for the segment audit.  A layout trial re-runs
+       * this pass, so replace the previous set rather than append to it. */
+      pic_var.pins_used = 0;
+      if (placed_ct) {
+        size_t         pi;
+        pic_var_pin_t *tmp;
+
+        if (placed_ct > pic_var.pins_alloc) {
+          tmp = REALLOC(pic_var.pins, placed_ct * sizeof(*tmp));
+          if (tmp) {
+            pic_var.pins       = tmp;
+            pic_var.pins_alloc = placed_ct;
+          }
+        }
+        if (pic_var.pins_alloc >= placed_ct) {
+          for (pi = 0; pi < placed_ct; pi++) {
+            pic_var.pins[pi].var  = placed[pi].var;
+            pic_var.pins[pi].base = placed[pi].base;
+            pic_var.pins[pi].need = placed[pi].need;
+          }
+          pic_var.pins_used = placed_ct;
+        }
+      }
       FREE(placed);
     }
     /* how many bytes the explicit placements actually took off the free
@@ -4511,7 +5171,7 @@ void pic_variable_alloc(pfile_t *pf)
         if (VARIABLE_BASE_UNKNOWN == variable_base_get(var, 0)) {
           variable_base_t base;
 
-          base = pic_data_alloc(pf, &pic_var.data_bank_list, variable_sz_get(var));
+          base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, variable_sz_get(var));
           if (VARIABLE_BASE_UNKNOWN != base) {
             variable_base_set(var, base, 0);
             variable_array_entry_add(allocated_vars, &var,
@@ -4530,7 +5190,7 @@ void pic_variable_alloc(pfile_t *pf)
         var  = *variable_array_entry_get(allocated_vars, ix);
         base = variable_base_get(var, 0);
 
-        pic_blist_add(pf, &pic_var.data_bank_list, base,
+        pic_blist_add(pf, &pic_var.map.data, base,
           base + variable_sz_get(var) - 1);
         variable_array_entry_remove(allocated_vars, ix);
       }
@@ -4560,13 +5220,7 @@ void pic_variable_alloc(pfile_t *pf)
 
 unsigned pic_data_bank_free_bytes_get(void)
 {
-  const pic_bank_info_t *bank;
-  unsigned               free_bytes;
-
-  for (bank = pic_var.data_bank_list, free_bytes = 0; bank; bank = bank->link) {
-    free_bytes += (unsigned) (bank->hi - bank->lo + 1);
-  }
-  return free_bytes;
+  return pic_mem_map_free_bytes(&pic_var.map, PIC_MEM_REGION_DATA);
 }
 
 void pic_blist_info_log(pfile_t *pf)
@@ -4579,33 +5233,33 @@ void pic_blist_free(pfile_t *pf)
 {
   UNUSED(pf);
 
-  while (pic_var.data_bank_list) {
+  while (pic_var.map.data) {
     pic_bank_info_t *bank;
 
-    bank = pic_var.data_bank_list->link;
-    FREE(pic_var.data_bank_list);
-    pic_var.data_bank_list = bank;
+    bank = pic_var.map.data->link;
+    FREE(pic_var.map.data);
+    pic_var.map.data = bank;
   }
-  while (pic_var.shared_bank_list) {
+  while (pic_var.map.shared) {
     pic_bank_info_t *bank;
 
-    bank = pic_var.shared_bank_list->link;
-    FREE(pic_var.shared_bank_list);
-    pic_var.shared_bank_list = bank;
+    bank = pic_var.map.shared->link;
+    FREE(pic_var.map.shared);
+    pic_var.map.shared = bank;
   }
-  while (pic_var.shared_pragma_list) {
+  while (pic_var.map.shared_pragma) {
     pic_bank_info_t *bank;
 
-    bank = pic_var.shared_pragma_list->link;
-    FREE(pic_var.shared_pragma_list);
-    pic_var.shared_pragma_list = bank;
+    bank = pic_var.map.shared_pragma->link;
+    FREE(pic_var.map.shared_pragma);
+    pic_var.map.shared_pragma = bank;
   }
-  while (pic_var.data_pragma_list) {
+  while (pic_var.map.data_pragma) {
     pic_bank_info_t *bank;
 
-    bank = pic_var.data_pragma_list->link;
-    FREE(pic_var.data_pragma_list);
-    pic_var.data_pragma_list = bank;
+    bank = pic_var.map.data_pragma->link;
+    FREE(pic_var.map.data_pragma);
+    pic_var.map.data_pragma = bank;
   }
 }
 

@@ -84,7 +84,7 @@ boolean_t pic_value_is_dynamic_bit_array_element(value_t val)
   return value_is_bit(val)
     && value_flag_test(val, VALUE_FLAG_ARRAY)
     && ((baseofs && !value_is_const(baseofs))
-      || (var && (pic_variable_chunk_ct_get(var) > 1)));
+      || (var && pic_mem_object_is_chunked(var)));
 }
 
 static void pic_dynamic_bit_ref_release(pfile_t *pf,
@@ -302,9 +302,13 @@ void pic_dynamic_bit_ref_addr_setup(pfile_t *pf,
 {
   variable_t      var;
   variable_ct_t  chunk_ct;
+  pic_mem_object_t obj;
 
   var = value_variable_get(ref->byte);
-  chunk_ct = var ? pic_variable_chunk_ct_get(var) : 0;
+  /* U0b: the object view is the single description (U0a); seg_base == NULL
+   * means no chunk map (the old accessor reported ct == 0) */
+  chunk_ct = (var && pic_mem_object_get(var, &obj) && obj.seg_base)
+    ? obj.seg_ct : 0;
   if (chunk_ct > 1) {
     label_t done;
     variable_ct_t ii;
@@ -315,8 +319,8 @@ void pic_dynamic_bit_ref_addr_setup(pfile_t *pf,
       variable_base_t chunk_base;
       variable_sz_t   chunk_sz;
 
-      chunk_base = pic_variable_chunk_base_get(var, ii);
-      chunk_sz   = pic_variable_chunk_sz_get(var, ii);
+      chunk_base = obj.seg_base[ii];
+      chunk_sz   = obj.seg_len[ii];
       next = LABEL_NONE;
       if (ii + 1 < chunk_ct) {
         next = pfile_label_alloc(pf, 0);

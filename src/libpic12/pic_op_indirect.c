@@ -187,6 +187,208 @@ static boolean_t pic_value_indirect_heap_string_through_pointer(const value_t va
       : BOOLEAN_FALSE;
 }
 
+/* FSR is already at a pointer SLOT: load the slot's pointer bytes into the
+ * scratch, trap when unbound, and re-stage FSR at the loaded pointer so the
+ * caller's INDF access hits the element's real target.  Shared by the
+ * runtime-indexed slot arm and the chunked const-index arm (P2b-2). */
+static void pic_pointer_slot_deref_stage(pfile_t *pf)
+{
+  value_t       indv;
+  value_t       fsrv;
+  value_t       ptmp;
+  boolean_t     wide16;
+  variable_sz_t jj;
+  variable_sz_t psz;
+
+  wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
+  psz = pic_pointer_size_get(pf);
+  indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+  fsrv = pic_fsr_get(pf);
+  ptmp = pic_var_pointer_get(pf);
+  for (jj = 0; jj < psz; jj++) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, jj);
+    if ((jj + 1) < psz) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0, PIC_OPDST_F);
+      if (wide16) {
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+        pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+      }
+    }
+  }
+  pic_pointer_value_emit_null_guard(pf, ptmp);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsrv, 0);
+  if (wide16) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 1, 0);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  } else {
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+    pic_instr_append_f_d(pf, PIC_OPCODE_BTFSC, ptmp, 1, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+  }
+  pic_var_pointer_release(pf, ptmp);
+  value_release(fsrv);
+  value_release(indv);
+}
+
+/*
+ * NAME
+ *   pic_access_plan_get
+ *
+ * DESCRIPTION
+ *   U2a: classify how a value is reached, ONCE, so an emitter asks one
+ *   question instead of re-deriving the answer from the object view, the
+ *   chunk map and the pointer flags at every step.  pic_indirect_setup is
+ *   the first consumer; U2b migrates the other emitter families and U3
+ *   deletes the parallel mechanisms the plan replaces.
+ *
+ *   aop     : an array-of-pointers element.  The slot address is RESOLVED
+ *             through the object's segments, but the slot itself must never
+ *             be walked: the walk would leave FSR at the slot and the caller
+ *             would read the pointer bytes as data (P2b-2).  This is the
+ *             single decision behind the five "do not walk" branches.
+ *   chunked : the object has more than one segment (the object view's
+ *             answer, not a second reading of the chunk map -- U0c).
+ */
+void pic_access_plan_get(pfile_t *pf, const value_t val,
+    pic_access_plan_t *plan)
+{
+  variable_t var;
+
+  (void) pf;   /* F2's tag dispatch will need it; today the plan is static */
+
+  plan->aop = pic_value_variable_is_array_of_pointers(val);
+  var = value_variable_get(val);
+  plan->chunked = (VARIABLE_NONE != var)
+    ? pic_mem_object_is_chunked(var) : BOOLEAN_FALSE;
+
+  if (plan->aop) {
+    plan->kind = PIC_ACCESS_RESOLVE;
+  } else if (value_is_indirect(val)) {
+    plan->kind = PIC_ACCESS_LINEAR;
+  } else if (plan->chunked) {
+    plan->kind = PIC_ACCESS_WALK_BAKED;
+  } else {
+    plan->kind = PIC_ACCESS_DIRECT;
+  }
+}
+
+/* F2b: the fat deref.  Emitted AFTER the linear staging (for a fat pointer
+ * that address is unused), so the shape is one local label and every legacy
+ * path stays byte-identical.  A 2-byte pointer packs the tag into the
+ * offset's top byte, so its high offset byte is masked before the carry add
+ * (ANDLW leaves the carry alone). */
+static void pic_fat_deref_emit(pfile_t *pf, value_t val, size_t offset)
+{
+  pic_fat_target_t kind;
+  variable_ct_t    id;
+  variable_t       var;
+  variable_def_t   def;
+  value_t          t;
+  label_t          done;
+  unsigned         top;
+  unsigned         shift;
+  unsigned         mask;
+  unsigned         ofs_mask;
+  variable_sz_t    psz;
+
+  if (!pic_fat_pointers_enabled(pf)) {
+    return;
+  }
+  if (0 == pic_fat_object_ct()) {
+    return;
+  }
+  if (pic_value_variable_is_array_of_pointers(val)) {
+    return;
+  }
+  /* "this value may be fat": any pointer-typed value in a program that has a
+   * fat object.  Tag 0 falls through to the linear staging, so this is safe
+   * for every linear pointer -- and it covers the ESCAPED case, where the
+   * pointer is dereferenced through a copy (a formal, or another pointer)
+   * that has no bind record.  `value_is_pointer()` is false here, so ask the
+   * DEFINITION. */
+  var = value_variable_get(val);
+  if ((0 == var) || (VARIABLE_NONE == var)) {
+    return;
+  }
+  def = variable_def_get(var);
+  if ((0 == def) || (VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(def))) {
+    return;
+  }
+  kind = pic_fat_target_kind(pf);
+  psz = pic_pointer_size_get(pf);
+  top = PIC_FAT_TOP_BYTE(kind);
+  shift = PIC_FAT_TAG_SHIFT(kind);
+  mask = PIC_FAT_TAG_MAX(kind) << shift;
+  ofs_mask = (3 == (unsigned) psz) ? 0xFFU : pic_fat_off_mask(kind);
+
+  t = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, 2);
+  if (!t) {
+    return;
+  }
+  done = pfile_label_alloc(pf, 0);
+
+  /* tag 0: the linear staging that already ran is the answer */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, (variable_sz_t) top,
+      PIC_OPDST_W);
+  pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (uchar) mask);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+
+  for (id = 0; id < pic_fat_object_ct(); id++) {
+    label_t  next;
+    unsigned idv;
+
+    var = pic_fat_object_get((unsigned) (id + 1));
+    if (VARIABLE_NONE == var) {
+      continue;
+    }
+    idv = (unsigned) (id + 1);
+    next = pfile_label_alloc(pf, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, (variable_sz_t) top,
+        PIC_OPDST_W);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (uchar) mask);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_XORLW, (uchar) (idv << shift));
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, next);
+    /* t = pointer offset + access offset (the add is always emitted, so the
+     * carry into the high byte is this ADD's, never a stale one) */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 0, PIC_OPDST_W);
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, (uchar) (offset & 0xFF));
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 0);
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val, 1, PIC_OPDST_W);
+    if (0xFFU != ofs_mask) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_ANDLW, (uchar) ofs_mask);
+    }
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+    if (offset >> 8) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW,
+          (uchar) ((offset >> 8) & 0xFF));
+    }
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, t, 1);
+    pic_fat_ladder_call(pf, var, t);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+    pic_instr_append_label(pf, next);
+    label_release(next);
+  }
+  /* fell through every id: the tag names no object, i.e. the pointer is
+   * corrupt.  Trap the same way the null-pointer guard does -- dereferencing
+   * the linear staging's value would touch an unrelated byte, silently. */
+  {
+    label_t trap;
+
+    trap = pfile_label_alloc(pf, 0);
+    pic_instr_append_label(pf, trap);
+    pic_instr_append_n(pf, PIC_OPCODE_GOTO, trap);
+    label_release(trap);
+  }
+  pic_instr_append_label(pf, done);
+  label_release(done);
+  pic_var_temp_release(pf, t);
+}
+
 /*
  * NAME
  *   pic_indirect_setup
@@ -205,7 +407,10 @@ static boolean_t pic_value_indirect_heap_string_through_pointer(const value_t va
  */
 void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
 {
-  value_t baseofs;
+  value_t           baseofs;
+  pic_access_plan_t plan;
+
+  pic_access_plan_get(pf, val, &plan);
 
   pic_stvar_fsr_mark(pf);
   baseofs = value_baseofs_get(val);
@@ -321,6 +526,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
         return;
       }
       if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
+          && !plan.aop
           && (formal_map
             || (pic_var_pointer_bind_walk_target(
                   value_variable_get(val)) != VARIABLE_NONE))) {
@@ -343,7 +549,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
      * `pic_value_indirect_heap_string_through_pointer`. */
     if (value_flag_test(val, VALUE_FLAG_ARRAY)
         && !pic_value_indirect_heap_string_through_pointer(val)
-        && (!pic_value_variable_is_array_of_pointers(val)
+        && (!plan.aop
           || pic_value_is_array_pointer_slot_storage(val))) {
       pic_opcode_t op;
 
@@ -423,6 +629,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
           walk = pic_var_pointer_bind_walk_target(walk);
         }
         if ((VALUE_NONE != baseofs) && value_is_const(baseofs)
+            && !plan.aop
             && walk && (VARIABLE_NONE != walk)
             && (pic_variable_chunks_holed(walk)
               || pic_var_openarray_pair_formal_runtime_get(walk)
@@ -451,7 +658,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
         /* `p[i]` / `p`+offset: const baseofs is an index into the *pointee*
          * (MOVF p,0 then ADDLW). `slot[i]` on `var pointer … slot[N]`: const
          * baseofs is a byte offset within the pointer *aggregate* (MOVF slot+2). */
-        slot_array = pic_value_variable_is_array_of_pointers(val);
+        slot_array = plan.aop;
         loff = 0;
         if (slot_array && VALUE_NONE != baseofs && value_is_const(baseofs)) {
           loff = (variable_sz_t) value_const_get(baseofs);
@@ -471,59 +678,10 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
              * compiled here (the staging emitted 14-bit _fsr/_irp
              * names) and the generic FSR0 tail re-staged from the
              * ARRAY's own storage -- silently wrong element targets. */
-            value_t indv;
-            value_t fsrv;
-            value_t ptmp;
-            boolean_t wide16;
-            variable_sz_t jj;
-            variable_sz_t psz;
-
-            wide16 = pic_is_16bit(pf) || pic_is_14bit_hybrid(pf);
-            psz = pic_pointer_size_get(pf);
-            indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
-            fsrv = pic_fsr_get(pf);
-            ptmp = pic_var_pointer_get(pf);
             pic_classic_fsr_load_base_dynamic_index(pf,
                 value_variable_get(tmp), value_base_get(tmp),
                 baseofs, (variable_sz_t) value_byte_sz_get(tmp));
-            /* load the slot's own pointer into the SCRATCH (not tmp --
-             * tmp maps to the array's own storage and would clobber
-             * slot 0) */
-            for (jj = 0; jj < psz; jj++) {
-                pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, indv, 0,
-                    PIC_OPDST_W);
-                pic_instr_append_f(pf, PIC_OPCODE_MOVWF, ptmp, jj);
-                if ((jj + 1) < psz) {
-                    pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0,
-                        PIC_OPDST_F);
-                    if (wide16) {
-                        /* INCF _fsr0l alone cannot cross a 256-byte boundary */
-                        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC,
-                            "_status", "_z");
-                        pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
-                    }
-                }
-            }
-            /* unbound element -> defined trap instead of FSR=0 */
-            pic_pointer_value_emit_null_guard(pf, ptmp);
-            /* FSR = the loaded pointer: fsr0l/fsr0h on wide cores,
-             * fsr + IRP-latch from bit 8 on the 14-bit core */
-            pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 0,
-                PIC_OPDST_W);
-            pic_instr_append_f(pf, PIC_OPCODE_MOVWF, fsrv, 0);
-            if (wide16) {
-                pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ptmp, 1, 0);
-                pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
-            } else {
-                pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status",
-                    "_irp");
-                pic_instr_append_f_d(pf, PIC_OPCODE_BTFSC, ptmp, 1, 0);
-                pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status",
-                    "_irp");
-            }
-            pic_var_pointer_release(pf, ptmp);
-            value_release(fsrv);
-            value_release(indv);
+            pic_pointer_slot_deref_stage(pf);
             /* the caller's INDF access now hits the element's real
              * target; the common FSR/IRP tail below would re-stage
              * from the value's own storage and clobber it */
@@ -542,7 +700,38 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
             pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, baseofs, 0,
                 PIC_OPDST_W);
           }
+        } else if (slot_array
+            && pic_mem_object_is_chunked(value_variable_get(val))) {
+          /* const-index slot in a CHUNKED table: the linear `MOVF tmp,loff`
+           * below reads the wrong chunk's byte.  Stage FSR at the slot's
+           * chunk-resolved address and load the pointer through INDF. */
+          variable_base_t addr;
+
+          addr = pic_var_chunk_addr_resolve(value_variable_get(tmp),
+              value_base_get(tmp) + loff);
+          if (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) {
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, addr & 0xff);
+            pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (addr >> 8) & 0xff);
+            pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+          } else {
+            pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, addr & 0xff);
+            pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+            pic_instr_append(pf, (addr >= 256)
+                ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
+          }
+          pic_pointer_slot_deref_stage(pf);
+          value_release(tmp);
+          return;
         } else if (slot_array) {
+          /* the chunked arm above only runs once the chunk map exists (the
+           * layout pass); make the pointer scratch a known layout variable
+           * even in the pass that has no map yet, or its first use is a
+           * post-placement MOVLB on an unplaced scratch (P2b-2) */
+          value_t layout_scratch;
+
+          layout_scratch = pic_var_pointer_get(pf);
+          pic_var_pointer_release(pf, layout_scratch);
           pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, loff, PIC_OPDST_W);
         } else {
           pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 0, PIC_OPDST_W);
@@ -573,7 +762,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
         }
         pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
         if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
-            && !pic_value_variable_is_array_of_pointers(val)) {
+            && !plan.aop) {
           variable_sz_t idx_sz;
 
           idx_sz = pic_dynamic_index_byte_sz_get(baseofs);
@@ -586,7 +775,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
           }
         } else if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)) {
           pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 1, PIC_OPDST_W);
-        } else if (pic_value_variable_is_array_of_pointers(val)) {
+        } else if (plan.aop) {
           variable_sz_t loff;
 
           loff = 0;
@@ -604,12 +793,12 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
 
         pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
         loff = 0;
-        if (pic_value_variable_is_array_of_pointers(val)
+        if (plan.aop
             && VALUE_NONE != baseofs && value_is_const(baseofs)) {
           loff = (variable_sz_t) value_const_get(baseofs);
         }
         if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
-            && !pic_value_variable_is_array_of_pointers(val)) {
+            && !plan.aop) {
           variable_sz_t idx_sz;
 
           idx_sz = pic_dynamic_index_byte_sz_get(baseofs);
@@ -623,7 +812,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
           pic_classic_irp_set_from_w(pf);
         } else {
           pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
-          irp_byte = pic_value_variable_is_array_of_pointers(val)
+          irp_byte = plan.aop
               ? (variable_sz_t) (loff + pic_pointer_size_get(pf) - 1)
               : (variable_sz_t) (pic_pointer_size_get(pf) - 1);
           pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, tmp, irp_byte, 0);
@@ -676,6 +865,7 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
     }
     value_release(fsr);
   }
+  pic_fat_deref_emit(pf, val, offset);
 }
 
 /*

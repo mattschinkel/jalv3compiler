@@ -1,0 +1,42 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — fat pointer across the RAM holes (F2b/F3a)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A 200-byte array does not fit one bank window on this core, so the
+--    placement splits it (0x23-0x6E, 0xA0-0xEF, 0x120-0x16F).  Bound to a
+--    pointer, that used to be impossible: the pointer-target contiguity rule
+--    refused the program.  With fat pointers forced
+--    (JALV2_FAT_POINTERS=1 JALV2_FAT_FORCE=1) the bind stores the object id
+--    in the tag and the deref walks the object's chunks at run time, so
+--    const and dynamic subscripts both reach the right byte.
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_bad 0
+-- @picsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+
+var volatile byte big[200]
+var byte i
+var volatile byte bad = 0
+var pointer p as var byte[200]
+
+for 200 using i loop
+  big[i] = i + 1
+end loop
+
+p is big
+if p[0] != 1 then bad = 1 end if
+if p[37] != 38 then bad = 1 end if
+if p[199] != 200 then bad = 1 end if
+i = 100
+if p[i] != 101 then bad = 1 end if
+
+forever loop
+end loop
