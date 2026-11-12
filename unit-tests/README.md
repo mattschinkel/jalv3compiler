@@ -20,6 +20,67 @@ L1 runtime suites + compile-pin tests, L2 unit/compare + HEX manifest,
 L3 second QEMU suite + ASan corpus). `run_compile_pin_tests.sh` runs the
 `test_*` pin scripts in this folder.
 
+Access-model flags (compiler): `-dump-plan <file>` writes the access-plan
+rows, and `-explain-access <file>:<line>` prints the access decisions made
+for one source line (kind, fact vector, operation, recipe and target, in
+operand order). Exit codes: 0 when rows were printed or when the line has no
+access (`no access at <file>:<line>`), 1 on a REFUSE row; a compile that
+already failed keeps its failure. Example:
+
+```sh
+bin/beta/jalv3-x86-64 -s 'demo_lib;third_party/jallib/lib;tests' \
+    -no-codfile -no-hex -quiet -explain-access \
+    sims/picsim/16f18857_picsim_fat_pointer.jal:40 \
+    sims/picsim/16f18857_picsim_fat_pointer.jal
+```
+
+The `run_plan_gate.sh` baseline (`plan-baselines/`) and the
+`run_access_matrix.sh --check` matrix + recipe-row coverage
+(`plan-matrix/`) pin both the decisions and the surface that made them.
+`test_access_cli.sh` pins the two options' argument validation (ENG S1):
+`-explain-access` takes only `<file>:<line>` with a decimal line in
+1..65535 (0, a typo, a negative, an overflow, trailing junk and an
+over-long file name are usage errors), `-dump-plan` needs a non-empty
+path, an unreadable source fails both without installing an image, and an
+unwritable dump path fails the compile without touching a pre-existing
+output.
+
+Feature switches (compiler): every boolean `JALV2_*` switch is unset =
+default, `1/true/yes/on` = on, `0/false/no/off` = off (case-insensitive,
+whitespace-trimmed); anything else prints one `JALV2-SWITCH` warning and
+uses the default. ` --features` (alias `-v`) prints the effective modes:
+
+```sh
+bin/beta/jalv3-x86-64 --features                             # fat pointers: on (default)
+JALV2_FAT_POINTERS=FALSE bin/beta/jalv3-x86-64 --features     # fat pointers: off (classic, deprecated)
+```
+
+`JALV2_FAT_POINTERS` defaults **on** since 2026-11-11; `=0` still restores
+the classic images for one release and prints one `JALV2-NOTICE` per
+compile. The per-program opt-out is `pragma target fat_pointers off`.
+
+The `env_switches` pin covers the accepted sets, the one-warning contract
+and the codegen consequence. `doc/designs/one-access-model.md#feature-switches`
+is the anchor.
+
+U3 open-array pair attachment (compiler): the pair set now lives on the CALL
+command. `JALV2_U3_PAIR_COMPARE=1` prints the acceptance comparator footer
+(`pair-compare: N calls, M pairs, X mismatches`) and makes X != 0 and zero
+calls errors; `JALV2_U3_PAIR_FAULT=drop|alter` corrupts one attachment so
+the pin proves the comparator is non-vacuous; `JALV2_U3_CALL_SHAPES=1`
+regenerates the call-shape matrix rows on stderr. Example:
+
+```sh
+JALV2_U3_PAIR_COMPARE=1 bin/beta/jalv3-x86-64 \
+    -s 'demo_lib;third_party/jallib/lib;sims/shared' -no-codfile \
+    sims/picsim/16f18857_picsim_string_clone.jal
+# expect: pair-compare: 6 calls, 9 pairs, 0 mismatches
+```
+
+The `u3_pair_attach` pin runs the four pair shapes, both fault hooks and the
+zero-call guard; the matrix is
+`docs/investigations/u3_call_shape_matrix_20261110.md`.
+
 New pins (2026-11-02, from the recurring-fix coverage audit):
 `test_cli_hex_contract.sh` (CLI termination + atomic HEX install + a
 non-regular target is never replaced; uses a FIFO, not `/dev/null`),

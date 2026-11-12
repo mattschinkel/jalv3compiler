@@ -93,6 +93,12 @@ extern void jal_string_heap_compact_defer_expand(pfile_t *pf);
 
 void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result)
 {
+  pfile_str_heap_defer_add_ex(pf, marker, result, BOOLEAN_FALSE);
+}
+
+void pfile_str_heap_defer_add_ex(pfile_t *pf, cmd_t marker, value_t result,
+    boolean_t as_call)
+{
   pfile_str_heap_defer_t *d;
 
   /* the list owns a reference: on the error/abort path
@@ -106,9 +112,10 @@ void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result)
     pfile_log_syserr(pf, ENOMEM);
     return;
   }
-  d->link   = pf->str_heap_defer;
-  d->marker = marker;
-  d->result = result;
+  d->link    = pf->str_heap_defer;
+  d->marker  = marker;
+  d->result  = result;
+  d->as_call = as_call;
   pf->str_heap_defer = d;
 }
 

@@ -1,0 +1,36 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — a pointer-to-ARRAY slot, RUNTIME subscript
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    G3 S3 on the classic 14-bit core: `pa[0] is big`, then `pa[0][i]`
+--    with a RUNTIME `i`.  The runtime offset is a POINTEE subscript, so the
+--    classic chunk walk resolves it through `big`'s map.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+--   (deliberate: this witness proves a VALUE, not a step count; the positive
+--    measurement and its failing negative control in the fat pin are the
+--    proof)
+-- expect byte v_g 101
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f887
+pragma target fat_pointers on
+
+var volatile byte big[200]
+var volatile byte i
+var volatile byte g = 0
+var pointer pa[2] as var byte[200]
+
+big[100] = 101
+i = 100
+pa[0] is big
+g = pa[0][i]
+
+forever loop
+end loop

@@ -252,6 +252,8 @@ void       mips_value_ensure(pfile_t *pf, value_t val);
 void       mips_wide_reset(void);
 
 /* cmd_t -> mips_code_t (mips_op.c) */
+/* E3: the always-on access-recipe table self-check */
+void       mips_access_audit(pfile_t *pf);
 void       mips_op_generate(pfile_t *pf, const cmd_t cmd);
 void       mips_op_resolve_fixups(pfile_t *pf);
 void       mips_op_reset(void);

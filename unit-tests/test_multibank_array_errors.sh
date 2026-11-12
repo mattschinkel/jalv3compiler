@@ -10,6 +10,13 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 CC=${1:-$REPO/bin/beta/jalv3-x86-64}
+
+# GATE MODE (T3): these baselines are the ENGINE-OFF behavior; pin it
+# explicitly so an ambient JALV2_FAT_POINTERS (e.g. after the default flip)
+# cannot change them.  Mode-specific arms set their own value per command.
+JALV2_FAT_POINTERS=0
+export JALV2_FAT_POINTERS
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 fails=0

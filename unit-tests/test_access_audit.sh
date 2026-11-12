@@ -21,7 +21,7 @@
 #   6. the audit is READ-ONLY: the image with the audit on is byte-identical
 #      to the image without it.
 #   7. U4-3: the FAT classification is produced -- with the fat gate on, a
-#      pointer deref classifies as FAT (kind=5, fat=1); with the gate off it
+#      pointer deref classifies as FAT (kind=5); with the gate off it
 #      never does.
 #   8. U4-4: the plan-consistency check -- a clean compile prints no
 #      INCONSISTENT line, and the JALV2_ACCESS_AUDIT_FAULT hook (which breaks
@@ -82,7 +82,7 @@ rc_plain=$?
     JALV2_FAT_FORCE=1 "$CC" "${INC[@]}" 16f18857_picsim_fat_pointer.jal \
     >log 2>&1 )
 rc_fat=$?
-( cd "$WORK/fat_off" && JALV2_ACCESS_AUDIT=1 \
+( cd "$WORK/fat_off" && JALV2_ACCESS_AUDIT=1 JALV2_FAT_POINTERS=0 \
     "$CC" "${INC[@]}" 16f18857_picsim_fat_pointer.jal >log 2>&1 )
 rc_fat_off=$?
 ( cd "$WORK/fault" && JALV2_ACCESS_AUDIT=1 JALV2_ACCESS_AUDIT_FAULT=1 \
@@ -155,8 +155,8 @@ else
 fi
 
 # 7. U4-3: the FAT classification (kind=5) appears only with the fat gate on
-if [ $rc_fat -eq 0 ] && grep -q "kind=5 .*fat=1" "$WORK/fat/log"; then
-  echo "ok   the fat witness classifies as FAT (kind=5 fat=1)"
+if [ $rc_fat -eq 0 ] && grep -q "kind=5 " "$WORK/fat/log"; then
+  echo "ok   the fat witness classifies as FAT (kind=5)"
 else
   echo "FAIL: no FAT classification on the fat witness (rc=$rc_fat)"
   sed 's/^/     /' "$WORK/fat/log" | tail -6

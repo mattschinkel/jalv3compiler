@@ -1,0 +1,42 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — WHEREIS of a pointer SLOT at a RUNTIME index
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The classic 14-bit form of the runtime-slot WHEREIS witness: `pa[60]`
+--    is holed across the RAM banks, so the slot address is walked before
+--    the pointer bytes are read.  Under the fat engine the stored pointer
+--    is tagged, and the classic resolve path rebuilds the second byte's
+--    address through the IRP page and calls the shared segment walk; the
+--    result must equal `WHEREIS(big[100])`, the element slot 1 was bound
+--    to (fixes/fix_whereis_runtime_slot_fat.md).
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+--   (deliberate: this witness proves one VALUE -- the address equality --
+--    not a step count)
+-- expect byte v_ok 1
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f887
+pragma target clock 4_000_000
+
+var volatile byte big[200]
+var volatile byte k = 1
+var volatile byte ok = 0
+var pointer pa[60] as var byte
+
+pa[0] is big[0]
+pa[1] is big[100]
+big[100] = 42
+
+if (WHEREIS(pa[k]) == WHEREIS(big[100])) & (WHEREIS(pa[k]) != 0) then
+   ok = 1
+end if
+
+forever loop
+end loop

@@ -27,6 +27,7 @@
 #include "piccolst.h"
 #include "pic_inst.h"
 #include "pic_op.h"
+#include "pic_access.h"
 #include "pic_op_priv.h"
 
 /* defined in this TU (prototypes keep definition order free) */
@@ -391,7 +392,15 @@ void pic_pointer_slot_add_emit(pfile_t *pf, value_t dst, value_t ofs)
   slot = value_clone(dst);
   tmp  = VALUE_NONE;
   if (slot) {
-    value_baseofs_set(slot, VALUE_NONE);
+    /* F5: keep a CONSTANT DESTINATION base offset (pointer-array slot
+     * index).  Clearing it added the source offset into slot 0 while the
+     * base store had already gone to the right slot. */
+    value_t base_ofs;
+
+    base_ofs = value_baseofs_get(dst);
+    if ((VALUE_NONE == base_ofs) || !value_is_const(base_ofs)) {
+      value_baseofs_set(slot, VALUE_NONE);
+    }
     value_indirect_clear(slot);
     psz = pic_pointer_size_get(pf);
     tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE, psz);
@@ -533,6 +542,16 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
       return;
     }
     base = value_base_get(src) + offset;
+    /* F5: WHEREIS() of a byte inside a CHUNKED object must be the PHYSICAL
+     * address the object model assigns it, not `variable base + linear
+     * offset` -- the latter lands in the RAM hole past the first chunk (a
+     * pointer to element 100 of a 200-byte 3-chunk array reported base+100,
+     * 140, while the element is really at 0xA0+28 = 188).  This is the same
+     * resolution every constant access uses; contiguous (and single-chunk)
+     * objects are returned unchanged, so nothing else moves. */
+    if (value_variable_get(src)) {
+      base = pic_var_chunk_addr_resolve(value_variable_get(src), base);
+    }
     pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
     pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, 0);
@@ -563,10 +582,16 @@ static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
   value_t           rt_baseofs;
   boolean_t         slot_rt;
   pic_access_plan_t plan;
+  pic_access_key_t  key;
+  const pic_access_recipe_t *recipe;
+  unsigned          action;
 
   /* U2b (slots family): the plan already says whether this destination is an
    * array-of-pointers element and whether its object is segmented. */
   pic_access_plan_get(pf, dst, &plan);
+  pic_access_key_fill(&plan, PIC_ACCESS_OP_BIND_DEST, &key);
+  recipe = pic_access_recipe_find(&key);
+  action = (0 != recipe) ? recipe->action : PIC_ACCESS_ACTION_BIND_PLAIN;
   src_var = value_variable_get(src);
   if (src_var) {
     variable_use_ct_bump(src_var, CTR_BUMP_INCR);
@@ -599,7 +624,8 @@ static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
      * slot elements (it would dereference the slot) -- and store each
      * byte through INDF with a carry-safe increment on wide cores. */
     rt_baseofs = value_baseofs_get(dst);
-    slot_rt = plan.aop
+    slot_rt = ((PIC_ACCESS_ACTION_BIND_SLOT == action)
+        || (PIC_ACCESS_ACTION_BIND_SLOT_CHUNKED == action))
       && (VALUE_NONE != rt_baseofs) && !value_is_const(rt_baseofs);
     if (slot_rt) {
       value_t   indv;
@@ -672,7 +698,7 @@ static void pic_assign_address_of_lvalue_to_pointer(pfile_t *pf, value_t dst,
      * beyond the first chunk were never written (the G3 defect).  Stage FSR
      * at the element's CHUNK-RESOLVED address and store each byte through
      * INDF, exactly like the runtime-indexed sibling above. */
-    if (plan.aop && plan.chunked) {
+    if (PIC_ACCESS_ACTION_BIND_SLOT_CHUNKED == action) {
       value_t         indv;
       value_t         fsrv;
       boolean_t       wide16;
@@ -887,29 +913,31 @@ static void pic_assign_from_function(pfile_t *pf, value_t dst,
  * same answer as the VARIABLE_FLAG_PTR_* bits, computed once per value).  Each
  * helper is only evaluated when the chain reaches its branch, so the plan fill
  * is paid on the pointer-class tail, not on every assignment. */
-static boolean_t pic_assign_dst_is_ptr_class(value_t dst)
+static boolean_t pic_assign_dst_is_ptr_class(pfile_t *pf, value_t dst)
 {
-  pic_access_plan_t plan;
+  unsigned action;
 
-  pic_access_plan_fill_var(value_variable_get(dst), &plan);
-  return (boolean_t) (plan.ptr_lookup || plan.ptr_read_call);
+  action = pic_access_var_action_get(pf, "assign:dst",
+      value_variable_get(dst), PIC_ACCESS_OP_ASSIGN_CLASS);
+  return (boolean_t) ((PIC_ACCESS_ACTION_ASSIGN_PTR_CLASS == action)
+      || (PIC_ACCESS_ACTION_ASSIGN_RUNTIME_PTR_CLASS == action));
 }
 
-static boolean_t pic_assign_src_is_ptr_class(value_t src)
+static boolean_t pic_assign_src_is_ptr_class(pfile_t *pf, value_t src)
 {
-  pic_access_plan_t plan;
+  unsigned action;
 
-  pic_access_plan_fill_var(value_variable_get(src), &plan);
-  return (boolean_t) (plan.ptr_lookup || plan.ptr_read_call);
+  action = pic_access_var_action_get(pf, "assign:src",
+      value_variable_get(src), PIC_ACCESS_OP_ASSIGN_CLASS);
+  return (boolean_t) ((PIC_ACCESS_ACTION_ASSIGN_PTR_CLASS == action)
+      || (PIC_ACCESS_ACTION_ASSIGN_RUNTIME_PTR_CLASS == action));
 }
 
-static boolean_t pic_assign_src_is_runtime_ptr_class(value_t src)
+static boolean_t pic_assign_src_is_runtime_ptr_class(pfile_t *pf, value_t src)
 {
-  pic_access_plan_t plan;
-
-  pic_access_plan_fill_var(value_variable_get(src), &plan);
-  return (boolean_t) (plan.runtime_map
-      && (plan.ptr_lookup || plan.ptr_read_call));
+  return (boolean_t) (PIC_ACCESS_ACTION_ASSIGN_RUNTIME_PTR_CLASS
+      == pic_access_var_action_get(pf, "assign:runtime_src",
+            value_variable_get(src), PIC_ACCESS_OP_ASSIGN_CLASS));
 }
 
 void pic_op_assign(pfile_t *pf, operator_t op, value_t dst, 
@@ -1051,17 +1079,17 @@ void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
     pic_assign_ptr_to_ptr(pf, dst, src);
   } else if (value_is_value(src)) {
     pic_assign_from_value(pf, dst, src);
-  } else if (pic_assign_dst_is_ptr_class(dst)) {
+  } else if (pic_assign_dst_is_ptr_class(pf, dst)) {
     pic_assign_to_ptr(pf, dst, src);
   } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
-      && pic_assign_src_is_runtime_ptr_class(src)) {
+      && pic_assign_src_is_runtime_ptr_class(pf, src)) {
     /* open-array formal addressed through the runtime chunk map: the value
      * may be a RAM buffer split across banks (walk) or a ROM const array
      * (linear lookup read) -- decide from the pointer at run time */
     pic_assign_from_runtime_formal(pf, dst, src);
   } else if (!value_flag_test(src, VALUE_FLAG_PTR_SLOT_RAW)
       && /*value_flag_test(src, VALUE_FLAG_INDIRECT) && */
-      pic_assign_src_is_ptr_class(src)) {
+      pic_assign_src_is_ptr_class(pf, src)) {
     pic_assign_from_ptr(pf, dst, src);
   } else if (value_is_indirect(dst) && value_is_indirect(src)) {
     /* src must move to a temporary */

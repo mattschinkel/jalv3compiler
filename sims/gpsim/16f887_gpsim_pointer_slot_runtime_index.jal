@@ -1,0 +1,37 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — a pointer SLOT at a RUNTIME index (fat)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    G3 S2 on the classic 14-bit core: `pa[k] is big[100]` with a RUNTIME
+--    `k`.  The bind computes the fat value into a scratch, stages FSR =
+--    &pa + k*psz (the classic _fsr/IRP form), and copies the bytes through
+--    INDF; the deref dispatch then resolves the chunk.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+--   (deliberate: this witness proves a VALUE, not a step count; the positive
+--    measurement and its failing negative control in the fat pin are the
+--    proof)
+-- expect byte v_got 42
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f887
+pragma target fat_pointers on
+
+var volatile byte  big[200]
+var pointer pa[2] as var byte
+var volatile byte k
+var volatile byte got = 0
+
+big[100] = 42
+k = 1
+pa[k] is big[100]
+got = pa[1]
+
+forever loop
+end loop

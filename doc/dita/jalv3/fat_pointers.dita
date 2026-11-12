@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="fat_pointers" xml:lang="en-US">
+  <title>Fat pointers and the engine switch</title>
+
+  <body>
+    <p>JALv3 can compile pointers with a <i>fat</i> representation: a pointer
+    that is stored, passed, or read back through memory carries a tag byte in
+    addition to the address, so one indirect access can reach a variable, a
+    constant array, a pseudo-variable, a routine, or a dynamic string without
+    the compiler deciding at every site.</p>
+
+    <p>The engine is <b>on by default</b> since 2026-11-11. A pointer whose
+    binding is known locally is unchanged; only programs that keep a pointer
+    in memory pay for the tag. In the sample tree the 2,850 programs with no
+    stored pointer surface compile byte-identically, and the 90 that exercise
+    one grow by 2.6% of their code.</p>
+
+    <section>
+      <title>Precedence</title>
+
+      <p>Each compile decides the mode in this order:</p>
+
+      <ol>
+        <li>the program's own <codeph>pragma target fat_pointers</codeph>;</li>
+        <li>the <codeph>JALV2_FAT_POINTERS</codeph> environment switch;</li>
+        <li>the default, on.</li>
+      </ol>
+
+      <p>The pragma accepts <codeph>on</codeph>, <codeph>off</codeph>,
+      <codeph>3byte</codeph> and <codeph>2byte</codeph>. <codeph>off</codeph>
+      is the per-program opt-out:</p>
+
+      <codeblock>pragma target fat_pointers off</codeblock>
+
+      <p><codeph>3byte</codeph> and <codeph>2byte</codeph> only choose the
+      14-bit hybrid pointer width; the 3-byte form is the default there, and
+      <codeph>2byte</codeph> is the RAM-tight alternative.</p>
+    </section>
+
+    <section>
+      <title>Rolling back</title>
+
+      <p><codeph>JALV2_FAT_POINTERS=0</codeph> restores the classic
+      representation byte for byte in every program that does not set the
+      pragma. That classic mode is <b>deprecated</b>: the compiler prints one
+      <codeph>JALV2-NOTICE</codeph> line per compile, and the switch is
+      removed after this release. For a single program use the pragma above;
+      the environment switch is a whole-build escape hatch only.</p>
+
+      <codeblock>JALV2_FAT_POINTERS=0 jalv3-x86-64 -s lib program.jal</codeblock>
+    </section>
+
+    <section>
+      <title>Checked switch values</title>
+
+      <p>Every <codeph>JALV2_*</codeph> switch follows one rule: an unset or
+      empty value means the default; <codeph>1</codeph>, <codeph>true</codeph>,
+      <codeph>yes</codeph> and <codeph>on</codeph> mean on;
+      <codeph>0</codeph>, <codeph>false</codeph>, <codeph>no</codeph> and
+      <codeph>off</codeph> mean off, case-insensitively and ignoring
+      surrounding whitespace. Any other value is reported once with the code
+      <codeph>JALV2-SWITCH</codeph> and the default is used, so a typo cannot
+      flip a mode silently. <codeph>jalv3-x86-64 --features</codeph> (alias
+      <codeph>-v</codeph>) prints the effective modes before compiling.</p>
+    </section>
+  </body>
+</topic>

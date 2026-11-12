@@ -15,6 +15,15 @@
 !/src/
 !/unit-tests/
 
+# The fat default-flip evidence (Phase 2, approved plan): the release
+# decision rests on this report, so it is committed deliberately.  Every
+# other file under docs/ stays private/untracked.
+!/docs/
+/docs/*
+!/docs/investigations/
+/docs/investigations/*
+!/docs/investigations/fat_default_flip_measurement_20261110.md
+
 # Private project notes live OUTSIDE this repo (the doc root). One must never
 # be committed from here, at the root or inside a re-included directory -- the
 # /* rule above does not cover the latter. No slash: matches at any depth.
@@ -41,6 +50,9 @@ __pycache__/
 
 # golden canary fixtures are inputs, not artifacts
 !sims/golden/*.hex
+# pinned target images are inputs, not artifacts (E1: a clean checkout must
+# carry the PIC32 spike pin the access_recipe gate hard-fails without)
+!unit-tests/plan-baselines/*.hex
 
 # fetched corpus (pinned by unit-tests/fetch_jallib.sh)
 /third_party/
@@ -82,3 +94,9 @@ bin/release/jalv3-win64.exe
 # makes a slip a git-level refusal rather than something to notice in review.
 bin/old_versions/jalv3*
 bin/old_versions/**/jalv3*
+
+# partial output from an interrupted compile (.hex above does not match .part)
+*.hex.part
+
+# track the deferred-work list at the repo root
+!/TODOS.md

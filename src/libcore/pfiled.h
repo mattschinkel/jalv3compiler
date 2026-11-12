@@ -20,6 +20,9 @@ struct pfile_str_heap_defer_ {
   struct pfile_str_heap_defer_ *link;
   cmd_t   marker;
   value_t result;
+  /* prefer ONE outlined `CALL string_heap_compact` at expansion instead of
+   * inlining the (large) compact body at this marker */
+  boolean_t as_call;
 };
 typedef struct pfile_str_heap_defer_ pfile_str_heap_defer_t;
 

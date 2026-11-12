@@ -1,0 +1,33 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — a BOUND pointer through the walk path (control)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The classic 14-bit control: cond = 1, the guard passes, and the walk
+--    reads big[100] = 101.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_g 101
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f887
+var volatile byte big[200]
+var pointer p as var byte[200]
+var volatile byte cond
+var volatile byte g = 0
+
+big[0] = 1
+big[100] = 101
+cond = 1
+if cond != 0 then
+  p is big
+end if
+g = p[100]
+
+forever loop
+end loop

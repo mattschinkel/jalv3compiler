@@ -27,6 +27,7 @@
 #include "../libcore/pf_msg.h"
 #include "../libcore/pf_cmd.h"
 #include "piccolst.h"
+#include "pic_access.h"
 #include "pic_brop.h"
 #include "picbsrop.h"
 #include "picmovlpop.h"
@@ -681,7 +682,8 @@ static void pic_openarray_formals_block(pfile_proc_t *proc)
  * Emitted only for a formal that got a map (i.e. one fed two or more
  * different layouts), so a program whose buffers share one layout pays
  * nothing and its generated code is unchanged. */
-static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
+static void pic_chunk_desc_store(pfile_t *pf, cmd_t call_cmd,
+    value_t formal, value_t actual)
 {
   variable_t      av;
   variable_t      fv;
@@ -691,6 +693,7 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
   variable_ct_t   ii;
   variable_sz_t   sz[PIC_CHUNK_MAP_MAX];
   variable_base_t base[PIC_CHUNK_MAP_MAX];
+  cmd_branch_pair_t *cpair;
 
   if (!formal || !actual) {
     return;
@@ -739,11 +742,19 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
   if (!av || (VARIABLE_NONE == av)) {
     return;
   }
+  /* U3: the pair is attached to THIS call, so the store reads it directly
+   * instead of looking it up in a compiler-wide registry by (actual,
+   * formal). */
+  cpair = cmd_brpair_find(call_cmd, av, fv);
   {
     variable_t    chain_src;
     variable_sz_t chain_sz;
 
-    if (pic_var_openarray_pair_chain_get(av, fv, &chain_src, &chain_sz)) {
+    chain_src = cpair ? cpair->chain_src : VARIABLE_NONE;
+    chain_sz  = cpair ? cpair->chain_sz : 0;
+    if (cpair
+        && (cpair->flags & CMD_BRANCH_PAIR_FLAG_PASSON)
+        && (VARIABLE_NONE != chain_src)) {
       /* PASS-ON: hand the source formal's ACTIVE map over byte for byte.
        * Both maps are compiler-owned globals placed after the final
        * placement, so this is a plain register copy (unrolled: the size is a
@@ -781,7 +792,8 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
     /* a non-array actual with no chain to copy: nothing to hand over */
     return;
   }
-  if (!pic_var_openarray_pair_layout_get(av, &ct, sz, base)) {
+  if (!cpair || (cpair->chunk_ct < 1)
+      || (cpair->chunk_ct > PIC_CHUNK_MAP_MAX)) {
     /* the layout was captured after placement
      * (pic_var_chunk_prepare_emit); a miss here means the call site is not
      * one of the recorded pairs -- hand over a linear layout from the
@@ -792,6 +804,12 @@ static void pic_chunk_desc_store(pfile_t *pf, value_t formal, value_t actual)
       base[0] = variable_base_get(av, 0);
     }
     sz[0]   = pic_variable_def_storage_need_get(pf, variable_def_get(av), 0);
+  } else {
+    ct = cpair->chunk_ct;
+    for (ii = 0; ii < ct; ii++) {
+      sz[ii]   = cpair->chunk_sz[ii];
+      base[ii] = cpair->chunk_base[ii];
+    }
   }
   if (ct > PIC_CHUNK_MAP_MAX) {
     pfile_log(pf, PFILE_LOG_ERR,
@@ -1020,6 +1038,7 @@ static value_t pic_bit_array_actual_normalize(pfile_t *pf, value_t actual)
  *
  * PARAMETERS
  *   pf          : pfile handle
+ *   call_cmd    : the CALL command (its attached open-array pairs)
  *   brtype      : branch type
  *   brcond      : condition
  *   brval       : value for the condition
@@ -1056,7 +1075,8 @@ static value_t pic_bit_array_actual_normalize(pfile_t *pf, value_t actual)
  * will be returned in W; the first 1-byte IN parameter
  * will be passed in W *except* for indirect functions
  */
-static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
+static void pic_branch_proc(pfile_t *pf, cmd_t call_cmd,
+    cmd_branchtype_t brtype,
     cmd_branchcond_t brcond, value_t brval, value_t prval, value_t *proc_params)
 {
   label_t brskip;
@@ -1258,7 +1278,16 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
               }
             }
           }
-          /* Function-pointer calls only: save the last pointer byte so the
+          /* `_pic_indirect` takes W = the PC HIGH byte: PCLATH on the
+           * 14-bit cores (pointer byte 1) and PCLATU on the 16-bit core
+           * (byte 2).  The 14H 3-byte form leaves byte 2 (UPPER|ROM) in W
+           * after the staging loop, which made PCLATH 0x80 and jumped the
+           * call to the wrong page; reload the address high byte. */
+          if (!pic_is_16bit(pf) && (pic_pointer_size_get(pf) > 2)) {
+            (void) pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, val2, 1,
+                PIC_OPDST_W);
+          }
+          /* Function-pointer calls only: save the PC high byte so the
            * unbound-slot guard can inspect every byte, then restore W.  A
            * call to a procedure merely flagged INDIRECT has a fixed label,
            * so guarding it would only add code. */
@@ -1362,7 +1391,7 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
               pic_op(pf, normalized_params && (actual == normalized_params[ii])
                   ? OPERATOR_POINTER_ASSIGN : OPERATOR_ASSIGN,
                   val, actual, VALUE_NONE);
-              pic_chunk_desc_store(pf, val, actual);
+              pic_chunk_desc_store(pf, call_cmd, val, actual);
             }
           }
         }
@@ -1391,8 +1420,12 @@ static void pic_branch_proc(pfile_t *pf, cmd_branchtype_t brtype,
         }
         value_release(rval);
 
-        /* jump to the procedure */
-        for (ii = value_sz_get(rval); ii; ii--) {
+        /* jump to the procedure.  The PC width is a CORE property (3 bytes
+         * on PIC18, 2 on 14/14H), NOT the pointer size: with the F4 3-byte
+         * pointer form on 14H the return pointer is 3 bytes while the PC is
+         * still 2, and scaling this loop with the pointer wrote _pclatu on a
+         * 14H part ("'_pclatu' not found", caught by the ROM arm). */
+        for (ii = pic_is_16bit(pf) ? 3 : 2; ii; ii--) {
           value_t     pcl;
           pic_code_t  code;
           const char *pcl_name;
@@ -1521,6 +1554,7 @@ static void pic_task_yield(pfile_t *pf)
  *
  * PARAMETERS
  *   pf          : pfile handle
+ *   call_cmd    : the CALL command (its attached open-array pairs)
  *   brtype      : branch type
  *   brcond      : condition
  *   dst         : destination label
@@ -1528,12 +1562,13 @@ static void pic_task_yield(pfile_t *pf)
  *   proc        : callee value
  *   proc_params : callee parameters
  */
-static void pic_branch(pfile_t *pf, cmd_branchtype_t brtype,
+static void pic_branch(pfile_t *pf, cmd_t call_cmd,
+    cmd_branchtype_t brtype,
     cmd_branchcond_t brcond, label_t dst, value_t val,
     value_t proc, value_t *proc_params)
 {
   if (proc) {
-    pic_branch_proc(pf, brtype, brcond, val, proc, proc_params);
+    pic_branch_proc(pf, call_cmd, brtype, brcond, val, proc, proc_params);
   } else {
     pic_opcode_t op;
 
@@ -2319,7 +2354,8 @@ void pic_proc_leave(pfile_t *pf, pfile_proc_t *proc)
 
       /* this would have been allocated on enter */
       rval = value_alloc(pfile_proc_ret_ptr_get(proc));
-      for (ii = value_sz_get(rval); ii; ii--) {
+      /* PC width, not pointer size -- see the jump above */
+      for (ii = pic_is_16bit(pf) ? 3 : 2; ii; ii--) {
         value_t     pcl;
         const char *pcl_name;
 
@@ -2435,6 +2471,9 @@ void pic_cmd_out(pfile_t *pf, cmd_t *cmd_ptr)
   pos.line = cmd_line_get(cmd);
   pos.src  = cmd_source_get(cmd);
   pfile_statement_start_set(pf, &pos);
+  /* E2: the access recorder needs the command identity for its site id,
+   * expression ordinal and line annotation (A7/A15). */
+  pic_access_cmd_set(pf, cmd);
   /* this is probably a hack, but it's also an easy way to get the
    * optimization type into the pic generation code without having
    * to modify every single function! */
@@ -2480,7 +2519,7 @@ void pic_cmd_out(pfile_t *pf, cmd_t *cmd_ptr)
       pic_last_values_reset();
       pic_brtest_out(pf, cmd_opval1_get(cmd), val,
           cmd_brcond_get(cmd_nxt));
-      pic_branch(pf, cmd_brtype_get(cmd_nxt), CMD_BRANCHCOND_NONE,
+      pic_branch(pf, cmd_nxt, cmd_brtype_get(cmd_nxt), CMD_BRANCHCOND_NONE,
           cmd_brdst_get(cmd_nxt), 0, 0, 0);
       value_release(val);
     }
@@ -2525,7 +2564,7 @@ void pic_cmd_out(pfile_t *pf, cmd_t *cmd_ptr)
         break;
       case CMD_TYPE_BRANCH:
         pic_last_values_reset();
-        pic_branch(pf, cmd_brtype_get(cmd), cmd_brcond_get(cmd),
+        pic_branch(pf, cmd, cmd_brtype_get(cmd), cmd_brcond_get(cmd),
             cmd_brdst_get(cmd), cmd_brval_get(cmd), cmd_brproc_get(cmd),
             cmd_brproc_params_get(cmd));
         break;
@@ -3831,6 +3870,10 @@ static void pic_preuser_init(pfile_t *pf, label_t lbl_user)
     }
   }
   pic_data_area_map_create(pf);
+  /* F2d: the fat-pointer object tables are READ-ONLY constants, so they are
+   * written after the clear-BSS pass (which would otherwise erase them) and
+   * before the entry -- the dispatch assumes they are valid from the start. */
+  pic_fat_desc_fill_emit(pf);
   /* if PFILE_FLAG_CLEAR_BSS is set we're going to assume it produced
    * some code, otherwise the program is too trivial */
   if ((pic_code_list_tail_get(pf) != code_start)
@@ -6255,6 +6298,104 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
 }
 
 /*
+ * U3 call-shape diagnostic (temporary, 2026-11-11).
+ *
+ * JALV2_U3_CALL_SHAPES=1 makes the pass-1 open-array record site print one
+ * row per CALL parameter on stderr.  It is the generator for the
+ * docs/investigations/u3_call_shape_matrix_*.md acceptance artifact: it
+ * shows every shape (direct/indirect, array actual, element actual,
+ * pointer (pass-on) formal, scalar formal, string-view mark) before the
+ * pair registry becomes an IR attachment.
+ */
+static boolean_t pic_u3_call_shapes_enabled(void)
+{
+  return pic_env_on("JALV2_U3_CALL_SHAPES");
+}
+
+static const char *pic_u3_type_name(variable_def_type_t type)
+{
+  const char *name;
+
+  name = "OTHER";
+  switch (type) {
+    case VARIABLE_DEF_TYPE_NONE:    name = "NONE";    break;
+    case VARIABLE_DEF_TYPE_BOOLEAN: name = "BOOLEAN"; break;
+    case VARIABLE_DEF_TYPE_INTEGER: name = "INTEGER"; break;
+    case VARIABLE_DEF_TYPE_FLOAT:   name = "FLOAT";   break;
+    case VARIABLE_DEF_TYPE_POINTER: name = "POINTER"; break;
+    case VARIABLE_DEF_TYPE_ARRAY:   name = "ARRAY";   break;
+    case VARIABLE_DEF_TYPE_FUNCTION:name = "FUNCTION";break;
+    default: break;
+  }
+  return name;
+}
+
+static void pic_u3_call_shape_dump(cmd_t call_cmd, size_t call_ix, size_t ix,
+    value_t actual, value_t formal, boolean_t direct, const char *action)
+{
+  pfile_source_t *src;
+  const char *src_name;
+  const char *callee;
+  const char *actual_name;
+  const char *formal_name;
+  const char *actual_type;
+  const char *formal_type;
+  flag_t callee_flags;
+  pfile_proc_t *tproc;
+
+  src         = cmd_source_get(call_cmd);
+  src_name    = src ? pfile_source_name_get(src) : "?";
+  callee      = value_name_get(cmd_brproc_get(call_cmd));
+  actual_name = actual ? value_name_get(actual) : 0;
+  formal_name = formal ? value_name_get(formal) : 0;
+  actual_type = actual ? pic_u3_type_name(value_type_get(actual)) : "-";
+  formal_type = formal ? pic_u3_type_name(value_type_get(formal)) : "-";
+  tproc       = value_proc_get(cmd_brproc_get(call_cmd));
+  callee_flags = 0;
+  if (tproc) {
+    if (pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_REENTRANT)) {
+      callee_flags |= 1;
+    }
+    if (pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_INDIRECT)) {
+      callee_flags |= 2;
+    }
+    if (pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_TASK)) {
+      callee_flags |= 4;
+    }
+    if (pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_FRAME)) {
+      callee_flags |= 8;
+    }
+  }
+  fprintf(stderr,
+      "U3CALL|%s|%u|%u|%s|%u|%u|%u|%s|%s|%s|%u|%s|%s|%s\n",
+      src_name ? src_name : "?",
+      (unsigned) cmd_line_get(call_cmd),
+      (unsigned) call_ix,
+      callee ? callee : "?",
+      (unsigned) (direct ? 1 : 0),
+      (unsigned) callee_flags,
+      (unsigned) ix,
+      actual_type,
+      actual_name ? actual_name : "-",
+      (actual && (VALUE_NONE != value_baseofs_get(actual))) ? "1" : "0",
+      (unsigned) (actual ? value_sz_get(actual) : 0),
+      formal_type,
+      formal_name ? formal_name : "-",
+      action);
+}
+
+/* U3: attach an open-array pair to the CALL that forms it.  The list is the
+ * call-site-owned replacement for the global pair registry; an allocation
+ * failure is fatal before any body is emitted (ENG E2). */
+static void pic_u3_pair_attach(pfile_t *pf, cmd_t call_cmd,
+    variable_t actual, variable_t formal, flag_t flags)
+{
+  if (!cmd_brpair_add(call_cmd, actual, formal, flags)) {
+    pfile_log_syserr(pf, ENOMEM);
+  }
+}
+
+/*
  * NAME
  *   pic_cmd_generate
  *
@@ -6273,7 +6414,9 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
   pfile_proc_t *proc;
   value_t       chipdef;
   int           cmd_count;
+  boolean_t     u3_fault_applied;
 
+  u3_fault_applied = BOOLEAN_FALSE;
   fflush(stdout);
 
 
@@ -6306,6 +6449,8 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
       return;
     }
   }
+  /* E3: the classic recipe table's mask rule, once per process */
+  pic_access_recipe_audit(pf);
 
   chipdef = pfile_value_find(pf, PFILE_LOG_NONE, "target_bank_size");
   if (VALUE_NONE == chipdef) {
@@ -6353,8 +6498,16 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
   for (pic_state.code_gen_pass = 0;
        (pic_state.code_gen_pass < 3) && !pfile_errct_get(pf);
        pic_state.code_gen_pass++) {
+    pic_access_generation_bump();
     pfile_log(pf, PFILE_LOG_INFO, PIC_MSG_GENERATING_CODE,
       1 + pic_state.code_gen_pass);
+
+    /* U3: the CALL command is the pair channel between the passes; record
+     * the program list once so placement-time propagation and the capture
+     * pass can walk it. */
+    if (2 == pic_state.code_gen_pass) {
+      pic_var_openarray_ir_set(cmd);
+    }
 
     /* PIC18 / 14H layout trials: measure both candidate layouts with
      * real emission and keep the smaller one (ties keep the baseline).
@@ -6364,8 +6517,7 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
     if ((2 == pic_state.code_gen_pass)
         && (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
         && !pfile_errct_get(pf) && pic_var_trials_available(pf)
-        && !(getenv("JALV2_NO_LAYOUT_TRIALS")
-          && strcmp(getenv("JALV2_NO_LAYOUT_TRIALS"), "0"))) {
+        && !pic_env_on("JALV2_NO_LAYOUT_TRIALS")) {
       unsigned long tot_plain;
       unsigned long tot_win;
       unsigned      ml_plain;
@@ -6416,6 +6568,7 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
       } else {
         pic_var_trial_install(pf, win);
       }
+      pic_access_generation_bump();
       /* a refused placement in the layout that will actually be
        * emitted is a hard error (trials above only compared) */
       pic_var_refusal_report(pf);
@@ -6430,6 +6583,10 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
        * shared chunk-walk helpers and picks the reset-vector form from them */
       pic_var_late_replace_all(pf);
       pic_var_chunk_prepare_emit(pf);
+      /* the capture pass put the state back on the CALL attachments; the
+       * acceptance comparator re-derives them from the parameters */
+      pic_var_pair_compare(pf, cmd);
+      pic_access_generation_bump();
     }
 
     /* DEBUG: Track PIC code generation progress */
@@ -6465,10 +6622,12 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
       pic_code_preamble(pf);
       pic_variable_counters_set(pf);
       pic_var_use_stash_from_pass0(pf);
+      pic_access_generation_bump();
       pic_reentrancy_guard_scan(pf);
     } else if (1 == pic_state.code_gen_pass) {
       pic_variable_counters_set(pf);
       pic_var_use_stash_merge_pass1(pf);
+      pic_access_generation_bump();
       /* Open-array actuals: a DIRECT, non-reentrant call records an
        * (actual -> formal) pair so a holed placement of the actual can
        * propagate its chunk map onto the formal -- the callee's
@@ -6478,8 +6637,10 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
        * (pic_var_escapes_to_call -- the callee addresses the formal
        * linearly). */
       {
-        cmd_t mark_cmd;
+        cmd_t  mark_cmd;
+        size_t u3_call_ix;
 
+        u3_call_ix = 0;
         for (mark_cmd = cmd; mark_cmd; mark_cmd = cmd_link_get(mark_cmd)) {
           size_t             ii;
           const value_t     *params;
@@ -6490,6 +6651,9 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
           ct     = cmd_brproc_param_ct_get(mark_cmd);
           params = cmd_brproc_params_get(mark_cmd);
           tproc  = value_proc_get(cmd_brproc_get(mark_cmd));
+          if (cmd_brproc_get(mark_cmd)) {
+            u3_call_ix++;
+          }
           /* a call whose formal cannot be pinned down (function pointer) or
            * whose callee is reentrant / reachable through a function pointer
            * cannot be specialized, and no per-formal layout may be assumed for
@@ -6507,13 +6671,25 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
             pic_openarray_formals_block(tproc);
           }
           for (ii = 0; ii < ct; ii++) {
-            variable_t avar;
+            variable_t   avar;
+            value_t      fval;
+            const char  *u3_action;
 
+            u3_action = "none";
+            fval      = VALUE_NONE;
             avar = value_variable_get(params[ii]);
             if (!avar || (VARIABLE_NONE == avar)) {
+              if (pic_u3_call_shapes_enabled()) {
+                pic_u3_call_shape_dump(mark_cmd, u3_call_ix, ii, params[ii],
+                    VALUE_NONE, direct, "no-variable");
+              }
               continue;
             }
             if (VALUE_NONE != value_baseofs_get(params[ii])) {
+              if (pic_u3_call_shapes_enabled()) {
+                pic_u3_call_shape_dump(mark_cmd, u3_call_ix, ii, params[ii],
+                    VALUE_NONE, direct, "element");
+              }
               /* `arr[i]` handed to a scalar formal (e.g. `serial = svalue[i]`
                * through a device pointer): the CALL SITE resolves the element
                * through the array's own chunk map, so the callee never
@@ -6526,41 +6702,69 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
               continue;
             }
             if (direct) {
-              value_t fval;
-
               fval = pfile_proc_param_get(tproc, ii);
               if (fval
                   && (VARIABLE_DEF_TYPE_ARRAY
                     == variable_def_type_get(
                         variable_def_get(avar)))) {
-                pic_var_openarray_pair_record(avar,
-                    value_variable_get(fval), BOOLEAN_FALSE);
+                u3_action = "array-pair";
+                pic_u3_pair_attach(pf, mark_cmd, avar,
+                    value_variable_get(fval), 0);
                 /* a string payload-view actual (the heap array value with a
                  * staged base offset): the formal's map needs the base word */
                 if (VARIABLE_NONE != pic_var_strview_site_get(params[ii])) {
-                  pic_var_openarray_pair_strview_mark(avar,
-                      value_variable_get(fval));
+                  u3_action = "array-pair-sv";
+                  pic_u3_pair_attach(pf, mark_cmd, avar,
+                      value_variable_get(fval),
+                      CMD_BRANCH_PAIR_FLAG_STRVIEW);
                 }
               } else if (fval
                   && (VARIABLE_DEF_TYPE_POINTER == value_type_get(fval))) {
+                u3_action = "pointer-passon";
                 /* PASS-ON (`inner(data)` inside a procedure that is itself
                  * walking `data`): all this call site knows is a pointer, so
                  * the layout can only come from the source formal's own map.
                  * Recorded as a pair; pic_var_chunk_prepare_emit copies the
                  * source's runtime map (or hands over its compile-time one)
                  * and blocks the formal only when neither exists. */
-                pic_var_openarray_pair_record(avar,
-                    value_variable_get(fval), BOOLEAN_TRUE);
+                pic_u3_pair_attach(pf, mark_cmd, avar,
+                    value_variable_get(fval),
+                    CMD_BRANCH_PAIR_FLAG_PASSON);
               } else {
                 /* non-array actual reaching a non-array formal (a plain
                  * value): nothing to hand over */
+                u3_action = fval ? "scalar-block" : "scalar-nofmal";
                 if (fval) {
                   pic_var_openarray_formal_block(value_variable_get(fval));
                 }
                 pic_var_call_actual_bump(avar);
               }
             } else {
+              u3_action = "indirect-bump";
               pic_var_call_actual_bump(avar);
+            }
+            if (pic_u3_call_shapes_enabled()) {
+              pic_u3_call_shape_dump(mark_cmd, u3_call_ix, ii, params[ii], fval,
+                  direct, u3_action);
+            }
+          }
+          /* U3 test hook: prove the acceptance comparator is non-vacuous by
+           * dropping or altering one attachment (JALV2_U3_PAIR_FAULT). */
+          if (!u3_fault_applied && cmd_brpairs_ct_get(mark_cmd)) {
+            const char *fault;
+
+            fault = getenv("JALV2_U3_PAIR_FAULT");
+            if (fault && *fault && (0 != strcmp(fault, "0"))) {
+              if (0 == strcmp(fault, "drop")) {
+                cmd_brpair_drop_last(mark_cmd);
+              } else if (0 == strcmp(fault, "alter")) {
+                cmd_branch_pair_t *fpairs;
+
+                fpairs = cmd_brpairs_get(mark_cmd);
+                fpairs[cmd_brpairs_ct_get(mark_cmd) - 1].flags ^=
+                    CMD_BRANCH_PAIR_FLAG_PASSON;
+              }
+              u3_fault_applied = BOOLEAN_TRUE;
             }
           }
         }
@@ -6589,6 +6793,17 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
             }
             if ((OPERATOR_POINTER_ASSIGN == cmd_optype_get(esc_cmd))
                 && (0 == oi)) {
+              /* G3: a pointer stored into a POINTER-ARRAY SLOT escapes (the
+               * slot value can be loaded and subscripted later), so the fat
+               * engine must give the target an id BEFORE the descriptor
+               * tables are built.  Gate-off keeps the physical-address path
+               * and the old escape analysis. */
+              if (pic_fat_pointers_enabled(pf)
+                  && (VARIABLE_NONE != pv)
+                  && pic_value_is_array_of_pointers(ops[oi])
+                  && !pic_value_slot_pointee_array(ops[oi])) {
+                pic_var_pointer_bind_escape(pv);
+              }
               continue; /* the bind's own destination */
             }
             if (VALUE_NONE != value_baseofs_get(ops[oi])) {
@@ -7078,54 +7293,88 @@ value_t pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which)
   return val;
 }
 
-/* Fat pointers (F0): OFF by default.  The env switch mirrors the front-end
- * IR switch: unset/0/false/no/off are off, anything else is on.  F0 only
- * establishes the representation and the parity gate -- nothing emits a
- * non-zero tag yet, so ON is still byte-identical. */
+/* Fat pointers (F0): ON by default since the 2026-11-11 flip.  Precedence is
+ * pragma > env > default: the program's own `pragma target fat_pointers` wins,
+ * then the strict JALV2_* env switch (DX F1), then ON.  JALV2_FAT_POINTERS=0
+ * still selects the classic representation for one release; the deprecation
+ * notice prints once per process. */
 boolean_t pic_fat_pointers_enabled(pfile_t *pf)
 {
-  const char *env;
-  value_t      pragma;
+  static boolean_t classic_noticed = BOOLEAN_FALSE;
+  value_t pragma;
+  boolean_t on;
 
   /* the program's own switch wins when present (it ships with the source);
    * the env var stays the testing override */
   pragma = pfile_value_find(pf, PFILE_LOG_NONE, "target_fat_pointers");
   if (pragma) {
-    boolean_t on;
-
     on = (0 != value_const_get(pragma)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
     value_release(pragma);
     return on;
   }
-  env = getenv("JALV2_FAT_POINTERS");
-  if ((0 == env) || (0 == env[0])) {
-    return BOOLEAN_FALSE;
+  /* DX F1: strict on/off parsing; the default is on.  A typo warns
+   * (JALV2-SWITCH) and keeps the default instead of changing the mode. */
+  on = pic_env_on_default("JALV2_FAT_POINTERS", BOOLEAN_TRUE);
+  if (!on && !classic_noticed) {
+    classic_noticed = BOOLEAN_TRUE;
+    fprintf(stderr,
+        "JALV2-NOTICE: JALV2_FAT_POINTERS=0 selects the classic pointer "
+        "representation; that mode is deprecated and the switch is removed "
+        "after this release (per program: `pragma target fat_pointers off`; "
+        "doc/designs/one-access-model.md#feature-switches)\n");
   }
-  if (('0' == env[0]) || !strcmp(env, "false") || !strcmp(env, "no")
-      || !strcmp(env, "off")) {
-    return BOOLEAN_FALSE;
-  }
-  return BOOLEAN_TRUE;
+  return on;
 }
 
-/* F2b/F3a phase gate: force every plain chunked bind to be a fat pointer and
- * let its target take the normal (chunked) placement, so the dispatch can be
- * witnessed before the escape analysis exists.  OFF by default; F3 deletes
- * it. */
+/* TEST-ONLY HOOK, not a user switch (documented; DX F20): JALV2_FAT_FORCE=1
+ * forces every chunked bind fat so the dispatch can be witnessed
+ * independently of the escape analysis.  It has 33 references across the
+ * fat/access/alloc pins and the pointer-array witness; any removal is a
+ * separate witness migration.  Parsed by the strict JALV2_* rule (default
+ * off). */
 boolean_t pic_fat_force_enabled(pfile_t *pf)
 {
-  const char *env;
-
   (void) pf;
-  env = getenv("JALV2_FAT_FORCE");
-  if ((0 == env) || (0 == env[0])) {
-    return BOOLEAN_FALSE;
+  return pic_env_on("JALV2_FAT_FORCE");
+}
+
+/* F4: does this program use the 14H 3-byte pointer form?  The env var is the
+ * testing override; `pragma target fat_pointers 3byte` is the program's own
+ * switch (value 2). */
+boolean_t pic_fat_ptr3_wanted(pfile_t *pf)
+{
+  value_t v;
+
+  /* F4 (measured 2026-11-09): the 3-byte form costs +1 byte of RAM per pointer
+   * and, on a 14H witness, 3 words LESS code than the 2-byte form (the 2-byte
+   * form pays an ANDLW mask on the offset's high byte).  It also removes the
+   * 3-id cap and the impossible auto-decision, so it is the DEFAULT whenever
+   * the engine is on.  A RAM-tight, pointer-dense program can still ask for
+   * 2-byte explicitly (`pragma target fat_pointers 2byte`, value 3). */
+  v = pfile_value_find(pf, PFILE_LOG_NONE, "target_fat_pointers");
+  if (v) {
+    int mode;
+    boolean_t on;
+
+    mode = (int) value_const_get(v);
+    value_release(v);
+    if (3 == mode) {
+      return BOOLEAN_FALSE;          /* 2byte: explicit 2-byte form */
+    }
+    on = (1 == mode) || (2 == mode) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+    return on;
   }
-  if (('0' == env[0]) || !strcmp(env, "false") || !strcmp(env, "no")
-      || !strcmp(env, "off")) {
-    return BOOLEAN_FALSE;
+  {
+    const char *env;
+
+    env = getenv("JALV2_FAT_PTR3");
+    if (env && *env) {
+      /* an explicit override; an invalid value warns and keeps 3-byte */
+      return pic_env_on_default("JALV2_FAT_PTR3", BOOLEAN_TRUE);
+    }
   }
-  return BOOLEAN_TRUE;
+  /* no pragma, no override: 3-byte whenever the engine is on */
+  return pic_fat_pointers_enabled(pf);
 }
 
 pic_fat_target_t pic_fat_target_kind(pfile_t *pf)
@@ -7134,10 +7383,15 @@ pic_fat_target_t pic_fat_target_kind(pfile_t *pf)
     return PIC_FAT_TARGET_18;
   }
   if (pic_is_14bit_hybrid(pf)) {
+    /* F4: the 3-byte form, when the size toggle selects it */
+    if (pic_fat_ptr3_wanted(pf)) {
+      return PIC_FAT_TARGET_14H3;
+    }
     return PIC_FAT_TARGET_14H;
   }
   return PIC_FAT_TARGET_CLASSIC;
 }
+
 
 variable_sz_t pic_pointer_size_get(pfile_t *pf)
 {
@@ -7161,6 +7415,10 @@ variable_sz_t pic_pointer_size_get(pfile_t *pf)
       }
       value_release(chipdef);
     }
+  }
+  if (pic_is_14bit_hybrid(pf) && pic_fat_ptr3_wanted(pf)) {
+    /* F4: the 3-byte 14H form (14H3), selected by the size toggle */
+    return 3;
   }
   {
     const pic_backend_t *be = pic_backend_get(pf);

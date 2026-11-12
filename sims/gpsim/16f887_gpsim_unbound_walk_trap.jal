@@ -1,0 +1,37 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — an UNBOUND pointer through the walk path traps
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The classic 14-bit form of the unbound-walk trap (pre-existing on every
+--    classic core, gate on and off): the walk path now guards the pointer's
+--    all-zero bytes before resolving the chunk address.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+-- expect byte v_armed 0xA5
+-- expect byte v_g 0
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f887
+var volatile byte big[200]
+var pointer p as var byte[200]
+var volatile byte cond
+var volatile byte g = 0
+var volatile byte armed = 0
+
+big[0] = 1
+big[100] = 101
+cond = 0
+if cond != 0 then
+  p is big
+end if
+armed = 0xA5
+g = p[100]
+
+forever loop
+end loop

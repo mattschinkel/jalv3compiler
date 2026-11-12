@@ -107,6 +107,16 @@ void           value_def_set(value_t val, variable_def_t var);
 void value_indirect_set(value_t val);
 void value_indirect_clear(value_t val);
 
+/* A4: opaque access record shared with the back end.  Zero is a legal
+ * kind, so validity is explicit; every mutation of var, def, flags or
+ * base offset clears it. */
+unsigned      value_access_kind_get(const value_t val);
+boolean_t     value_access_valid_get(const value_t val);
+unsigned long value_access_generation_get(const value_t val);
+void          value_access_record_set(value_t val, unsigned kind,
+                  unsigned long generation);
+void          value_access_clear(value_t val);
+
 
 pfile_proc_t *value_proc_get(const value_t var);
 label_t       value_label_get(const value_t val);

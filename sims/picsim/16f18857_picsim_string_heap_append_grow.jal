@@ -1,0 +1,42 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — dynamic-string APPEND growth on a chunked heap
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `s = ""; for 80 using i loop s[i] = i end loop` on a 200-byte
+--    `_string_heap` (three RAM chunks on this device).  The append used to
+--    reallocate an exactly-sized block every byte; the heap fragmented and
+--    the append stalled at length 64 (a 65-byte payload needs a 68-byte
+--    block and both free runs were one byte short).  The append now uses the
+--    handle's spare capacity, grows geometrically, and compacts ONCE (the
+--    outlined string_heap_compact call) before retrying a failed growth.
+--
+-- @picsim_validate begin
+-- steps: 3000000
+-- frequency_hz: auto
+-- expect byte v_len 80
+-- expect byte v_last 79
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target string_heap_size 200
+include strings_dynamic
+
+var string s
+var volatile byte i
+var volatile byte len = 0
+var volatile byte last = 0
+
+s = ""
+for 80 using i loop
+  s[i] = i
+end loop
+len = count(s)
+last = s[79]
+
+forever loop
+end loop

@@ -108,6 +108,8 @@
 
   <chapter href="pointers.dita">
     <topicref href="pointer_calls.dita"/>
+
+    <topicref href="fat_pointers.dita"/>
   </chapter>
 
   <chapter href="interrupts.dita"/>

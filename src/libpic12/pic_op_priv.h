@@ -131,11 +131,8 @@ void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src);
 void pic_assign_lookup_label_to_pointer(pfile_t *pf, value_t dst,
     label_t lbl, variable_const_t offset);
 void pic_pointer_slot_add_emit(pfile_t *pf, value_t dst, value_t ofs);
-
-/* F2b: the baked chunk ladder, for a fat pointer that carries its own
- * object-relative offset. */
-void pic_fat_ladder_emit(pfile_t *pf, variable_t var, value_t t);
-void pic_fat_ladder_call(pfile_t *pf, variable_t var, value_t t);
+/* the destination value IS a slot of an array-of-pointers (no plan needed) */
+boolean_t pic_value_is_array_of_pointers(const value_t val);
 
 /* F2b: a fat bind (forced by JALV2_FAT_FORCE until F3). */
 boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src);

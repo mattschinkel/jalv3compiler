@@ -1,15 +1,16 @@
--- Title: PIC18F4620 gpsim — semantic subscript load/store (JALV2_FRONT_IR)
+-- Title: PIC18F4620 gpsim — semantic subscript load/store (typed front end)
 -- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
 -- Compiler: JALV2
 --
 -- Description:
 --    The phase-1 front-end semantic layer defers a heap-string subscript to
 --    the post-parse lowering pass, carrying the base string and the index
---    instead of the already-lowered element view.  With JALV2_FRONT_IR=1 the
---    clone's reads and stores must still produce the normal string rules:
+--    instead of the already-lowered element view.  Under this lowering
+--    (historically selected by the retired JALV2_FRONT_IR=1) the clone's
+--    reads and stores must still produce the normal string rules:
 --    in-place stores below COUNT, an append AT COUNT, and a read that
 --    composes with an expression (`x[0] = x[1] + 1`).  The same witness is
---    compiled with the gate off/on by unit-tests/test_front_ir_parity.sh and
+--    compiled once by unit-tests/test_front_ir_parity.sh and
 --    must be byte-identical; with the gate off it is the ordinary path.
 --
 -- @gpsim_validate begin

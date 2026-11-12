@@ -188,6 +188,8 @@ static void jal_string_silent_truncate_end(pfile_t *pf)
 
 static variable_sz_t jal_string_current_index_size_get(pfile_t *pf);
 static void jal_string_heap_compact_fill_bld(pfile_t *pf, value_t res);
+static boolean_t jal_string_heap_compact_jal_call_emit(pfile_t *pf,
+    value_t result);
 static value_t jal_string_heap_cpt_u16_temp_get(pfile_t *pf);
 
 static variable_def_t jal_string_byte_def_alloc(flag_t flags)
@@ -2276,15 +2278,23 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
   value_t   ofs;
   value_t   hdr;
   value_t   len;
+  value_t   cap;
   value_t   one;
   value_t   need;
+  value_t   need2;
+  value_t   max_cap;
   value_t   zero;
   value_t   old_off;
   value_t   old_cap;
+  value_t   tried;
+  value_t   cpt_res;
   label_t   fast_lbl;
   label_t   append_lbl;
+  label_t   grow_lbl;
+  label_t   retry_lbl;
   label_t   have_lbl;
   label_t   alloc_fail_lbl;
+  label_t   heap_full_lbl;
   label_t   done_lbl;
 
   if (getenv("JALV2_DBG_OL") && jal_string_subscript_value_is(dst)) {
@@ -2309,12 +2319,23 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
         "string element assignment requires a byte value");
   } else {
     len  = jal_string_handle_index_get(pf, base, _STRING_FIELD_LENGTH);
+    cap  = jal_string_handle_index_get(pf, base, _STRING_FIELD_CAP);
     one  = jal_string_const_get(pf, 1);
     fast_lbl = pfile_label_alloc(pf, 0);
     append_lbl = pfile_label_alloc(pf, 0);
+    grow_lbl = pfile_label_alloc(pf, 0);
+    retry_lbl = pfile_label_alloc(pf, 0);
     have_lbl = pfile_label_alloc(pf, 0);
     alloc_fail_lbl = pfile_label_alloc(pf, 0);
+    heap_full_lbl = pfile_label_alloc(pf, 0);
     done_lbl = pfile_label_alloc(pf, 0);
+    tried = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1);
+    if (VALUE_NONE == tried) {
+      pfile_log_syserr(pf, ENOMEM);
+      tried = VALUE_NONE;
+    } else {
+      jal_string_assign_value(pf, tried, jal_string_const_get(pf, 0));
+    }
 
     off = jal_string_handle_index_get(pf, base, _STRING_FIELD_OFFSET);
     hdr = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
@@ -2341,10 +2362,57 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     /* append: one more byte at the end (COUNT(s) itself) */
     pfile_cmd_label_add(pf, append_lbl);
     need = jal_string_binary_emit(pf, OPERATOR_ADD, len, one);
+    /* G3 heap fix: the handle's CAPACITY is the spare room the old exact-size
+     * realloc threw away.  While len < cap the byte fits in place (no
+     * allocation, no copy, no free), and a growth request is GEOMETRIC so
+     * the next appends land in the spare capacity instead of fragmenting
+     * the heap by one byte per append (the append stalled at len 64 on a
+     * 200-byte chunked heap: a 65-byte payload needs a 68-byte block and
+     * both free runs were one byte short). */
+    jal_string_branch_if_value_cmp(pf, OPERATOR_LT, len, cap,
+        CMD_BRANCHCOND_TRUE, grow_lbl);
+    need2 = jal_string_binary_emit(pf, OPERATOR_ADD, need, cap);
+    max_cap = VALUE_NONE;
+    {
+      value_t heap_sz_val;
+
+      heap_sz_val = pfile_value_find(pf, PFILE_LOG_NONE, "_string_heap_size");
+      if (heap_sz_val) {
+        variable_const_t heap_sz;
+        variable_const_t max_payload;
+
+        heap_sz = value_const_get(heap_sz_val);
+        value_release(heap_sz_val);
+        max_payload = (heap_sz > jal_string_header_size_get(pf))
+          ? (variable_const_t) (heap_sz - jal_string_header_size_get(pf))
+          : 0;
+        if (max_payload > 0) {
+          max_cap = jal_string_const_get(pf, max_payload);
+          /* clamp the geometric request to what a fresh heap can hold */
+          if (max_cap) {
+            label_t clamp_lbl;
+            label_t after_lbl;
+
+            clamp_lbl = pfile_label_alloc(pf, 0);
+            after_lbl = pfile_label_alloc(pf, 0);
+            jal_string_branch_if_value_cmp(pf, OPERATOR_GT, need2, max_cap,
+                CMD_BRANCHCOND_TRUE, clamp_lbl);
+            pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
+                CMD_BRANCHCOND_NONE, after_lbl, VALUE_NONE, VALUE_NONE, 0);
+            pfile_cmd_label_add(pf, clamp_lbl);
+            jal_string_assign_value(pf, need2, max_cap);
+            pfile_cmd_label_add(pf, after_lbl);
+            label_release(after_lbl);
+            label_release(clamp_lbl);
+          }
+        }
+      }
+    }
+    pfile_cmd_label_add(pf, retry_lbl);
     zero = jal_string_const_get(pf, 0);
     old_off = VALUE_NONE;
     old_cap = VALUE_NONE;
-    jal_string_allocate_emit_ex(pf, base, need, alloc_fail_lbl, have_lbl,
+    jal_string_allocate_emit_ex(pf, base, need2, alloc_fail_lbl, have_lbl,
         BOOLEAN_FALSE, &old_off, &old_cap);
     pfile_cmd_label_add(pf, have_lbl);
     jal_string_handle_index_set(pf, base, _STRING_FIELD_LENGTH, need);
@@ -2364,16 +2432,84 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
     pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
         done_lbl, VALUE_NONE, VALUE_NONE, 0);
 
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        done_lbl, VALUE_NONE, VALUE_NONE, 0);
+
+    /* spare capacity: append in place */
+    pfile_cmd_label_add(pf, grow_lbl);
+    off = jal_string_handle_index_get(pf, base, _STRING_FIELD_OFFSET);
+    hdr = jal_string_add_const(pf, off, jal_string_header_size_get(pf));
+    value_release(off);
+    ofs = jal_string_binary_emit(pf, OPERATOR_ADD, hdr, idx);
+    value_release(hdr);
+    jal_string_heap_index_set(pf, ofs, src);
+    value_release(ofs);
+    jal_string_handle_index_set(pf, base, _STRING_FIELD_LENGTH, need);
+    pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+        done_lbl, VALUE_NONE, VALUE_NONE, 0);
+
     pfile_cmd_label_add(pf, alloc_fail_lbl);
+    /* G3 heap fix: the first allocation failure compacts the heap ONCE and
+     * retries.  The compact MUST happen here, at the append site, not inside
+     * the allocator: compaction moves the append's live old block, and the
+     * allocator's old-offset capture would otherwise be stale (the retry
+     * re-reads the handle).  The compact is the outlined library call, so
+     * the body is not duplicated per append site. */
+    if (VALUE_NONE != tried) {
+      jal_string_branch_if_const_cmp(pf, OPERATOR_NE, tried, 0,
+          CMD_BRANCHCOND_TRUE, heap_full_lbl);
+      jal_string_bool_assign(pf, tried, BOOLEAN_TRUE);
+      cpt_res = pfile_value_temp_get(pf, VARIABLE_DEF_TYPE_BOOLEAN, 1U);
+      if (VALUE_NONE != cpt_res) {
+        cmd_t nopc;
+
+        /* the compact is DEFERRED: at parse time the library's
+         * string_heap_compact procedure is not visible yet.  Expansion picks
+         * the outlined CALL when the procedure exists, else inlines. */
+        nopc = cmd_alloc(CMD_TYPE_NOP, 0U);
+        if (CMD_NONE == nopc) {
+          pfile_log_syserr(pf, ENOMEM);
+          pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
+              CMD_BRANCHCOND_NONE, heap_full_lbl, VALUE_NONE, VALUE_NONE, 0);
+        } else {
+          pfile_cmd_add(pf, nopc);
+          pfile_str_heap_defer_add_ex(pf, nopc, cpt_res, BOOLEAN_TRUE);
+          jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, cpt_res, 0,
+              CMD_BRANCHCOND_TRUE, heap_full_lbl);
+          pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
+              CMD_BRANCHCOND_NONE, retry_lbl, VALUE_NONE, VALUE_NONE, 0);
+        }
+      } else {
+        pfile_log_syserr(pf, ENOMEM);
+        pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
+            CMD_BRANCHCOND_NONE, heap_full_lbl, VALUE_NONE, VALUE_NONE, 0);
+      }
+    } else {
+      pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+          heap_full_lbl, VALUE_NONE, VALUE_NONE, 0);
+    }
+
+    pfile_cmd_label_add(pf, heap_full_lbl);
     jal_error_raise(pf, JAL_ERROR_SOURCE_STRING, _STRING_ERROR_NAME,
         _STRING_ERROR_HEAP_FULL);
 
     pfile_cmd_label_add(pf, done_lbl);
     label_release(done_lbl);
     label_release(alloc_fail_lbl);
+    label_release(heap_full_lbl);
+    label_release(retry_lbl);
+    label_release(grow_lbl);
     label_release(have_lbl);
     label_release(append_lbl);
     label_release(fast_lbl);
+    if (VALUE_NONE != max_cap) {
+      value_release(max_cap);
+    }
+    if (VALUE_NONE != tried) {
+      value_release(tried);
+    }
+    value_release(need2);
+    value_release(cap);
     value_release(one);
     value_release(need);
     value_release(len);
@@ -8243,7 +8379,9 @@ void jal_string_heap_compact_defer_expand(pfile_t *pf)
   for (d = l; d; d = n) {
     n = d->link;
     pfile_cmd_bld_start(pf);
-    jal_string_heap_compact_fill_bld(pf, d->result);
+    if (!(d->as_call && jal_string_heap_compact_jal_call_emit(pf, d->result))) {
+      jal_string_heap_compact_fill_bld(pf, d->result);
+    }
     pfile_cmd_bld_end(pf, &nh, &nt);
     pfile_cmd_replace1_with_chain(pf, d->marker, nh, nt);
     /* the expanded chain's cmds hold their own references; drop the

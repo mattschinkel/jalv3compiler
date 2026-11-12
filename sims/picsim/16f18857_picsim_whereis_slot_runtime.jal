@@ -1,0 +1,50 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — WHEREIS of a pointer SLOT at a RUNTIME index
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A pointer ARRAY larger than one bank (`pa[60]`, 180 bytes on the 14H
+--    core, so its chunks are holed) addressed at a RUNTIME index.  The
+--    WHEREIS value is the slot's stored pointer, so the FSR walk has to
+--    stage the slot address through the array's chunk map before reading
+--    the pointer bytes: the FSR_WALK/HOLED recipe row (A12 row 17).
+--
+--    The resolved value must be the PHYSICAL address of the element slot 1
+--    was bound to (`big[100]`, in a later chunk): under the fat engine the
+--    stored pointer is the tagged (id, object offset) form, and the runtime
+--    slot path resolves it through the shared segment walk, exactly like
+--    the const-index form and the engine-off path (fixes/
+--    fix_whereis_runtime_slot_fat.md).  Before the fix this form returned
+--    the raw encoded value (100) instead of the address.
+--
+--    A12 coverage fixture: before this witness no gate program reached the
+--    FSR_WALK runtime/holed rows through this shape (the direct element
+--    subscripts take the FSR_DYNAMIC rows instead).
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_ok 1
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var volatile byte big[200]
+var volatile byte k = 1
+var volatile byte ok = 0
+var pointer pa[60] as var byte
+
+pa[0] is big[0]
+pa[1] is big[100]
+big[100] = 42
+
+if (WHEREIS(pa[k]) == WHEREIS(big[100])) & (WHEREIS(pa[k]) != 0) then
+   ok = 1
+end if
+
+forever loop
+end loop

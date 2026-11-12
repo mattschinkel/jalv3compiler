@@ -7,9 +7,9 @@
 --    subscript read, a string POINTER subscript read, a read that feeds a
 --    store (`s[0] = s[2]`), a subscript read passed as a call argument, a
 --    subscript read in a condition, and a generic fixed-size array formal
---    store.  With JALV2_FRONT_IR=1 the string reads go through the semantic
+--    store.  Under the typed front end (historically JALV2_FRONT_IR=1) the string reads go through the semantic
 --    base+index load; the fixed-size formal store uses the generic element
---    store.  unit-tests/test_front_ir_parity.sh compiles this gate-off/on
+--    store.  unit-tests/test_front_ir_parity.sh compiles this single-arm
 --    and requires byte-identical HEX; with the gate off it is the ordinary
 --    path.
 --

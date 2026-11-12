@@ -1,0 +1,39 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — a pointer-to-ARRAY slot bind (G3 control)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    G3 surface-3 control: `pa[0] is big` binds the ARRAY (not an element),
+--    then `pa[0][100]` subscripts through the loaded pointer.  Its base
+--    offset is a POINTEE subscript, so the unescaped bind walk stays the
+--    right classification (the slot store is deliberately NOT a fat bind --
+--    the recipe's SLOT_POINTEE fact selects NOT_FAT_BIND) and slot 0
+--    resolves through the walked bind.  This also exercises the
+--    NOT_FAT_BIND recipe row under the fat engine.
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_g0 101
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target fat_pointers on
+
+var volatile byte big[200]
+var byte i
+var volatile byte g0 = 0
+var pointer pa[2] as var byte[200]
+
+for 200 using i loop
+  big[i] = i + 1
+end loop
+pa[0] is big
+g0 = pa[0][100]
+
+forever loop
+end loop

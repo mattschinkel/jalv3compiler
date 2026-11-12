@@ -173,8 +173,15 @@ def gen_ptr_bound_script(workdir):
 def compile_one(compiler, path):
     """Return (summary_errors, full_output)."""
     try:
+        # GATE MODE (T3): these diagnostics are the CLASSIC front-end rules;
+        # ptr_bound_bank_span_script.jal in particular is an escaped-bind
+        # bank-span refusal that the fat engine legitimately legalizes.  Pin
+        # the classic mode so the switch's default cannot move a diagnostic.
+        env = dict(os.environ)
+        env["JALV2_FAT_POINTERS"] = "0"
         r = subprocess.run([compiler, "-s", LIBS, "-no-codfile", path],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=60,
+                           env=env)
         out = r.stdout + r.stderr
     except subprocess.TimeoutExpired:
         return -1, "TIMEOUT"

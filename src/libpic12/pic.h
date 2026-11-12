@@ -229,6 +229,7 @@ char *pic_chip_name_get(pfile_t *pf);
 boolean_t        pic_in_isr(pfile_t *pf); /* TRUE when generating ISR code */
 value_t          pic_indirect_get(pfile_t *pf, pfile_log_t plog, size_t which);
 variable_sz_t    pic_pointer_size_get(pfile_t *pf);
+boolean_t        pic_fat_ptr3_wanted(pfile_t *pf);
 
 /* fat pointers (F0): the switch and the per-target tag layout.  The switch
  * is OFF by default (unset/0/false/no/off) so the default build is
@@ -256,6 +257,12 @@ typedef enum pic_access_kind_ {
 typedef struct pic_access_plan_ {
   pic_access_kind_t kind;
   boolean_t         aop;      /* array-of-pointers element: never walk     */
+  /* G3: an array-of-pointers element whose POINTEE is an array.  Such a
+   * value's base offset is a pointee subscript (pa[k][j]), not just the
+   * slot's byte offset, so the unescaped bind walk is still the right
+   * classification for it; a SCALAR-pointee slot (pa[k]) has only the slot
+   * offset and must read the slot's value. */
+  boolean_t         slot_pointee_array;
   boolean_t         chunked;  /* the object has more than one segment      */
   /* U2b: the WALK classification.  The indirect setup used to OR three
    * predicates inline and look the bind target up at every branch; the plan
@@ -269,22 +276,41 @@ typedef struct pic_access_plan_ {
   boolean_t         ptr_lookup;    /* PTR_LOOKUP: const table / open-array  */
   boolean_t         ptr_read_call; /* read needs the helper: proc/eeprom/
                                     * flash (PTR_PTR+LOOKUP, EEPROM, FLASH) */
+  /* Step 5: the individual storage class, so the pointer read/write can
+   * stop re-reading the variable flags. */
+  boolean_t         ptr_ptr;       /* VARIABLE_FLAG_PTR_PTR                 */
+  boolean_t         ptr_eeprom;    /* VARIABLE_FLAG_PTR_EEPROM              */
+  boolean_t         ptr_flash;     /* VARIABLE_FLAG_PTR_FLASH               */
+  /* Step 5 (assign family): the class predicates, answered once. */
+  boolean_t         ptr_class;         /* ptr_lookup || ptr_read_call       */
+  boolean_t         runtime_ptr_class; /* runtime_map && ptr_class          */
   /* U3-3: the raw facts a VARIABLE-based emitter needs (the FSR walk
    * helpers take a variable_t, not a value).  pic_access_plan_fill_var
    * computes the variable-derived fields only; the value-derived ones
    * (aop, kind) stay zero. */
   boolean_t         holed;    /* the object is split across segments  */
   boolean_t         sv_view;  /* classic string-view formal           */
-  /* U4-3: the fat family's question.  TRUE when the fat engine is on, an
-   * object id exists, the value is not a slot element and the VARIABLE is
-   * a pointer (the emitter's own test) -- the deref then dispatches on the
-   * tag, so `kind` reports FAT for it. */
-  boolean_t         fat_candidate;
+  boolean_t         indirect; /* the value is indirect                */
+  /* G3: the fat engine is on for this compile (an input to the slot bind
+   * decision; see PIC_ACCESS_FACT_FAT_ENGINE). */
+  boolean_t         fat_engine;
 } pic_access_plan_t;
 
 void pic_access_plan_get(pfile_t *pf, const value_t val,
     pic_access_plan_t *plan);
 void pic_access_plan_fill_var(variable_t var, pic_access_plan_t *plan);
+/* variable-only external sites: fill, then record the variable-keyed row */
+void pic_access_plan_fill_var_at(pfile_t *pf, const char *site,
+    variable_t var, pic_access_plan_t *plan);
+/* the value IS a slot element of an array-of-pointers (the pass-1 escape
+ * analysis asks this without computing a plan) */
+boolean_t pic_value_is_array_of_pointers(const value_t val);
+boolean_t pic_value_slot_pointee_array(const value_t val);
+/* the project rule: unset/empty/0/false/no/off are OFF */
+boolean_t pic_env_on(const char *name);
+boolean_t pic_env_on_default(const char *name, boolean_t def);
+/* -features: the effective JALV2_* feature modes */
+void pic_features_report(void);
 
 /* back-end descriptor (pic_backend.h): the per-target delegation seam.
  * A NULL descriptor selects the classic PIC12/14/14H/18/SX

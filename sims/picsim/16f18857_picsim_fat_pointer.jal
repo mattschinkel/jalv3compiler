@@ -10,7 +10,10 @@
 --    refused the program.  With fat pointers forced
 --    (JALV2_FAT_POINTERS=1 JALV2_FAT_FORCE=1) the bind stores the object id
 --    in the tag and the deref walks the object's chunks at run time, so
---    const and dynamic subscripts both reach the right byte.
+--    const and dynamic subscripts both reach the right byte.  The clock
+--    pragma is REQUIRED: without it the picsim engine does not execute the
+--    program at all and every `expect` reads zero -- which silently hid the
+--    dynamic-subscript defect this witness now covers.
 --
 -- @picsim_validate begin
 -- steps: 2000000
@@ -21,6 +24,8 @@
 -- ----------------------------------------------------------------------------
 
 include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
 
 var volatile byte big[200]
 var byte i

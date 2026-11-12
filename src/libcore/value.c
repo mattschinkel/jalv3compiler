@@ -39,6 +39,11 @@ struct value_
   flag_t          flags;
   unsigned        bitofs_delta;
   const char     *name;
+  /* A4: opaque access record.  libpic12 owns the kind values; zero is a
+   * legal kind, so validity is explicit. */
+  unsigned        access_kind;
+  unsigned long   access_generation;
+  boolean_t       access_valid;
 #ifdef JALV2_VALUE_DEBUG
   void           *dbg_bt[6];        /* release call stack (death certificate) */
   int             dbg_bt_ct;
@@ -181,6 +186,7 @@ void value_variable_set(value_t val, variable_t var)
     ptr->var   = var;
     ptr->def   = variable_def_get(var);
     ptr->name  = variable_name_get(var);
+    ptr->access_valid = BOOLEAN_FALSE;
   }
 }
 
@@ -207,6 +213,9 @@ value_t value_alloc(variable_t var)
   ptr->flags     = VALUE_FLAG_NONE;
   ptr->bitofs_delta = 0;
   ptr->name      = 0;
+  ptr->access_kind = 0;
+  ptr->access_generation = 0;
+  ptr->access_valid = BOOLEAN_FALSE;
 
   value_variable_set(val, var);
   return val;
@@ -218,6 +227,9 @@ void value_def_set(value_t val, variable_def_t def)
 
   ptr = value_element_seek(val, BOOLEAN_TRUE);
   if (ptr) {
+    if (ptr->def != def) {
+      ptr->access_valid = BOOLEAN_FALSE;
+    }
     ptr->def = def;
   }
 }
@@ -385,6 +397,7 @@ void value_flag_set_all(value_t val, flag_t flags)
   ptr = value_element_seek(val, BOOLEAN_TRUE);
   if (ptr) {
     ptr->flags = flags;
+    ptr->access_valid = BOOLEAN_FALSE;
   }
 }
 
@@ -639,6 +652,7 @@ void value_baseofs_set(value_t val, value_t baseofs)
     }
     ptr = value_element_seek(val, BOOLEAN_TRUE);
     ptr->baseofs = baseofs;
+    ptr->access_valid = BOOLEAN_FALSE;
   }
 }
 
@@ -1019,6 +1033,7 @@ void value_flag_set(value_t val, flag_t flags)
   ptr = value_element_seek(val, BOOLEAN_TRUE);
   if (ptr) {
     ptr->flags |= flags;
+    ptr->access_valid = BOOLEAN_FALSE;
   }
 }
 
@@ -1029,6 +1044,56 @@ void value_flag_clr(value_t val, flag_t flags)
   ptr = value_element_seek(val, BOOLEAN_TRUE);
   if (ptr) {
     ptr->flags &= ~flags;
+    ptr->access_valid = BOOLEAN_FALSE;
+  }
+}
+
+unsigned value_access_kind_get(const value_t val)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_FALSE);
+  return (ptr) ? ptr->access_kind : 0;
+}
+
+boolean_t value_access_valid_get(const value_t val)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_FALSE);
+  return (ptr) ? ptr->access_valid : BOOLEAN_FALSE;
+}
+
+unsigned long value_access_generation_get(const value_t val)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_FALSE);
+  return (ptr) ? ptr->access_generation : 0;
+}
+
+void value_access_record_set(value_t val, unsigned kind,
+    unsigned long generation)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->access_kind = kind;
+    ptr->access_generation = generation;
+    ptr->access_valid = BOOLEAN_TRUE;
+  }
+}
+
+void value_access_clear(value_t val)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_TRUE);
+  if (ptr) {
+    ptr->access_kind = 0;
+    ptr->access_generation = 0;
+    ptr->access_valid = BOOLEAN_FALSE;
   }
 }
 

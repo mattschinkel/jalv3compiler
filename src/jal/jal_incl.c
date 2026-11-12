@@ -655,6 +655,12 @@ static void jal_parse_pragma_target_fat_pointers(pfile_t *pf)
     want = 1;
   } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "off")) {
     want = 0;
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "3byte")) {
+    /* F4: on AND the 14H 3-byte pointer form (127 ids) -- now the default */
+    want = 2;
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "2byte")) {
+    /* F4: on, but keep the 2-byte 14H form (3 ids) for a RAM-tight program */
+    want = 3;
   }
   if (want < 0) {
     pfile_log(pf, PFILE_LOG_ERR,

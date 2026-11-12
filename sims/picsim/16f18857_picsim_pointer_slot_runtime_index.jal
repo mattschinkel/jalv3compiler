@@ -1,0 +1,37 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — a pointer SLOT at a RUNTIME index (fat)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    G3 S2: `pa[k] is big[100]` with a RUNTIME `k`.  The runtime slot index
+--    was lowered as slot 0 (the multiply into the destination offset was
+--    computed and then ignored), so `pa[1]` never received the bind.  The
+--    bind now computes the fat value (tagged id + object-relative offset)
+--    into a scratch, stages FSR = &pa + k*psz, and copies the bytes through
+--    INDF with a carry-safe increment.
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_got 42
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target fat_pointers on
+
+var volatile byte  big[400]
+var pointer pa[2] as var byte
+var volatile byte k
+var volatile byte got = 0
+
+big[100] = 42
+k = 1
+pa[k] is big[100]
+got = pa[1]
+
+forever loop
+end loop

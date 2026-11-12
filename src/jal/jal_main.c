@@ -26,6 +26,7 @@
 #include "../libpic32/pic32.h"
 #include "../libpic12/pic_stk.h"
 #include "../libpic12/pic_var.h"
+#include "../libpic12/pic_access.h"
 #include "../libpic12/pic_inst.h"
 #include "../libpic12/picbsrop.h"
 #include "../libpic12/piccolst.h"
@@ -60,6 +61,10 @@ extern unsigned _stklen = 16384;
 #define JAL_VERSION_CONST_NAME "jal_version"
 #define JAL_BUILD_CONST_NAME   "jal_build"
 
+/* ENG S1: the largest source line -explain-access accepts (the editor /
+ * source model is 16-bit line numbered). */
+#define JAL_EXPLAIN_LINE_MAX   65535UL
+
 
 /* format: 
  *   picjal file 
@@ -80,6 +85,8 @@ typedef enum {
   opt_file_lst,
   opt_file_log,
   opt_file_jal,
+  opt_dump_plan,
+  opt_explain_access,
   /* --- bootloader options --- */
   opt_boot_bloader,
   opt_boot_fuse,
@@ -152,6 +159,12 @@ static const opt_def_t opt_defs[] = {
       OPT_FLAG_PARAM | OPT_FLAG_NO_PREFIX, PFILE_FLAG_NONE},
   {opt_file_log, "log",
       "set the name of the log file (default is no file created)",
+      OPT_FLAG_PARAM | OPT_FLAG_NO_PREFIX, PFILE_FLAG_NONE},
+  {opt_dump_plan, "dump-plan",
+      "write the access-plan dump to {file}",
+      OPT_FLAG_PARAM | OPT_FLAG_NO_PREFIX, PFILE_FLAG_NONE},
+  {opt_explain_access, "explain-access",
+      "print the access decisions made for {file}:{line}",
       OPT_FLAG_PARAM | OPT_FLAG_NO_PREFIX, PFILE_FLAG_NONE},
   {opt_file_include_path, "s",
       "set the include path, elements seperated with ';'", 
@@ -801,6 +814,8 @@ int main(int argc, char **argv)
   const char *lst_name;
   const char *log_name;
   const char *jal_name;
+  const char *dump_plan_name;
+  const char *explain_name;
   const char *prog_name;
   flag_t      pfile_flags;
   flag_t      pfile_flags_def;
@@ -920,6 +935,8 @@ int main(int argc, char **argv)
   cod_name = 0;
   lst_name = 0;
   log_name = 0;
+  dump_plan_name = 0;
+  explain_name = 0;
   namebuf  = 0;
   pfile_flags_def = 
     PFILE_FLAG_WARN_ALL
@@ -970,6 +987,14 @@ int main(int argc, char **argv)
       } else if (0 == strcmp(arg, "--version")) {
         cli_info_only = BOOLEAN_TRUE;
         arg_no = argc;
+      } else if ((0 == strcmp(arg, "--features"))
+          || (0 == strcmp(arg, "-v"))
+          || (0 == strcmp(arg, "/features"))) {
+        /* DX F1: the effective JALV2_* feature modes (and any invalid-value
+         * warnings) before compiling anything */
+        pic_features_report();
+        cli_info_only = BOOLEAN_TRUE;
+        arg_no = argc;
       } else if (arg[0] == '-') {
         /* this is an option */
         arg++;
@@ -1011,7 +1036,10 @@ int main(int argc, char **argv)
       if ((arg_no == argc) 
           && def
           && (def->opt_flags & OPT_FLAG_PARAM)
-          && !is_no) {
+          && !is_no
+          /* -opt=value carries its parameter on the option itself (K5) */
+          && (!(def->opt_flags & OPT_FLAG_NO_PREFIX)
+            || (0 == strchr(argv[arg_no - 1], '=')))) {
         fprintf(stderr, "Required parameter to %s is missing!\n",
             def->key);
         err = BOOLEAN_TRUE;
@@ -1030,6 +1058,8 @@ int main(int argc, char **argv)
           case opt_file_jal:          need        = &jal_name;    break;
           case opt_file_lst:          need        = &lst_name;    break;
           case opt_file_log:          need        = &log_name;    break;
+          case opt_dump_plan:         need        = &dump_plan_name; break;
+          case opt_explain_access:    need        = &explain_name; break;
           case opt_boot_rickpic:
              if (!is_no) {
                pfile_flags &= ~PFILE_FLAG_BOOT_FUSES;
@@ -1164,6 +1194,12 @@ int main(int argc, char **argv)
           } else {
             if (is_no) {
               files_disabled |= (1 << opt);
+            } else if (def && (def->opt_flags & OPT_FLAG_NO_PREFIX)
+                && (0 != strchr(argv[arg_no - 1], '='))) {
+              /* -opt=value: the value rides on the option itself */
+              *need = strchr(argv[arg_no - 1], '=') + 1;
+              arg_no--;
+              files_disabled &= ~(1 << opt);
             } else {
               *need = argv[arg_no];
               files_disabled &= ~(1 << opt);
@@ -1211,6 +1247,62 @@ int main(int argc, char **argv)
     FREE(inc_path);
     FREE(pre_include);
     return EXIT_SUCCESS;
+  }
+  if (dump_plan_name) {
+    /* ENG S1: an empty path used to fall back to plan.log in the current
+     * directory; a requested dump must name its file. */
+    if (0 == *dump_plan_name) {
+      fprintf(stderr, "jal: -dump-plan needs a file name\n");
+      err = BOOLEAN_TRUE;
+    } else {
+      pic_access_dump_set(dump_plan_name);
+    }
+  }
+  if (explain_name) {
+    /* K5: split at the LAST colon so Windows drive letters survive */
+    const char *colon;
+
+    colon = strrchr(explain_name, ':');
+    if ((0 == colon) || (0 == colon[1])) {
+      fprintf(stderr,
+          "jal: -explain-access needs <file>:<line>, got '%s'\n",
+          explain_name);
+      err = BOOLEAN_TRUE;
+    } else if ((size_t) (colon - explain_name) >= 512) {
+      /* ENG S1: a name that had to be truncated could never match a
+       * source line, so refuse it instead of reporting "no access" */
+      fprintf(stderr,
+          "jal: -explain-access: the file name is too long (max 511)\n");
+      err = BOOLEAN_TRUE;
+    } else {
+      char          file[512];
+      size_t        len;
+      char         *end;
+      unsigned long line;
+
+      len = (size_t) (colon - explain_name);
+      if (0 == len) {
+        fprintf(stderr,
+            "jal: -explain-access needs a file name before ':line'\n");
+        err = BOOLEAN_TRUE;
+      } else {
+        memcpy(file, explain_name, len);
+        file[len] = 0;
+        /* ENG S1: the line must be a plain decimal in 1..65535.  The old
+         * strtoul-only parse accepted 0, a non-numeric tail (line 0) and
+         * an overflow (line 4294967295) and then reported "no access". */
+        line = strtoul(colon + 1, &end, 10);
+        if ((end == (colon + 1)) || (0 != *end)
+            || (line < 1) || (line > JAL_EXPLAIN_LINE_MAX)) {
+          fprintf(stderr,
+              "jal: -explain-access line must be 1..%u, got '%s'\n",
+              (unsigned) JAL_EXPLAIN_LINE_MAX, colon + 1);
+          err = BOOLEAN_TRUE;
+        } else {
+          pic_access_explain_set(jal_name, file, (unsigned) line);
+        }
+      }
+    }
   }
   if (!jal_name) {
     fprintf(stderr, "no source file, use %s --help for help\n",
@@ -1420,6 +1512,17 @@ int main(int argc, char **argv)
             (1U == pfile_warnct_get(pf)) ? "" : "s");
         err = pfile_errct_get(pf);
         pfile_close(pf);
+        if (explain_name) {
+          int explain_rc;
+
+          /* K5/E2: print the collected decisions for the requested line.
+           * A compile that already failed keeps its failure; otherwise a
+           * REFUSE row is the exit-1 case. */
+          explain_rc = pic_access_explain_print();
+          if (!err && (0 != explain_rc)) {
+            err = BOOLEAN_TRUE;
+          }
+        }
       }
       jal_reset_between_compiles();
       }

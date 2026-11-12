@@ -39,6 +39,13 @@ void pic_intrinsics_create(pfile_t *pf);
 void pic_chunk_walk_helpers_create(pfile_t *pf);
 boolean_t pic_chunk_walk_helpers_exist(void);
 void pic_chunk_walk_helpers_register(pfile_t *pf);
+/* F2d: the shared O(1) segment walk (`_pic_fat_seg_addr`, one body per
+ * program).  Registered before the reset-vector decision (its body joins the
+ * helpers at the top of the image), emitted with them, and called from the
+ * fat deref's dispatch. */
+void    pic_fat_seg_addr_register(pfile_t *pf);
+label_t pic_fat_seg_addr_label(void);
+void    pic_fat_seg_addr_create(pfile_t *pf);
 boolean_t pic_intrinsics_exist(pfile_t *pf);
 void pic_multiply_create_fn(pfile_t *pf, label_t lbl,
     value_t mresult, value_t multiplier, value_t multiplicand);

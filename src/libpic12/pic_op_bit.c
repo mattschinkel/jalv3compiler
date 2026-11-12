@@ -1073,7 +1073,7 @@ void pic_assign_from_bit(pfile_t *pf, value_t dst, value_t src)
         /* OOM: fall through to the original emission */
       }
       bit_ix = 0;
-      if (getenv("JALV2_DBG_OBF")) {
+      if (pic_env_on("JALV2_DBG_OBF")) {
         fprintf(stderr, "OBF pass=%u bitofs=%d baseofs=%d\n",
           (int) pic_code_gen_pass_get(pf),
           (int) value_bit_offset_get(src),

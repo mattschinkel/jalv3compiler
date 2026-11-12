@@ -691,10 +691,15 @@ static void pic_indirect_create(pfile_t *pf)
   value_t            lsb;
   static const char *names[] = { "_pcl", "_pclath", "_pclatu" };
   variable_sz_t      ii;
+  variable_sz_t      pc_sz;
 
   lsb = pic_var_pointer_get(pf);
-  for (ii = pic_pointer_size_get(pf); ii > 0; ii--) {
-    if (ii < pic_pointer_size_get(pf)) {
+  /* the PC width is a CORE property (3 bytes on PIC18, 2 on 14/14H), not the
+   * pointer size: with the F4 3-byte pointer form on 14H this wrote _pclatu
+   * ("'_pclatu' not found", caught by the ROM arm). */
+  pc_sz = pic_is_16bit(pf) ? 3 : 2;
+  for (ii = pc_sz; ii > 0; ii--) {
+    if (ii < pc_sz) {
       pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, lsb, ii - 1, PIC_OPDST_W);
     }
     pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, names[ii - 1]);

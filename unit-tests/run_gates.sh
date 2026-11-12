@@ -25,6 +25,9 @@
 #   unit-tests/run_gates.sh --level 2 --update-manifest
 #                                # refresh the HEX A/B manifest after the run
 #                                # (commit it with INTENTIONAL codegen changes)
+#   unit-tests/run_gates.sh --update-plan-baseline
+#                                # refresh unit-tests/plan-baselines/ from the
+#                                # pinned subset (review the diff first)
 #   unit-tests/run_gates.sh --skip-gpsim      # 32-bit-only changes
 #   unit-tests/run_gates.sh --quick           # legacy alias for --level 1
 #   unit-tests/run_gates.sh --stop            # terminate the ACTIVE gate run
@@ -173,6 +176,7 @@ DRY=0
 SKIP_GPSIM=0
 WITH_SAN=1
 UPDATE_MANIFEST=0
+UPDATE_PLAN_BASELINE=0
 COMPILER="$ROOT/bin/beta/jalv3-x86-64"
 WITNESSES=()
 LEGACY_QUICK=0
@@ -190,6 +194,7 @@ while [[ $# -gt 0 ]]; do
     --compiler)        COMPILER="$2"; shift 2 ;;
     --witness)         WITNESSES+=("$2"); shift 2 ;;
     --update-manifest) UPDATE_MANIFEST=1; shift ;;
+    --update-plan-baseline) UPDATE_PLAN_BASELINE=1; shift ;;
     --quick)           LEGACY_QUICK=1; shift ;;
     --fast)            FAST=1; shift ;;
     --no-pins)         NO_PINS=1; shift ;;
@@ -197,6 +202,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
+
+if (( UPDATE_PLAN_BASELINE )); then
+  "$ROOT/unit-tests/run_plan_gate.sh" "$COMPILER" --update || exit $?
+  exit 0
+fi
 
 if [[ "$LEGACY_QUICK" == "1" && "$LEVEL_EXPLICIT" != "1" ]]; then
   LEVEL=1
@@ -404,6 +414,7 @@ if (( DRY )); then
     else
       echo "  L2 hex manifest A/B diff"
     fi
+    echo "  L2 access matrix (0 drift) + recipe-row coverage"
   fi
   if (( LEVEL >= 3 )); then
     echo "  L3 second qemu suite (when L1 was narrowed)"
@@ -532,6 +543,8 @@ if (( LEVEL >= 2 )); then
   else
     skip "L2 hex manifest (none yet — run with --update-manifest to start A/B tracking)"
   fi
+  gate "L2 access matrix (0 drift)" \
+    "$ROOT/unit-tests/run_access_matrix.sh" "$COMPILER" --check
 fi
 
 # ---------------------------------------------------------------- escalation

@@ -8,7 +8,8 @@
 --    The shared COUNT lowering on the flat 32-bit back end: COUNT(x) in a
 --    reads-only open-array body (the string view's length and the generic
 --    array's `_name_count`), COUNT(arr) on a fixed array and COUNT(p) on a
---    pointer string.  Runs with JALV2_FRONT_IR off and on.
+--    pointer string.  The retired JALV2_FRONT_IR switch is gone; this runs
+--    the one lowering (historically it ran off and on).
 --
 -- @sim_validate begin
 -- duration_s: 5.0

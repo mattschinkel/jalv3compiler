@@ -10,6 +10,7 @@
  **
  ***********************************************************/
 #include <assert.h>
+#include <string.h>
 #include "../libutils/mem.h"
 #include "cmdd.h"
 #include "cmd_brch.h"
@@ -96,6 +97,28 @@ static void cmd_branch_dump(cmd_t cmd, FILE *dst)
       value_dump(params[ii], dst);
     }
     fprintf(dst, ")");
+    /* U3: the call's open-array pairs, so a plan/IR dump explains what the
+     * record site attached */
+    if (cmd_brpairs_ct_get(cmd)) {
+      cmd_branch_pair_t *pairs;
+      size_t             pi;
+
+      pairs = cmd_brpairs_get(cmd);
+      fprintf(dst, " pairs=%u[", (unsigned) cmd_brpairs_ct_get(cmd));
+      for (pi = 0; pi < cmd_brpairs_ct_get(cmd); pi++) {
+        if (pi) {
+          fputc(',', dst);
+        }
+        fprintf(dst, "%s->%s%s%s",
+            variable_name_get(pairs[pi].actual)
+              ? variable_name_get(pairs[pi].actual) : "?",
+            variable_name_get(pairs[pi].formal)
+              ? variable_name_get(pairs[pi].formal) : "?",
+            (pairs[pi].flags & CMD_BRANCH_PAIR_FLAG_PASSON) ? ":passon" : "",
+            (pairs[pi].flags & CMD_BRANCH_PAIR_FLAG_STRVIEW) ? ":sv" : "");
+      }
+      fputc(']', dst);
+    }
   }
 }
 
@@ -108,6 +131,12 @@ static void cmd_branch_free(cmd_t cmd)
 
   ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
   if (ptr) {
+    if (ptr->u.br.pairs) {
+      FREE(ptr->u.br.pairs);
+      ptr->u.br.pairs      = 0;
+      ptr->u.br.pair_ct    = 0;
+      ptr->u.br.pair_alloc = 0;
+    }
     if (ptr->u.br.proc) {
       value_t              *params;
       variable_def_t        def;
@@ -148,6 +177,7 @@ static cmd_t cmd_branch_dup(const cmd_t cmd)
 {
   value_t *dup_params;
   value_t *params;
+  cmd_t    dup;
 
   params = cmd_brproc_params_get(cmd);
   if (params) {
@@ -164,10 +194,33 @@ static cmd_t cmd_branch_dup(const cmd_t cmd)
     dup_params = 0;
   }
 
-  return cmd_branch_alloc(cmd_brtype_get(cmd),
+  dup = cmd_branch_alloc(cmd_brtype_get(cmd),
       cmd_brcond_get(cmd), cmd_brdst_get(cmd),
       cmd_brval_get(cmd), cmd_brproc_get(cmd),
       dup_params);
+  /* U3: the pair list is plain data (variable handles and captured layout);
+   * deep-copy it so a duplicated CALL owns its own pairs.  In this tree the
+   * body clone happens before code generation, so the list is normally
+   * empty here -- the copy exists so that invariant is not load-bearing. */
+  if (dup && cmd_brpairs_ct_get(cmd)) {
+    struct cmd_ *src;
+    struct cmd_ *dst;
+    size_t       ct;
+
+    src = cmd_element_seek(cmd, BOOLEAN_FALSE);
+    dst = cmd_element_seek(dup, BOOLEAN_TRUE);
+    ct  = src ? src->u.br.pair_ct : 0;
+    if (dst && ct) {
+      dst->u.br.pairs = CALLOC(ct, sizeof(*dst->u.br.pairs));
+      if (dst->u.br.pairs) {
+        memcpy(dst->u.br.pairs, src->u.br.pairs,
+            ct * sizeof(*dst->u.br.pairs));
+        dst->u.br.pair_ct    = ct;
+        dst->u.br.pair_alloc = ct;
+      }
+    }
+  }
+  return dup;
 }
 
 static void cmd_branch_label_remap(cmd_t cmd, const label_map_t *map)
@@ -361,7 +414,10 @@ cmd_t cmd_branch_alloc(
       ptr->u.br.var         = 0;
       ptr->u.br.proc        = proc;
       ptr->u.br.proc_params = proc_params;
-      
+      ptr->u.br.pairs       = 0;
+      ptr->u.br.pair_ct     = 0;
+      ptr->u.br.pair_alloc  = 0;
+
       cmd_brdst_set(cmd, dst);
       cmd_brval_set(cmd, val);
       if (proc) {
@@ -627,3 +683,106 @@ value_t cmd_brproc_param_get(const cmd_t cmd, size_t ix)
     : VALUE_NONE;
 }
 
+
+/*
+ * U3: the open-array pair list attached to a CALL command.
+ *
+ * The list is call-site state, not compiler-wide state: a pair is recorded
+ * in pass 1, captured after placement, and read by the call-site descriptor
+ * store in pass 2 -- everything through the CALL that owns it.  A list miss
+ * is not an error: most calls have no open-array actuals.
+ */
+cmd_branch_pair_t *cmd_brpairs_get(const cmd_t cmd)
+{
+  struct cmd_ *ptr;
+
+  ptr = cmd_element_seek(cmd, BOOLEAN_FALSE);
+  return (ptr && (CMD_TYPE_BRANCH == cmd_type_get(cmd)))
+    ? ptr->u.br.pairs
+    : 0;
+}
+
+size_t cmd_brpairs_ct_get(const cmd_t cmd)
+{
+  struct cmd_ *ptr;
+
+  ptr = cmd_element_seek(cmd, BOOLEAN_FALSE);
+  return (ptr && (CMD_TYPE_BRANCH == cmd_type_get(cmd)))
+    ? ptr->u.br.pair_ct
+    : 0;
+}
+
+cmd_branch_pair_t *cmd_brpair_find(const cmd_t cmd, variable_t actual,
+    variable_t formal)
+{
+  cmd_branch_pair_t *pairs;
+  size_t             ii;
+
+  pairs = cmd_brpairs_get(cmd);
+  if (!pairs) {
+    return 0;
+  }
+  for (ii = 0; ii < cmd_brpairs_ct_get(cmd); ii++) {
+    if ((pairs[ii].actual == actual) && (pairs[ii].formal == formal)) {
+      return &pairs[ii];
+    }
+  }
+  return 0;
+}
+
+boolean_t cmd_brpair_add(cmd_t cmd, variable_t actual, variable_t formal,
+    flag_t flags)
+{
+  struct cmd_ *ptr;
+  cmd_branch_pair_t *tmp;
+  size_t             resize;
+  size_t             ii;
+
+  if ((CMD_TYPE_BRANCH != cmd_type_get(cmd))
+      || !actual || !formal || (VARIABLE_NONE == actual)
+      || (VARIABLE_NONE == formal)) {
+    return BOOLEAN_TRUE; /* nothing to attach */
+  }
+  ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
+  if (!ptr) {
+    return BOOLEAN_FALSE;
+  }
+  for (ii = 0; ii < ptr->u.br.pair_ct; ii++) {
+    if ((ptr->u.br.pairs[ii].actual == actual)
+        && (ptr->u.br.pairs[ii].formal == formal)) {
+      ptr->u.br.pairs[ii].flags |= flags;
+      return BOOLEAN_TRUE;
+    }
+  }
+  if (ptr->u.br.pair_ct == ptr->u.br.pair_alloc) {
+    resize = ptr->u.br.pair_alloc ? 2 * ptr->u.br.pair_alloc : 4;
+    tmp = REALLOC(ptr->u.br.pairs, resize * sizeof(*tmp));
+    if (!tmp) {
+      return BOOLEAN_FALSE;
+    }
+    ptr->u.br.pairs      = tmp;
+    ptr->u.br.pair_alloc = resize;
+  }
+  tmp = &ptr->u.br.pairs[ptr->u.br.pair_ct++];
+  tmp->actual     = actual;
+  tmp->formal     = formal;
+  tmp->flags      = flags;
+  tmp->chunk_ct   = 0;
+  tmp->chain_src  = VARIABLE_NONE;
+  tmp->chain_sz   = 0;
+  for (ii = 0; ii < CMD_BRANCH_PAIR_CHUNK_MAX; ii++) {
+    tmp->chunk_sz[ii]   = 0;
+    tmp->chunk_base[ii] = 0;
+  }
+  return BOOLEAN_TRUE;
+}
+
+void cmd_brpair_drop_last(cmd_t cmd)
+{
+  struct cmd_ *ptr;
+
+  ptr = cmd_element_seek(cmd, BOOLEAN_TRUE);
+  if (ptr && (CMD_TYPE_BRANCH == cmd_type_get(cmd)) && ptr->u.br.pair_ct) {
+    ptr->u.br.pair_ct--;
+  }
+}

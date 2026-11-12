@@ -17,9 +17,13 @@
 
 #include "../libutils/mem.h"
 #include "../libcore/pf_proc.h"
+#include "../libcore/cmd_brch.h"
 #include "pic_msg.h"
 #include "pic_stvar.h"
+#include "pic_inst.h"
 #include "pic_var.h"
+#include "pic_access.h" /* A3: layout-generation bumps */
+#include "pic_opfn.h"   /* F2d: the shared _seg_addr label */
 
 /* U3-5: file-local now (it had no external user); pic_var_reset() calls it
  * before the definition, so the prototype lives here. */
@@ -76,37 +80,6 @@ typedef struct pic_var_ptr_bind_ {
   variable_t tvar;
   boolean_t  escaped;
 } pic_var_ptr_bind_t;
-
-typedef struct pic_var_openarray_pair_ {
-  variable_t actual;
-  variable_t formal;
-  boolean_t                   reported;
-  /* PASS-ON pair: the actual is another procedure's open-array formal, so all
-   * this call site knows is the pointer.  When that formal has a runtime map
-   * of its own the CALL SITE copies it here (the layout is only known at run
-   * time); when it has a compile-time map the captured layout below is enough
-   * (see pic_var_openarray_pair_layout_get). */
-  boolean_t                    passon;
-  variable_t                   chain_src;   /* runtime map copied per call */
-  variable_sz_t                chain_sz;    /* bytes to copy */
-  /* STRING PAYLOAD VIEW: the actual is the heap array standing for a string
-   * payload whose base offset is staged at run time -- the formal's map gets
-   * a base word and the walk adds it to the index (fixes/
-   * fix_string_arg_view.md) */
-  boolean_t                    strview;
-  /* Layout of the ACTUAL captured at the end of placement: the chunk maps
-   * are not visible during call emission (found 2026-11-02 -- ct read 0 at
-   * the call site), so the call-site fill reads the layout from here.  A
-   * linearly placed actual is normalized to ONE chunk (its base and size)
-   * so every pair carries a layout and two call sites can be compared. */
-  variable_ct_t                chunk_ct;
-  variable_sz_t                chunk_sz[PIC_CHUNK_MAP_MAX];
-  variable_base_t              chunk_base[PIC_CHUNK_MAP_MAX];
-  /* the actual's placement is chunked wider than the runtime map can
-   * describe; the pair cannot carry that layout (found 2026-11-09: two
-   * different >cap layouts through one formal silently used one baked map) */
-  boolean_t                    over_cap;
-} pic_var_openarray_pair_t;
 
 /* a variable placed after placement ran, and the placement generation its
  * address belongs to (see pic_var_late_replace_all) */
@@ -172,8 +145,13 @@ typedef struct pic_var_state_ {
   variable_t                  *call_actuals;
   size_t                       call_actuals_used;
   size_t                       call_actuals_alloc;
-  pic_var_openarray_pair_t    *openarray_pairs;
-  size_t                       openarray_pairs_used;
+  /* U3: per-formal aggregates that OUTLIVE the capture pass because the
+   * emitters (the call-site store, the shared walk helpers) ask them during
+   * pass-2 emission.  Filled from the CALL attachments in one walk. */
+  variable_t                  *openarray_strview_fed;
+  size_t                       openarray_strview_fed_used;
+  size_t                       openarray_strview_fed_alloc;
+  cmd_t                        openarray_cmd_head; /* set in pass 2 */
   /* per-formal runtime chunk maps (see pic_var_chunk_prepare_emit) */
   pic_var_formal_map_t        *formal_maps;
   size_t                       formal_maps_used;
@@ -212,7 +190,8 @@ typedef struct pic_var_state_ {
                                                 * index argument (2 bytes) */
   variable_t                   chunk_g_base;
   variable_t                   chunk_g_span1;
-  size_t                       openarray_pairs_alloc;
+  variable_t                   whereis_scratch; /* runtime slot WHEREIS
+                                                 * resolution (pointer size) */
   boolean_t                    refused;
   boolean_t                    refused_ptr;
   boolean_t                    refused_call;
@@ -254,7 +233,7 @@ void pic_var_reset(void)
   FREE(pic_var.ptr_targets);
   FREE(pic_var.ptr_binds);
   FREE(pic_var.call_actuals);
-  FREE(pic_var.openarray_pairs);
+  FREE(pic_var.openarray_strview_fed);
   FREE(pic_var.formal_maps);
   FREE(pic_var.strview_sites);
   FREE(pic_var.strview_formals);
@@ -462,11 +441,25 @@ static variable_t    pic_fat_objects[PIC_FAT_MAX_OBJECTS];
 static variable_ct_t pic_fat_objects_used;
 static boolean_t     pic_fat_cap_reported;   /* refuse once, not per pass */
 
+/* F2d: the O(1) dispatch's data.  `pic_fat_desc_vars[i]` is object i+1's
+ * segment descriptor (a compiler-owned byte array), `pic_fat_desc_tbl` is
+ * `_obj_desc[]` (2 bytes per id, entry i = descriptor i's address) and
+ * `pic_fat_id_cell` is the dispatch's id argument.  All are created after the
+ * final placement and filled by preuser init. */
+static variable_t pic_fat_desc_vars[PIC_FAT_MAX_OBJECTS];
+static variable_t pic_fat_desc_tbl;
+static variable_t pic_fat_id_cell;
+static boolean_t  pic_fat_desc_ready;
+
 static void pic_fat_object_reset(void)
 {
-  pic_fat_objects_used = 0;
-  pic_fat_cap_reported = BOOLEAN_FALSE;
+  pic_fat_objects_used  = 0;
+  pic_fat_cap_reported  = BOOLEAN_FALSE;
+  pic_fat_desc_ready    = BOOLEAN_FALSE;
+  pic_fat_desc_tbl      = VARIABLE_NONE;
+  pic_fat_id_cell       = VARIABLE_NONE;
   memset(pic_fat_objects, 0, sizeof(pic_fat_objects));
+  memset(pic_fat_desc_vars, 0, sizeof(pic_fat_desc_vars));
 }
 
 /* Assign (or find) the id of an object a fat pointer may address.  Ids are
@@ -505,6 +498,7 @@ boolean_t pic_fat_object_register(pfile_t *pf, variable_t var, unsigned *id)
     return BOOLEAN_FALSE;
   }
   pic_fat_objects[pic_fat_objects_used++] = var;
+  pic_access_generation_bump();
   if (0 != id) {
     *id = (unsigned) pic_fat_objects_used;
   }
@@ -653,12 +647,19 @@ boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar)
 
 void pic_var_pointer_bind_escape(variable_t pvar)
 {
-  size_t ii;
+  size_t    ii;
+  boolean_t changed;
 
+
+  changed = BOOLEAN_FALSE;
   for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
     if (pic_var.ptr_binds[ii].pvar == pvar) {
       pic_var.ptr_binds[ii].escaped = BOOLEAN_TRUE;
+      changed = BOOLEAN_TRUE;
     }
+  }
+  if (changed) {
+    pic_access_generation_bump();
   }
 }
 
@@ -958,6 +959,239 @@ variable_t pic_var_chunk_walk_arg_get(void)
   return pic_var.chunk_g_t;
 }
 
+/* pointer-size scratch for the resolved address of a runtime
+ * pointer-slot WHEREIS (pic_fat_whereis_resolve_emit fills it and stages
+ * FSR there, so the caller's INDF read yields the physical address).
+ * Created on first use; like the walk scratch it must survive placement. */
+variable_t pic_var_whereis_scratch_get(pfile_t *pf)
+{
+  if (VARIABLE_NONE == pic_var.whereis_scratch) {
+    /* the resolved address (pointer size) followed by a 2-byte address
+     * cell for the classic core's FSR/IRP staging */
+    pic_var.whereis_scratch = pic_var_chunk_global_create(pf,
+        "_pic_fat_whereis",
+        (variable_sz_t) (pic_pointer_size_get(pf) + 2));
+  }
+  return pic_var.whereis_scratch;
+}
+
+/* ---- F2d: the O(1) dispatch's tables ---------------------------------
+ *
+ * F2b/F2c dispatched on the pointer's tag with a compare chain: one
+ * `movf/andlw/xorlw/btfss/goto` block per object id, at every deref site.
+ * That is O(ids) CODE per site (~5 instructions per id per site; a 127-id
+ * program is ~635 instructions per site).  F2d replaces it with one table:
+ *
+ *     tag -> id -> _obj_desc[id] -> shared _seg_addr(id, offset) walk
+ *
+ * `_obj_desc[]` holds each fat object's descriptor address; the descriptor
+ * is the runtime chunk-map form F2a defined (`[count][base lo,hi,span]...`),
+ * so the walk is the loop the runtime chunk walks already use -- only the
+ * map's address comes from the pointer's tag instead of a formal.
+ *
+ * The tables are created AFTER the final placement (a layout trial re-places
+ * everything and throws its emission away; a descriptor built from the trial
+ * layout would name the wrong segments) and placed out of the leftover free
+ * list, exactly like the walk scratch.  Their BYTES are constants, so they
+ * are written by preuser init (pic_fat_desc_fill_emit) -- before the user
+ * entry runs, after the clear-BSS code that would otherwise erase them.  The
+ * fill re-reads the chunk map at emission time rather than caching bytes:
+ * placement is final, so the two cannot disagree.
+ */
+
+boolean_t pic_fat_table_ready(void)
+{
+  return pic_fat_desc_ready;
+}
+
+variable_t pic_fat_id_get(void)
+{
+  return pic_fat_id_cell;
+}
+
+variable_t pic_fat_desc_tbl_get(void)
+{
+  return pic_fat_desc_tbl;
+}
+
+variable_t pic_fat_desc_var_get(unsigned id)
+{
+  if ((id < 1U) || (id > (unsigned) PIC_FAT_MAX_OBJECTS)) {
+    return VARIABLE_NONE;
+  }
+  return pic_fat_desc_vars[id - 1U];
+}
+
+void pic_fat_desc_prepare(pfile_t *pf)
+{
+  variable_t    cnt;
+  variable_t    base;
+  variable_t    span;
+  variable_ct_t ct;
+  variable_ct_t ii;
+  char          name[48];
+
+  if (pic_fat_desc_ready || !pic_fat_pointers_enabled(pf)) {
+    return;
+  }
+  ct = pic_fat_object_ct();
+  if (0 == ct) {
+    return;
+  }
+  /* from here on the program needs the tables: the dispatch has no chain
+   * fallback any more, so every failure is a diagnostic, never a silent
+   * linear deref */
+  if (!pic_var_chunk_walk_globals_get(pf, &cnt, &base, &span)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "fat pointers: the segment walk's scratch could not be created");
+    return;
+  }
+  pic_fat_id_cell = pic_var_chunk_global_create(pf, "_pic_fat_id", 1);
+  if (VARIABLE_NONE == pic_fat_id_cell) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "fat pointers: no room for the dispatch's id cell");
+    return;
+  }
+  pic_fat_desc_tbl = pic_var_chunk_global_create(pf, "_pic_fat_desc_tbl",
+      (variable_sz_t) (2U * ((unsigned) ct + 1U)));
+  if (VARIABLE_NONE == pic_fat_desc_tbl) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "fat pointers: no room for the object table (%u bytes of RAM)",
+        (unsigned) (2U * ((unsigned) ct + 1U)));
+    return;
+  }
+  for (ii = 0; ii < ct; ii++) {
+    pic_mem_object_t obj;
+    variable_t       var;
+
+    var = pic_fat_object_get((unsigned) (ii + 1));
+    if ((VARIABLE_NONE == var) || !pic_mem_object_get(var, &obj)
+        || !obj.seg_base || (obj.seg_ct < 2)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "fat pointers: object id %u has no segment map",
+          (unsigned) (ii + 1));
+      return;
+    }
+    sprintf(name, "_pic_fat_desc_%u", (unsigned) (ii + 1));
+    pic_fat_desc_vars[ii] = pic_var_chunk_global_create(pf, name,
+        (variable_sz_t) pic_fat_desc_size(obj.seg_ct));
+    if (VARIABLE_NONE == pic_fat_desc_vars[ii]) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "fat pointers: no room for the segment descriptor of '%s' "
+          "(%u bytes of RAM)",
+          variable_name_get(var) ? variable_name_get(var) : "?",
+          (unsigned) pic_fat_desc_size(obj.seg_ct));
+      return;
+    }
+  }
+  if (VARIABLE_BASE_UNKNOWN == variable_base_get(pic_fat_desc_tbl, 0)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "fat pointers: no room for the object table (%u bytes of RAM)",
+        (unsigned) (2U * ((unsigned) ct + 1U)));
+    return;
+  }
+  pic_fat_desc_ready = BOOLEAN_TRUE;
+  /* the shared walk's body is emitted at the top of the image with the
+   * chunk-walk helpers, so the reset vector must know about it: create the
+   * label before pic_code_preamble decides the entry form */
+  pic_fat_seg_addr_register(pf);
+  /* the descriptor fill lives in preuser init, so that entry must be
+   * reached; the reset vector goes to the preuser label when it exists */
+  label_release(pic_label_find(pf, PIC_LABEL_PREUSER, BOOLEAN_TRUE));
+}
+
+/* Emit the load-time fill of the descriptors and `_obj_desc[]`.  Called from
+ * preuser init (after its clear-BSS pass), so the tables are valid before any
+ * user code runs.  Immediate MOVLW/MOVWF pairs only: nothing the surrounding
+ * init code holds is disturbed, and the addresses are final. */
+void pic_fat_desc_fill_emit(pfile_t *pf)
+{
+  value_t        tblval;
+  variable_ct_t  ct;
+  variable_ct_t  ii;
+
+  if (!pic_fat_desc_ready) {
+    return;
+  }
+  tblval = value_alloc(pic_fat_desc_tbl);
+  if (!tblval) {
+    return;
+  }
+  ct = pic_fat_object_ct();
+  for (ii = 0; ii < ct; ii++) {
+    pic_mem_object_t obj;
+    variable_t       var;
+    variable_t       desc;
+    variable_base_t  dbase;
+    value_t          dval;
+    unsigned long   *bases;
+    unsigned        *lens;
+    unsigned char   *bytes;
+    unsigned         bx;
+    unsigned         sz;
+
+    var  = pic_fat_object_get((unsigned) (ii + 1));
+    desc = pic_fat_desc_var_get((unsigned) (ii + 1));
+    if ((VARIABLE_NONE == var) || (VARIABLE_NONE == desc)
+        || !pic_mem_object_get(var, &obj) || !obj.seg_base) {
+      continue;
+    }
+    dbase = variable_base_get(desc, 0);
+    if (VARIABLE_BASE_UNKNOWN == dbase) {
+      continue;
+    }
+    sz    = pic_fat_desc_size(obj.seg_ct);
+    bases = MALLOC((size_t) obj.seg_ct * sizeof(*bases));
+    lens  = MALLOC((size_t) obj.seg_ct * sizeof(*lens));
+    bytes = MALLOC((size_t) sz);
+    if (!bases || !lens || !bytes) {
+      FREE(bases);
+      FREE(lens);
+      FREE(bytes);
+      continue;
+    }
+    for (bx = 0; bx < obj.seg_ct; bx++) {
+      bases[bx] = (unsigned long) obj.seg_base[bx];
+      lens[bx]  = (unsigned) obj.seg_len[bx];
+    }
+    pic_fat_desc_build(obj.seg_ct, bases, lens, bytes);
+    dval = value_alloc(desc);
+    if (dval) {
+      for (bx = 0; bx < sz; bx++) {
+        if (bytes[bx]) {
+          pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, bytes[bx]);
+          pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dval, bx);
+        } else {
+          pic_instr_append_f(pf, PIC_OPCODE_CLRF, dval, bx);
+        }
+      }
+      value_release(dval);
+    }
+    FREE(bases);
+    FREE(lens);
+    FREE(bytes);
+    /* _obj_desc[id] = descriptor address (id is 1-based; slot 0 unused) */
+    if (dbase & 0xFFU) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (unsigned) (dbase & 0xFFU));
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tblval,
+          (size_t) (2U * ((unsigned) ii + 1U)));
+    } else {
+      pic_instr_append_f(pf, PIC_OPCODE_CLRF, tblval,
+          (size_t) (2U * ((unsigned) ii + 1U)));
+    }
+    if (dbase >> 8) {
+      pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+          (unsigned) ((dbase >> 8) & 0xFFU));
+      pic_instr_append_f(pf, PIC_OPCODE_MOVWF, tblval,
+          (size_t) (2U * ((unsigned) ii + 1U) + 1U));
+    } else {
+      pic_instr_append_f(pf, PIC_OPCODE_CLRF, tblval,
+          (size_t) (2U * ((unsigned) ii + 1U) + 1U));
+    }
+  }
+  value_release(tblval);
+}
+
 /* ---- per-formal runtime chunk maps -----------------------------------
  *
  * One callee body serves every call site, so a formal fed two DIFFERENT
@@ -1091,14 +1325,47 @@ boolean_t pic_var_strview_classic_formal(variable_t formal)
     ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
-/* any string payload-view pair feeds this formal? */
+/* U3: add `formal` to the persistent string-view aggregate (first wins) */
+static void pic_var_openarray_strview_fed_add(variable_t formal)
+{
+  size_t     ii;
+  size_t     resize;
+  variable_t *tmp;
+
+  if (!formal || (VARIABLE_NONE == formal)) {
+    return;
+  }
+  for (ii = 0; ii < pic_var.openarray_strview_fed_used; ii++) {
+    if (pic_var.openarray_strview_fed[ii] == formal) {
+      return;
+    }
+  }
+  if (pic_var.openarray_strview_fed_used
+      == pic_var.openarray_strview_fed_alloc) {
+    resize = pic_var.openarray_strview_fed_alloc
+      ? 2 * pic_var.openarray_strview_fed_alloc : 8;
+    tmp = REALLOC(pic_var.openarray_strview_fed,
+        resize * sizeof(*tmp));
+    if (!tmp) {
+      return;
+    }
+    pic_var.openarray_strview_fed       = tmp;
+    pic_var.openarray_strview_fed_alloc = resize;
+  }
+  pic_var.openarray_strview_fed[pic_var.openarray_strview_fed_used++]
+    = formal;
+}
+
+/* any string payload-view pair feeds this formal?  (U3: a persistent
+ * per-formal aggregate computed in one walk of the CALL attachments; the
+ * call-site store and the walk helpers ask it during emission, when the
+ * capture pass is long over) */
 boolean_t pic_var_openarray_formal_strview_fed(variable_t formal)
 {
   size_t ii;
 
-  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
-    if ((pic_var.openarray_pairs[ii].formal == formal)
-        && pic_var.openarray_pairs[ii].strview) {
+  for (ii = 0; ii < pic_var.openarray_strview_fed_used; ii++) {
+    if (pic_var.openarray_strview_fed[ii] == formal) {
       return BOOLEAN_TRUE;
     }
   }
@@ -1133,6 +1400,7 @@ void pic_var_openarray_formal_block(variable_t formal)
     pic_var.openarray_blocked_alloc = resize;
   }
   pic_var.openarray_blocked[pic_var.openarray_blocked_used++] = formal;
+  pic_access_generation_bump();
 }
 
 static boolean_t pic_var_openarray_formal_blocked(variable_t formal)
@@ -1147,119 +1415,151 @@ static boolean_t pic_var_openarray_formal_blocked(variable_t formal)
   return BOOLEAN_FALSE;
 }
 
-/* Does this open-array formal address its elements through a runtime map?
- *
- * TRUE only once pic_var_chunk_prepare_emit gave it a map, i.e. when its call
- * sites hand over two or more different layouts and every one of them can
- * fill it.  Both the call site and the callee body ask THIS question, so the
- * two sides can never disagree. */
-boolean_t pic_var_openarray_pair_formal_runtime_get(variable_t formal)
+/* U3 Phase 1: the CALL command is the channel between the passes.  The
+ * pass-2 capture (and the placement-time map propagation) walk the IR; this
+ * records the list head once, at the start of pass 2. */
+void pic_var_openarray_ir_set(const cmd_t cmd_head)
 {
-  return (VARIABLE_NONE != pic_var_openarray_formal_map_get(formal))
-    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  pic_var.openarray_cmd_head = cmd_head;
+  pic_var.openarray_strview_fed_used = 0;
 }
 
-/* Layout captured for an actual at propagation time (see the pair struct).
- * Returns BOOLEAN_TRUE when the actual was chunked with 2..4 chunks and the
- * layout is available; the call-site descriptor store uses it because the
- * chunk maps themselves are not reachable from the emitter. */
-boolean_t pic_var_openarray_pair_layout_get(variable_t actual,
-    variable_ct_t *ct, variable_sz_t *sz, variable_base_t *base)
+/* the expected attachment for one CALL parameter, from the record rules */
+static void pic_var_pair_expected(const cmd_t cmd, size_t ii,
+    variable_t *actual, variable_t *formal, flag_t *flags)
 {
-  size_t ii;
+  pfile_proc_t *tproc;
+  value_t       fval;
+  value_t      *params;
+  variable_t    avar;
 
-  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
-    if (pic_var.openarray_pairs[ii].actual != actual) {
-      continue;
-    }
-    if ((pic_var.openarray_pairs[ii].chunk_ct >= 1)
-        && (pic_var.openarray_pairs[ii].chunk_ct <= PIC_CHUNK_MAP_MAX)) {
-      variable_ct_t cix;
-
-      *ct = pic_var.openarray_pairs[ii].chunk_ct;
-      for (cix = 0; cix < *ct; cix++) {
-        sz[cix]   = pic_var.openarray_pairs[ii].chunk_sz[cix];
-        base[cix] = pic_var.openarray_pairs[ii].chunk_base[cix];
-      }
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
-}
-
-/* A PASS-ON call site (`inner(data)` inside a procedure that is itself walking
- * `data`) has no compile-time layout to hand over: it copies the source
- * formal's runtime map instead.  Returns the source map and its byte count. */
-boolean_t pic_var_openarray_pair_chain_get(variable_t actual, variable_t formal,
-    variable_t *src, variable_sz_t *sz)
-{
-  size_t ii;
-
-  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
-    if ((pic_var.openarray_pairs[ii].actual == actual)
-        && (pic_var.openarray_pairs[ii].formal == formal)
-        && (VARIABLE_NONE != pic_var.openarray_pairs[ii].chain_src)) {
-      *src = pic_var.openarray_pairs[ii].chain_src;
-      *sz  = pic_var.openarray_pairs[ii].chain_sz;
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
-}
-
-/* mark every (actual, formal) pair of this call site as a string payload
- * view -- the actual value is registered with a staged base offset */
-void pic_var_openarray_pair_strview_mark(variable_t actual, variable_t formal)
-{
-  size_t ii;
-
-  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
-    if ((pic_var.openarray_pairs[ii].actual == actual)
-        && (pic_var.openarray_pairs[ii].formal == formal)) {
-      pic_var.openarray_pairs[ii].strview = BOOLEAN_TRUE;
-    }
-  }
-}
-
-void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    boolean_t passon)
-{
-  size_t ii;
-
-  if (!actual || !formal
-      || (VARIABLE_NONE == actual) || (VARIABLE_NONE == formal)) {
+  *actual = VARIABLE_NONE;
+  *formal = VARIABLE_NONE;
+  *flags  = 0;
+  params  = cmd_brproc_params_get(cmd);
+  tproc   = value_proc_get(cmd_brproc_get(cmd));
+  if (!params || !tproc
+      || (ii >= cmd_brproc_param_ct_get(cmd))
+      || pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_REENTRANT)
+      || pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_INDIRECT)
+      || pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_TASK)
+      || pfile_proc_flag_test(tproc, PFILE_PROC_FLAG_FRAME)) {
     return;
   }
-  for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
-    if ((pic_var.openarray_pairs[ii].actual == actual)
-        && (pic_var.openarray_pairs[ii].formal == formal)) {
-      return;
-    }
+  avar = value_variable_get(params[ii]);
+  if (!avar || (VARIABLE_NONE == avar)
+      || (VALUE_NONE != value_baseofs_get(params[ii]))) {
+    return;
   }
-  if (pic_var.openarray_pairs_used == pic_var.openarray_pairs_alloc) {
-    size_t resize;
-    void  *tmp;
+  fval = pfile_proc_param_get(tproc, ii);
+  if (!fval) {
+    return;
+  }
+  if (VARIABLE_DEF_TYPE_ARRAY
+      == variable_def_type_get(variable_def_get(avar))) {
+    *actual = avar;
+    *formal = value_variable_get(fval);
+    if (VARIABLE_NONE != pic_var_strview_site_get(params[ii])) {
+      *flags = CMD_BRANCH_PAIR_FLAG_STRVIEW;
+    }
+  } else if (VARIABLE_DEF_TYPE_POINTER == value_type_get(fval)) {
+    *actual = avar;
+    *formal = value_variable_get(fval);
+    *flags  = CMD_BRANCH_PAIR_FLAG_PASSON;
+  }
+}
 
-    resize = pic_var.openarray_pairs_alloc
-      ? 2 * pic_var.openarray_pairs_alloc : 32;
-    tmp = REALLOC(pic_var.openarray_pairs,
-        resize * sizeof(*pic_var.openarray_pairs));
-    if (!tmp) {
-      return;
+/* the acceptance comparator (see pic_var.h) */
+void pic_var_pair_compare(pfile_t *pf, const cmd_t cmd_head)
+{
+  size_t      calls;
+  size_t      pairs;
+  size_t      mismatches;
+  boolean_t   loud;
+  const char *env;
+  cmd_t       cmd;
+
+  calls      = 0;
+  pairs      = 0;
+  mismatches = 0;
+  (void) env;
+  loud       = pic_env_on("JALV2_U3_PAIR_COMPARE");
+  for (cmd = cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    cmd_branch_pair_t *att;
+    size_t             att_ct;
+    size_t             ii;
+    size_t             jj;
+    boolean_t          seen;
+
+    if (!cmd_brproc_get(cmd)) {
+      continue;
     }
-    pic_var.openarray_pairs       = tmp;
-    pic_var.openarray_pairs_alloc = resize;
+    calls++;
+    att    = cmd_brpairs_get(cmd);
+    att_ct = cmd_brpairs_ct_get(cmd);
+    pairs += att_ct;
+    /* 1. every expected pair is present with the expected flags ... */
+    for (ii = 0; ii < cmd_brproc_param_ct_get(cmd); ii++) {
+      variable_t actual;
+      variable_t formal;
+      flag_t     flags;
+
+      pic_var_pair_expected(cmd, ii, &actual, &formal, &flags);
+      if (VARIABLE_NONE == actual) {
+        continue;
+      }
+      seen = BOOLEAN_FALSE;
+      for (jj = 0; jj < att_ct; jj++) {
+        if ((att[jj].actual != actual) || (att[jj].formal != formal)) {
+          continue;
+        }
+        seen = BOOLEAN_TRUE;
+        if ((att[jj].flags & CMD_BRANCH_PAIR_FLAG_PASSON) !=
+              (flags & CMD_BRANCH_PAIR_FLAG_PASSON)
+            || (att[jj].flags & CMD_BRANCH_PAIR_FLAG_STRVIEW) !=
+              (flags & CMD_BRANCH_PAIR_FLAG_STRVIEW)) {
+          mismatches++;
+        }
+        break;
+      }
+      if (!seen) {
+        mismatches++;
+      }
+    }
+    /* 2. no attachment the call's own parameters do not explain ... */
+    for (jj = 0; jj < att_ct; jj++) {
+      boolean_t explained;
+
+      explained = BOOLEAN_FALSE;
+      for (ii = 0; ii < cmd_brproc_param_ct_get(cmd); ii++) {
+        variable_t actual;
+        variable_t formal;
+        flag_t     flags;
+
+        pic_var_pair_expected(cmd, ii, &actual, &formal, &flags);
+        if ((actual == att[jj].actual) && (formal == att[jj].formal)) {
+          explained = BOOLEAN_TRUE;
+          break;
+        }
+      }
+      if (!explained) {
+        mismatches++;
+      }
+    }
   }
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].actual   = actual;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].formal   = formal;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].reported = BOOLEAN_FALSE;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].passon   = passon;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_src = VARIABLE_NONE;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].chain_sz  = 0;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].strview  = BOOLEAN_FALSE;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].chunk_ct = 0;
-  pic_var.openarray_pairs[pic_var.openarray_pairs_used].over_cap = BOOLEAN_FALSE;
-  pic_var.openarray_pairs_used++;
+  if (loud || mismatches) {
+    fprintf(stderr, "pair-compare: %u calls, %u pairs, %u mismatches\n",
+        (unsigned) calls, (unsigned) pairs, (unsigned) mismatches);
+  }
+  if (loud && (0 == calls)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "pair-compare: no CALL commands in the corpus program");
+  }
+  if (mismatches) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "pair-compare: %u open-array pair attachment(s) disagree with the "
+        "call parameters", (unsigned) mismatches);
+  }
 }
 
 /* copy src's chunk map onto dst (replace semantics; dst usually an
@@ -1310,24 +1610,6 @@ static void pic_variable_chunk_map_copy(pfile_t *pf, variable_t src,
  * fix_openarray_formal_chunk_map.md).  A formal fed two different layouts now
  * owns a map that every call site fills (pic_var_chunk_prepare_emit), while
  * the old baked propagation below still serves the one-layout case. */
-
-/* two pairs' captured layouts describe the same addressing? */
-static boolean_t pic_var_openarray_layout_same(
-    const pic_var_openarray_pair_t *a, const pic_var_openarray_pair_t *b)
-{
-  variable_ct_t ii;
-
-  if (a->chunk_ct != b->chunk_ct) {
-    return BOOLEAN_FALSE;
-  }
-  for (ii = 0; ii < a->chunk_ct; ii++) {
-    if ((a->chunk_base[ii] != b->chunk_base[ii])
-        || (a->chunk_sz[ii] != b->chunk_sz[ii])) {
-      return BOOLEAN_FALSE;
-    }
-  }
-  return BOOLEAN_TRUE;
-}
 
 /* create (or grow) the map buffer of one formal.  It holds
  * [count][base lo,hi,span]..., and the size is exact for the widest layout
@@ -1386,154 +1668,299 @@ static boolean_t pic_var_formal_map_resize(pfile_t *pf, variable_t formal,
  *  3. create + place the walk scratch, so nothing is created during emission
  *     (creating and placing a variable mid-emit re-entered the allocator --
  *     a pass-3 hang on Rob's full program, found 2026-11-02). */
-/* the byte size `formal`'s map needs given the state right now (0 = none).
- *  - its own captured layouts: a map only when two of them DIFFER and one is
- *    chunked (one layout is addressed exactly by the baked copy);
- *  - every PASS-ON source formal that already has a runtime map: the call site
- *    copies that map, so the target must be at least as big. */
-static variable_sz_t pic_var_formal_map_need(pfile_t *pf, variable_t formal)
+/* P3: defined after the placement helpers it consumes (see the block
+ * comment at the definition). */
+static void pic_var_segment_audit(pfile_t *pf);
+
+/* U3: the capture pass's working set.  Built from the CALL attachments (one
+ * walk), it lives only for the duration of pic_var_chunk_prepare_emit -- the
+ * authoritative copy is on the IR.  The per-formal entries are the plan's
+ * "persistent per-formal aggregates" in their pass-local form; the ones the
+ * emitters need later (strview-fed, the formal maps) are published to
+ * pic_var state as the pass runs. */
+typedef struct pic_var_u3_pair_ {
+  variable_t      actual;
+  variable_t      formal;
+  size_t          formal_ix;   /* index into the per-formal aggregates */
+  flag_t          flags;       /* CMD_BRANCH_PAIR_FLAG_* */
+  boolean_t       reported;
+  variable_ct_t   chunk_ct;
+  variable_sz_t   chunk_sz[PIC_CHUNK_MAP_MAX];
+  variable_base_t chunk_base[PIC_CHUNK_MAP_MAX];
+  variable_t      chain_src;
+  variable_sz_t   chain_sz;
+} pic_var_u3_pair_t;
+
+typedef struct pic_var_u3_formal_ {
+  variable_t      formal;
+  size_t          pair_ct;
+  variable_ct_t   max_ct;
+  boolean_t       chunked;
+  boolean_t       differ;
+  boolean_t       over_cap;
+  boolean_t       strview_fed;
+  variable_ct_t   sv_piece_max;
+  variable_sz_t   passon_need;
+  boolean_t       first_valid;
+  variable_ct_t   first_ct;
+  variable_sz_t   first_sz[PIC_CHUNK_MAP_MAX];
+  variable_base_t first_base[PIC_CHUNK_MAP_MAX];
+} pic_var_u3_formal_t;
+
+static pic_var_u3_pair_t *pic_var_u3_pair_find(pic_var_u3_pair_t *pairs,
+    size_t ct, variable_t actual, variable_t formal)
 {
-  size_t        pi;
-  size_t        pj;
-  variable_ct_t max_ct;
+  size_t ii;
+
+  for (ii = 0; ii < ct; ii++) {
+    if ((pairs[ii].actual == actual) && (pairs[ii].formal == formal)) {
+      return &pairs[ii];
+    }
+  }
+  return 0;
+}
+
+/* capture one unique pair's layout from the actual's final chunk map (step 1
+ * of the old pass, unchanged) */
+static void pic_var_u3_pair_capture(pfile_t *pf, pic_var_u3_pair_t *pair)
+{
+  pic_variable_chunk_map_t *m;
+
+  m = pic_variable_chunk_map_find(pair->actual);
+  if (m && (m->ct >= 1) && (m->ct <= PIC_CHUNK_MAP_MAX)) {
+    variable_ct_t cix;
+
+    pair->chunk_ct = m->ct;
+    for (cix = 0; cix < m->ct; cix++) {
+      pair->chunk_sz[cix]   = m->sz[cix];
+      pair->chunk_base[cix] = m->base[cix];
+    }
+  } else if (m && (m->ct > PIC_CHUNK_MAP_MAX)) {
+    /* not "linear": the actual IS chunked, just wider than the map */
+    pair->chunk_ct = 0;
+    pair->flags   |= CMD_BRANCH_PAIR_FLAG_OVER_CAP;
+  } else if (pair->flags & CMD_BRANCH_PAIR_FLAG_PASSON) {
+    pair->chunk_ct = 0;
+  } else {
+    /* no chunk map: the actual is placed linearly (or is a ROM const
+     * array, whose base is unknown here) -- one chunk covers it */
+    pair->chunk_ct        = 1;
+    pair->chunk_base[0]   = variable_base_get(pair->actual, 0);
+    pair->chunk_sz[0]     = pic_variable_def_storage_need_get(pf,
+        variable_def_get(pair->actual), 0);
+  }
+}
+
+/* rebuild the per-formal aggregates from the current unique pairs, in first
+ * appearance order.  Called once per fixpoint round because step 2a can drop
+ * a pass-on pair's inherited layout, which is exactly what the old scan of
+ * the live registry saw. */
+static void pic_var_u3_formals_rebuild(pic_var_u3_pair_t *pairs,
+    size_t pair_ct, pic_var_u3_formal_t *formals, size_t *formal_ct)
+{
+  size_t pi;
+  size_t fi;
+
+  *formal_ct = 0;
+  for (pi = 0; pi < pair_ct; pi++) {
+    pic_var_u3_formal_t *f;
+
+    f = 0;
+    for (fi = 0; fi < *formal_ct; fi++) {
+      if (formals[fi].formal == pairs[pi].formal) {
+        f = &formals[fi];
+        break;
+      }
+    }
+    if (!f) {
+      f = &formals[(*formal_ct)++];
+      f->formal       = pairs[pi].formal;
+      f->pair_ct      = 0;
+      f->max_ct       = 0;
+      f->chunked      = BOOLEAN_FALSE;
+      f->differ       = BOOLEAN_FALSE;
+      f->over_cap     = BOOLEAN_FALSE;
+      f->strview_fed  = BOOLEAN_FALSE;
+      f->sv_piece_max = 0;
+      f->passon_need  = 0;
+      f->first_valid  = BOOLEAN_FALSE;
+      f->first_ct     = 0;
+    }
+    pairs[pi].formal_ix = (size_t) (f - formals);
+  }
+  /* second pass: aggregate the layouts (pair order is stable, so the
+   * "compare against the first layout" rule is the old pairwise rule) */
+  for (pi = 0; pi < pair_ct; pi++) {
+    pic_var_u3_pair_t   *pair;
+    pic_var_u3_formal_t *f;
+
+    pair = &pairs[pi];
+    f    = &formals[pair->formal_ix];
+    f->pair_ct++;
+    if ((pair->flags & CMD_BRANCH_PAIR_FLAG_OVER_CAP)
+        || (pair->chunk_ct > PIC_CHUNK_MAP_MAX)) {
+      f->over_cap = BOOLEAN_TRUE;
+    }
+    if (pair->flags & CMD_BRANCH_PAIR_FLAG_STRVIEW) {
+      f->strview_fed = BOOLEAN_TRUE;
+    }
+    if (pair->chunk_ct >= 1) {
+      if (pair->chunk_ct > f->max_ct) {
+        f->max_ct = pair->chunk_ct;
+      }
+      if (pair->chunk_ct >= 2) {
+        f->chunked = BOOLEAN_TRUE;
+      }
+      if (!f->first_valid) {
+        variable_ct_t cix;
+
+        f->first_ct    = pair->chunk_ct;
+        for (cix = 0; cix < pair->chunk_ct; cix++) {
+          f->first_sz[cix]   = pair->chunk_sz[cix];
+          f->first_base[cix] = pair->chunk_base[cix];
+        }
+        f->first_valid = BOOLEAN_TRUE;
+      } else {
+        variable_ct_t cix;
+
+        if (f->first_ct != pair->chunk_ct) {
+          f->differ = BOOLEAN_TRUE;
+        }
+        for (cix = 0; (cix < pair->chunk_ct) && !f->differ; cix++) {
+          if ((f->first_sz[cix] != pair->chunk_sz[cix])
+              || (f->first_base[cix] != pair->chunk_base[cix])) {
+            f->differ = BOOLEAN_TRUE;
+          }
+        }
+      }
+      if (pair->flags & CMD_BRANCH_PAIR_FLAG_STRVIEW) {
+        variable_ct_t ppieces;
+        variable_ct_t cix;
+
+        ppieces = 0;
+        for (cix = 0; cix < pair->chunk_ct; cix++) {
+          ppieces += (variable_ct_t) ((pair->chunk_sz[cix] + 254U) / 255U);
+        }
+        if (ppieces > f->sv_piece_max) {
+          f->sv_piece_max = ppieces;
+        }
+      }
+    }
+    if ((pair->flags & CMD_BRANCH_PAIR_FLAG_PASSON)
+        && (0 == pair->chunk_ct)) {
+      variable_t src;
+      variable_sz_t ssz;
+
+      src = pic_var_openarray_formal_map_get(pair->actual);
+      if (VARIABLE_NONE != src) {
+        ssz = variable_sz_get(src);
+        if (ssz > f->passon_need) {
+          f->passon_need = ssz;
+        }
+      }
+    }
+  }
+}
+
+/* the byte size a formal's map needs, from its aggregate (the old
+ * pic_var_formal_map_need, O(1) in the pair count) */
+static variable_sz_t pic_var_u3_formal_need(pfile_t *pf,
+    const pic_var_u3_formal_t *f)
+{
   variable_sz_t need;
-  boolean_t     differ;
-  boolean_t     chunked;
 
-  max_ct  = 0;
-  differ  = BOOLEAN_FALSE;
-  chunked = BOOLEAN_FALSE;
-  need    = 0;
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
-
-    pair = &pic_var.openarray_pairs[pi];
-    if ((pair->formal != formal) || (pair->chunk_ct < 1)) {
-      continue;
-    }
-    if (pair->chunk_ct > max_ct) {
-      max_ct = pair->chunk_ct;
-    }
-    if (pair->chunk_ct >= 2) {
-      chunked = BOOLEAN_TRUE;
-    }
-    for (pj = 0; pj < pic_var.openarray_pairs_used; pj++) {
-      pic_var_openarray_pair_t *other;
-
-      other = &pic_var.openarray_pairs[pj];
-      if ((other->formal != formal) || (other->chunk_ct < 1)) {
-        continue;
-      }
-      if (!pic_var_openarray_layout_same(pair, other)) {
-        differ = BOOLEAN_TRUE;
-      }
-    }
+  /* Two call sites need a runtime map, but a layout is wider than the map
+   * can hold.  Baking either layout silently misaddresses the other call
+   * site, so refuse (the same policy as the emitted-map size check).  This
+   * runs from the fixpoint, exactly where the old per-formal scan ran. */
+  if (f->over_cap && (f->pair_ct >= 2)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "the runtime chunk map holds %u chunks but open-array formal '%s' "
+        "sees more than one layout and one is wider; reduce the buffers "
+        "(e.g. _string_heap_size) so each needs fewer RAM bank pieces",
+        (unsigned) PIC_CHUNK_MAP_MAX,
+        variable_name_get(f->formal)
+          ? variable_name_get(f->formal) : "?");
   }
-  {
-    boolean_t over;
-    size_t    oi;
-    unsigned  calls;
-
-    over  = (max_ct > PIC_CHUNK_MAP_MAX) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-    calls = 0;
-    for (oi = 0; oi < pic_var.openarray_pairs_used; oi++) {
-      if (pic_var.openarray_pairs[oi].formal != formal) {
-        continue;
-      }
-      calls++;
-      if (pic_var.openarray_pairs[oi].over_cap) {
-        over = BOOLEAN_TRUE;
-      }
-    }
-    if (over && (calls >= 2)) {
-      /* Two call sites need a runtime map, but a layout is wider than the
-       * map can hold.  Baking either layout silently misaddresses the other
-       * call site, so refuse (the same policy as the emitted-map size
-       * check). */
-      pfile_log(pf, PFILE_LOG_ERR,
-          "the runtime chunk map holds %u chunks but open-array formal '%s' "
-          "sees more than one layout and one is wider; reduce the buffers "
-          "(e.g. _string_heap_size) so each needs fewer RAM bank pieces",
-          (unsigned) PIC_CHUNK_MAP_MAX,
-          variable_name_get(formal) ? variable_name_get(formal) : "?");
-    }
+  need = 0;
+  if (f->chunked && f->differ && (f->max_ct <= PIC_CHUNK_MAP_MAX)) {
+    need = (variable_sz_t) (1 + 3 * f->max_ct);
   }
-  if (chunked && differ && (max_ct <= PIC_CHUNK_MAP_MAX)) {
-    need = (variable_sz_t) (1 + 3 * max_ct);
-  }
-  /* a string payload-view formal ALWAYS needs the runtime map (its one
-   * layout is the heap's, but the base offset differs per call site -- the
-   * baked map cannot carry it) and its format is
-   * [count][base lo,hi][pad][entries 3*ct] -- with every run longer than
-   * 255 bytes SPLIT (the walk's span compare is byte-sized), so the size
-   * must count the pieces.  A CLASSIC 14-bit core has no runtime-map
-   * walk: the formal keeps the BAKED copy of the heap's map and the base
-   * travels in the per-formal cell instead. */
-  if ((pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
-      && pic_var_openarray_formal_strview_fed(formal)) {
-    variable_ct_t piece_ct;
-
-    piece_ct = 0;
-    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-      pic_var_openarray_pair_t *pair;
-      variable_ct_t             ppieces;
-
-      pair = &pic_var.openarray_pairs[pi];
-      if ((pair->formal != formal) || (pair->chunk_ct < 1)) {
-        continue;
-      }
-      ppieces = 0;
-      for (pj = 0; pj < pair->chunk_ct; pj++) {
-        ppieces += (variable_ct_t) ((pair->chunk_sz[pj] + 254U) / 255U);
-      }
-      if (ppieces > piece_ct) {
-        piece_ct = ppieces;
-      }
-    }
-    if ((piece_ct >= 1) && (piece_ct <= PIC_CHUNK_MAP_MAX)) {
+  if ((pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) && f->strview_fed) {
+    if ((f->sv_piece_max >= 1) && (f->sv_piece_max <= PIC_CHUNK_MAP_MAX)) {
       variable_sz_t svneed;
 
-      svneed = (variable_sz_t) (4 + 3 * piece_ct);
+      svneed = (variable_sz_t) (4 + 3 * f->sv_piece_max);
       if (svneed > need) {
         need = svneed;
       }
     }
   }
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
-    variable_t                src;
-    variable_sz_t             ssz;
-
-    pair = &pic_var.openarray_pairs[pi];
-    if ((pair->formal != formal) || !pair->passon
-        || (0 != pair->chunk_ct)) {
-      continue;
-    }
-    src = pic_var_openarray_formal_map_get(pair->actual);
-    if (VARIABLE_NONE == src) {
-      continue;
-    }
-    ssz = variable_sz_get(src);
-    if (ssz > need) {
-      need = ssz;
-    }
+  if (f->passon_need > need) {
+    need = f->passon_need;
   }
   return need;
 }
 
-/* P3: defined after the placement helpers it consumes (see the block
- * comment at the definition). */
-static void pic_var_segment_audit(pfile_t *pf);
+/* copy the captured state back onto every CALL attachment */
+static void pic_var_u3_sync_ir(const cmd_t cmd_head, pic_var_u3_pair_t *pairs,
+    size_t pair_ct)
+{
+  cmd_t cmd;
+
+  for (cmd = cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    cmd_branch_pair_t *nodes;
+    size_t             ct;
+    size_t             ii;
+
+    ct = cmd_brpairs_ct_get(cmd);
+    if (!ct) {
+      continue;
+    }
+    nodes = cmd_brpairs_get(cmd);
+    for (ii = 0; ii < ct; ii++) {
+      pic_var_u3_pair_t *pair;
+      variable_ct_t      ci;
+
+      pair = pic_var_u3_pair_find(pairs, pair_ct, nodes[ii].actual,
+          nodes[ii].formal);
+      if (!pair) {
+        continue;
+      }
+      nodes[ii].chunk_ct  = pair->chunk_ct;
+      nodes[ii].chain_src = pair->chain_src;
+      nodes[ii].chain_sz  = pair->chain_sz;
+      if (pair->flags & CMD_BRANCH_PAIR_FLAG_OVER_CAP) {
+        nodes[ii].flags |= CMD_BRANCH_PAIR_FLAG_OVER_CAP;
+      }
+      for (ci = 0; ci < pair->chunk_ct; ci++) {
+        nodes[ii].chunk_sz[ci]   = pair->chunk_sz[ci];
+        nodes[ii].chunk_base[ci] = pair->chunk_base[ci];
+      }
+    }
+  }
+}
 
 void pic_var_chunk_prepare_emit(pfile_t *pf)
 {
-  /* F2b/F3a: a fat-bound target owns an id and must not use a compile-time
-   * walk, so register it (and mark the bind escaped) before any body is
-   * emitted -- ids have to be stable across every emission pass. */
-  size_t   pi;
-  size_t   pj;
-  unsigned round;
-  size_t   fbi;
+  size_t              pi;
+  size_t              fi;
+  unsigned            round;
+  size_t              fbi;
+  cmd_t               cmd;
+  pic_var_u3_pair_t  *pairs;
+  size_t              pair_ct;
+  size_t              pair_alloc;
+  pic_var_u3_formal_t *formals;
+  size_t              formal_ct;
+  size_t              formal_alloc;
+
+  pairs        = 0;
+  pair_ct      = 0;
+  pair_alloc   = 0;
+  formals      = 0;
+  formal_ct    = 0;
+  formal_alloc = 0;
 
   /* F2b/F3a: a fat-bound target owns an id and must not use a compile-time
    * walk, so register it (and mark the bind escaped) before any body is
@@ -1559,37 +1986,63 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
     }
   }
 
-  /* 1. capture every pair's layout.  A PASS-ON pair only knows a pointer, so
-   * it has a layout only when the source formal carries a COMPILE-TIME chunk
-   * map (the call site can then hand those literals over); a source with a
-   * runtime map is handled in step 2 by copying it. */
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
-    pic_variable_chunk_map_t *m;
+  /* 0. build the unique pair view from the CALL attachments (first
+   * appearance order, deduped by (actual, formal) -- the old record site's
+   * order), and capture each pair's layout from the final chunk maps. */
+  pic_var.openarray_strview_fed_used = 0;
+  for (cmd = pic_var.openarray_cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    cmd_branch_pair_t *nodes;
+    size_t             ct;
+    size_t             ii;
 
-    pair = &pic_var.openarray_pairs[pi];
-    m    = pic_variable_chunk_map_find(pair->actual);
-    if (m && (m->ct >= 1) && (m->ct <= PIC_CHUNK_MAP_MAX)) {
-      variable_ct_t cix;
+    ct = cmd_brpairs_ct_get(cmd);
+    if (!ct) {
+      continue;
+    }
+    nodes = cmd_brpairs_get(cmd);
+    for (ii = 0; ii < ct; ii++) {
+      pic_var_u3_pair_t *pair;
 
-      pair->chunk_ct = m->ct;
-      for (cix = 0; cix < m->ct; cix++) {
-        pair->chunk_sz[cix]   = m->sz[cix];
-        pair->chunk_base[cix] = m->base[cix];
+      pair = pic_var_u3_pair_find(pairs, pair_ct, nodes[ii].actual,
+          nodes[ii].formal);
+      if (!pair) {
+        if (pair_ct == pair_alloc) {
+          size_t              resize;
+          pic_var_u3_pair_t  *tmp;
+
+          resize = pair_alloc ? 2 * pair_alloc : 16;
+          tmp = REALLOC(pairs, resize * sizeof(*tmp));
+          if (!tmp) {
+            pfile_log_syserr(pf, ENOMEM);
+            FREE(pairs);
+            FREE(formals);
+            return;
+          }
+          pairs      = tmp;
+          pair_alloc = resize;
+        }
+        pair = &pairs[pair_ct++];
+        pair->actual    = nodes[ii].actual;
+        pair->formal    = nodes[ii].formal;
+        pair->formal_ix = 0;
+        pair->flags     = nodes[ii].flags
+          & (CMD_BRANCH_PAIR_FLAG_PASSON | CMD_BRANCH_PAIR_FLAG_STRVIEW
+            | CMD_BRANCH_PAIR_FLAG_OVER_CAP);
+        pair->reported  = BOOLEAN_FALSE;
+        pair->chunk_ct  = 0;
+        pair->chain_src = VARIABLE_NONE;
+        pair->chain_sz  = 0;
+        pic_var_u3_pair_capture(pf, pair);
+      } else {
+        pair->flags |= nodes[ii].flags
+          & (CMD_BRANCH_PAIR_FLAG_PASSON | CMD_BRANCH_PAIR_FLAG_STRVIEW
+            | CMD_BRANCH_PAIR_FLAG_OVER_CAP);
       }
-    } else if (m && (m->ct > PIC_CHUNK_MAP_MAX)) {
-      /* not "linear": the actual IS chunked, just wider than the map */
-      pair->chunk_ct = 0;
-      pair->over_cap = BOOLEAN_TRUE;
-    } else if (pair->passon) {
-      pair->chunk_ct = 0;
-    } else {
-      /* no chunk map: the actual is placed linearly (or is a ROM const
-       * array, whose base is unknown here) -- one chunk covers it */
-      pair->chunk_ct        = 1;
-      pair->chunk_base[0]   = variable_base_get(pair->actual, 0);
-      pair->chunk_sz[0]     = pic_variable_def_storage_need_get(pf,
-          variable_def_get(pair->actual), 0);
+      /* any call site's string-view mark feeds the formal (the old registry
+       * OR-ed the mark onto the shared (actual, formal) row) */
+      if (pair->flags & CMD_BRANCH_PAIR_FLAG_STRVIEW) {
+        pic_var_openarray_strview_fed_add(pair->formal);
+      }
     }
   }
   /* 2. create the maps, to a FIXPOINT: a pass-on pair can only be sized once
@@ -1598,41 +2051,53 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
   for (round = 0; round < 8; round++) {
     boolean_t changed;
 
+    /* the aggregates are rebuilt each round: step 2a drops a pass-on pair's
+     * inherited layout and the map size must follow (the old live scan did) */
+    if (formal_alloc < pair_ct) {
+      size_t                  resize;
+      pic_var_u3_formal_t    *tmp;
+
+      resize = (0 == pair_ct) ? 1 : pair_ct;
+      tmp = REALLOC(formals, resize * sizeof(*tmp));
+      if (!tmp) {
+        pfile_log_syserr(pf, ENOMEM);
+        FREE(pairs);
+        FREE(formals);
+        return;
+      }
+      formals      = tmp;
+      formal_alloc = resize;
+    }
+    pic_var_u3_formals_rebuild(pairs, pair_ct, formals, &formal_ct);
+
     changed = BOOLEAN_FALSE;
-    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-      pic_var_openarray_pair_t *pair;
+    for (pi = 0; pi < pair_ct; pi++) {
+      pic_var_u3_pair_t *pair;
 
       /* A pass-on pair whose source formal has a runtime map is a CHAIN: the
        * baked layout it may have inherited (the first actual's, via
        * pic_var_chunk_map_propagate) describes only one call site, so it must
        * not be handed over as literals. */
-      pair = &pic_var.openarray_pairs[pi];
-      if (pair->passon && (0 != pair->chunk_ct)
+      pair = &pairs[pi];
+      if ((pair->flags & CMD_BRANCH_PAIR_FLAG_PASSON)
+          && (0 != pair->chunk_ct)
           && (VARIABLE_NONE !=
             pic_var_openarray_formal_map_get(pair->actual))) {
         pair->chunk_ct = 0;
         changed = BOOLEAN_TRUE;
       }
     }
-    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
+    for (fi = 0; fi < formal_ct; fi++) {
       variable_t    formal;
       variable_t    map;
       variable_sz_t need;
 
-      formal = pic_var.openarray_pairs[pi].formal;
+      formal = formals[fi].formal;
       if (!formal || (VARIABLE_NONE == formal)
           || pic_var_openarray_formal_blocked(formal)) {
         continue;
       }
-      for (pj = 0; pj < pi; pj++) {
-        if (pic_var.openarray_pairs[pj].formal == formal) {
-          break;
-        }
-      }
-      if (pj != pi) {
-        continue; /* this formal was handled at an earlier index */
-      }
-      need = pic_var_formal_map_need(pf, formal);
+      need = pic_var_u3_formal_need(pf, &formals[fi]);
       if (0 == need) {
         continue;
       }
@@ -1645,15 +2110,16 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
         changed = BOOLEAN_TRUE;
       }
     }
-    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-      pic_var_openarray_pair_t *pair;
-      variable_t                src;
-      variable_t                dst;
-      variable_sz_t             ssz;
-      variable_sz_t             dsz;
+    for (pi = 0; pi < pair_ct; pi++) {
+      pic_var_u3_pair_t *pair;
+      variable_t         src;
+      variable_t         dst;
+      variable_sz_t      ssz;
+      variable_sz_t      dsz;
 
-      pair = &pic_var.openarray_pairs[pi];
-      if (!pair->passon || (0 != pair->chunk_ct)
+      pair = &pairs[pi];
+      if (!(pair->flags & CMD_BRANCH_PAIR_FLAG_PASSON)
+          || (0 != pair->chunk_ct)
           || (VARIABLE_NONE != pair->chain_src)) {
         continue;
       }
@@ -1691,12 +2157,14 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
   }
   /* 3. a pass-on pair that never got a layout or a chain hands over nothing:
    * keep the baked map, exactly as before this mechanism existed */
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
+  for (pi = 0; pi < pair_ct; pi++) {
+    pic_var_u3_pair_t *pair;
 
-    pair = &pic_var.openarray_pairs[pi];
-    if (pair->passon && (0 == pair->chunk_ct)
-        && (VARIABLE_NONE == pic_var_openarray_formal_map_get(pair->formal))) {
+    pair = &pairs[pi];
+    if ((pair->flags & CMD_BRANCH_PAIR_FLAG_PASSON)
+        && (0 == pair->chunk_ct)
+        && (VARIABLE_NONE
+          == pic_var_openarray_formal_map_get(pair->formal))) {
       pic_var_openarray_formal_block(pair->formal);
     }
   }
@@ -1706,11 +2174,11 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
    * plain-format copy -- without this the callee would walk the STALE map of
    * the string call site (found with the b(s)+a(buf) probe: writes landed
    * in the string's payload) */
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
+  for (pi = 0; pi < pair_ct; pi++) {
+    pic_var_u3_pair_t *pair;
 
-    pair = &pic_var.openarray_pairs[pi];
-    if (pair->passon && !pair->reported
+    pair = &pairs[pi];
+    if ((pair->flags & CMD_BRANCH_PAIR_FLAG_PASSON) && !pair->reported
         && (pic_var_openarray_formal_strview_fed(pair->formal)
           || pic_var_openarray_formal_strview_fed(pair->actual))) {
       pair->reported = BOOLEAN_TRUE;
@@ -1720,46 +2188,40 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
     }
   }
   /* 4. report a buffer split into more pieces than the map can describe,
-   * once per formal */
-  for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-    pic_var_openarray_pair_t *pair;
-    variable_t                formal;
-    variable_ct_t             max_ct;
-    size_t                    pj2;
+   * once per formal (the aggregate's max_ct; the reporting pair is the
+   * first one not already reported, as the live scan did) */
+  for (pi = 0; pi < pair_ct; pi++) {
+    pic_var_u3_pair_t   *pair;
+    pic_var_u3_formal_t *f;
 
-    pair   = &pic_var.openarray_pairs[pi];
-    formal = pair->formal;
-    max_ct = 0;
-    for (pj2 = 0; pj2 < pic_var.openarray_pairs_used; pj2++) {
-      if ((pic_var.openarray_pairs[pj2].formal == formal)
-          && (pic_var.openarray_pairs[pj2].chunk_ct > max_ct)) {
-        max_ct = pic_var.openarray_pairs[pj2].chunk_ct;
-      }
-    }
-    if ((max_ct > PIC_CHUNK_MAP_MAX) && !pair->reported && formal
-        && (VARIABLE_NONE != formal)) {
+    pair = &pairs[pi];
+    f    = &formals[pair->formal_ix];
+    if ((f->max_ct > PIC_CHUNK_MAP_MAX) && !pair->reported
+        && pair->formal && (VARIABLE_NONE != pair->formal)) {
       pair->reported = BOOLEAN_TRUE;
       pfile_log(pf, PFILE_LOG_ERR,
           "open-array formal '%s' receives a buffer split into %u RAM bank "
           "pieces, but the runtime chunk map holds %u; reduce the buffer "
           "size so it needs fewer bank pieces",
-          variable_name_get(formal) ? variable_name_get(formal) : "?",
-          (unsigned) max_ct, (unsigned) PIC_CHUNK_MAP_MAX);
+          variable_name_get(pair->formal)
+            ? variable_name_get(pair->formal) : "?",
+          (unsigned) f->max_ct, (unsigned) PIC_CHUNK_MAP_MAX);
     }
   }
   /* 4b. CLASSIC 14-bit cores: one base cell per string-view FORMAL (the
    * payload offset's per-call rendezvous -- see pic_var_strview_formal_).
    * Created here, after the final placement, like the runtime maps. */
   if (!pic_is_16bit(pf) && !pic_is_14bit_hybrid(pf)) {
-    for (pi = 0; pi < pic_var.openarray_pairs_used; pi++) {
-      pic_var_openarray_pair_t *pair;
-      variable_t                cell;
-      char                      name[32];
+    for (pi = 0; pi < pair_ct; pi++) {
+      pic_var_u3_pair_t *pair;
+      variable_t         cell;
+      char               name[32];
 
-      pair = &pic_var.openarray_pairs[pi];
-      if (!pair->strview || !pair->formal
+      pair = &pairs[pi];
+      if (!(pair->flags & CMD_BRANCH_PAIR_FLAG_STRVIEW) || !pair->formal
           || (VARIABLE_NONE == pair->formal)
-          || (VARIABLE_NONE != pic_var_strview_formal_base_get(pair->formal))) {
+          || (VARIABLE_NONE != pic_var_strview_formal_base_get(
+              pair->formal))) {
         continue;
       }
       /* the walk needs the formal to carry a chunk map, and a CONTIGUOUS
@@ -1796,6 +2258,11 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
       }
     }
   }
+  /* put the captured state on the CALL attachments, then release the
+   * pass-local working set */
+  pic_var_u3_sync_ir(pic_var.openarray_cmd_head, pairs, pair_ct);
+  FREE(pairs);
+  FREE(formals);
   /* 5. the walk scratch: needed by every runtime-map formal AND by the SHARED
    * static walk (one helper per holed variable) */
   {
@@ -1828,14 +2295,22 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
       (void) pic_var_chunk_walk_globals_get(pf, &gc, &gb, &gs);
     }
   }
+  /* F2d: the O(1) dispatch's descriptors + `_obj_desc[]`, after the final
+   * placement (their contents are the placed segment bases) */
+  pic_fat_desc_prepare(pf);
   /* P3: placement is final here (the map is the last piece of it), so this
    * is the one point where the whole object model can be checked. */
   pic_var_segment_audit(pf);
 }
 
+
+/* U3: walk the CALL attachments, not a pair registry.  The captured layout
+ * is re-derived from the actual's chunk map by the capture pass, so this
+ * pass only has to copy the map onto a formal that has none (a pass-on
+ * source's map is what the callee walks). */
 static void pic_var_chunk_map_propagate(pfile_t *pf, variable_t var)
 {
-  size_t    ii;
+  cmd_t     cmd;
   boolean_t changed;
 
   if (!pic_variable_chunk_map_find(var)) {
@@ -1843,31 +2318,28 @@ static void pic_var_chunk_map_propagate(pfile_t *pf, variable_t var)
   }
   do {
     changed = BOOLEAN_FALSE;
-    for (ii = 0; ii < pic_var.openarray_pairs_used; ii++) {
-      variable_t src;
-      variable_t dst;
+    for (cmd = pic_var.openarray_cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+      cmd_branch_pair_t *pairs;
+      size_t             ct;
+      size_t             ii;
 
-      src = pic_var.openarray_pairs[ii].actual;
-      dst = pic_var.openarray_pairs[ii].formal;
-      if (src != dst) {
-        pic_variable_chunk_map_t *smap;
-
-        smap = pic_variable_chunk_map_find(src);
-        if (smap && (smap->ct >= 2) && (smap->ct <= PIC_CHUNK_MAP_MAX)) {
-          variable_ct_t cix;
-
-          pic_var.openarray_pairs[ii].chunk_ct = smap->ct;
-          for (cix = 0; cix < smap->ct; cix++) {
-            pic_var.openarray_pairs[ii].chunk_sz[cix]   = smap->sz[cix];
-            pic_var.openarray_pairs[ii].chunk_base[cix] = smap->base[cix];
-          }
-        }
+      ct = cmd_brpairs_ct_get(cmd);
+      if (!ct) {
+        continue;
       }
-      if ((src != dst)
-          && pic_variable_chunk_map_find(src)
-          && !pic_variable_chunk_map_find(dst)) {
-        pic_variable_chunk_map_copy(pf, src, dst);
-        changed = BOOLEAN_TRUE;
+      pairs = cmd_brpairs_get(cmd);
+      for (ii = 0; ii < ct; ii++) {
+        variable_t src;
+        variable_t dst;
+
+        src = pairs[ii].actual;
+        dst = pairs[ii].formal;
+        if ((src != dst)
+            && pic_variable_chunk_map_find(src)
+            && !pic_variable_chunk_map_find(dst)) {
+          pic_variable_chunk_map_copy(pf, src, dst);
+          changed = BOOLEAN_TRUE;
+        }
       }
     }
   } while (changed);
@@ -2630,7 +3102,7 @@ static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
      If so, good! */
 
   base = pic_mem_map_alloc(pf, map, region, need, pointer_slots);
-  if (getenv("JALV2_DBG_REFUSAL")) {
+  if (pic_env_on("JALV2_DBG_REFUSAL")) {
     fprintf(stderr, "DBG first %-18s need=%u base=0x%x\n",
         variable_name_get(vptr) ? variable_name_get(vptr) : "?",
         (unsigned) need, (unsigned) base);
@@ -2948,7 +3420,7 @@ static void pic_variable_alloc_volatile(pfile_t *pf)
         for (var = pfile_block_variable_list_head(blk);
              var;
              var = variable_link_get(var)) {
-          if (getenv("JALV2_DBG_VR")
+          if (pic_env_on("JALV2_DBG_VR")
               && variable_name_get(var)
               && strstr(variable_name_get(var), "bitarg")) {
             fprintf(stderr, "VR: %s vol=%d auto=%d base_known=%d used=%d asg=%d\n",
@@ -3089,7 +3561,7 @@ boolean_t pic_var_refusal_get(variable_t *var, variable_sz_t *sz,
 
 void pic_var_refusal_report(pfile_t *pf)
 {
-  if (getenv("JALV2_DBG_REFUSAL")) {
+  if (pic_env_on("JALV2_DBG_REFUSAL")) {
     fprintf(stderr, "DBG refusal free=%u data_nodes=%d\n",
         (unsigned) pic_data_bank_free_bytes_get(),
         (int) (pic_var.map.data ? 1 : 0));
@@ -3520,7 +3992,7 @@ static void pic_variable_fixup_place(pfile_t *pf,
     }
     base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, sz_reqd,
         pointer_slots_reqd);
-    if (getenv("JALV2_DBG_REFUSAL")) {
+    if (pic_env_on("JALV2_DBG_REFUSAL")) {
       fprintf(stderr, "DBG place %-16s sz=%u base=0x%x free=%u\n",
           variable_name_get(data[ii]) ? variable_name_get(data[ii]) : "?",
           (unsigned) sz_reqd, (unsigned) base,
@@ -4760,7 +5232,7 @@ static void pic_var_segment_audit(pfile_t *pf)
 
   /* U4: the invariants are checked on EVERY compile; the report and the
    * selftest stay behind their switches (a check, not a report). */
-  if (getenv("JALV2_ALLOC_AUDIT_SELFTEST")) {
+  if (pic_env_on("JALV2_ALLOC_AUDIT_SELFTEST")) {
     unsigned selftest;
 
     selftest = pic_var_seg_selftest();
@@ -4771,7 +5243,7 @@ static void pic_var_segment_audit(pfile_t *pf)
   segments   = 0;
   owned      = 0;
   violations = 0;
-  if (getenv("JALV2_ALLOC_AUDIT_FAULT")) {
+  if (pic_env_on("JALV2_ALLOC_AUDIT_FAULT")) {
     /* test hook: prove the always-on verdict path without a real defect */
     violations++;
   }
@@ -4923,7 +5395,7 @@ static void pic_var_segment_audit(pfile_t *pf)
         " the image may place storage across a boundary",
         (unsigned) violations, (unsigned) objects, (unsigned) segments);
   }
-  if (getenv("JALV2_ALLOC_AUDIT")) {
+  if (pic_env_on("JALV2_ALLOC_AUDIT")) {
     fprintf(stderr,
         "jal alloc audit: objects=%u segments=%u owned=%u violations=%u"
         " data_used=%u data_free=%u data_largest=%u"
@@ -4946,7 +5418,7 @@ void pic_variable_alloc(pfile_t *pf)
 {
   pfile_proc_t *proc;
 
-  if (getenv("JALV2_DBG_REFUSAL")) {
+  if (pic_env_on("JALV2_DBG_REFUSAL")) {
     fprintf(stderr, "DBG alloc round, free-before=%u\n",
         (unsigned) pic_data_bank_free_bytes_get());
   }

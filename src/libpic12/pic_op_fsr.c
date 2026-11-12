@@ -26,6 +26,7 @@
 #include "pic_opfn.h"
 #include "pic_stvar.h"
 #include "pic_var.h"
+#include "pic_access.h"
 #include "piccolst.h"
 #include "pic_inst.h"
 #include "pic_op.h"
@@ -366,19 +367,21 @@ void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
 {
   variable_sz_t     idx_sz;
   variable_t        walk_var;
-  pic_access_plan_t plan;
+  variable_t        bind;
+  unsigned          action;
 
   /* U3-3: the walk classification comes from the plan (the FSR helpers take
    * a variable, so this is the variable-based fill). */
   walk_var = value_variable_get(array_val);
-  pic_access_plan_fill_var(walk_var, &plan);
-  if (plan.runtime_map) {
+  action = pic_access_var_action_get2(pf, "fsr:walk", walk_var,
+      PIC_ACCESS_OP_FSR_WALK, &bind);
+  if (PIC_ACCESS_ACTION_FSR_WALK_RUNTIME == action) {
     pic_fsr_chunk_walk_emit_globals(pf, walk_var, idx, 0);
     return;
   }
-  if (!plan.holed) {
+  if (PIC_ACCESS_ACTION_FSR_WALK_HOLED != action) {
     /* unescaped pointer bind: walk the TARGET's chunks */
-    walk_var = plan.bind_walk;
+    walk_var = bind;
   }
   if (pic_variable_chunks_holed(walk_var)) {
     pic_fsr_chunk_walk_emit(pf, walk_var, idx, BOOLEAN_TRUE);
@@ -554,51 +557,6 @@ static void pic_fsr_chunk_ladder(pfile_t *pf, variable_t var, value_t t,
   label_release(done);
 }
 
-static label_t pic_chunk_walk_helper_find(pfile_t *pf, variable_t var);
-
-/* F2b: a fat pointer carries the object-relative offset, so the baked ladder
- * applies unchanged -- expose the entry with the core's flags. */
-void pic_fat_ladder_emit(pfile_t *pf, variable_t var, value_t t)
-{
-  pic_fsr_chunk_ladder(pf, var, t,
-      (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)) ? BOOLEAN_TRUE
-        : BOOLEAN_FALSE,
-      pic_is_14bit_hybrid(pf));
-}
-
-/* The CALL form: the same ladder, but through the shared per-variable helper
- * (one body per chunked variable, emitted once) instead of inlining it at
- * every fat deref site.  The index travels in the compiler-owned
- * `_pic_chunk_t`, exactly like every other call site of the helper. */
-void pic_fat_ladder_call(pfile_t *pf, variable_t var, value_t t)
-{
-  boolean_t wide;
-  variable_t arg;
-  label_t    lbl;
-  value_t    argval;
-
-  wide = (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
-    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-  lbl = pic_chunk_walk_helper_find(pf, var);
-  arg = pic_var_chunk_walk_arg_get();
-  if ((LABEL_NONE == lbl) || (0 == arg) || (VARIABLE_NONE == arg)) {
-    /* no shared helper (should not happen for a chunked object): inline */
-    pic_fsr_chunk_ladder(pf, var, t, wide, pic_is_14bit_hybrid(pf));
-    return;
-  }
-  argval = value_alloc(arg);
-  if (!argval) {
-    return;
-  }
-  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 0, PIC_OPDST_W);
-  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, argval, 0);
-  if (wide) {
-    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, t, 1, PIC_OPDST_W);
-    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, argval, 1);
-  }
-  pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
-  value_release(argval);
-}
 
 /* ---- SHARED STATIC CHUNK WALK (2026-11-02) ----------------------------
  *
@@ -627,6 +585,13 @@ static pic_chunk_walk_helper_t *pic_cw_help;
 static size_t                   pic_cw_help_used;
 static size_t                   pic_cw_help_alloc;
 
+/* F2d: the one shared segment walk (`_pic_fat_seg_addr`).  Registered before
+ * the reset-vector decision, emitted with the chunk-walk helpers at the top of
+ * the image, and CALLed by the fat deref's dispatch. */
+#define PIC_LABEL_FAT_SEG_ADDR "_pic_fat_seg_addr"
+static label_t   pic_fat_seg_lbl;
+static boolean_t pic_fat_seg_used;
+
 void pic_chunk_walk_state_reset(void)
 {
   size_t ii;
@@ -638,6 +603,11 @@ void pic_chunk_walk_state_reset(void)
   if (pic_cw_help) {
     FREE(pic_cw_help);
   }
+  if (pic_fat_seg_lbl) {
+    label_release(pic_fat_seg_lbl);
+  }
+  pic_fat_seg_lbl   = LABEL_NONE;
+  pic_fat_seg_used  = BOOLEAN_FALSE;
   pic_cw_help       = 0;
   pic_cw_help_used  = 0;
   pic_cw_help_alloc = 0;
@@ -758,7 +728,8 @@ void pic_chunk_walk_helpers_register(pfile_t *pf)
  * and the program never reaches its entry -- found 2026-11-02) */
 boolean_t pic_chunk_walk_helpers_exist(void)
 {
-  return (pic_cw_help_used != 0) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  return ((pic_cw_help_used != 0) || pic_fat_seg_used)
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
 /* emit the helpers that were referenced; called once, at the same point as
@@ -801,6 +772,219 @@ void pic_chunk_walk_helpers_create(pfile_t *pf)
     pic_instr_append(pf, PIC_OPCODE_RETURN);
     value_release(tv);
   }
+  /* F2d: the shared segment walk, emitted once, after every call site */
+  pic_fat_seg_addr_create(pf);
+}
+
+/* ---- F2d: the shared O(1) segment walk -------------------------------
+ *
+ * The fat deref dispatch has an object id and an OBJECT-RELATIVE offset.
+ * `_pic_fat_seg_addr` turns (id, offset) into the physical address, in
+ * FSR0 (or `_fsr` + IRP on classic 14-bit), leaving the walk's usual
+ * convention intact: the caller's INDF access reads the element.
+ *
+ *     desc = _obj_desc[id]                 ; 2 bytes per id, filled at start
+ *     count = INDF++                       ; [count][base lo,hi,span]...
+ *     loop: base = INDF++; span = INDF++
+ *           if (offset < span) done
+ *           offset -= span; if (--count) loop
+ *     done: FSR = base + offset
+ *
+ * This is `pic_fsr_chunk_walk_emit_globals`' loop; the only difference is
+ * where the map comes from -- `_obj_desc[id]` instead of a formal's map
+ * cell -- which is what makes the dispatch O(1) in the object count.  The
+ * descriptors hold at most 255 segments of at most 255 bytes (the F2a
+ * format, which holds for every RAM run the allocator produces).
+ */
+
+void pic_fat_seg_addr_register(pfile_t *pf)
+{
+  if (!pic_fat_seg_used) {
+    pic_fat_seg_lbl = pic_label_find(pf, PIC_LABEL_FAT_SEG_ADDR, BOOLEAN_TRUE);
+    pic_fat_seg_used = (LABEL_NONE != pic_fat_seg_lbl)
+      ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  }
+}
+
+label_t pic_fat_seg_addr_label(void)
+{
+  return pic_fat_seg_used ? pic_fat_seg_lbl : LABEL_NONE;
+}
+
+/* read one descriptor byte through INDF and advance the walk pointer */
+static void pic_fat_seg_read(pfile_t *pf, boolean_t wide, value_t ind,
+    value_t dst, size_t ofs)
+{
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, ind, 0, PIC_OPDST_W);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ofs);
+  if (wide) {
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0l", PIC_OPDST_F);
+    /* INCF sets Z on the low byte's wrap only; the high byte carries.
+     * (The flag is Z, never C -- C still holds an earlier op.) */
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  } else {
+    /* classic 14-bit: _fsr is one byte, IRP carries bit 8; every descriptor
+     * sits inside one RAM bank, so an INCF never crosses the IRP page */
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr", PIC_OPDST_F);
+  }
+}
+
+/* point the walk register (FSR0 or _fsr + IRP) at the 2-byte address in
+ * `src`; `hi_ofs` names the byte holding bit 8 (classic only) */
+static void pic_fat_seg_fsr_set(pfile_t *pf, boolean_t wide, value_t src,
+    size_t hi_ofs)
+{
+  if (wide) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, src, 0, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, src, 1, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+  } else {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, src, 0, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, src, hi_ofs, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+  }
+}
+
+void pic_fat_seg_addr_create(pfile_t *pf)
+{
+  variable_t      idv;
+  variable_t      arg;
+  variable_t      cnt;
+  variable_t      base;
+  variable_t      span;
+  variable_t      tblv;
+  variable_base_t tblbase;
+  value_t         idval;
+  value_t         argval;
+  value_t         cntval;
+  value_t         baseval;
+  value_t         spanval;
+  value_t         ind;
+  label_t         loop;
+  label_t         ge;
+  label_t         done;
+  boolean_t       wide;
+
+  if (!pic_fat_seg_used) {
+    return;
+  }
+  if (!pic_var_chunk_walk_globals_get(pf, &cnt, &base, &span)) {
+    return;
+  }
+  idv  = pic_fat_id_get();
+  tblv = pic_fat_desc_tbl_get();
+  arg  = pic_var_chunk_walk_arg_get();
+  if ((VARIABLE_NONE == idv) || (VARIABLE_NONE == tblv)
+      || !arg || (VARIABLE_NONE == arg)) {
+    return;
+  }
+  tblbase = variable_base_get(tblv, 0);
+  if (VARIABLE_BASE_UNKNOWN == tblbase) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "fat pointers: the object table has no address");
+    return;
+  }
+  ind = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+  if (!ind) {
+    return;
+  }
+  wide = (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  idval   = value_alloc(idv);
+  argval  = value_alloc(arg);
+  cntval  = value_alloc(cnt);
+  baseval = value_alloc(base);
+  spanval = value_alloc(span);
+  if (!idval || !argval || !cntval || !baseval || !spanval) {
+    if (idval)   { value_release(idval); }
+    if (argval)  { value_release(argval); }
+    if (cntval)  { value_release(cntval); }
+    if (baseval) { value_release(baseval); }
+    if (spanval) { value_release(spanval); }
+    return;
+  }
+  loop = pfile_label_alloc(pf, 0);
+  ge   = pfile_label_alloc(pf, 0);
+  done = pfile_label_alloc(pf, 0);
+
+  pic_instr_append_label(pf, pic_fat_seg_lbl);
+  /* desc_addr = _obj_desc + 2*id ; kept in `base` until it is read */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, idval, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, idval, 0, PIC_OPDST_W);
+  pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, (uchar) (tblbase & 0xFF));
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, baseval, 0);
+  pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW,
+      (uchar) ((tblbase >> 8) & 0xFF));
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+  pic_instr_append_w_kn(pf, PIC_OPCODE_ADDLW, 1);
+  pic_instr_append_f(pf, PIC_OPCODE_MOVWF, baseval, 1);
+  pic_fat_seg_fsr_set(pf, wide, baseval, 1);
+  /* read the 2-byte descriptor address into `base` */
+  pic_fat_seg_read(pf, wide, ind, baseval, 0);
+  pic_fat_seg_read(pf, wide, ind, baseval, 1);
+
+  /* FSR = descriptor; count = [FSR++] */
+  pic_fat_seg_fsr_set(pf, wide, baseval, 1);
+  pic_fat_seg_read(pf, wide, ind, cntval, 0);
+
+  pic_instr_append_label(pf, loop);
+  pic_fat_seg_read(pf, wide, ind, baseval, 0);
+  pic_fat_seg_read(pf, wide, ind, baseval, 1);
+  pic_fat_seg_read(pf, wide, ind, spanval, 0);
+  /* if (offset < span) done -- a non-zero high byte cannot be in a
+   * (<= 255 byte) segment, so it takes the subtract path */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, argval, 1, PIC_OPDST_W);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_z");
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, ge);
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, spanval, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, argval, 0, PIC_OPDST_W);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, done);
+  pic_instr_append_label(pf, ge);
+  /* next chunk: offset -= span (16-bit); if (--count) loop */
+  pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, spanval, 0, PIC_OPDST_W);
+  pic_instr_append_f_d(pf, PIC_OPCODE_SUBWF, argval, 0, PIC_OPDST_F);
+  pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSS, "_status", "_c");
+  pic_instr_append_f_d(pf, PIC_OPCODE_DECF, argval, 1, PIC_OPDST_F);
+  pic_instr_append_f_d(pf, PIC_OPCODE_DECFSZ, cntval, 0, PIC_OPDST_F);
+  pic_instr_append_n(pf, PIC_OPCODE_GOTO, loop);
+
+  pic_instr_append_label(pf, done);
+  if (wide) {
+    /* FSR0 = base + offset (offset < 256 here) */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseval, 0, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0l");
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseval, 1, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr0h");
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, argval, 0, PIC_OPDST_W);
+    pic_instr_append_reg_d(pf, PIC_OPCODE_ADDWF, "_fsr0l", PIC_OPDST_F);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_reg_d(pf, PIC_OPCODE_INCF, "_fsr0h", PIC_OPDST_F);
+  } else {
+    /* classic: _fsr = base_lo + offset, IRP = base bit 8 + carry */
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, baseval, 0, PIC_OPDST_W);
+    pic_instr_append_f_d(pf, PIC_OPCODE_ADDWF, argval, 0, PIC_OPDST_W);
+    pic_instr_append_reg(pf, PIC_OPCODE_MOVWF, "_fsr");
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BCF, "_status", "_irp");
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, baseval, 1, 0);
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_c");
+    pic_instr_append_reg_flag(pf, PIC_OPCODE_BSF, "_status", "_irp");
+  }
+  pic_instr_append(pf, PIC_OPCODE_RETURN);
+
+  label_release(done);
+  label_release(ge);
+  label_release(loop);
+  value_release(spanval);
+  value_release(baseval);
+  value_release(cntval);
+  value_release(argval);
+  value_release(idval);
 }
 
 /* Layer 2: a variable placed across bank holes (non-adjacent chunks).
@@ -902,10 +1086,11 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
   unsigned          t_wide;
   value_t           t;
   boolean_t         sv_classic;
-  pic_access_plan_t plan;
+  unsigned          action;
 
-  pic_access_plan_fill_var(var, &plan);
-  if (plan.runtime_map) {
+  action = pic_access_var_action_get(pf, "fsr:dynamic", var,
+      PIC_ACCESS_OP_FSR_DYNAMIC);
+  if (PIC_ACCESS_ACTION_FSR_DYNAMIC_RUNTIME == action) {
     pic_fsr_chunk_walk_emit_globals(pf, var, idx, offset);
     return;
   }
@@ -913,7 +1098,7 @@ void pic_fsr_chunk_walk_emit_ofs(pfile_t *pf, variable_t var,
    * chunk map, and the payload base rides the per-formal cell -- added
    * into the scratch below (the FSR0 cores took their base from the
    * runtime map and returned above) */
-  sv_classic = plan.sv_view;
+  sv_classic = (PIC_ACCESS_ACTION_FSR_DYNAMIC_SV == action);
   if ((!idx || value_is_const(idx))
       && (pic_mem_object_is_chunked(var) || sv_classic)) {
     /* CONSTANT subscript through a compile-time chunk map (e.g.
@@ -1010,16 +1195,18 @@ void pic_classic_fsr_load_base_dynamic_index(pfile_t *pf,
   variable_sz_t     idx_sz;
   boolean_t         wide16;
   boolean_t         sv_classic;
-  pic_access_plan_t plan;
+  variable_t        bind;
+  unsigned          action;
 
   /* U3-3: the walk classification comes from the plan. */
-  pic_access_plan_fill_var(var, &plan);
+  action = pic_access_var_action_get2(pf, "fsr:bind", var,
+      PIC_ACCESS_OP_FSR_BIND, &bind);
   /* a CLASSIC-core string-view formal always walks (its payload base is
    * runtime data the linear forms cannot carry), even when the baked copy
    * of the heap's map is a single chunk */
-  sv_classic = plan.sv_view;
-  if (!plan.holed && !sv_classic) {
-    var = plan.bind_walk;
+  sv_classic = (PIC_ACCESS_ACTION_FSR_BIND_SV == action);
+  if ((PIC_ACCESS_ACTION_FSR_BIND_HOLED != action) && !sv_classic) {
+    var = bind;
   }
   if (pic_variable_chunks_holed(var) || sv_classic) {
     /* the ladder must take the FSR0 staging on the 16-bit and 14H cores;

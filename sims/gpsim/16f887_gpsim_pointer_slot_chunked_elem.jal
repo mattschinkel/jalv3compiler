@@ -1,0 +1,48 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — a pointer SLOT bound to a CHUNKED array element
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `var pointer pa[2] as var byte` bound to `big[100]`, where `big` is a
+--    200-byte array the allocator splits across the classic RAM banks.  The
+--    slot dereference used to resolve the ARRAY's compile-time bind walk at
+--    object offset 0 (the subscript was the slot byte offset, not a pointee
+--    offset), so `s0 = pa[0]` read big[0] (1), not big[100] (101), with the
+--    fat engine on AND off.  The fix makes the slot deref read the slot's
+--    runtime value, and the slot store carry the element's chunk-resolved
+--    PHYSICAL address.
+--
+-- @gpsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- checkpoint_verify: off
+--   (deliberate: this witness proves two VALUES, not a step count, and
+--    includes no regression_checkpoint() machinery -- the positive
+--    measurement and its failing negative control in the fat pin are the
+--    proof, so there is nothing to pair statically)
+-- expect byte v_s0 101
+-- expect byte v_s1 50
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f887
+var volatile byte big[200]
+var byte arr[8]
+var byte i
+var volatile byte s0 = 0
+var volatile byte s1 = 0
+var pointer pa[2] as var byte
+
+for 200 using i loop
+  big[i] = i + 1
+end loop
+arr[0] = 10
+arr[4] = 50
+pa[0] is big[100]
+pa[1] is arr[4]
+s0 = pa[0]
+s1 = pa[1]
+
+forever loop
+end loop

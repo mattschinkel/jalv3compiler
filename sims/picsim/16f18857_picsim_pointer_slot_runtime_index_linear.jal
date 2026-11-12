@@ -1,0 +1,35 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — a pointer SLOT at a RUNTIME index (linear)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    G3 S2, non-fat value: `pa[k] is arr[4]` with a RUNTIME `k`.  The
+--    pre-existing linear emitters also stored into slot 0; the new scratch
+--    plus FSR-staged byte copy covers this path too, so the fix is not
+--    fat-specific.  `arr` is one run (not chunked), so the slot holds a
+--    physical address.
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_got 50
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var pointer pa[2] as var byte
+var byte arr[8]
+var volatile byte k
+var volatile byte got = 0
+
+arr[4] = 50
+k = 1
+pa[k] is arr[4]
+got = pa[1]
+
+forever loop
+end loop

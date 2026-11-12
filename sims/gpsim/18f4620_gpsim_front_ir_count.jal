@@ -9,9 +9,9 @@
 --    body (COUNT is the array bound, 4).  Storing COUNT into a byte element
 --    is refused by the normal string rule (the count is word-width), so the
 --    witness compares instead -- that keeps the shape valid gate-off as well
---    as gate-on.  With JALV2_FRONT_IR=1 the COUNT is a deferred semantic node
+--    as gate-on.  Under the typed front end (historically JALV2_FRONT_IR=1) the COUNT is a deferred semantic node
 --    lowered by the same count rules as the parser; the parity pin requires
---    byte-identical HEX gate-off/on.
+--    byte-identical HEX single-arm.
 --
 -- @gpsim_validate begin
 -- steps: 600000

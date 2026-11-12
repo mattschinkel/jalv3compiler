@@ -23,6 +23,11 @@ typedef struct cmd_branch_ {
    * hold the necessary info */
   value_t           proc;
   value_t          *proc_params;
+  /* U3: open-array actual/formal pairs owned by this CALL (null for a
+   * non-call or a call with no open-array actuals).  See cmd_brch.h. */
+  cmd_branch_pair_t *pairs;
+  size_t             pair_ct;
+  size_t             pair_alloc;
 } cmd_branch_t;
 
 #endif /* cmd_brdc_h__ */

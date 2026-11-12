@@ -24,7 +24,11 @@ typedef enum pic_fat_target_ {
   PIC_FAT_TARGET_CLASSIC = 0, /* 14-bit: 2 bytes, tag = byte 1 bits 1..6 */
   PIC_FAT_TARGET_14H     = 1, /* 14H:     2 bytes, tag = byte 1 bits 5..6 */
   PIC_FAT_TARGET_18      = 2, /* PIC18:   3 bytes, tag = byte 2 bits 0..6 */
-  PIC_FAT_TARGET_FLAT    = 3  /* 32-bit:  no tag bits                      */
+  PIC_FAT_TARGET_FLAT    = 3, /* 32-bit:  no tag bits                      */
+  PIC_FAT_TARGET_14H3    = 4  /* 14H, 3-byte: tag = byte 2 bits 0..6 (127
+                               * ids); the F4 size toggle's representation.
+                               * Byte 1 is the offset's high half, so the tag
+                               * byte carries no offset bits (like PIC18). */
 } pic_fat_target_t;
 
 #define PIC_FAT_ROM_BIT 0x80U
@@ -42,12 +46,12 @@ typedef enum pic_fat_target_ {
  * the 3-byte form.  A 14H part with data at or above 0x2000 cannot use
  * the 2-byte form at all. */
 #define PIC_FAT_TAG_SHIFT(t) \
-  (((PIC_FAT_TARGET_18) == (t)) ? 0U \
+  (((PIC_FAT_TARGET_18) == (t)) || ((PIC_FAT_TARGET_14H3) == (t)) ? 0U \
    : ((PIC_FAT_TARGET_14H) == (t)) ? 5U \
    : ((PIC_FAT_TARGET_CLASSIC) == (t)) ? 1U : 0U)
 
 #define PIC_FAT_TAG_BITS(t) \
-  (((PIC_FAT_TARGET_18) == (t)) ? 7U \
+  (((PIC_FAT_TARGET_18) == (t)) || ((PIC_FAT_TARGET_14H3) == (t)) ? 7U \
    : ((PIC_FAT_TARGET_14H) == (t)) ? 2U \
    : ((PIC_FAT_TARGET_CLASSIC) == (t)) ? 6U : 0U)
 
@@ -58,7 +62,7 @@ typedef enum pic_fat_target_ {
 /* the byte carrying the tag/ROM bits: byte 2 on PIC18 (3-byte pointer),
  * byte 1 on the 2-byte 14-bit forms */
 #define PIC_FAT_TOP_BYTE(t) \
-  (((PIC_FAT_TARGET_18) == (t)) ? 2U : 1U)
+  ((((PIC_FAT_TARGET_18) == (t)) || ((PIC_FAT_TARGET_14H3) == (t))) ? 2U : 1U)
 
 #define PIC_FAT_TAG_GET(t, bytes) \
   ((unsigned) ((((unsigned) (bytes)[PIC_FAT_TOP_BYTE(t)]) \

@@ -5,9 +5,9 @@
 -- Description:
 --    `if (x == y)` in a body that stores through BOTH formals, so the string
 --    clone re-flavors both x and y and the compare is a content compare.
---    With JALV2_FRONT_IR=1 the relation is a deferred semantic node carrying
+--    Under the typed front end (historically JALV2_FRONT_IR=1) the relation is a deferred semantic node carrying
 --    both operands and the operator; the parity pin requires byte-identical
---    HEX gate-off/on.
+--    HEX single-arm.
 --
 --    NOTE: the clone's string formal compared with an `in` array formal (the
 --    payload VIEW) or with a literal is still refused by the relation source

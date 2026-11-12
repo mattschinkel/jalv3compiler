@@ -1,0 +1,39 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — a pointer SLOT bound to a RUNTIME element offset
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    G3 S1: `pa[0] is big[i]` with a RUNTIME `i` selecting element 100 of a
+--    400-byte array the allocator splits across the 14H RAM banks.  The
+--    physical-address slot representation could not resolve `big[i]` across
+--    chunks at bind time, so it stored the object-linear `big.base + i` (a
+--    RAM-hole address).  Under the fat engine the slot holds the tagged
+--    id + object-relative offset; the deref dispatch resolves the chunk at
+--    run time.  Gate-off keeps the old physical-address limitation (the
+--    witness is a gate-on arm).
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_got 42
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target fat_pointers on
+
+var volatile byte  big[400]
+var pointer pa[2] as var byte
+var volatile byte i
+var volatile byte got = 0
+
+big[100] = 42
+i = 100
+pa[0] is big[i]
+got = pa[0]
+
+forever loop
+end loop

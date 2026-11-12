@@ -109,6 +109,7 @@ static void f1_offset_field(void)
   static const struct f1_case cases[] = {
     { PIC_FAT_TARGET_CLASSIC, 0x01EFUL, 5 },
     { PIC_FAT_TARGET_14H,     0x196FUL, 2 },
+    { PIC_FAT_TARGET_14H3,    0x196FUL, 2 },
     { PIC_FAT_TARGET_18,      0x0FFFUL, 9 }
   };
   unsigned char b[4];
@@ -135,6 +136,7 @@ static void f1_add_keeps_tag(void)
   static const struct f1_case cases[] = {
     { PIC_FAT_TARGET_CLASSIC, 0x01EFUL, 5 },
     { PIC_FAT_TARGET_14H,     0x196FUL, 2 },
+    { PIC_FAT_TARGET_14H3,    0x196FUL, 2 },
     { PIC_FAT_TARGET_18,      0x0FFFUL, 9 }
   };
   static const unsigned long steps[] = { 1UL, 2UL, 3UL, 255UL, 256UL, 0x100UL };
@@ -205,6 +207,7 @@ static void f1_compare_is_tag_first(void)
   static const struct f1_case cases[] = {
     { PIC_FAT_TARGET_CLASSIC, 0x01EFUL, 5 },
     { PIC_FAT_TARGET_14H,     0x196FUL, 2 },
+    { PIC_FAT_TARGET_14H3,    0x196FUL, 2 },
     { PIC_FAT_TARGET_18,      0x0FFFUL, 9 }
   };
   unsigned char a[4];

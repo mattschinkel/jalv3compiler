@@ -27,6 +27,7 @@
 #include "piccolst.h"
 #include "pic_inst.h"
 #include "pic_op.h"
+#include "pic_access.h"
 #include "pic_op_priv.h"
 
 /* F2b: a fat bind.  Forced by JALV2_FAT_FORCE until F3's escape analysis.
@@ -36,17 +37,27 @@ boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src)
 {
   variable_t        var;
   pic_access_plan_t plan;
+  pic_access_key_t  key;
+  const pic_access_recipe_t *recipe;
 
   if (!pic_fat_pointers_enabled(pf)) {
     return BOOLEAN_FALSE;
   }
-  if (!value_is_pointer(dst)) {
+  /* U2b (slots family): the bind recipe decides.  G3: a SCALAR-pointee slot
+   * store under the engine is FAT_BIND (the slot holds the tagged value); an
+   * ARRAY-pointee slot and the engine-off case are NOT_FAT_BIND.  The slot
+   * element value is typed as the pointee, so `value_is_pointer` is only the
+   * plain-variable test -- the aop fact supplies the slot case. */
+  pic_access_plan_get(pf, dst, &plan);
+  pic_access_key_fill(&plan, PIC_ACCESS_OP_BIND, &key);
+  recipe = pic_access_recipe_find(&key);
+  pic_access_explain_note(pf, "ptr:bind", value_variable_get(dst), &plan,
+      PIC_ACCESS_OP_BIND, recipe);
+  if ((0 != recipe)
+      && (PIC_ACCESS_ACTION_NOT_FAT_BIND == recipe->action)) {
     return BOOLEAN_FALSE;
   }
-  /* U2b (slots family): a slot store is never a fat bind; the plan owns the
-   * array-of-pointers answer. */
-  pic_access_plan_get(pf, dst, &plan);
-  if (plan.aop) {
+  if (!value_is_pointer(dst) && !plan.aop) {
     return BOOLEAN_FALSE;
   }
   var = value_variable_get(src);
@@ -55,6 +66,11 @@ boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src)
   }
   if (!pic_mem_object_is_chunked(var)) {
     return BOOLEAN_FALSE;
+  }
+  /* G3: the recipe already decided that a scalar-pointee slot store under
+   * the engine escapes (it is exactly the slot representation change). */
+  if ((0 != recipe) && (PIC_ACCESS_ACTION_FAT_BIND == recipe->action)) {
+    return BOOLEAN_TRUE;
   }
   /* F3: fat when the bind ESCAPES (the deref no longer knows the object), or
    * when the phase gate forces the unescaped case for the F2 witnesses. */
@@ -107,9 +123,76 @@ void pic_fat_bind_emit(pfile_t *pf, value_t dst, value_t src)
       pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
     }
   }
+  if ((VALUE_NONE != bo) && !value_is_const(bo)) {
+    /* G3 S1: the element index is a RUNTIME expression.  The fat value is
+     * self-describing, so adding it to the object-relative offset is enough:
+     * the deref dispatch resolves the chunk at run time (no bind-time chunk
+     * walk).  The sum stays below the tag bits for every object the
+     * allocator can place. */
+    pic_pointer_slot_add_emit(pf, dst, bo);
+    /* The generic add treated the pointer as a number and zeroed its top
+     * byte on the forms whose tag IS the whole top byte (PIC18 / 14H3);
+     * restore the id -- the offset occupies the bytes below it and cannot
+     * carry into it. */
+    if (0 == PIC_FAT_TAG_SHIFT(kind)) {
+      unsigned tag;
+
+      tag = (unsigned) id & PIC_FAT_TAG_MAX(kind);
+      if (0 == tag) {
+        pic_instr_append_f(pf, PIC_OPCODE_CLRF, dst,
+            PIC_FAT_TOP_BYTE(kind));
+      } else {
+        pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, (uchar) tag);
+        pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst,
+            PIC_FAT_TOP_BYTE(kind));
+      }
+    }
+  }
 }
 
-void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
+/* G3 S2: store a pointer value at a RUNTIME slot index.  The slot address
+ * is pa + k*psz; stage FSR there (the helper also walks a holed pointer
+ * array), then copy the value bytes through INDF with a carry-safe FSR
+ * increment on the wide cores. */
+static void pic_pointer_slot_store_rt(pfile_t *pf, value_t dst, value_t src)
+{
+  value_t       indv;
+  value_t       fsrv;
+  boolean_t     wide16;
+  variable_sz_t psz;
+  variable_sz_t ii;
+
+  psz    = (variable_sz_t) pic_pointer_size_get(pf);
+  wide16 = (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  indv = pic_indirect_get(pf, PFILE_LOG_ERR, 0);
+  fsrv = pic_fsr_get(pf);
+  if (!indv || !fsrv) {
+    if (indv) { value_release(indv); }
+    if (fsrv) { value_release(fsrv); }
+    return;
+  }
+  pic_classic_fsr_load_base_dynamic_index(pf,
+      value_variable_get(dst), value_base_get(dst),
+      value_baseofs_get(dst), (variable_sz_t) value_byte_sz_get(dst));
+  for (ii = 0; ii < psz; ii++) {
+    pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, src, ii, PIC_OPDST_W);
+    pic_instr_append_f(pf, PIC_OPCODE_MOVWF, indv, 0);
+    if (ii + 1 < psz) {
+      pic_instr_append_f_d(pf, PIC_OPCODE_INCF, fsrv, 0, PIC_OPDST_F);
+      if (wide16) {
+        pic_instr_append_reg_flag(pf, PIC_OPCODE_BTFSC, "_status", "_z");
+        pic_instr_append_reg(pf, PIC_OPCODE_INCF, "_fsr0h");
+      }
+    }
+  }
+  value_release(fsrv);
+  value_release(indv);
+}
+
+/* the linear (non-fat) value computation; the public wrapper below chooses
+ * fat/linear and handles a runtime slot index */
+static void pic_array_to_pointer_emit(pfile_t *pf, value_t dst, value_t src)
 {
   /* Set up member definition for array pointer */
   if (value_is_pointer(dst) && value_is_array(src)) {
@@ -130,10 +213,6 @@ void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
     }
   }
   
-  if (pic_fat_bind_forced(pf, dst, src)) {
-    pic_fat_bind_emit(pf, dst, src);
-    return;
-  }
 
   {
     variable_t sv0;
@@ -178,6 +257,8 @@ void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
     variable_sz_t   dst_sz;
     variable_t       sv;
     boolean_t        addr_from_data;
+    boolean_t        elem_folded;
+    value_t          bo;
 
     sv = value_variable_get(src);
     addr_from_data = (sv && (variable_data_get(sv) || variable_is_lookup(sv)));
@@ -188,7 +269,39 @@ void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
     dst_sz = (value_is_pointer(dst) && !value_is_array(dst))
       ? pic_pointer_size_get(pf)
       : value_sz_get(dst);
-    for (ii = 0, base = value_base_get(src);
+    /* G3: a pointer SLOT bound to a CHUNKED element must carry the element's
+     * PHYSICAL address, not the object-linear base + offset.  The deref of a
+     * slot element reads the pointer VALUE (pic_indirect_setup), so a linear
+     * address inside a RAM hole reads the wrong byte.  Fold a CONSTANT
+     * element offset through the object's chunk map -- the same resolution
+     * the address-of/WHEREIS path already applies (pic_op_assign.c).  A
+     * contiguous target is returned unchanged, and offset 0 is already the
+     * chunk base, so neither moves.  A runtime element offset still stores
+     * linearly (pre-existing; a bind-time runtime walk is the design work),
+     * and a runtime SLOT index keeps its old slot-0 store. */
+    base = value_base_get(src);
+    elem_folded = BOOLEAN_FALSE;
+    bo = value_baseofs_get(src);
+    if (sv && (VARIABLE_NONE != sv) && !addr_from_data
+        && (VALUE_NONE != bo) && value_is_const(bo)
+        && value_const_get(bo)
+        && pic_mem_object_is_chunked(sv)) {
+      pic_access_plan_t dplan;
+      pic_access_key_t  key;
+      const pic_access_recipe_t *recipe;
+      unsigned          action;
+
+      pic_access_plan_get(pf, dst, &dplan);
+      pic_access_key_fill(&dplan, PIC_ACCESS_OP_ADDR_OF, &key);
+      recipe = pic_access_recipe_find(&key);
+      action = (0 != recipe) ? recipe->action : PIC_ACCESS_ACTION_NONE;
+      if (PIC_ACCESS_ACTION_ADDR_OF_SLOT == action) {
+        base = pic_var_chunk_addr_resolve(sv,
+            base + (variable_base_t) value_const_get(bo));
+        elem_folded = BOOLEAN_TRUE;
+      }
+    }
+    for (ii = 0;
          ii < dst_sz;
          ii++, base >>= 8) {
       if (base || addr_from_data) {
@@ -223,12 +336,45 @@ void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
      * the array base; a runtime subscript (`ram_array[index].field`)
      * rides in baseofs and must be added, or the formal binds the
      * array start instead of the element. */
-    if (value_baseofs_get(src)
+    if (!elem_folded && value_baseofs_get(src)
         && (!value_is_const(value_baseofs_get(src))
           || value_const_get(value_baseofs_get(src)))) {
       pic_pointer_slot_add_emit(pf, dst, value_baseofs_get(src));
     }
   }
+}
+
+/* G3 S2: the bind entry.  A runtime SLOT INDEX is handled by computing the
+ * pointer value into a scratch (the fat/linear decision is made with the
+ * real destination, because the scratch is not a slot) and then copying the
+ * scratch's bytes to pa + k*psz. */
+void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
+{
+  value_t bo;
+
+  bo = value_baseofs_get(dst);
+  if ((VALUE_NONE != bo) && !value_is_const(bo)) {
+    value_t tmp;
+
+    tmp = pic_var_temp_get(pf, VARIABLE_DEF_FLAG_NONE,
+        (variable_sz_t) pic_pointer_size_get(pf));
+    if (!tmp) {
+      return;
+    }
+    if (pic_fat_bind_forced(pf, dst, src)) {
+      pic_fat_bind_emit(pf, tmp, src);
+    } else {
+      pic_array_to_pointer_emit(pf, tmp, src);
+    }
+    pic_pointer_slot_store_rt(pf, dst, tmp);
+    pic_var_temp_release(pf, tmp);
+    return;
+  }
+  if (pic_fat_bind_forced(pf, dst, src)) {
+    pic_fat_bind_emit(pf, dst, src);
+    return;
+  }
+  pic_array_to_pointer_emit(pf, dst, src);
 }
 
 void pic_assign_ptr_to_ptr(pfile_t *pf, value_t dst, value_t src)
@@ -394,9 +540,18 @@ void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
   variable_def_t    sdef;
   boolean_t         src_array_like;
   pic_access_plan_t plan;
+  pic_access_key_t  key;
+  const pic_access_recipe_t *recipe;
+  unsigned          action;
 
   /* U2b-3: the destination's pointer STORAGE class comes from the plan. */
   pic_access_plan_get(pf, dst, &plan);
+  pic_access_key_fill(&plan, PIC_ACCESS_OP_PTR_WRITE, &key);
+  recipe = pic_access_recipe_find(&key);
+  action = (0 != recipe) ? recipe->action
+    : PIC_ACCESS_ACTION_PTR_WRITE_LINEAR;
+  pic_access_explain_note(pf, "ptr:write", value_variable_get(dst), &plan,
+      PIC_ACCESS_OP_PTR_WRITE, recipe);
   /* PTR_LOOKUP is set on the pointer when a const array is bound for reads, but
    * `p is buf` is still "store buf's address in p" — not the lookup-label loop
    * below (which treats dst as an INDF destination). */
@@ -446,7 +601,7 @@ void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
   } else if (value_is_array(src)) {
     pic_assign_array_to_pointer(pf, dst, src);
   } else {
-    if (plan.ptr_lookup && value_is_indirect(dst)
+    if ((PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP_IND == action)
         && variable_def_get(value_variable_get(dst))
         && variable_def_flag_test(
              variable_def_get(value_variable_get(dst)),
@@ -455,8 +610,9 @@ void pic_assign_to_ptr(pfile_t *pf, value_t dst, value_t src)
        * pointer (a pointer actual): a linear store, not a lookup bind.  A
        * user pointer bound to a const array keeps the refusal below. */
       pic_assign_to_ptr_linear(pf, dst, src);
-    } else if (plan.ptr_lookup) {
-      pfile_log(pf, PFILE_LOG_ERR, 
+    } else if ((PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP_IND == action)
+        || (PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP == action)) {
+      pfile_log(pf, PFILE_LOG_ERR,
         "Attempt to assign to a lookup table");
     } else {
       assert(0);
@@ -470,16 +626,24 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
   if (value_is_pointer(dst)) {
     pic_assign_ptr_to_ptr(pf, dst, src);
   } else {
-    variable_t        svar;
     value_t           tmp;
     value_t           baseofs;
     variable_sz_t     ii;
     variable_def_t    src_def;
     pic_access_plan_t plan;
+    pic_access_key_t  key;
+    const pic_access_recipe_t *recipe;
+    unsigned          action;
 
     /* U2b (slots family): classify the source once (the predicate reads the
      * variable's def, so the clone/def swap below does not change it). */
     pic_access_plan_get(pf, src, &plan);
+    pic_access_key_fill(&plan, PIC_ACCESS_OP_PTR_READ, &key);
+    recipe = pic_access_recipe_find(&key);
+    action = (0 != recipe) ? recipe->action
+      : PIC_ACCESS_ACTION_PTR_READ_LINEAR;
+    pic_access_explain_note(pf, "ptr:read", value_variable_get(src), &plan,
+        PIC_ACCESS_OP_PTR_READ, recipe);
     src     = value_clone(src);
     baseofs = value_baseofs_get(src);
     value_baseofs_set(src, VALUE_NONE);
@@ -494,10 +658,10 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
     src_def = value_def_get(src);
     value_def_set(src, value_def_get(tmp));
 
-    svar = value_variable_get(src);
     /* U2b-3: the plan already resolved the read's storage class (procedure
      * pointer, EEPROM or FLASH needs the helper call). */
-    if (plan.ptr_read_call) {
+    if ((PIC_ACCESS_ACTION_PTR_READ_CALL == action)
+        || (PIC_ACCESS_ACTION_PTR_READ_CALL_SLOT == action)) {
       /* this will necessitate a function call */
       variable_sz_t sz;
       variable_sz_t ipos;
@@ -521,7 +685,7 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
             pic_instr_append_f(pf, PIC_OPCODE_CLRF, tmp, ii);
           }
         }
-      } else if (plan.aop) {
+      } else if (PIC_ACCESS_ACTION_PTR_READ_CALL_SLOT == action) {
         /* ARRAY-of-pointers element read at a runtime index: DOUBLE
          * indirection -- FSR = &slot[k], load the slot's pointer into
          * tmp, and the existing PTR_READ flow dereferences tmp (the
@@ -603,10 +767,10 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
       pic_value_sign_extend(pf, dst, ii - 1, value_is_signed(src));
 
       label_release(lbl);
-    } else if (variable_flag_test(svar, VARIABLE_FLAG_PTR_PTR)) {
+    } else if (PIC_ACCESS_ACTION_PTR_READ_PTR == action) {
       /* ptr --> dst */
       assert(0);
-    } else if (variable_flag_test(svar, VARIABLE_FLAG_PTR_LOOKUP)) {
+    } else if (PIC_ACCESS_ACTION_PTR_READ_LOOKUP == action) {
       /* lookup --> dst */
       /* pic_sign holds LSB */
       /* W holds MSB */
@@ -659,15 +823,22 @@ void pic_assign_from_ptr(pfile_t *pf, value_t dst, value_t src)
         tmp = VALUE_NONE;
       } else {
         label_t       lbl;
+        variable_sz_t pc_hi;
 
         lbl = pic_label_find(pf, PIC_LABEL_INDIRECT, BOOLEAN_TRUE);
+        /* `_pic_indirect` takes W = the PC HIGH byte: PCLATH on the 14-bit
+         * cores (pointer byte 1 = the address high byte) and PCLATU on the
+         * 16-bit core (pointer byte 2).  Using the pointer's LAST byte broke
+         * the 14H 3-byte form: byte 2 is UPPER|ROM, so PCLATH became 0x80
+         * and the call jumped to the wrong code page. */
+        pc_hi = pic_is_16bit(pf)
+          ? (variable_sz_t) (pic_pointer_size_get(pf) - 1) : 1;
         for (ii = 0; ii < sz; ii++) {
           if (ii) {
             pic_op(pf, OPERATOR_INCR, tmp, VALUE_NONE, VALUE_NONE);
           }
           pic_indirect_bump3(pf, dst, VALUE_NONE, VALUE_NONE, ii, &ipos);
-          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, 
-            pic_pointer_size_get(pf) - 1, PIC_OPDST_W);
+          pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, tmp, pc_hi, PIC_OPDST_W);
           pic_instr_append_n(pf, PIC_OPCODE_CALL, lbl);
           if (!pic_value_is_w(dst)) {
             pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dst, ii);
@@ -903,7 +1074,13 @@ boolean_t pic_try_bind_array_to_pointer_slot(pfile_t *pf, value_t dst,
   }
   if (value_is_pointer(dst)) {
     ptr_slot = value_clone(dst);
-    value_baseofs_set(ptr_slot, VALUE_NONE);
+    /* F5: KEEP a CONSTANT destination base offset.  A pointer-array
+     * element (`pa[1] is buf`) carries its slot offset there; clearing it
+     * stored every element bind into slot 0 (16F18857: `pa[0] is arr[0]`
+     * then `pa[1] is arr[4]` read 50 for pa[0]).  Only INDIRECT must go:
+     * the slot is the DESTINATION, not a pointer to store through.
+     * G3 S2: a RUNTIME slot index is kept too -- the bind wrapper computes
+     * the value into a scratch and stores it at &slot[k]. */
     value_indirect_clear(ptr_slot);
   } else if ((vbind = value_variable_get(dst)) != VARIABLE_NONE) {
     variable_def_t      vdef;

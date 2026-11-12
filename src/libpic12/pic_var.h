@@ -67,6 +67,24 @@ variable_ct_t pic_fat_object_ct(void);
 variable_t    pic_fat_object_get(unsigned id);   /* id is 1-based */
 
 /*
+ * F2d: the O(1) dispatch's data.  Created after the FINAL placement (pass 2)
+ * because their contents are the placed segment bases: one descriptor per
+ * fat object in the runtime chunk-map format, plus `_obj_desc[]`, a table of
+ * their addresses indexed by id.  Both are filled by the preuser init
+ * (pic_fat_desc_fill_emit), before the user entry runs.
+ *
+ * pic_fat_table_ready() is FALSE whenever that data does not exist (fat
+ * pointers off, or no fat object, or a creation failure already reported):
+ * the dispatch then emits nothing and the compile has failed.
+ */
+boolean_t     pic_fat_table_ready(void);
+variable_t    pic_fat_id_get(void);              /* the dispatch's id cell */
+variable_t    pic_fat_desc_tbl_get(void);        /* `_obj_desc[]` */
+variable_t    pic_fat_desc_var_get(unsigned id); /* 1-based; VARIABLE_NONE */
+void          pic_fat_desc_prepare(pfile_t *pf);
+void          pic_fat_desc_fill_emit(pfile_t *pf);
+
+/*
  * U1: the one memory map.  U1a makes the four free/declared lists fields of
  * one object (mechanical, behaviour unchanged); U1b adds the region table and
  * the free-segment invariants; U1c moves the allocator onto it.
@@ -110,22 +128,19 @@ boolean_t pic_var_pointer_bind_escaped_var(variable_t pvar);
 boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar);
 variable_t pic_var_pointer_bind_walk_target(variable_t pvar);
 void pic_var_pointer_bind_check_escaped(pfile_t *pf);
-void pic_var_openarray_pair_record(variable_t actual, variable_t formal,
-    boolean_t passon);
-/* mark a recorded (actual, formal) pair as a string payload view (the
- * formal's runtime map gains the base-word format) */
-void pic_var_openarray_pair_strview_mark(variable_t actual,
-    variable_t formal);
-boolean_t pic_var_openarray_pair_layout_get(variable_t actual,
-    variable_ct_t *ct, variable_sz_t *sz, variable_base_t *base);
-/* a PASS-ON call site copies the source formal's runtime map (it has no
- * compile-time layout of its own to hand over) */
-boolean_t pic_var_openarray_pair_chain_get(variable_t actual, variable_t formal,
-    variable_t *src, variable_sz_t *sz);
 /* runtime chunk-map capacity: a marshalling buffer is split by RAM bank
  * nodes; the call-site store refuses (with a diagnostic) beyond this */
 #define PIC_CHUNK_MAP_MAX 8
-boolean_t pic_var_openarray_pair_formal_runtime_get(variable_t formal);
+
+/* U3 Phase 1: the CALL command owns its open-array pairs
+ * (cmd_branch_pair_t, attached by the pass-1 record site).  The capture
+ * pass and the call-site descriptor store read those attachments; this
+ * records the program command list once at the start of pass 2. */
+void pic_var_openarray_ir_set(const cmd_t cmd_head);
+/* non-vacuous acceptance comparator: re-derives the expected pair set per
+ * CALL from the parameters and compares it with the attachments.  Prints
+ * `pair-compare: N calls, M pairs, X mismatches`; X != 0 is an error. */
+void pic_var_pair_compare(pfile_t *pf, const cmd_t cmd_head);
 /* the runtime chunk map of ONE open-array formal (its own storage, filled by
  * every call site), or VARIABLE_NONE while the formal uses its baked map */
 variable_t pic_var_openarray_formal_map_get(variable_t formal);
@@ -169,6 +184,10 @@ void pic_var_chunk_prepare_emit(pfile_t *pf);
 boolean_t pic_var_chunk_walk_globals_get(pfile_t *pf, variable_t *cnt,
     variable_t *base, variable_t *span);
 variable_t pic_var_chunk_walk_arg_get(void);
+/* pointer-size scratch holding the PHYSICAL address of a runtime
+ * pointer-slot WHEREIS (the resolution of a fat slot's tag); created on
+ * first use, after placement */
+variable_t pic_var_whereis_scratch_get(pfile_t *pf);
 boolean_t pic_var_escapes_to_call(variable_t var);
 
 /* late (post-placement) allocation for emit-time scratch variables */

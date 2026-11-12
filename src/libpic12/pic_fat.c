@@ -45,7 +45,7 @@
 /* pointer value width in bytes (the tag never grows the value in F1) */
 unsigned pic_fat_ptr_size(pic_fat_target_t t)
 {
-  if (PIC_FAT_TARGET_18 == t) {
+  if ((PIC_FAT_TARGET_18 == t) || (PIC_FAT_TARGET_14H3 == t)) {
     return 3;
   }
   if (PIC_FAT_TARGET_FLAT == t) {

@@ -7,7 +7,7 @@
 --    lands in the string-flavored clone and performs the handle/block
 --    assign.  A byte array actual uses the generic body, where the assign
 --    only REBINDS the formal's local pointer -- the caller's array is
---    untouched (verified gate-off and gate-on).  With JALV2_FRONT_IR=1 the
+--    untouched (verified gate-off and gate-on).  Under the typed front end (historically JALV2_FRONT_IR=1) the
 --    whole-formal assign is a deferred semantic node lowered with the
 --    formal's actual flavor; the parity pin requires byte-identical HEX.
 --

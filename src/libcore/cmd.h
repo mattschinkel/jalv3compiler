@@ -79,9 +79,9 @@ typedef struct {
 #define CMD_FLAG_SPEED     0x0004 /* optimize for speed      */
 /* BLOCK_START from pfile_cmd_block_dup (pragma inline body); see pfile_temp_fixup */
 #define CMD_FLAG_INLINE_DUP_BLOCK 0x0008
-/* front-end semantic layer (JALV2_FRONT_IR): deferred formal-dependent
- * operations; the front-end lowering pass replaces them before the
- * optimizer/back end */
+/* front-end semantic layer: deferred formal-dependent operations; the
+ * front-end lowering pass replaces them before the optimizer/back end
+ * (the retired JALV2_FRONT_IR switch no longer selects a second arm) */
 #define CMD_FLAG_SEM_STORE         0x0010
 #define CMD_FLAG_SEM_STR_LOAD      0x0020
 #define CMD_FLAG_SEM_STR_STORE     0x0040

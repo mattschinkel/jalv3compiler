@@ -1,0 +1,42 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — an UNBOUND pointer through the walk path traps
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    F5 section 4: a CONDITIONALLY bound pointer (`if cond ... p is big`) that
+--    is dereferenced through the compile-time chunk WALK never read the
+--    pointer's value, so an unbound `p` silently read the target's first
+--    byte (big[0] = 1) instead of trapping.  The walk now emits the same
+--    all-bytes-zero guard as the fat and slot paths; this arm keeps `g` at 0
+--    (the guard hangs before the load) while the bound control reads 101.
+--
+-- @picsim_validate begin
+-- steps: 2000000
+-- frequency_hz: auto
+-- expect byte v_armed 0xA5
+-- expect byte v_g 0
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+
+var volatile byte big[400]
+var pointer p as var byte[400]
+var volatile byte cond
+var volatile byte g = 0
+var volatile byte armed = 0
+
+big[0] = 1
+big[100] = 101
+cond = 0
+if cond != 0 then
+  p is big
+end if
+armed = 0xA5
+g = p[100]
+
+forever loop
+end loop

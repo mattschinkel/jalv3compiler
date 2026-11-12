@@ -1638,10 +1638,13 @@ static boolean_t jal_proc_strclone_passon_fix(pfile_t *pf,
  *   Find or create the string-flavored clone of ORIG for the flavour MASK:
  *   a hidden procedure whose open byte-array formals named by MASK are
  *   dynamic-string handles (their hidden count member dropped), with the
- *   body RE-PARSED from the recorded source position so every statement
- *   lowers through the string rules (the subscript append rule, live
- *   COUNT, per-access handle re-derivation).  Formals not in the mask keep
- *   their pointer/view definition in the same variant.
+ *   body DUPLICATED from the parsed block list (pfile_proc_body_dup) and
+ *   re-lowered so every statement lowers through the string rules (the
+ *   subscript append rule, live COUNT, per-access handle re-derivation).
+ *   The retired source re-parse (JALV2_FRONT_IR) is history; only the
+ *   eligibility marker it fed remains until the Phase 7 cleanup.  Formals
+ *   not in the mask keep their pointer/view definition in the same
+ *   variant.
  *
  * PARAMETERS
  *   pf   : the compile

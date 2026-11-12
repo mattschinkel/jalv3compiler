@@ -7,8 +7,9 @@
 #      F0b also scans every real linear file address (0x0020..0x196F on 14H,
 #      ..0x01EF on classic, ..0x36FF on PIC18) and asserts that none of them
 #      reads as a tag -- tag 0 must stay "legacy linear";
-#   2. JALV2_FAT_POINTERS=1 is byte-identical to unset (F0 emits tag 0
-#      only, so the whole corpus must not move).
+#   2. JALV2_FAT_POINTERS=1 is byte-identical to unset (since the 2026-11-11
+#      default flip both mean the engine is on; this arm keeps the explicit
+#      value from ever diverging from the default).
 #
 # Usage: unit-tests/test_fat_pointer_tags.sh [compiler]
 set -u

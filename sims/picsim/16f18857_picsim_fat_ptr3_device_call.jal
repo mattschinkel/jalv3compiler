@@ -1,0 +1,50 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F18857 picsim — a FAT 3-byte device call reaches the right page
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The `print_string(device, str)` pseudo-device call stages a FUNCTION
+--    pointer and enters `_pic_indirect`, which takes W = the PC HIGH byte.
+--    With the 14H 3-byte pointer form the caller left the pointer's LAST
+--    byte (UPPER|ROM) in W, so PCLATH became 0x80 and the call jumped to the
+--    wrong code page -- the string-heap allocator, where it livelocked.
+--    This witness runs the full path (heap assign + print_string + a
+--    user device) with `pragma target fat_pointers 3byte` pinned in the
+--    source, so both the gate-off and gate-on suites exercise it.
+--
+-- @picsim_validate begin
+-- steps: 3000000
+-- frequency_hz: auto
+-- expect byte v_capn 9
+-- expect byte v_c0 0x4D
+-- expect byte v_c8 0x67
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include 16f18857
+pragma target clock 4_000_000
+pragma target WDT DISABLED
+pragma target string_heap_size 15
+pragma target fat_pointers 3byte
+include strings_dynamic
+include print
+
+var string my_string
+var byte buf[40]
+var volatile byte capn = 0
+var volatile byte c0 = 0
+var volatile byte c8 = 0
+
+procedure cap'put(byte in x) is
+  buf[capn] = x
+  capn = capn + 1
+end procedure
+
+my_string = "My string"
+print_string(cap, my_string)
+c0 = buf[0]
+c8 = buf[8]
+
+forever loop
+end loop

@@ -88,15 +88,30 @@ run_movlb() {
   report "skip_verify_movlb" "$log" "$?"
 }
 
+# GATE MODE (T3): every baseline pin starts ENGINE-OFF, so an ambient
+# JALV2_FAT_POINTERS (e.g. while measuring the default flip) cannot change a
+# baseline.  Mode-specific pins set their own value per command; the gate
+# below asserts the baseline scripts each state their mode.
+JALV2_FAT_POINTERS=0
+export JALV2_FAT_POINTERS
+for _s in test_openarray_chunked_pins.sh test_multibank_array_errors.sh \
+          test_alloc_capacity.sh test_access_recipe.sh run_plan_gate.sh \
+          run_access_matrix.sh; do
+  if ! grep -q 'JALV2_FAT_POINTERS' "$ROOT/unit-tests/$_s"; then
+    echo "FAIL: gate-mode pin (T3): $_s does not state JALV2_FAT_POINTERS" >&2
+    exit 2
+  fi
+done
+
 cd "$ROOT" || exit 2
 
 echo "compile-pin gate: compiler=$CC"
 
 # String / parser diagnostics
 run_sh string_error_paths          unit-tests/test_string_error_paths.sh "$CC"
-# Phase-1 front-end semantic subscript layer (JALV2_FRONT_IR, default off):
-# clone witnesses must stay byte-identical gate-off/on, and the hard
-# subscript witness must run under gpsim with the gate on.
+# Typed front-end semantic subscript layer (the retired JALV2_FRONT_IR
+# switch is gone; the layer is the only lowering): the clone witnesses run
+# under gpsim and must keep passing as the single-arm pin.
 run_sh front_ir_parity             unit-tests/test_front_ir_parity.sh "$CC"
 # The same sem-on runtime equivalence on the flat 32-bit (PIC32) back end.
 run_sh front_ir_pic32              unit-tests/test_front_ir_parity_pic32.sh "$CC"
@@ -192,7 +207,22 @@ run_sh fat_pointer_deref          unit-tests/test_fat_pointer_deref.sh "$CC"
 run_sh alloc_segment_audit        unit-tests/test_alloc_segment_audit.sh "$CC"
 run_sh alloc_capacity             unit-tests/test_alloc_capacity.sh "$CC"
 run_sh access_audit               unit-tests/test_access_audit.sh "$CC"
+# ENG S1: -explain-access / -dump-plan CLI validation (line grammar, path,
+# unreadable source, unwritable dump with atomic output, happy paths).
+run_sh access_cli                 unit-tests/test_access_cli.sh "$CC"
 run_sh openarray_pair_over_cap    unit-tests/test_openarray_pair_over_cap.sh "$CC"
+# DX F1: strict JALV2_* on/off parsing (FALSE/space/typos) and --features.
+run_sh env_switches              unit-tests/test_env_switches.sh "$CC"
+# Dynamic-string append growth on a chunked heap (spare capacity, geometric
+# growth, one compact-and-retry).
+run_sh string_heap_append        unit-tests/test_string_heap_append.sh "$CC"
+# F5 section 4: the walk-path null guard (an unbound pointer traps instead
+# of silently reading the target's first byte).
+run_sh unbound_walk_guard        unit-tests/test_unbound_walk_guard.sh "$CC"
+# U3 Phase 1: the open-array pairs live on the CALL command; the acceptance
+# comparator re-derives them from the parameters (with drop/alter fault hooks
+# proving it is non-vacuous).
+run_sh u3_pair_attach             unit-tests/test_u3_pair_attach.sh "$CC"
 run_sh pic12_indirect_refusal     unit-tests/test_pic12_indirect_refusal.sh "$CC"
 run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
 # Header dependency tracking (the mixed-object lesson): a header edit must
@@ -225,6 +255,13 @@ run_py pic32mx_mvec_layout         unit-tests/test_pic32mx_mvec_layout.py --comp
 
 # Source comment blocks vs the code they document (no build needed).
 run_py comment_docs                unit-tests/check_comment_docs.py
+# Step 4: FAT recipe dispatch, fatal default, and plan generations.
+run_sh access_recipes              unit-tests/test_access_recipes.sh
+# Step 2: the plan-diff gate over the pinned classic subset.
+run_sh access_plan_gate            unit-tests/run_plan_gate.sh "$CC"
+# E3: the neutral dispatcher, both back ends' table self-checks, and the
+# PIC32 pointer-read spike's byte-identical pin.
+run_sh access_recipe               unit-tests/test_access_recipe.sh "$CC"
 # Every simulator validate block must pin something a stall cannot satisfy:
 # a checkpoint-counter expectation or at least one nonzero value.  The
 # runtime harness cannot see the difference (18f4620_float_str_battery passed

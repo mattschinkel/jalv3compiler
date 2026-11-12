@@ -340,6 +340,8 @@ pfile_token_ct_t pfile_token_ct_get(pfile_t *pf);
 
 /* dynamic string: deferred `string_heap_compact` (NOP in cmd list, expanded in dump) */
 void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result);
+void pfile_str_heap_defer_add_ex(pfile_t *pf, cmd_t marker, value_t result,
+    boolean_t as_call);
 void pfile_str_heap_defer_free(pfile_t *pf);
 
 void pfile_cmd_cursor_set(pfile_t *pf, cmd_t cmd);

@@ -1034,6 +1034,7 @@ void mips_cmd_generate(pfile_t *pf, const cmd_t cmd)
 
   mips_reg_cache_reset();
   mips_isa_bind(pf);
+  mips_access_audit(pf);
 
   /* The MX1/2 boot flash is 3 KB and the generated device file's const
    * pool alone (SFR/fuse/USERID constants) is larger than that, so a
