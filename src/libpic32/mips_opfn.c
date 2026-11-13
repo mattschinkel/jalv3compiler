@@ -646,6 +646,32 @@ static void mips_float_toint_create(pfile_t *pf)
   mfalg_ret_conv(pf);
 }
 
+/* cut 6: unsigned 32-bit conversions.  Same register contract as the
+ * signed pair; the kernels take the full unsigned range. */
+static void mips_float_uconv_create(pfile_t *pf)
+{
+  value_t f1;
+  value_t conv;
+
+  f1   = mips_fval1_get(pf);
+  conv = mips_fconv_get(pf, 4);
+  mips_load_value(pf, conv, MFALG_OP1);
+  value_release(conv);
+  value_release(f1);
+  falg_u2f_core(pf, &mips_falg_ops);
+}
+
+static void mips_float_utoint_create(pfile_t *pf)
+{
+  value_t f1;
+
+  f1 = mips_fval1_get(pf);
+  mips_load_value(pf, f1, MFALG_OP1);
+  value_release(f1);
+  falg_u2i_core(pf, &mips_falg_conv_ops);
+  mfalg_ret_conv(pf);
+}
+
 static const struct {
   const char *tag;
   void (*fn)(pfile_t *);
@@ -656,7 +682,9 @@ static const struct {
   {MIPS_LABEL_FLOAT_DIVIDE,   mips_float_divide_create},
   {MIPS_LABEL_FLOAT_SCONV,    mips_float_sconv_create},
   {MIPS_LABEL_FLOAT_CONV,     mips_float_conv_create},
-  {MIPS_LABEL_FLOAT_TOINT,    mips_float_toint_create}
+  {MIPS_LABEL_FLOAT_TOINT,    mips_float_toint_create},
+  {MIPS_LABEL_FLOAT_UCONV,    mips_float_uconv_create},
+  {MIPS_LABEL_FLOAT_UTOINT,   mips_float_utoint_create}
 };
 
 void mips_float_intrinsics_create(pfile_t *pf)
@@ -801,8 +829,13 @@ void mips_float_assign_to(pfile_t *pf, value_t dst, value_t src)
     mips_store_value(pf, exp1, MIPS_REG_ZERO);
     value_release(exp1);
   }
-  which = value_is_signed(src) ? MIPS_LABEL_FLOAT_SCONV
-                               : MIPS_LABEL_FLOAT_CONV;
+  if (value_is_signed(src)) {
+    which = MIPS_LABEL_FLOAT_SCONV;
+  } else if (4 == value_byte_sz_get(src)) {
+    which = MIPS_LABEL_FLOAT_UCONV;
+  } else {
+    which = MIPS_LABEL_FLOAT_CONV;
+  }
   mips_float_call(pf, which);
   {
     value_t f1;
@@ -834,7 +867,9 @@ void mips_float_assign_from(pfile_t *pf, value_t dst, value_t src)
   f1 = mips_fval1_get(pf);
   mips_load_value(pf, src, MIPS_REG_T1);
   mips_store_value(pf, f1, MIPS_REG_T1);
-  mips_float_call(pf, MIPS_LABEL_FLOAT_TOINT);
+  mips_float_call(pf, ((4 == value_byte_sz_get(dst))
+      && !value_is_signed(dst))
+        ? MIPS_LABEL_FLOAT_UTOINT : MIPS_LABEL_FLOAT_TOINT);
   conv = mips_fconv_get(pf, value_byte_sz_get(dst));
   mips_load_value(pf, conv, MIPS_REG_T1);
   mips_store_value(pf, dst, MIPS_REG_T1);

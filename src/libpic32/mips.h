@@ -317,6 +317,8 @@ boolean_t  mips_wide_generate(pfile_t *pf, operator_t op, value_t dst,
 #define MIPS_LABEL_FLOAT_SCONV    "_mips_float_sconv"
 #define MIPS_LABEL_FLOAT_CONV     "_mips_float_conv"
 #define MIPS_LABEL_FLOAT_TOINT    "_mips_float_toint"
+#define MIPS_LABEL_FLOAT_UCONV    "_mips_float_uconv"
+#define MIPS_LABEL_FLOAT_UTOINT  "_mips_float_utoint"
 
 boolean_t  mips_op_is_float(value_t dst, value_t v1, value_t v2);
 boolean_t  mips_fpu_hw_enabled(pfile_t *pf);

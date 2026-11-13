@@ -32,6 +32,7 @@ def parse_validate_block(jal_text: str) -> dict[str, Any]:
             "duration_s": None,
             "machine": None,
             "icount": None,
+            "smp": None,
             "compiler_args": [],
             "uart_out": None,
             "uart_contains": None,
@@ -70,6 +71,14 @@ def parse_validate_block(jal_text: str) -> dict[str, Any]:
             machine = line.split(":", 1)[1].strip()
             continue
 
+        if low.startswith("smp:"):
+            # ESP32-only: the QEMU -smp cpu count (the second-core
+            # witnesses need 2; single-core programs leave it unset)
+            try:
+                smp = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                smp = None
+            continue
         if low.startswith("icount:"):
             # ESP32-only: QEMU -icount shift override (virtual ns per
             # instruction = 2^shift).  Programs that run the 240 MHz

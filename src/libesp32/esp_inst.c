@@ -83,6 +83,15 @@ void esp_inst_encode(pfile_t *pf, const esp_code_t code,
       out[2] = (unsigned char) (code->imm & 0xFF);
       break;
 
+    case ESP_OP_S32C1I:
+      /* S32C1I at, as, imm: [ (at<<4)|2, 0xE0|as, imm ] (imm = bytes/4).
+       * The ISA's RRI8 form: op0=2, op1=0xE.  Atomically: if [as+imm*4]
+       * equals SCOMPARE1 (sr 12), store at; at receives the old word. */
+      out[0] = (unsigned char) (((code->at & 0xF) << 4) | 0x2);
+      out[1] = (unsigned char) (0xE0 | (code->as & 0xF));
+      out[2] = (unsigned char) (code->imm & 0xFF);
+      break;
+
     case ESP_OP_J: {
       /* J near target: m0=0x06, imm16 = delta/4 (delta = target-(PC+4),
        * must be 4-aligned); bytes [06, imm_lo, imm_hi]. Far/unaligned

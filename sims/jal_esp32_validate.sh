@@ -34,6 +34,7 @@ LIBDIR="demo_lib;third_party/jallib/lib"   # 32-bit lib variants shadow pristine
 COMPILER="$ROOT/bin/beta/jalv3-x86-64"
 NO_VALIDATE=0
 QUIET=0
+SMP_OVERRIDE=0
 JAL=""
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --compiler) COMPILER="$2"; shift 2 ;;
     -s)         LIBDIR="$2"; shift 2 ;;
     --quiet)    QUIET=1; shift ;;
+    --smp)      SMP_OVERRIDE="$2"; shift 2 ;;
     --no-validate) NO_VALIDATE=1; shift ;;
     -h|--help)
       sed -n '1,24p' "$0"
@@ -150,22 +152,26 @@ PY
 )"
 UART_ABS="$BUILD_DIR/${JAL_BASENAME}.uart"
 ICOUNT="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("icount") or 3)' <<<"$META_JSON")"
-python3 - "$QEMU_PY" "$HEX_ABS" "$MACHINE" "$DURATION" "$DUMP_ABS" "$UART_ABS" "$NEEDS_UART" "$ICOUNT" <<'PY'
+SMP="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("smp") or 1)' <<<"$META_JSON")"
+if [[ "$SMP_OVERRIDE" -gt 1 ]]; then
+  SMP="$SMP_OVERRIDE"
+fi
+python3 - "$QEMU_PY" "$HEX_ABS" "$MACHINE" "$DURATION" "$DUMP_ABS" "$UART_ABS" "$NEEDS_UART" "$ICOUNT" "$SMP" <<'PY'
 import importlib.util
 import sys
 from pathlib import Path
 
-qemu_py, hex_path, machine, duration, dump_path, uart_path, needs_uart, icount = sys.argv[1:9]
+qemu_py, hex_path, machine, duration, dump_path, uart_path, needs_uart, icount, smp = sys.argv[1:10]
 spec = importlib.util.spec_from_file_location("esp32_qemu", qemu_py)
 mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(mod)
 capture = needs_uart == "1"
 if capture:
-    ram, ser = mod.run_hex(hex_path, machine=machine, duration_s=float(duration), dump_bytes=1024, capture_serial=True, icount_shift=int(icount))
+    ram, ser = mod.run_hex(hex_path, machine=machine, duration_s=float(duration), dump_bytes=1024, capture_serial=True, icount_shift=int(icount), cpu_count=int(smp))
     Path(uart_path).write_bytes(ser)
 else:
-    ram = mod.run_hex(hex_path, machine=machine, duration_s=float(duration), dump_bytes=1024, icount_shift=int(icount))
+    ram = mod.run_hex(hex_path, machine=machine, duration_s=float(duration), dump_bytes=1024, icount_shift=int(icount), cpu_count=int(smp))
 Path(dump_path).write_text(mod.xp_to_dump_text(ram), encoding="utf-8")
 PY
 

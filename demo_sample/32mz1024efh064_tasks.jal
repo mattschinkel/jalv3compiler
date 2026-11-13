@@ -8,7 +8,7 @@
 --
 -- Description:
 --    PIC32 port of the ESP32 cooperative-multitasking demo added since
---    jalv2 2.5r9: `pragma task N`, `task ... end task`, `_task_start
+--    jalv2 2.5r9: `task ... end task`, `_task_start
 --    proc()` and `suspend`. The scheduler is a deterministic
 --    round-robin: every `suspend` hands control to the next live task,
 --    and a task that falls off its end removes itself. Two worker
@@ -95,7 +95,6 @@ include print
 
 include format
 
-pragma task 4          -- main + three workers
 
 -- Task bodies share the starter's stack (leaf frames): keep state in
 -- globals, never in task-local variables.

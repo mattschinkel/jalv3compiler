@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="second_core" xml:lang="en-US">
+  <title>Multiple cores and task affinity (ESP32)</title>
+
+  <body>
+    <p>An ESP32 has two Xtensa LX6 cores. JALv3 programs run on the PRO core
+    by default; <codeph>pragma target enable_cores 2</codeph> also releases
+    the APP core at startup, and both cores run the program's cooperative
+    task scheduler. A task can be pinned to one core with a
+    <codeph>core(...)</codeph> clause on <codeph>_task_start</codeph>.</p>
+
+    <section>
+      <title>Enabling the cores</title>
+
+      <codeblock>pragma target enable_cores 2</codeblock>
+
+      <p>The value is the number of cores the program may use. 1 is the
+      default and produces the same image as a build without the pragma.
+      2 is valid on the ESP32 (PRO + APP); a larger value is a compile
+      error, as is any value above the selected chip's core count
+      (single-core PIC and PIC32 targets have one). The value must be a
+      constant and must appear above the first <codeph>core(...)</codeph>
+      clause or <codeph>_task_core(...)</codeph> use.</p>
+
+      <p>The feature is opt-in and stays that way: enabling it changes the
+      image (startup code, a 4 KB APP-core stack, DPORT setup) and buys
+      nothing for single-core programs. With the pragma absent the
+      generated image is byte-identical to a build without the feature.</p>
+    </section>
+
+    <section>
+      <title>What starts</title>
+
+      <p>At the end of the startup sequence the PRO core writes the APP
+      core's boot address and releases it (DPORT APPCPU reset, run stall,
+      clock, and the RTC stall the ROM holds). The APP core boots into the
+      program's task dispatcher with its own stack. When the program
+      declares no tasks the APP core parks in a self-loop.</p>
+    </section>
+
+    <section>
+      <title>Slots are automatic</title>
+
+      <p>There is no <codeph>pragma task</codeph>: the scheduler sizes its
+      slot table from the <codeph>task ... end task</codeph> declarations,
+      plus slot 0 for the main program. The <codeph>-task</codeph> command
+      line option can pre-size the table; it is not needed in source.</p>
+    </section>
+
+    <section>
+      <title>Tasks are cooperative, and both cores schedule them</title>
+
+      <p>The task model is unchanged: <codeph>_task_start</codeph>,
+      <codeph>_task_yield</codeph>, <codeph>_task_suspend</codeph>,
+      <codeph>_task_resume</codeph>, <codeph>_task_kill</codeph> and
+      <codeph>_task_restart</codeph> behave as on the other targets. With
+      the second core enabled, both cores run the same round-robin over the
+      task slots:</p>
+
+      <ul>
+        <li>a runnable slot is claimed with a single Xtensa
+        <codeph>S32C1I</codeph> compare-and-swap, so exactly one core owns a
+        task at a time;</li>
+        <li>a yielding task writes its resume address back and releases its
+        slot; either core may pick it up next, so a task can move between
+        cores at a yield unless it is pinned;</li>
+        <li>slot 0 is the resume slot of the main program. A core with no
+        current task writes its own resume address there when it yields, so
+        main is dispatched like any other task.</li>
+      </ul>
+
+      <p>There is no preemption. A task that never yields occupies its core
+      until it yields or ends, and with two cores the other core keeps
+      scheduling.</p>
+    </section>
+
+    <section>
+      <title>Pinning a task to a core</title>
+
+      <codeblock>_task_start core(2) painter()      -- only the APP core runs it
+_task_start painter() core(1)      -- the clause may follow the task
+_task_start painter()              -- any core
+
+var byte c
+c = 2
+_task_start core(c) painter()      -- the clause takes a variable too</codeblock>
+
+      <p>Cores are numbered 1 (PRO) and 2 (APP). The clause takes a constant
+      or a variable; a constant is checked at compile time against
+      <codeph>enable_cores</codeph>, and 0 means "any core". A runtime value
+      is checked when the statement runs: a value outside 0..N raises the
+      runtime error below and pins the task to any core, so it still
+      runs.</p>
+
+      <p>The pin belongs to the task's slot: a plain <codeph>_task_start</codeph>
+      clears an old pin, <codeph>_task_restart</codeph> keeps it, and a new
+      <codeph>_task_start</codeph> sets it again. It takes effect at the
+      next claim, so a running task moves only when it is next dispatched.
+      Core numbering and <codeph>core</codeph> are ordinary identifiers
+      everywhere except inside <codeph>_task_start</codeph>.</p>
+    </section>
+
+    <section>
+      <title>Reading which core ran a task</title>
+
+      <codeblock>if _task_core(painter()) == 2 then
+   ...
+end if</codeblock>
+
+      <p><codeph>_task_core(name())</codeph> returns the core that last
+      claimed the task (1 or 2), or 0 if it has never run. It is an
+      observation for tests and diagnostics; the pin is set only by
+      <codeph>_task_start</codeph>.</p>
+    </section>
+
+    <section>
+      <title>The core-range runtime error</title>
+
+      <p>When a runtime <codeph>core(...)</codeph> value is outside 0..N,
+      the task runs on any core and the compiler raises the program's
+      runtime error: <codeph>_error_source = _ERROR_SOURCE_CORE</codeph> and
+      <codeph>_core_error = _CORE_ERROR_RANGE</codeph>. Defining
+      <codeph>procedure _error_hook()</codeph> (or including
+      <codeph>error_hook</codeph>, which prints <codeph>[core out of
+      range]</codeph>) delivers the error at the statement. Like
+      <codeph>_string_error</codeph>, <codeph>_core_error</codeph> is
+      consume-on-read: reading it clears it, and the hook clears the cells
+      when it returns. Without a hook the cell stays set for polling.</p>
+    </section>
+
+    <section>
+      <title>Memory model and constraints</title>
+
+      <ul>
+        <li>Both cores share the same DRAM. Program globals are shared with
+        no per-task visibility, exactly as in a single-core build; two tasks
+        running on different cores can touch the same global, so
+        synchronisation (when it matters) is the program's job.</li>
+        <li>Each core has its own stack. Task procedure bodies are entered by
+        jump, and task local variables live at fixed DRAM addresses, so a
+        task carries no stack frame of its own across a yield.</li>
+        <li><codeph>_task_yield</codeph> is only valid inside a task body
+        (using it in a procedure is a compile error): a yield inside a
+        nested call would leave a caller's frame behind while the task
+        moves to another core's stack.</li>
+        <li>Task locals are allocated statically as on the other 32-bit
+        targets; a task can declare variables.</li>
+      </ul>
+    </section>
+
+    <section>
+      <title>Validation status</title>
+
+      <p>The ESP32 suite runs five second-core bodies under QEMU and on
+      silicon:</p>
+
+      <ul>
+        <li><codeph>esp32_body_smp_dispatch.jal</codeph>: a task that never
+        yields consumes the APP core while main resumes on the other core;</li>
+        <li><codeph>esp32_body_smp_contention.jal</codeph>: two yielding
+        tasks race across both cores with per-task duplicate-run detectors
+        and a per-core claim counter;</li>
+        <li><codeph>esp32_body_smp_control.jal</codeph>: pause, resume, kill
+        and restart issued from a task while the target runs on the other
+        core;</li>
+        <li><codeph>esp32_body_smp_affinity.jal</codeph>: constant and
+        variable pins hold (a task's last core matches its pin) while both
+        cores claim tasks;</li>
+        <li><codeph>esp32_body_smp_affinity_error.jal</codeph>: an
+        out-of-range runtime pin raises the error through the hook and the
+        task still runs.</li>
+      </ul>
+
+      <p>Preemption (timer-driven task switching) is not part of this
+      feature.</p>
+    </section>
+  </body>
+</topic>

@@ -81,6 +81,8 @@ typedef enum {
   ESP_OP_S8I,     /* [as + imm*1] = at                      */
   ESP_OP_S16I,    /* [as + imm*2] = at                      */
   ESP_OP_S32I,    /* [as + imm*4] = at                      */
+  ESP_OP_S32C1I,  /* [as + imm*4] = at iff it == SCOMPARE1;
+                   * at receives the old memory word        */
   ESP_OP_J,       /* pc = target (label node)               */
   ESP_OP_LIT,     /* literal-pool word (imm32), 4 bytes     */
   ESP_OP_LABEL,   /* label, no space                         */
@@ -166,6 +168,8 @@ void       esp_add_fixup(pfile_t *pf, esp_code_t node, label_t lbl);
 void       esp_emit_l32r(unsigned reg, esp_code_t lit);
 void       esp_pend_label_lit(pfile_t *pf, label_t lbl, esp_code_t lit);
 void       esp_emit_label_addr(pfile_t *pf, unsigned reg, label_t lbl);
+/* load a value into a register (linears, consts, proc labels) */
+void       esp_emit_value_load(pfile_t *pf, value_t val, unsigned reg);
 label_t    esp_task_helper_label(pfile_t *pf, const char *name);
 void       esp_emit_helper_jmp(pfile_t *pf, const char *name);
 void       esp_op_helper_bind(label_t lbl, esp_code_t node);
@@ -223,7 +227,16 @@ void       esp_op_reset(void);
 void       esp_op_state_reset(void);
 
 void       esp_var_state_reset(void);
-void       esp_startup_emit(pfile_t *pf);   /* sp/WOE/WDT */
+void       esp_startup_emit(pfile_t *pf);
+/* extui rd = (rs >> shift) & (2^width - 1); the src2 operand is width-1 */
+void       esp_emit_extui(unsigned rd, unsigned rs, unsigned shift,
+    unsigned width);
+/* Phase 9: the second (APP) core -- the gate, the DPORT release
+ * sequence and its entry body (esp_core.c) */
+boolean_t  esp_second_core_enabled(pfile_t *pf);
+void       esp_second_core_alloc(pfile_t *pf);          /* runtime cells */
+void       esp_second_core_startup_emit(pfile_t *pf);
+void       esp_second_core_entry_create(pfile_t *pf);   /* sp/WOE/WDT */
 unsigned   esp_isr_level_get(void);          /* armed ISR vector level */
 void       esp_delay_create(pfile_t *pf, variable_const_t usec);
 

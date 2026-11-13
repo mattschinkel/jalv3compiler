@@ -1251,6 +1251,13 @@ static void pic_float_sconv_create(pfile_t *pf)
     val = pic_var_float_conv_get(pf, -1);
     lbl_skip = pfile_label_alloc(pf, 0);
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0);
+    /* the float sign bit is the negative-path flag: cleared here for the
+     * positive path and set below for the negative one.  Deciding the
+     * `movlw 0' skip from the INTEGER's top bit was wrong for INT_MIN:
+     * negating 0x80000000 leaves the top bit set, so the sign seed was
+     * thrown away and `float(-2147483648)` came out +2^31 (found
+     * 2026-11-12 by the Phase 5 value sweep). */
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BCF, flt.fval1, 3, 7);
     pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSS, val,
       value_sz_get(val) - 1, 7);
     pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_skip);
@@ -1259,11 +1266,10 @@ static void pic_float_sconv_create(pfile_t *pf)
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, 0x80);
     pic_instr_append_label(pf, lbl_skip);
     /*
-     * this is guaranteed to be clear, we just want to skip the
-     * `movlw 0' which begins a normal conversion create
+     * skip the `movlw 0' which begins a normal conversion create when the
+     * sign bit says this is the negative path (W already holds 0x80)
      */
-    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSC, val,
-      value_sz_get(val) - 1, 7);
+    pic_instr_append_f_bn(pf, PIC_OPCODE_BTFSS, flt.fval1, 3, 7);
     label_release(lbl_skip);
     value_release(val);
     pic_var_float_release(pf, &flt);

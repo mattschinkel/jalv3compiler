@@ -1,0 +1,55 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — ISR body on CPU interrupt 5
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    `pragma interrupt 5` arms the handler on CPU interrupt 5 (level 1)
+--    instead of 1: the compiler sets INTENABLE bit 5 and the level-1
+--    vector entry, and the UART source is routed to the same number
+--    through the interrupt matrix.  This is the end-to-end form of the
+--    CPU-interrupt selection pin
+--    (unit-tests/test_esp32_isr_cpu_int.py): before the 2026-11-03 fix
+--    the number was ignored and the image armed on 1.
+--
+--    Phase 4(b): interrupt numbers greater than 1.  ESP32 levels 2..7
+--    (CPU interrupt numbers 6..31) stay a REFUSED shape by design
+--    (fixes/fix_esp32_isr_cpu_int_selection.md): the compiler reports one
+--    error instead of arming the wrong line.  That refusal is the
+--    negative control and is pinned by the compile-only test above.
+--
+-- @sim_validate begin
+-- duration_s: 5.0
+-- machine: esp32
+-- expect byte v_tick 1
+-- expect byte v_done 1
+-- @sim_validate end
+--
+-- Negative control (unit-tests/test_isr_source_wiring.sh): the source
+-- muted (UART0_INT_ENA = 0) -- nothing dispatches.  (Routing the source
+-- to another number is NOT a usable negative on QEMU: the Xtensa model
+-- still takes the level-1 exception for an armed handler.)
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+
+var volatile byte tick = 0
+var volatile byte done = 0
+
+procedure _uart_isr() is
+   pragma interrupt 5
+   UART0_INT_CLR = 0xFFFFFFFF
+   UART0_INT_ENA = 0x00000000
+   tick = tick + 1
+end procedure
+
+UART0_INT_CLR = 0xFFFFFFFF
+UART0_INT_ENA = 0x00004000
+DPORT_PRO_UART_INTR_MAP = 5
+UART0_FIFO = 0x41
+
+while tick == 0 loop
+end loop
+done = 1
+forever loop
+end loop

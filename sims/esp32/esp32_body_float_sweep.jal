@@ -1,0 +1,40 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — per-type float value sweep
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 5 (SDCC float sweeps), full form: the per-type value range
+--    body (`sims/shared/_regression_float_sweep_body.jal`) with
+--    `_fsw_full = 1`, so the float specials (0, -0, 1.5, -1.5, 0.1,
+--    1e-38, 1e38, +inf, -inf, NaN) and the NaN-comparison negative
+--    control run as well.
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: esp32
+-- compiler_args: -Wno-misc -Wno-conversion -Wno-truncate
+-- expect byte v__check_step 8
+-- expect byte v__fsw_byte 1
+-- expect byte v__fsw_sbyte 1
+-- expect byte v__fsw_word 1
+-- expect byte v__fsw_sword 1
+-- expect byte v__fsw_dword 1
+-- expect byte v__fsw_sdword 1
+-- expect byte v__fsw_render 1
+-- expect byte v__fsw_specials 1
+-- expect byte v__fsw_nan_neg 0
+-- @sim_validate end
+-- ------------------------------------------------------
+
+include regression_esp32_device
+include regression_esp32
+
+pragma target string_heap_size 64
+pragma string index byte
+include strings_dynamic
+
+const byte _fsw_full = 1
+
+include _regression_float_sweep_body

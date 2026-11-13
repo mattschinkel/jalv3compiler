@@ -1,0 +1,45 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — the second (APP) core boots
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 9 (SMP branch), first witness: `pragma target enable_cores 2`
+--    emits the DPORT release sequence (OVLD + boot address, then reset
+--    release, run-stall release and clock enable) and a hidden APP entry.
+--    The APP core bumps the `app_core_hits` global once; the PRO core
+--    observes it (bounded wait) and sets `done`.  The image is otherwise
+--    the single-core program.
+--
+--    QEMU runs with two CPUs (`smp: 2`); the QEMU proves the boot and the
+--    scheduling, silicon concurrency needs its own plan.
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- smp: 2
+-- expect byte v_app_seen 1
+-- expect byte v_done 1
+-- @sim_validate end
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+
+pragma target enable_cores 2
+
+var volatile dword app_core_hits = 0
+var volatile byte app_seen = 0
+var volatile byte done = 0
+var volatile dword guard = 0
+
+while (app_core_hits == 0) & (guard < 2000000) loop
+   guard = guard + 1
+end loop
+
+if app_core_hits != 0 then
+   app_seen = 1
+end if
+done = 1
+
+forever loop
+end loop

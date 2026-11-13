@@ -564,7 +564,8 @@ static const task_alg_ops_t pic_task_alg_ops = {
   pic_task_flag_store,
   pic_task_jump_entry,
   pic_task_yield,
-  pic_task_emit_suicide
+  pic_task_emit_suicide,
+  0                         /* affinity_store: single-core */
 };
 
 /* the four task-control statements. Semantics mirror task_alg's
@@ -7223,6 +7224,29 @@ boolean_t pic_task_locals_allowed(pfile_t *pf)
 const pic_backend_t *pic_backend_get(pfile_t *pf)
 {
   return pic_backend_find(pic_target_cpu_get(pf));
+}
+
+/* cores the selected target has; the classic back end (no descriptor)
+ * is single-core */
+unsigned pic_core_ct_get(pfile_t *pf)
+{
+  const pic_backend_t *be;
+
+  /* target_cpu may still be unread (programs without pointers never query
+   * it during parsing): lazy-init so the back-end lookup is meaningful */
+  if (PIC_TARGET_CPU_NONE == pic_target_cpu_get(pf)) {
+    value_t chipdef = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+
+    if (chipdef) {
+      pic_target_cpu_set(pf, value_const_get(chipdef));
+      value_release(chipdef);
+    }
+  }
+  be = pic_backend_get(pf);
+  if ((0 != be) && (be->core_ct > 0)) {
+    return be->core_ct;
+  }
+  return 1U;
 }
 
 unsigned pfile_bitbucket_packed_lo_reserve_get(pfile_t *pf)

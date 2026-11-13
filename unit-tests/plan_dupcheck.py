@@ -28,6 +28,10 @@ FACTS = 8
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", required=True)
+    parser.add_argument("--key-fields", type=int, default=KEY_FIELDS,
+                        help="the canonical key column count (default 6; a "
+                             "32-bit back end's rows key on its own columns "
+                             "and treat the rest as the payload)")
     args = parser.parse_args()
 
     rows = 0
@@ -40,12 +44,12 @@ def main():
                 if not line or line.startswith("#"):
                     continue
                 parts = line.split(",")
-                if len(parts) < KEY_FIELDS + FACTS:
+                if len(parts) < args.key_fields + 1:
                     continue
                 rows += 1
                 unique.add(tuple(parts))
-                key = tuple(parts[0:KEY_FIELDS])
-                facts = tuple(parts[KEY_FIELDS:KEY_FIELDS + FACTS])
+                key = tuple(parts[0:args.key_fields])
+                facts = tuple(parts[args.key_fields:])
                 groups.setdefault(key, []).append(facts)
     except OSError as exc:
         print(f"cannot read {args.log}: {exc}", file=sys.stderr)

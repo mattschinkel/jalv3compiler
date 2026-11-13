@@ -1,0 +1,61 @@
+-- Title: ESP32 silicon — the second (APP) core boots
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 9 silicon check: `pragma target enable_cores 2` emits the DPORT
+--    release sequence and the APP entry; the APP core bumps `app_core_hits`
+--    once and the PRO core reports the result over UART0, with the DPORT
+--    and RTC stall registers read back for diagnosis.
+--
+--    Expected transcript: "SC-BOOT", the register dump, then "SC-APP-OK".
+--    "SC-APP-MISS" means the APP core never ran the entry.
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+include esp32_serial_hw
+include print
+
+pragma target enable_cores 2
+
+alias serial_data is serial_hw_data
+
+var volatile dword app_core_hits = 0
+var volatile dword app_boot_seen = 0
+var volatile dword guard = 0
+
+var volatile dword dport_a at 0x3FF0002C
+var volatile dword dport_b at 0x3FF00030
+var volatile dword dport_c at 0x3FF00034
+var volatile dword dport_d at 0x3FF00038
+var volatile dword rtc_stall at 0x3FF480AC
+
+print_string(serial_data, "SC-BOOT\r\n")
+print_string(serial_data, "SC-A=")
+print_dword_dec(serial_data, dport_a)
+print_string(serial_data, " SC-B=")
+print_dword_dec(serial_data, dport_b)
+print_string(serial_data, " SC-C=")
+print_dword_dec(serial_data, dport_c)
+print_string(serial_data, " SC-D=")
+print_dword_dec(serial_data, dport_d)
+print_string(serial_data, " SC-RTC=")
+print_dword_dec(serial_data, rtc_stall)
+print_string(serial_data, " SC-SEEN=")
+print_dword_dec(serial_data, app_boot_seen)
+print_string(serial_data, "\r\n")
+
+while (app_core_hits == 0) & (guard < 2000000) loop
+   guard = guard + 1
+end loop
+
+if app_core_hits != 0 then
+   print_string(serial_data, "SC-APP-OK\r\n")
+else
+   print_string(serial_data, "SC-APP-MISS\r\n")
+end if
+
+forever loop
+end loop

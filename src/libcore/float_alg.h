@@ -155,5 +155,13 @@ void falg_div_core(pfile_t *pf, const falg_ops_t *ops);
  * INT_MIN/INT_MAX; NaN -> 0). */
 void falg_i2f_core(pfile_t *pf, const falg_ops_t *ops);
 void falg_f2i_core(pfile_t *pf, const falg_ops_t *ops);
+/* cut 6: the UNSIGNED 32-bit conversions.  `falg_i2f_core` and
+ * `falg_f2i_core` are signed-only (they read the sign bit as a value
+ * sign), so an unsigned dword at or above 2^31 converted to the wrong
+ * number (found 2026-11-12 by the Phase 5 value sweep).  These take the
+ * full unsigned range: u2f rounds to nearest even and saturates to 2^32,
+ * u2i truncates and saturates at 2^32-1 (NaN -> 0). */
+void falg_u2f_core(pfile_t *pf, const falg_ops_t *ops);
+void falg_u2i_core(pfile_t *pf, const falg_ops_t *ops);
 
 #endif /* float_alg_h__ */

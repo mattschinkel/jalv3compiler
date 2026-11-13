@@ -52,7 +52,8 @@ def list_suite_files(suite: Suite) -> list[Path]:
     return sorted(ROOT.glob(suite.glob))
 
 
-def run_one(jal: Path, compiler: Path, quiet: bool) -> tuple[Path, int, str]:
+def run_one(jal: Path, compiler: Path, quiet: bool,
+    smp: int = 1) -> tuple[Path, int, str]:
     cmd = [
         str(VALIDATE),
         "--compiler",
@@ -61,6 +62,8 @@ def run_one(jal: Path, compiler: Path, quiet: bool) -> tuple[Path, int, str]:
     ]
     if quiet:
         cmd.insert(1, "--quiet")
+    if smp > 1:
+        cmd[1:1] = ["--smp", str(smp)]
     env = os.environ.copy()
     env.setdefault("JALV2_NO_REPORT_ARCHIVE", "1")
     env.setdefault("JALV2_NO_CHANGELOG_ENTRY", "1")
@@ -84,6 +87,10 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--compiler", type=Path, default=DEFAULT_COMPILER)
     ap.add_argument("--fail-fast", action="store_true")
+    ap.add_argument("--smp", "--cpu-count", dest="smp", type=int, default=1,
+                    help="QEMU CPU count override (the second-core "
+                         "witnesses need 2; the per-file `smp:` key is "
+                         "the default when this is 1)")
     args = ap.parse_args()
 
     if args.list_suites:
@@ -117,7 +124,8 @@ def main() -> int:
     failed: list[Path] = []
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
         futs = {
-            ex.submit(run_one, jal, args.compiler, args.quiet): jal for jal in files
+            ex.submit(run_one, jal, args.compiler, args.quiet,
+                      args.smp): jal for jal in files
         }
         for fut in as_completed(futs):
             jal, rc, out = fut.result()

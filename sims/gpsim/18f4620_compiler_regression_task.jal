@@ -21,7 +21,6 @@
 
 include regression_18f4620_device
 
-pragma task 2
 
 alias led is pin_A0
 pin_A0_direction = OUTPUT

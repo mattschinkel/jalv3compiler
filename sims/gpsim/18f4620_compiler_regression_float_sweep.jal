@@ -1,0 +1,40 @@
+-- ------------------------------------------------------
+-- Title: PIC18F4620 compiler regression — per-type float value sweep
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 5 (SDCC float sweeps), classic form: the per-type value range
+--    body (`sims/shared/_regression_float_sweep_body.jal`) with
+--    `_fsw_full = 0` -- the classic float path has no inf/NaN/denormals,
+--    so the specials group is skipped and only the exact integer/
+--    rendering sweep runs.
+--
+-- @gpsim_validate begin
+-- steps: 40000000
+-- frequency_hz: auto
+-- expect byte v__check_step 8
+-- expect byte v__fsw_byte 1
+-- expect byte v__fsw_sbyte 1
+-- expect byte v__fsw_word 1
+-- expect byte v__fsw_sword 1
+-- expect byte v__fsw_dword 1
+-- expect byte v__fsw_sdword 1
+-- expect byte v__fsw_render 1
+-- expect byte v__fsw_specials 1
+-- expect byte v__fsw_nan_neg 0
+-- compiler_args: -Wno-misc -Wno-conversion -Wno-truncate
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 64
+pragma string index byte
+include strings_dynamic
+
+const byte _fsw_full = 0
+
+include _regression_float_sweep_body

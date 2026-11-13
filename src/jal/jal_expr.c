@@ -19,6 +19,8 @@
 #include "../libcore/variable.h"
 #include "../libcore/pf_proc.h"
 #include "jal_proc.h"
+#include "../libcore/task_alg.h"
+#include "jal_error.h"
 #include "jal_blck.h"
 #include "jal_tokn.h"
 #include "jal_vdef.h"
@@ -1371,6 +1373,8 @@ value_t jal_parse_value(pfile_t *pf, jal_parse_value_type_t type)
   if (val) {
     jal_string_error_rvalue_consumed(pf,
         (JAL_PARSE_VALUE_TYPE_RVALUE == type) ? 1 : 0, &val);
+    jal_error_core_rvalue_consumed(pf,
+        (JAL_PARSE_VALUE_TYPE_RVALUE == type) ? 1 : 0, &val);
   }
   return val;
 }
@@ -1619,6 +1623,75 @@ static value_t value_get_whereis(pfile_t *pf)
   return val;
 }
 
+/* `_task_core(proc())`: the core that last claimed the task's slot
+ * (1 = PRO, 2 = APP, 0 = never ran).  `proc()` matches the task
+ * statements' addressing. */
+static value_t value_get_task_core(pfile_t *pf)
+{
+  value_t val;
+
+  val = VALUE_NONE;
+  if (pf_token_is(pf, PF_TOKEN_NEXT, PFILE_LOG_ERR, "(")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);       /* to the task name */
+  }
+  if (!jal_token_is_identifier(pf)) {
+    pfile_log(pf, PFILE_LOG_ERR, "task name expected");
+  } else {
+    value_t   jvals[JAL_VAL_TYPE_CT];
+    boolean_t found;
+
+    found = jal_value_find(pf, pf_token_get(pf, PF_TOKEN_CURRENT), jvals);
+    {
+      pfile_proc_t *proc;
+
+      proc = (found) ? value_proc_get(jvals[JAL_VAL_TYPE_BASE])
+                     : PFILE_PROC_NONE;
+      if (!found || !proc
+          || !pfile_proc_flag_test(proc, PFILE_PROC_FLAG_TASK)) {
+        pfile_log(pf, PFILE_LOG_ERR, "task name expected");
+      } else {
+        value_t cell;
+
+        /* consume the task's `()` (also on the error path, so the
+         * statement does not cascade) */
+        pf_token_get(pf, PF_TOKEN_NEXT);
+        if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "(")) {
+          pf_token_get(pf, PF_TOKEN_NEXT);
+        }
+        if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, ")")) {
+          pf_token_get(pf, PF_TOKEN_NEXT);
+        }
+        if (jal_target_enable_cores_get(pf) < 2U) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "_task_core needs `pragma target enable_cores 2`");
+          cell = VALUE_NONE;
+        } else {
+          cell = jal_task_last_core_cell_get(pf);
+        }
+        if (cell) {
+          value_t ofs;
+
+          ofs = pfile_constant_get(pf,
+              task_alg_slot_of(pf, proc), VARIABLE_DEF_NONE);
+          jal_val_baseofs_add(pf, cell, ofs);
+          value_release(ofs);
+          if (value_is_array(cell)) {
+            value_dereference(cell);
+          }
+          val = cell;
+        }
+      }
+    }
+    if (found) {
+      jal_value_release(jvals);
+    }
+  }
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, ")")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+  return val;
+}
+
 static value_t value_get_defined(pfile_t *pf)
 {
   value_t val;
@@ -1741,6 +1814,9 @@ static value_t value_get(pfile_t *pf)
     val = value_get_whereis(pf);
   } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "defined")) {
     val = value_get_defined(pf);
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE,
+        "_task_core")) {
+    val = value_get_task_core(pf);
   } else {
     const char *ptr;
     operator_t  op;

@@ -111,9 +111,6 @@ static boolean_t task_alg_program_has_task_proc(pfile_t *pf)
 
 boolean_t task_alg_used(pfile_t *pf)
 {
-  if (pfile_task_ct_get(pf) >= 2U) {
-    return BOOLEAN_TRUE;
-  }
   return task_alg_program_has_task_proc(pf);
 }
 
@@ -204,6 +201,12 @@ void task_alg_emit_start(pfile_t *pf, const task_alg_ops_t *ops,
 
   proc_val = cmd_brproc_get(cmd);
   slot = task_alg_slot_of(pf, value_proc_get(proc_val));
+  /* the affinity goes first: a core must never claim the task between
+   * the entry store and the pin (the slot is not runnable while it is
+   * written) */
+  if (ops->affinity_store) {
+    (*ops->affinity_store)(pf, slot, cmd_brval_get(cmd));
+  }
   /* static slot: store the entry and clear any stale suspend flag (a
    * start on a suspended/finished task makes it runnable again) */
   (*ops->entry_store)(pf, proc_val, slot);

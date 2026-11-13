@@ -226,6 +226,12 @@ static void jal_error_constants_ensure(pfile_t *pf)
       JAL_ERROR_SOURCE_STRING);
   (void) jal_error_const_alloc(pf, "_error_source_user",
       JAL_ERROR_SOURCE_USER);
+  (void) jal_error_const_alloc(pf, "_error_source_core",
+      JAL_ERROR_SOURCE_CORE);
+  (void) jal_error_const_alloc(pf, "_core_error_none",
+      JAL_CORE_ERROR_NONE);
+  (void) jal_error_const_alloc(pf, "_core_error_range",
+      JAL_CORE_ERROR_RANGE);
   /* compatibility spellings (the constants had no leading underscore
    * before 2026-11-02; equates are free, so keep both) */
   (void) jal_error_const_alloc(pf, "string_error_none", 0);
@@ -237,6 +243,90 @@ static void jal_error_constants_ensure(pfile_t *pf)
       JAL_ERROR_SOURCE_STRING);
   (void) jal_error_const_alloc(pf, "error_source_user",
       JAL_ERROR_SOURCE_USER);
+  (void) jal_error_const_alloc(pf, "error_source_core",
+      JAL_ERROR_SOURCE_CORE);
+  (void) jal_error_const_alloc(pf, "core_error_none",
+      JAL_CORE_ERROR_NONE);
+  (void) jal_error_const_alloc(pf, "core_error_range",
+      JAL_CORE_ERROR_RANGE);
+}
+
+/* the `_core_error` cell, created on first use */
+boolean_t jal_error_core_cell_ensure(pfile_t *pf)
+{
+  variable_t     var;
+  variable_def_t def;
+  result_t       rc;
+
+  var = pfile_variable_find(pf, PFILE_LOG_NONE, JAL_CORE_ERROR_NAME, 0);
+  if (var) {
+    variable_release(var);
+    return BOOLEAN_TRUE;
+  }
+  def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      VARIABLE_DEF_FLAG_NONE, 1);
+  if (!def) {
+    pfile_log_syserr(pf, ENOMEM);
+    return BOOLEAN_FALSE;
+  }
+  rc = pfile_variable_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL,
+      JAL_CORE_ERROR_NAME, def, VARIABLE_NONE, &var);
+  if (RESULT_OK != rc) {
+    pfile_log_syserr(pf, rc);
+    return BOOLEAN_FALSE;
+  }
+  variable_const_set(var, def, 0, JAL_CORE_ERROR_NONE);
+  variable_release(var);
+  return BOOLEAN_TRUE;
+}
+
+/* a user rvalue read of `_core_error` snapshots it into a temp and clears
+ * the cell (mirrors the `_string_error` consume-on-read contract) */
+void jal_error_core_rvalue_consumed(pfile_t *pf, int is_rvalue,
+    value_t *pval)
+{
+  const char       *nm;
+  value_t           v;
+  value_t           lval;
+  value_t           z;
+  value_t           temp;
+  variable_def_t    vdef;
+  variable_t        vvar;
+  variable_t        lvar;
+
+  v = pval ? *pval : VALUE_NONE;
+  if (!v || !is_rvalue) {
+    return;
+  }
+  nm = value_name_get(v);
+  if (!nm || (0 != strcmp(nm, JAL_CORE_ERROR_NAME))
+      || value_baseofs_get(v)) {
+    return;
+  }
+  lval = pfile_value_find(pf, PFILE_LOG_NONE, JAL_CORE_ERROR_NAME);
+  if (!lval) {
+    return;
+  }
+  vvar = value_variable_get(v);
+  lvar = value_variable_get(lval);
+  if (vvar && lvar && (vvar != lvar)) {
+    value_release(lval);
+    return;
+  }
+  vdef = value_def_get(v);
+  if (!vdef) {
+    value_release(lval);
+    return;
+  }
+  temp = pfile_value_temp_get_from_def(pf, vdef);
+  pfile_cmd_op_add_assign(pf, OPERATOR_ASSIGN, &temp, v);
+  value_release(v);
+  z = pfile_constant_get(pf, JAL_CORE_ERROR_NONE, value_def_get(lval));
+  pfile_cmd_op_add_assign(pf, OPERATOR_ASSIGN, &lval, z);
+  value_release(z);
+  value_release(lval);
+  value_lock(temp);
+  *pval = temp;
 }
 
 void jal_error_program_start(pfile_t *pf)
@@ -257,6 +347,7 @@ void jal_error_hook_prepare(pfile_t *pf)
     value_release(v);
   }
   (void) jal_string_error_cell_ensure(pf);
+  (void) jal_error_core_cell_ensure(pf);
 }
 
 void jal_error_raise(pfile_t *pf, unsigned source, const char *code_cell,

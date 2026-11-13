@@ -13,7 +13,6 @@
 --
 -- ------------------------------------------------------
 
-pragma task 3
 
 var volatile byte _tl_a_final = 0
 var volatile byte _tl_b_final = 0

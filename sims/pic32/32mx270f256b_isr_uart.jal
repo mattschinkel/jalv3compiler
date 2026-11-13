@@ -1,0 +1,47 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — UART-source ISR body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A UART1-source interrupt (U1RXIF = IFS1<8>) at priority 7
+--    (IPC8<U1IP>): the handler reads the receive register (clearing the
+--    condition on the real part) and clears the flag, bumping `ticks`;
+--    main observes it and sets `isr_done`.  QEMU models the MX interrupt
+--    controller, so the flag is raised through IFS1SET, exactly like the
+--    core-timer body's IFS0SET.
+--
+--    This is Phase 4's UART-source ISR body for PIC32 (the timer-source
+--    body is `32mx270f256b_isr.jal`).
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_ticks 1
+-- expect byte v_isr_done 1
+-- @sim_validate end
+--
+-- Negative control (unit-tests/test_isr_source_wiring.sh): IPC8 = 0
+-- (priority 0 disables the source) -- the flag is set but nothing
+-- dispatches.
+-- ------------------------------------------------------
+include regression_32mx270f256b_device
+
+var volatile byte ticks = 0
+var volatile byte isr_done = 0
+var volatile dword last = 0
+
+procedure u1_isr() is
+   pragma interrupt
+   last = U1RXREG
+   IFS1CLR = 0x00000100
+   ticks = ticks + 1
+end procedure
+
+IPC8 = 0x1C
+IEC1SET = 0x00000100
+IFS1SET = 0x00000100
+isr_done = 1
+forever loop
+end loop

@@ -18,7 +18,10 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Pros:** Makes the batch shippable and the tracked binaries consistent.
 - **Cons:** None; it is the release step, not new work.
 - **Context:** E1-E3 fix docs are in `fixes/`; final L2 was ALL GATES PASS
-  (897 s) with hex manifest 0 drift. Needs the user's go-ahead to commit.
+  (897 s) with hex manifest 0 drift. Committed 2026-11-11 (`522468f`) with
+  both tracked binaries; the `Commit:` headers in the E-series fix docs are
+  still `(pending)` and want backfilling, as does the L3 line in
+  `fixes/fix_whereis_runtime_slot_fat.md`.
 - **Effort:** human S / CC ~1h (plus the L3 run).
 - **Priority:** P1.
 - **Depends on:** nothing; the recipe-row coverage gap below does not block
@@ -57,6 +60,35 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Effort:** human ~2-3 wk / CC ~3-5 d (delivered).
 - **Priority:** P1.
 - **Depends on:** nothing.
+
+## U3 residual — the pointer-bind registry (`ptr_binds`)
+
+- **What:** Move the pointer-bind target and its escaped bit onto the object
+  model and delete `pic_var.ptr_binds`, the twin of the pair-registry
+  deletion U3 landed.  `pic_var_pointer_bind_record` still appends
+  `(pointer, target, escaped)` triples at every pointer assign; the escaped
+  bit is read by `pic_fat_bind_forced()` (`src/libpic12/pic_op_ptr.c:80`)
+  and by the classic bank-spanning refusal
+  (`pic_var_pointer_bind_check_escaped`, `src/libpic12/pic_var.c:684`).
+- **Why:** it is the last file-static registry the plan path reads, and U3's
+  close-out defers it by name ("`ptr_binds` stays persistent (its refactor
+  was deferred in the plan)", `fixes/fix_u3_pair_attach.md`).  Under the fat
+  engine the bind decision already comes from the `BIND` recipe rows, so the
+  registry is now a fallback plus the classic-only refusal.
+- **Pros:** completes the deletion arc U3 started and removes cross-pass
+  state from the pointer path.
+- **Cons / ordering:** the classic half of the refusal returns early when the
+  fat engine is on, so that half disappears entirely with the
+  `JALV2_FAT_POINTERS=0` rollback switch (owner-deferred to the release
+  after this one).  Porting only the fat-side escaped bit is possible now;
+  doing both at once is cheaper AFTER the switch is removed.
+- **Context:** `fixes/fix_u3_pair_attach.md` "Deferred / open";
+  `src/libpic12/pic_var.c` (the registry and its accessors, ~600-730);
+  consumers `src/libpic12/pic_op_ptr.c:80` and `src/libpic12/pic.c:6813`.
+- **Effort:** human ~3-5 d / CC ~1-2 d (registry-scale, not a linkage edit).
+- **Priority:** P3.
+- **Depends on:** none; the rollback-switch removal is the natural moment
+  (so the classic half is deleted rather than ported).
 
 ## Fat pointers — F5 hardening and the default flip
 
@@ -179,38 +211,69 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P3.
 - **Depends on:** none; E2's row identity does not affect it.
 
-## WHEREIS of a runtime pointer slot under the fat engine
+## `WHEREIS` of a runtime subscript silently drops the offset
 
-- **What:** `WHEREIS(pa[k])` with a runtime `k` reports the RAW stored
-  pointer when the engine is on: the low byte is the object-relative offset,
-  not the physical address (`16f18857`: `0x64` for `big[100]`, whose
-  physical address is `0xC0`).  With `JALV2_FAT_POINTERS=0` the same
-  expression reports the physical address, and the const-index form
-  (`WHEREIS(pa[1])`) reports the physical address under BOTH modes, so the
-  runtime path is the odd one out.  Fix: resolve the loaded tag through the
-  descriptor (`_seg_addr`) before storing the WHEREIS result, the way a
-  deref does.
-- **Why:** WHEREIS is documented to report the address a pointer targets;
-  a program comparing `WHEREIS(p)` with `WHEREIS(target)` silently fails
-  under the default engine.
-- **Pros:** One visible inconsistency removed; the runtime and const forms
-  agree.
-- **Cons:** The fix extends the dispatch emitter to produce an address as a
-  value (today it leaves it in FSR for the INDF access), so it is a real
-  emitter change with a runtime witness per form.
-- **Context:** found 2026-11-12 while building the A12 row-17 fixture; the
-  probe values are in `fixes/fix_recipe_row_fixtures.md`; the fixture
-  deliberately asserts only `!= 0` until this is fixed.
-- **Effort:** human ~2-3 d / CC ~1 d.
+- **What:** `c = whereis(big[i])` with a runtime `i` returns the array BASE.
+  On 16F18857 with `big[200]` at 0x22, `i = 100` emits `movlw 34; movwf c`
+  and nothing else, so `c` is 0x22 for every `i`.  Pick one: refuse the shape
+  with one error (the documented form is "DATA address plus constant
+  offset", `unit-tests/syntax_test.jal:453`), or add the index at run time
+  after the chunk resolution.
+- **Why:** a silent wrong address.  `whereis(big[i]) - whereis(big[0])` is 0
+  for every `i`, and a program that derives a pointer from it reads the wrong
+  byte.  This is NOT the runtime-slot form fixed 2026-11-12
+  (`fixes/fix_whereis_runtime_slot_fat.md`, which is `WHEREIS(pa[k])` on a
+  pointer slot and resolves the fat tag); this is a plain array with a
+  runtime index.
+- **Pros:** Closes the last silent `WHEREIS` shape; the refusal variant is a
+  small pin.
+- **Cons:** Supporting it needs the runtime index added AFTER the chunk
+  resolution, a different shape from the other walk sites.
+- **Context:** 12-line probe on 16F18857 (compiled 2026-11-12); the const
+  subscript is chunk-resolved through `pic_var_chunk_addr_resolve` in
+  `src/libpic12/pic_op_assign.c`.  If the `whereis --recipe` item below
+  lands, it would print this decision.
+- **Effort:** human S / CC ~1 h (refuse) | ~3 h (support).
 - **Priority:** P2.
+- **Depends on:** none.
+
+## Grown dynamic-string element read on the classic 14-bit core
+
+- **What:** A constant-index read of a dynamic string that has GROWN past its
+  first heap chunk (`last = s[79]` after 80 appends) stalls on classic 14.
+  The read emits `base + 6 + index` and a chunk walk over `_string_heap`; the
+  defect is not yet localized, so the first deliverable is a witness that
+  reproduces it and names the stage that stalls.
+- **Why:** recorded as a residual in `fixes/fix_string_heap_append.md`
+  (2026-11-11) and it reproduces with the pre-fix binary, so it is a
+  pre-existing defect rather than a regression from the growth policy; it
+  had no ticket until now.
+- **Pros:** A dynamic string becomes safely indexable after any growth, which
+  is the obvious next thing a user does with one.
+- **Cons:** Measure first: the stall may sit in the caller rather than the
+  read path, in which case the deliverable is a witness plus a record, not a
+  fix.
+- **Context:** "Residual" in `fixes/fix_string_heap_append.md`; the same
+  section records that `pragma string alloc best_fit` still only affects the
+  exact request.  Heap growth itself is fixed (2026-11-11).
+- **Effort:** human ~1 d / CC ~2-3 h.
+- **Priority:** P3.
+- **Depends on:** none.
 
 ## Full front-end IR — residual
 
 - **What:** Phases 3 and 4 landed (the block-dup clone at `2e65a20`, the
-  phase-4 measured decision memo). The residual: delete the dead
-  `body_pos`/`body_pos_valid` eligibility marker and fix the clone/comment
-  text (plan Phase 7), and keep the accepted per-formal clone mask width
-  (64-bit, ~31 array formals) recorded as unwitnessed.
+  phase-4 measured decision memo).  **Phase 7 landed 2026-11-12**
+  (`fixes/fix_clone_eligibility_marker.md`): the dead
+  `body_pos`/`body_pos_valid` marker is gone (its only reader was the
+  clone-eligibility test; the plan's `block_ct > 0` replacement is
+  unusable because the block count is only generated by the -dump path,
+  so eligibility stays on the DEFINED-body predicate), the stale comment
+  and the clone DESCRIPTION are corrected, `JALV2_PROC_ELIG=1` exposes
+  the decision, and a new pin covers forward-declared/defined, guarded,
+  empty and call-before-body cases.  Remaining note: the accepted
+  per-formal clone mask width (64-bit, ~31 array formals) stays recorded
+  as unwitnessed.
 - **Why:** The original Phase 3/4 work is already in the tree; only the
   cleanup and the accepted note remain.
 - **Pros:** Removes the last stale state on the retired re-parse.
@@ -220,6 +283,59 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P2.
 - **Depends on:** none.
 
+## Access-recipe adoption on the 32-bit back ends (DONE 2026-11-12 — `fixes/fix_access_recipe_32bit_families.md`)
+
+- **What:** Phase 8.  **Landed 2026-11-12:** the PIC32 pointer-WRITE family
+  and the ESP32 deref-ADDRESS family (shared by its read and write paths)
+  now go through the libcore `access_recipe` dispatcher, beside the
+  existing PIC32 pointer-read spike; the PIC32 audit checks both tables.
+  The 32-bit family inventory (grep-audited): **pointer read**, **pointer
+  write**, **deref/array address**, **pointer-slot bind**.  The classic-only
+  families (assign-class, addr-of-slot, slot shapes, FSR walk/dynamic/bind)
+  do not exist in the mips/esp emitters (no FSR or chunk machinery; the
+  grep shows no `FSR_*`, `BIND_DEST` or `ADDR_OF` sites in
+  `mips_op.c`/`esp_op.c`), so they are recorded N/A rather than dropped.
+  **Also landed 2026-11-12:** the neutral recorder
+  (`src/libcore/access_record.{c,h}`, ENG A4) that the classic recorder
+  now bridges (CSV byte-identical); PIC32/ESP32 emit their family rows;
+  `run_plan_gate.sh --backend pic32|esp32` with `plan-baselines/pic32.txt`
+  (116 rows) and `plan-baselines/esp32.txt` (79 rows), the DX F5 failure
+  contract and `plan_dupcheck.py --key-fields`.  The pointer-slot BIND
+  family is NOT a family on the 32-bit back ends (bind is the generic
+  pointer-value store there); QEMU coverage is the existing pointer/slot
+  witnesses, which the backend gates compile and pin.
+- **Why:** E3's neutral dispatcher is the shared route; the classic table
+  stays classic-only.
+- **Pros:** One decision table per back end, with the same row discipline
+  (mask rule audited) as the classic family.
+- **Cons:** The recorder is the orthogonal half; without it the per-backend
+  plan-diff subset cannot exist.
+- **Context:** `fixes/fix_access_recipe_32bit_families.md` (the A/B:
+  246/246 images byte-identical across sims/pic32 + sims/esp32);
+  `src/libcore/access_recipe.h`; the spike record in E3.
+- **Effort:** delivered 2026-11-12; the phase doc states nothing in the
+  Phase 8 bullet list remains open.
+- **Priority:** P3.
+
+## Full classic-family recipe interpreter (closed: NO-GO, measured)
+
+- **What:** Phase 6 (the plan's P3): separate the decision table from a
+  row-keyed step table over the emitter primitives, with a dual-path
+  comparison mode.  **Milestone measured 2026-11-12 and stopped at the
+  plan's kill point**: the pointer family's 14 action uses need **+351
+  lines** to replace **2** of them, and the first family already needed a
+  conditional step (`LINEAR_IF_OPEN`) because the OPENARRAY fact is not in
+  the recipe key.  The read family's bodies are entangled with temp/label/
+  value state and each row's body is unique, so a step list relocates
+  code rather than deleting it.
+- **Why:** the plan's C12 payoff metric: the interpreter must shrink the
+  special cases to earn its complexity; it did not.
+- **Context:** `fixes/fix_access_interpreter_no_go.md` (the prototype, the
+  dual-path/fault-hook proof, and the measurements).  Reopen only after
+  the recipe KEY carries the deciding facts (OPENARRAY, pointee
+  mutability) so a row's behavior is a function of the key alone.
+- **Priority:** P3 (closed).
+
 ## ISR coverage gaps (ESP32 + PIC32)
 
 - **What:** (a) an external-pin (GPIO) or UART-source ISR body on each
@@ -227,6 +343,17 @@ here). Each entry names its evidence and the fix/investigation doc.
   (c) hardware evidence: the PIC32 ISR path on silicon and the real-silicon
   check of the ESP32 vector-table 0x400-alignment rule (the compile defect is
   fixed; the silicon half is open).
+  **Phase 4 landed 2026-11-12** (software half): UART-source bodies for
+  ESP32 (`esp32_body_isr_uart.jal`) and PIC32
+  (`32mx270f256b_isr_uart.jal`), an ESP32 body on CPU interrupt 5
+  (`esp32_body_isr_cpu5.jal`), and the negative controls as
+  `unit-tests/test_isr_source_wiring.sh` (matrix route mismatch, muted
+  source, priority 0 -- each must NOT dispatch).  The classic target
+  already had the external-pin INT0 body
+  (`16f18857_picsim_isr_int0.jal`).  ESP32 levels 2..7 stay a refused
+  shape by design (`pragma interrupt 6` and up is one error, pinned by
+  `test_esp32_isr_cpu_int.py`); (c) remains excluded under the user's
+  hardware-ISR exclusion.
 - **Why:** QEMU diverges from silicon; these are the remaining untested ISR
   surfaces. Landed already: baseline single-source bodies
   (`esp32_body_isr.jal`, `32mz1024efh064_isr.jal`), the dual-source body
@@ -242,6 +369,79 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Effort:** human ~1-2 d / CC ~3-4 h (software half).
 - **Priority:** P3.
 - **Depends on:** bench access for (c).
+
+## ESP32 second core — SMP dispatcher (Phase 9, silicon-validated)
+
+- **What:** the owner chose the **full SMP dispatcher** branch.  **Landed
+  2026-11-12 (commit `8eb7100`):** the design memo (register/bit table for the DPORT APPCPU
+  block and the release order, the shared-DRAM ownership memory model,
+  the cooperative-SMP dispatcher design) at
+  `docs/investigations/esp32_second_core_design_20261112.md`; the enabling
+  surface (`pragma target second_core on|off`, `JALV2_SECOND_CORE=1`
+  override with the strict on/off rule, off by default, an invalid pragma
+  value a compile error); the DPORT release sequence and the APP entry
+  body in the ESP32 emitter; and the QEMU runner `--smp`/`--cpu-count`
+  (validate-script `--smp` + a per-witness `smp:` key, `run_hex(cpu_count)`).
+  The single-core suite is byte-identical (246/246 32-bit images).
+- **SILICON PASS 2026-11-12 (boot):** on the owner's ESP32 the APP core
+  boots through the DPORT release (`SC-BOOT` then `SC-APP-OK`).  The
+  correct map is CTRL_A[0]=RESETTING, CTRL_B[0]=CLKGATE_EN,
+  CTRL_C[0]=RUNSTALL, CTRL_D=BOOT_ADDR (no OVLD bit), plus clearing
+  RTC_CNTL_SW_CPU_STALL[7:0]; two codegen bugs were fixed on the way
+  (the entry label was never allocated; the entry body was emitted after
+  the fixup pass).
+- **SILICON PASS 2026-11-12 (SMP dispatcher):** the SMP witness (then
+  `sims/esp32/second_core/esp32_silicon_second_core_smp.jal`, renamed to
+  `sims/esp32/esp32_body_smp_dispatch.jal` in `bf09f94`) prints `SMP-BOOT` then `SMP-OK`,
+  stable over repeated resets: the APP core claims the started `painter`
+  task with `S32C1I`, runs it on its own stack, and the PRO core resumes
+  main, which sees the shared counter pass 1000.  Four measured causes
+  were fixed on the way (recorded in `fixes/fix_smp_dispatcher.md`):
+  the DPORT release preceded the `.bss` zeroing (the APP core claimed
+  staging garbage as a task PC); both cores shared one stack (now a
+  private 4 KB `_esp32_app_stack`); `S32C1I` against DRAM does not store
+  at the reset `ATOMCTL` 0x28 or at RCW 0x29, it needs 0x2A; and the
+  claim's `BNE` was emitted as `bne a10, a0` (the register-branch
+  encoder takes `(t, s)`), so every successful claim looked lost.
+  Main's resume PC is now stored into slot 0 when the core has no
+  current slot.  **QEMU still does not run the DPORT-released core**
+  even though `-smp 2` reports two CPUs, so the witnesses stay parked out
+  of the suite (`sims/esp32/second_core/`, with the README recording both
+  results) until the model follows the silicon or a QEMU workaround is
+  found.
+- **VALIDATION 2026-11-12 (C7):** the three SMP bodies are in the ESP32
+  suite (`esp32_body_smp_{dispatch,contention,control}.jal`, `smp: 2`,
+  UART + `v_smp_ok` expectations).  QEMU runs the DPORT-released core
+  (the earlier "it never runs" conclusion was an artifact of the bugs in
+  `fix_smp_dispatcher.md`), and the contention body asserts both cores
+  claimed tasks via `_task_run_core[0/1]`, each task ran its exact count,
+  its procedure ran each iteration, and no duplicate instance was seen;
+  the control body checks cross-core pause/resume/kill/restart.  Silicon
+  passes all three, stable over resets.
+- **SURFACE 2026-11-12 (JALv3 multi-core):** `pragma target enable_cores N`
+  (default 1, chip-limited: 3 on ESP32 or 2 on a PIC is a compile error)
+  replaces `pragma target second_core` and `JALV2_SECOND_CORE`, both
+  removed; `pragma task` is removed too (slots are sized from the task
+  declarations; `-task` only pre-sizes). `_task_start core(<expr>) task()`
+  (clause before or after, constant or runtime) pins a task; the
+  dispatcher skips a slot pinned to another core. A runtime pin outside
+  0..N runs the task on any core and raises the new
+  `_ERROR_SOURCE_CORE` / `_core_error` runtime error through
+  `_error_hook` (`demo_lib/error_hook.jal` prints `[core out of range]`).
+  `_task_core(task())` reports the core that last ran a task.
+  `unit-tests/test_cores_pragma.sh` and `test_task_yield_scope.sh` pin the
+  surface; the new suite bodies `esp32_body_smp_affinity.jal` and
+  `esp32_body_smp_affinity_error.jal` pass under QEMU and on silicon
+  (`SMPA-OK`; `SMPE-BOOT` / `[core out of range]` / `SMPE-OK`).
+- **DEFAULT DECISION (C7):** stays opt-in.  It changes every image
+  (entry, 4 KB APP stack, DPORT setup) and buys nothing for programs
+  without tasks; the suite now protects it, so a default flip is possible
+  but not useful.  Documented in `doc/dita/jalv3/second_core.dita`; the
+  `--features` report shows the switch.
+- **Remaining:** preemption stays out of this cut (it needs a per-core
+  timer interrupt and context save).
+- **Priority:** P3.
+- **Depends on:** the ESP32 board for the second-core validation.
 
 ## Hardware-bound ISR work — MZ nesting + MZ boot-flash ISR
 
@@ -282,42 +482,6 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P3.
 - **Depends on:** the PFM-layout 2x quirk.
 
-## ESP32 second core
-
-- **What:** Use the APP core: startup on it (own stack, entry via the ROM
-  APP-core boot register), a memory-model decision (shared DRAM with
-  ownership rules vs message passing), and a scheduling story (core affinity
-  or an SMP-aware dispatcher using Xtensa S32C1I).
-- **Why:** The ESP32-WROOM-32 is dual-core but the compiler uses one core;
-  low priority (user-noted 2026-10-05) — nothing depends on it.
-- **Pros:** Real parallelism for bit-banged protocol + heavy compute shapes.
-- **Cons:** Large and isolated; the classic/PIC32 targets are single-core.
-- **Context:** QEMU's esp32 machine emulates both cores (SMP `cpu-count`),
-  so a runtime gate is possible.
-- **Effort:** human XL / CC ~3-5 d.
-- **Priority:** P3.
-- **Depends on:** none.
-
-## Test-suite gaps left from the SDCC survey
-
-- **What:** Float range sweeps (an exhaustive per-type value sweep). Every
-  other survey item has landed: boundary bodies on PC/ESP32 and both PIC32
-  parts (`esp32_body_boundary`, `32mx270f256b_boundary_regression`,
-  `32mz1024efh064_boundary_regression`), optimizer-semantics bodies on all
-  three targets (`*_body_optsem` / `*_optsem_regression`), CRC16+sort
-  known-answer bodies on all three, the SHA-256 workload on 18F4620
-  (`18f4620_gpsim_sha256.jal`), and the unified negative-test table
-  (2026-10-17).
-- **Why:** The SDCC survey adopted the matrix; the float sweeps are the one
-  remaining item. (The ISR matrix it listed is tracked separately above.)
-- **Pros:** Broadens the known-answer corpus per target.
-- **Cons:** Much new test-body work for a low defect yield.
-- **Context:** `/home/jal/AGENTS.md` ("Test-suite gap survey vs SDCC"); the
-  survey document itself is not in this checkout.
-- **Effort:** human ~2-3 d / CC ~1 d.
-- **Priority:** P3.
-- **Depends on:** none.
-
 ## Module / separate-compilation architecture
 
 - **What:** Design the module mechanism (explicit interface, pre-compiled
@@ -347,25 +511,3 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Effort:** human S / CC ~30min.
 - **Priority:** P3.
 - **Depends on:** none, but low value until requested.
-
-## Full classic-family recipe interpreter
-
-- **What:** Turn the action switches in the converted families into a true recipe interpreter.
-- **Why:** The current families use recipe actions with the bodies still in code; a full interpreter is the design's end state.
-- **Pros:** The decision and the emitted sequence become one data structure.
-- **Cons:** Large; the action form is already plan-field-free and gate-proven.
-- **Context:** The cross-target interface settled (E3 spike passed 2026-11-10); revisit when the action form starts to hurt.
-- **Effort:** human XL / CC ~3-5d.
-- **Priority:** P3.
-- **Depends on:** none (the interface spike is done).
-
-## ESP32 + full cross-target adoption
-
-- **What:** Extend the shared access-recipe interface from the PIC32 pointer-read spike to ESP32 and the full operation set, including the per-backend plan-diff subset (it needs the access recorder adopted in libpic32; the spike's witness is the byte-identical image plus QEMU).
-- **Why:** The accepted CEO spike passed (2026-11-10: the pointer-read table is byte-identical and the QEMU witness passes); this is the remaining cross-target work.
-- **Pros:** One access model across every backend.
-- **Cons:** XL; the other backends do not share the classic facts.
-- **Context:** The PIC32 spike passed its byte-identical gate (2026-11-10); this is the next cross-target step.
-- **Effort:** human XL / CC ~3-5d.
-- **Priority:** P3.
-- **Depends on:** none (the spike is done).

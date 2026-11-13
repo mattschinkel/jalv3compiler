@@ -26,14 +26,19 @@ See NOTICE for full attribution.
 - **Native bit arrays** (`var bit flags[32]`) and **multidimensional
   arrays**
 - **Wide integers up to 128 bits** (`dword`, `qword` and beyond)
-- **Cooperative multitasking** — `pragma task N`, `task name() is …`,
-  `_task_start`, `_task_yield`
+- **Cooperative multitasking** — `task name() is …` (slots are sized
+  automatically), `_task_start`, `_task_yield`
+- **Multiple cores and task affinity (ESP32)** — `pragma target enable_cores 2`
+  releases the second core; both run the task scheduler and
+  `_task_start core(2) name()` pins a task to a core (constant or runtime
+  pin; `_task_core(name())` reports where it last ran)
 - **Optional procedure parameters** with `default` values
 - **IEEE-754 floating point** on every target (round-to-nearest-even,
   gradual underflow)
 - **Runtime error hook** — define `procedure _error_hook()` and the compiler
   calls it wherever a runtime error is raised (string heap full, string
-  overflow, string invalid), with `_error_source` and `_string_error` set;
+  overflow, string invalid, core pin out of range), with `_error_source`
+  and the domain cell (`_string_error`, `_core_error`) set;
   the flags are cleared when the hook returns. No hook defined = no cost, and
   the error flags stay available for polling
 - **Runtime error hook library** — `include error_hook` gives you a ready-made

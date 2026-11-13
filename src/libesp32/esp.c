@@ -169,7 +169,8 @@ const pic_backend_t *esp32_backend_get(void)
     esp_code_emu,
     esp_pointer_size_get,
     esp32_clock_solve_maybe,
-    BOOLEAN_TRUE              /* task_locals_allowed */
+    BOOLEAN_TRUE,             /* task_locals_allowed */
+    2U                        /* core_ct: PRO + APP */
   };
 
   return &esp32_backend;
@@ -605,6 +606,16 @@ void esp_startup_emit(pfile_t *pf)
   (void) esp_code_alloc(ESP_OP_AND, ESP_REG_A2, ESP_REG_A2, (int) ESP_REG_A3);
   (void) esp_code_alloc(ESP_OP_WSR, ESP_REG_A2, 0, ESP32_SR_PS);
   (void) esp_code_alloc(ESP_OP_ESYNC, 0, 0, 0);
+  /* ATOMCTL (SR 99), only when the second core is enabled: the SMP
+   * dispatcher's S32C1I claim does not store with the reset value 0x28
+   * (bypass/uncached field 0 = "exception"; measured on silicon
+   * 2026-11-12).  0x2A selects the core's internal operation, the value
+   * that works on this part (0x29/RCW does not store).  Off by default,
+   * so the single-core image stays byte-identical. */
+  if (esp_second_core_enabled(pf)) {
+    (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A2, 0, 0x2A);
+    (void) esp_code_alloc(ESP_OP_WSR, ESP_REG_A2, 0, 99);
+  }
   /* ISR programs (3g): point VECBASE at the emitted vector table and
    * unmask the CPU interrupt the interrupt matrix routes to (int 1,
    * intlevel 1).  VECBASE first -- the literal is unbound until the
@@ -664,6 +675,13 @@ void esp_startup_emit(pfile_t *pf)
       }
     }
   }
+  /* Phase 9: release the APP core LAST (off by default).  It enters the
+   * shared dispatcher and reads `_task_list` / `_task_active_core`
+   * immediately, so it must not start before the .bss zeroing above has
+   * cleared them: PSRAM/DRAM staging garbage would otherwise be claimed
+   * as a task resume PC and jumped to (measured 2026-11-12: the PRO core
+   * went silent right after the APP core booted). */
+  esp_second_core_startup_emit(pf);
   /* CPU clock select: NOT emitted inline in startup (known issue:
    * the full cold bring-up sequence crashes at the PLL source flip
    * when emitted inline, though the identical register sequence runs
@@ -735,6 +753,10 @@ void esp_cmd_generate(pfile_t *pf, const cmd_t cmd)
       esp_op_generate(pf, cmd_ptr);
     }
   }
+  /* the APP core's entry body (Phase 9; no-op unless enabled).  It must
+   * exist BEFORE the fixup pass below, which binds the startup's pending
+   * boot-address literal to this label. */
+  esp_second_core_entry_create(pf);
   esp_op_resolve_fixups(pf);
 
   /* outlined divide/mod helpers (after main, before the halt loop) */

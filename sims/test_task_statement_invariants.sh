@@ -30,7 +30,6 @@ bad()  { echo "FAIL $1"; fails=$((fails+1)); }
 # --- 1. self-referencing task stays non-REENTRANT ------------------------
 cat > "$TMPDIR/self.jal" <<'EOF'
 include 16f877
-pragma task 2
 var volatile byte x = 0
 task _w() is
    _task_suspend _w()
@@ -58,7 +57,6 @@ fi
 # --- 2. _task_yield clean; deprecated `suspend` warns once per use -------
 cat > "$TMPDIR/yield.jal" <<'EOF'
 include 16f877
-pragma task 2
 var volatile byte x = 0
 task _w() is
    _task_yield
@@ -85,7 +83,6 @@ fi
 # _task_yield alone must be warning-free
 cat > "$TMPDIR/clean.jal" <<'EOF'
 include 16f877
-pragma task 2
 var volatile byte x = 0
 task _w() is
    _task_yield

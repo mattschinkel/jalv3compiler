@@ -1,0 +1,103 @@
+-- Title: ESP32 (SMP) — task affinity: a task only runs on its core
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 9 (SMP) affinity witness.  Three tasks: `on_app` is pinned to
+--    core 2 (APP), `on_pro` to core 1 (PRO), and `on_any` is pinned with a
+--    VARIABLE (`core(runtime_core)`) to core 2.  All three yield every
+--    iteration, so both cores schedule them for many slices.
+--
+--    The assertions are on _task_core(name()): the core that last claimed
+--    the task's slot.  A scheduler that ignored the pin would report the
+--    wrong core for at least one task.  Each task must also have ticked.
+--
+--    Expected transcript: "SMPA-BOOT" then "SMPA-OK".
+--
+-- @sim_validate begin
+-- duration_s: 8.0
+-- machine: esp32
+-- smp: 2
+-- uart_contains: SMPA-OK
+-- expect byte v_smp_ok 1
+-- @sim_validate end
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+include esp32_serial_hw
+include print
+
+pragma target enable_cores 2
+
+alias serial_data is serial_hw_data
+
+var volatile byte smp_ok = 0
+var volatile dword a_ticks = 0
+var volatile dword b_ticks = 0
+var volatile dword c_ticks = 0
+var volatile dword guard = 0
+var byte runtime_core = 2
+var volatile byte _task_run_core[2]
+
+task on_app() is
+   forever loop
+      a_ticks = a_ticks + 1
+      _task_yield
+   end loop
+end task
+
+task on_pro() is
+   forever loop
+      b_ticks = b_ticks + 1
+      _task_yield
+   end loop
+end task
+
+task on_any() is
+   forever loop
+      c_ticks = c_ticks + 1
+      _task_yield
+   end loop
+end task
+
+print_string(serial_data, "SMPA-BOOT\r\n")
+
+_task_start core(2) on_app()
+_task_start on_pro() core(1)
+_task_start core(runtime_core) on_any()
+
+-- wait until every task has run at least once: the QEMU dual-core model
+-- schedules the APP core only after a few thousand PRO instructions, so a
+-- fixed yield count is not enough
+while ((_task_core(on_app()) == 0) | (_task_core(on_pro()) == 0) | (_task_core(on_any()) == 0)) & (guard < 200000) loop
+   guard = guard + 1
+   _task_yield
+end loop
+
+if (_task_core(on_app()) == 2) & (_task_core(on_pro()) == 1) & (_task_core(on_any()) == 2) & (a_ticks != 0) & (b_ticks != 0) & (c_ticks != 0) & (_task_run_core[0] != 0) & (_task_run_core[1] != 0) then
+   smp_ok = 1
+   print_string(serial_data, "SMPA-OK\r\n")
+else
+   print_string(serial_data, "SMPA-FAIL app=")
+   print_byte_dec(serial_data, _task_core(on_app()))
+   print_string(serial_data, " pro=")
+   print_byte_dec(serial_data, _task_core(on_pro()))
+   print_string(serial_data, " any=")
+   print_byte_dec(serial_data, _task_core(on_any()))
+   print_string(serial_data, " runs=")
+   print_dword_dec(serial_data, _task_run_core[0])
+   print_string(serial_data, "/")
+   print_dword_dec(serial_data, _task_run_core[1])
+   print_string(serial_data, " guard=")
+   print_dword_dec(serial_data, guard)
+   print_string(serial_data, "\r\n")
+end if
+
+_task_kill on_app()
+_task_kill on_pro()
+_task_kill on_any()
+
+forever loop
+end loop

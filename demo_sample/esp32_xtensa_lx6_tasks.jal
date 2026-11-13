@@ -7,7 +7,7 @@
 -- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
 --
 -- Description: Shows the cooperative multitasking added since jalv2 2.5r9:
--- `pragma task N`, `task ... end task`, `_task_start proc()` and `_task_yield`.
+-- `task ... end task`, `_task_start proc()` and `_task_yield`.
 -- The scheduler is a deterministic round-robin: every `suspend` hands
 -- control to the next live task, and a task that falls off its end
 -- removes itself. Two worker tasks print per-slice lines interleaved
@@ -71,7 +71,6 @@ include print
 
 _usec_delay(1_000_000) -- start delay: open the terminal BEFORE powering (bench rule); 1 s is enough and keeps QEMU runs sane
 
-pragma task 4          -- main + three workers
 
 -- Task bodies share the starter's stack (leaf frames): keep state in
 -- globals, never in task-local variables.

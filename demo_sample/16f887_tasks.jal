@@ -6,7 +6,7 @@
 -- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
 --
 -- Description: the cooperative round-robin scheduler on the classic
---              midrange PIC16F887: `pragma task`, `task ... end task`,
+--              midrange PIC16F887: `task ... end task`,
 --              `_task_start` and `_task_yield`.  Two workers and the main
 --              context interleave; each worker records how many slices it
 --              ran and the checksum is printed on the EUSART.
@@ -47,7 +47,6 @@ const PRINT_MAX_VAR_SIZE = 4
 include print
 include format
 --
-pragma task 4                  -- main + three workers
 var volatile byte ta_count = 0
 var volatile byte tb_count = 0
 var volatile byte main_count = 0

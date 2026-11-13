@@ -133,6 +133,7 @@ def run_hex(
     qemu: str | None = None,
     capture_serial: bool | None = None,
     icount_shift: int = 3,
+    cpu_count: int = 1,
 ) -> list[int] | tuple[list[int], bytes]:
     """
     Convert HEX to a flash image, free-run duration_s (wall), stop, dump
@@ -175,6 +176,11 @@ def run_hex(
         qemu_bin,
         "-M",
         machine,
+    ]
+    if cpu_count > 1:
+        # Phase 9: the esp32 machine's second (APP) LX6 core
+        args += ["-smp", str(cpu_count)]
+    args += [
         "-display",
         "none",
         "-icount",

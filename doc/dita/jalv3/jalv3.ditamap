@@ -114,6 +114,8 @@
 
   <chapter href="interrupts.dita"/>
 
+  <chapter href="second_core.dita"/>
+
   <chapter href="tasks.dita"/>
 
   <chapter href="assembly.dita">

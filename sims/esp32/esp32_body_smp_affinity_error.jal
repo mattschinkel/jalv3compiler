@@ -1,0 +1,69 @@
+-- Title: ESP32 (SMP) — an out-of-range runtime core pin errors and runs on any core
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 9 (SMP) affinity error witness.  `_task_start core(bad_core)`
+--    passes 3 with `enable_cores 2` at run time.  The runtime check must:
+--      * raise the runtime error (`_error_source = _ERROR_SOURCE_CORE`,
+--        `_core_error = _CORE_ERROR_RANGE`) through `_error_hook`; the
+--        `error_hook` library prints "[core out of range]";
+--      * clamp the pin to 0 (any core), so the task still runs.
+--
+--    The witness checks the UART text and that the task ticked.
+--
+--    Expected transcript: "SMPE-BOOT", "[core out of range]", "SMPE-OK".
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: esp32
+-- smp: 2
+-- uart_contains: [core out of range]
+-- expect byte v_smp_ok 1
+-- @sim_validate end
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+include esp32_serial_hw
+include print
+
+pragma target enable_cores 2
+
+alias serial_data is serial_hw_data
+alias _error_device is serial_hw_data
+
+include error_hook
+
+var volatile byte smp_ok = 0
+var volatile dword ticks = 0
+var byte bad_core = 3
+var byte i
+
+task worker() is
+   forever loop
+      ticks = ticks + 1
+      _task_yield
+   end loop
+end task
+
+print_string(serial_data, "SMPE-BOOT\r\n")
+
+_task_start core(bad_core) worker()
+
+for 16 using i loop
+   _task_yield
+end loop
+
+if ticks != 0 then
+   smp_ok = 1
+   print_string(serial_data, "SMPE-OK\r\n")
+else
+   print_string(serial_data, "SMPE-MISS\r\n")
+end if
+
+_task_kill worker()
+
+forever loop
+end loop

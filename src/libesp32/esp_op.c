@@ -28,6 +28,9 @@
 #include "../libcore/pfile.h"
 #include "../libcore/cmd.h"
 #include "../libcore/cmd_op.h"
+#include "../libcore/access_record.h"
+#include "../libcore/access_recipe.h"
+#include "../libcore/pf_src.h"
 #include "../libcore/cmd_brch.h"
 #include "../libcore/cmd_usec.h"
 #include "../libcore/operator.h"
@@ -234,7 +237,7 @@ void esp_emit_l32r(unsigned reg, esp_code_t lit)
 
 /* extract unsigned bit field rd = rs >> shift (masked to width):
  * the extui src2 operand encodes width-1 */
-static void esp_code_extui(unsigned rd, unsigned rs, unsigned shift,
+void esp_emit_extui(unsigned rd, unsigned rs, unsigned shift,
     unsigned width)
 {
   esp_code_t _e = esp_code_alloc(ESP_OP_EXTUI, rd, rs, (int) shift);
@@ -885,8 +888,29 @@ static void esp_emit_compare_bool(pfile_t *pf, value_t dst,
 
 /* ---------------- float relations ---------------- */
 
+/* Which i2f helper converts this operand: the unsigned 32-bit kernel
+ * for an unsigned dword (the signed one would read the top bit as a
+ * sign), the signed kernel otherwise (narrow unsigned values have no
+ * sign bit to confuse). */
+static unsigned esp_float_tof_idx(value_t v)
+{
+  if (!v || value_is_float(v)) {
+    return 5U;
+  }
+  return ((4 == value_byte_sz_get(v)) && !value_is_signed(v)) ? 6U : 5U;
+}
+
+/* Which f2i helper converts back into this destination. */
+static unsigned esp_float_toi_idx(value_t dst)
+{
+  if (!dst) {
+    return 4U;
+  }
+  return ((4 == value_byte_sz_get(dst)) && !value_is_signed(dst)) ? 7U : 4U;
+}
+
 /* Load two float operands into a2/a3 (an int operand converts
- * through _esp_i2f). */
+ * through _esp_i2f / _esp_u2f). */
 static void esp_float_loads(pfile_t *pf, value_t v1, value_t v2)
 {
   if (v2) {
@@ -894,7 +918,7 @@ static void esp_float_loads(pfile_t *pf, value_t v1, value_t v2)
       esp_load_value(pf, v2, ESP_REG_A3);
     } else {
       esp_load_value(pf, v2, ESP_REG_A2);
-      esp_float_call(pf, 5U);                 /* (float)v2 */
+      esp_float_call(pf, esp_float_tof_idx(v2));   /* (float)v2 */
       (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A3, ESP_REG_A2, 0);
     }
   } else {
@@ -902,7 +926,7 @@ static void esp_float_loads(pfile_t *pf, value_t v1, value_t v2)
   }
   esp_load_value(pf, v1, ESP_REG_A2);
   if (!value_is_float(v1)) {
-    esp_float_call(pf, 5U);                   /* (float)v1 */
+    esp_float_call(pf, esp_float_tof_idx(v1)); /* (float)v1 */
   }
 }
 
@@ -1273,7 +1297,7 @@ static void esp_load_bit(pfile_t *pf, value_t val, unsigned reg)
     (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A6, 0, 3);
     (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A6, 0);
     (void) esp_code_alloc(ESP_OP_SRL, ESP_REG_A6, ESP_REG_A5, 0);
-    esp_code_extui(ESP_REG_A5, ESP_REG_A5, 0, 3);
+    esp_emit_extui(ESP_REG_A5, ESP_REG_A5, 0, 3);
     if (thru) {
       esp_code_t lit = esp_pool_lit(esp_var_ram(sv));
       (void) esp_emit_l32r(ESP_REG_A4, lit);
@@ -1287,7 +1311,7 @@ static void esp_load_bit(pfile_t *pf, value_t val, unsigned reg)
     (void) esp_code_alloc(ESP_OP_L8UI, rd, ESP_REG_A4, 0);
     (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A5, 0);
     (void) esp_code_alloc(ESP_OP_SRL, rd, rd, 0);
-    esp_code_extui(reg, rd, 0, 1);
+    esp_emit_extui(reg, rd, 0, 1);
     return;
   }
   {
@@ -1344,7 +1368,7 @@ static void esp_load_bit(pfile_t *pf, value_t val, unsigned reg)
         (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A6, 0);
         (void) esp_code_alloc(ESP_OP_SRL, rd, rd, 0);
       }
-      esp_code_extui(reg, rd, 0, 1);
+      esp_emit_extui(reg, rd, 0, 1);
       return;
     }
     (void) esp_code_alloc(ESP_OP_L8UI, rd, ESP_REG_A4, 0);
@@ -1353,7 +1377,7 @@ static void esp_load_bit(pfile_t *pf, value_t val, unsigned reg)
       (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A6, 0);
       (void) esp_code_alloc(ESP_OP_SRL, rd, rd, 0);
     }
-    esp_code_extui(reg, rd, 0, 1);
+    esp_emit_extui(reg, rd, 0, 1);
   }
 }
 
@@ -1384,7 +1408,7 @@ static void esp_store_bit(pfile_t *pf, value_t val, unsigned vreg)
     lset = esp_code_label_alloc();
     if (br) { br->target = lset; }
   } else {
-    esp_code_extui(vreg, vreg, 0, 1);
+    esp_emit_extui(vreg, vreg, 0, 1);
   }
   if (esp_bit_is_runtime(val)) {
     unsigned bit_base = thru ? 0U : value_bit_offset_get(val);
@@ -1407,7 +1431,7 @@ static void esp_store_bit(pfile_t *pf, value_t val, unsigned vreg)
     (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A6, 0, 3);
     (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A6, 0);
     (void) esp_code_alloc(ESP_OP_SRL, ESP_REG_A6, ESP_REG_A5, 0);
-    esp_code_extui(ESP_REG_A5, ESP_REG_A5, 0, 3);
+    esp_emit_extui(ESP_REG_A5, ESP_REG_A5, 0, 3);
     if (thru) {
       esp_code_t lit = esp_pool_lit(esp_var_ram(sv));
       (void) esp_emit_l32r(ESP_REG_A4, lit);
@@ -1556,7 +1580,7 @@ static void esp_load_bitfield(pfile_t *pf, value_t val, unsigned reg)
       (void) esp_code_alloc(ESP_OP_SRL, rd, rd, 0);
     }
     if (width <= 16U) {
-      esp_code_extui(reg, rd, 0, width);
+      esp_emit_extui(reg, rd, 0, width);
     } else {
       unsigned long mask = (width >= 32U) ? 0xFFFFFFFFUL
           : ((1UL << width) - 1UL);
@@ -1584,7 +1608,7 @@ static void esp_load_bitfield(pfile_t *pf, value_t val, unsigned reg)
     (void) esp_code_alloc(ESP_OP_SRL, rd, rd, 0);
   }
   if (width <= 16U) {
-    esp_code_extui(reg, rd, 0, width);
+    esp_emit_extui(reg, rd, 0, width);
   } else {
     unsigned long mask = (width >= 32U) ? 0xFFFFFFFFUL
         : ((1UL << width) - 1UL);
@@ -1627,7 +1651,7 @@ static void esp_store_bitfield(pfile_t *pf, value_t val, unsigned vreg)
   }
   /* normalize the incoming value to the field width */
   if (width <= 16U) {
-    esp_code_extui(vreg, vreg, 0, width);
+    esp_emit_extui(vreg, vreg, 0, width);
   } else if (width < 32U) {
     unsigned long mask = (1UL << width) - 1UL;
     esp_code_t lit = esp_pool_lit(mask);
@@ -2208,9 +2232,9 @@ static void esp_walg_shift_fill_all_runtime(pfile_t *pf, value_t dst,
   esp_wide_addr(pf, src, ESP_REG_A4);
   esp_wide_load_byte(src, src_sz ? src_sz - 1U : 0U, src_sz,
       ESP_REG_A2, ESP_REG_A4);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 7, 1);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 7, 1);
   (void) esp_code_alloc(ESP_OP_NEG, ESP_REG_A2, (int) ESP_REG_A2, 0);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
   esp_wide_addr(pf, dst, ESP_REG_A5);
   for (k = 0; k < n; k++) {
     (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, (int) ESP_REG_A5,
@@ -2237,9 +2261,9 @@ static void esp_walg_shift_const_lo(value_t src, int lo_i,
       } else {
         esp_wide_load_byte(src, src_sz - 1U, src_sz, reg,
             ESP_REG_A4);
-        esp_code_extui(reg, reg, 7, 1);
+        esp_emit_extui(reg, reg, 7, 1);
         (void) esp_code_alloc(ESP_OP_NEG, reg, (int) reg, 0);
-        esp_code_extui(reg, reg, 0, 8);
+        esp_emit_extui(reg, reg, 0, 8);
       }
     } else {
       (void) esp_code_alloc(ESP_OP_MOVI, reg, 0, 0);
@@ -2282,7 +2306,7 @@ static void esp_walg_shift_const_byte(pfile_t *pf, value_t dst,
         (int) ESP_REG_A3);
   }
   /* mask to 8 bits */
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
   (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, (int) ESP_REG_A5, i);
 }
 
@@ -2371,11 +2395,11 @@ static void esp_wide_neg_inplace(pfile_t *pf, value_t val, unsigned n)
     (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A3, 0, -1);
     (void) esp_code_alloc(ESP_OP_XOR, ESP_REG_A2, ESP_REG_A2,
         (int) ESP_REG_A3);
-    esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+    esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
     (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A2, ESP_REG_A2,
         (int) ESP_REG_A9);
-    esp_code_extui(ESP_REG_A9, ESP_REG_A2, 8, 1);
-    esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+    esp_emit_extui(ESP_REG_A9, ESP_REG_A2, 8, 1);
+    esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
     (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, ESP_REG_A4, (int) ofs);
   }
 }
@@ -2432,7 +2456,7 @@ static void esp_walg_alu_step_add(void)
       (int) ESP_REG_A3);
   (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A2, (int) ESP_REG_A2,
       (int) ESP_REG_A8);
-  esp_code_extui(ESP_REG_A8, ESP_REG_A2, 8, 1);
+  esp_emit_extui(ESP_REG_A8, ESP_REG_A2, 8, 1);
 }
 
 /* borrow = (x <u y + borrow); result = x - (y + borrow).
@@ -2499,11 +2523,11 @@ static void esp_walg_neg_step(pfile_t *pf, value_t v1, unsigned k,
   (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A3, 0, -1);
   (void) esp_code_alloc(ESP_OP_XOR, ESP_REG_A2, (int) ESP_REG_A2,
       (int) ESP_REG_A3);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
   (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A2, (int) ESP_REG_A2,
       (int) ESP_REG_A8);
-  esp_code_extui(ESP_REG_A8, ESP_REG_A2, 8, 1);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A8, ESP_REG_A2, 8, 1);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
 }
 
 /* dst = v1 +/- 1: increment carry / decrement borrow chain */
@@ -2522,7 +2546,7 @@ static void esp_walg_incr_decr_step(pfile_t *pf, operator_t op,
   if (OPERATOR_INCR == op) {
     (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A2, (int) ESP_REG_A2,
         (int) ESP_REG_A8);
-    esp_code_extui(ESP_REG_A8, ESP_REG_A2, 8, 1);
+    esp_emit_extui(ESP_REG_A8, ESP_REG_A2, 8, 1);
   } else {
     /* borrow = (x <u borrow): result = x - borrow (alu SUB shape) */
     (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A9, (int) ESP_REG_A8, 0);
@@ -2541,7 +2565,7 @@ static void esp_walg_incr_decr_step(pfile_t *pf, operator_t op,
     (void) esp_code_alloc(ESP_OP_SUB, ESP_REG_A2, (int) ESP_REG_A2,
         (int) ESP_REG_A9);
   }
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
 }
 
 /* ---------- shared wide MUL/DIV primitives (libcore wide_alg) -----
@@ -2591,7 +2615,7 @@ static void esp_walg_sign_to_cell(pfile_t *pf, value_t cell, value_t val,
 {
   esp_wide_addr(pf, val, ESP_REG_A4);
   esp_wide_load_byte(val, n - 1U, n, ESP_REG_A2, ESP_REG_A4);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 7, 1);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 7, 1);
   esp_wide_addr(pf, cell, ESP_REG_A5);
   (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, (int) ESP_REG_A5, 0);
 }
@@ -2631,14 +2655,14 @@ static void esp_walg_bit_load(pfile_t *pf, value_t num)
 {
   UNUSED(pf);
   UNUSED(num);
-  esp_code_extui(ESP_REG_A14, ESP_REG_A10, 3, 5);
-  esp_code_extui(ESP_REG_A15, ESP_REG_A10, 0, 3);
+  esp_emit_extui(ESP_REG_A14, ESP_REG_A10, 3, 5);
+  esp_emit_extui(ESP_REG_A15, ESP_REG_A10, 0, 3);
   (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A14, (int) ESP_REG_A11,
       (int) ESP_REG_A14);
   (void) esp_code_alloc(ESP_OP_L8UI, ESP_REG_A14, (int) ESP_REG_A14, 0);
   (void) esp_code_alloc(ESP_OP_SSR, 0, (int) ESP_REG_A15, 0);
   (void) esp_code_alloc(ESP_OP_SRL, ESP_REG_A14, (int) ESP_REG_A14, 0);
-  esp_code_extui(ESP_REG_A14, ESP_REG_A14, 0, 1);
+  esp_emit_extui(ESP_REG_A14, ESP_REG_A14, 0, 1);
 }
 
 /* rem[0] |= a14 (a12 holds rem's address) */
@@ -2657,11 +2681,11 @@ static void esp_walg_bit_set(pfile_t *pf, value_t quot)
 {
   UNUSED(pf);
   UNUSED(quot);
-  esp_code_extui(ESP_REG_A14, ESP_REG_A10, 3, 5);
+  esp_emit_extui(ESP_REG_A14, ESP_REG_A10, 3, 5);
   (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A14, (int) ESP_REG_A13,
       (int) ESP_REG_A14);
   (void) esp_code_alloc(ESP_OP_L8UI, ESP_REG_A2, (int) ESP_REG_A14, 0);
-  esp_code_extui(ESP_REG_A15, ESP_REG_A10, 0, 3);
+  esp_emit_extui(ESP_REG_A15, ESP_REG_A10, 0, 3);
   (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A3, 0, 1);
   (void) esp_code_alloc(ESP_OP_SSL, 0, (int) ESP_REG_A15, 0);
   (void) esp_code_alloc(ESP_OP_SLL, ESP_REG_A3, (int) ESP_REG_A3, 0);
@@ -2706,8 +2730,8 @@ static void esp_walg_mul_row_step(pfile_t *pf, value_t t1, value_t t2,
       (int) ESP_REG_A3);
   (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A2, (int) ESP_REG_A2,
       (int) ESP_REG_A9);
-  esp_code_extui(ESP_REG_A9, ESP_REG_A2, 8, 8);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A9, ESP_REG_A2, 8, 8);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
   (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, (int) ESP_REG_A5,
       (int) (i + j));
 }
@@ -2875,7 +2899,7 @@ static void esp_walg_shift_var_byte(pfile_t *pf, operator_t op,
     (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A9, (int) ESP_REG_A8,
         (int) (i * 8));
   }
-  esp_code_extui(ESP_REG_A7, ESP_REG_A9, 0, 3);   /* bit in byte */
+  esp_emit_extui(ESP_REG_A7, ESP_REG_A9, 0, 3);   /* bit in byte */
   (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A3, 0, 3);
   (void) esp_code_alloc(ESP_OP_SSR, 0, (int) ESP_REG_A3, 0);
   /* byte index = bitbase >> 3 ARITHMETIC: a left shift's bitbase can
@@ -2890,9 +2914,9 @@ static void esp_walg_shift_var_byte(pfile_t *pf, operator_t op,
   if (arith && !left) {
     esp_wide_load_byte(src, src_sz - 1U, src_sz, ESP_REG_A2,
         ESP_REG_A6);
-    esp_code_extui(ESP_REG_A2, ESP_REG_A2, 7, 1);
+    esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 7, 1);
     (void) esp_code_alloc(ESP_OP_NEG, ESP_REG_A2, (int) ESP_REG_A2, 0);
-    esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+    esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
   } else {
     (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A2, 0, 0);
   }
@@ -2911,9 +2935,9 @@ static void esp_walg_shift_var_byte(pfile_t *pf, operator_t op,
   if (arith && !left) {
     esp_wide_load_byte(src, src_sz - 1U, src_sz, ESP_REG_A3,
         ESP_REG_A6);
-    esp_code_extui(ESP_REG_A3, ESP_REG_A3, 7, 1);
+    esp_emit_extui(ESP_REG_A3, ESP_REG_A3, 7, 1);
     (void) esp_code_alloc(ESP_OP_NEG, ESP_REG_A3, (int) ESP_REG_A3, 0);
-    esp_code_extui(ESP_REG_A3, ESP_REG_A3, 0, 8);
+    esp_emit_extui(ESP_REG_A3, ESP_REG_A3, 0, 8);
   } else {
     (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A3, 0, 0);
   }
@@ -2937,7 +2961,7 @@ static void esp_walg_shift_var_byte(pfile_t *pf, operator_t op,
   (void) esp_code_alloc(ESP_OP_SLL, ESP_REG_A3, (int) ESP_REG_A3, 0);
   (void) esp_code_alloc(ESP_OP_OR, ESP_REG_A2, (int) ESP_REG_A2,
       (int) ESP_REG_A3);
-  esp_code_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
+  esp_emit_extui(ESP_REG_A2, ESP_REG_A2, 0, 8);
   (void) esp_code_alloc(ESP_OP_S8I, ESP_REG_A2, (int) ESP_REG_A5,
       (int) i);
 }
@@ -3062,7 +3086,7 @@ static void esp_bit_extract_abs(unsigned long ram, unsigned pos,
     (void) esp_code_alloc(ESP_OP_SSR, 0, ESP_REG_A6, 0);
     (void) esp_code_alloc(ESP_OP_SRL, reg, reg, 0);
   }
-  esp_code_extui(reg, reg, 0, 1);
+  esp_emit_extui(reg, reg, 0, 1);
 }
 
 /* insert reg (0/1) into absolute bit `pos` of the packed container at
@@ -3661,74 +3685,238 @@ static boolean_t esp_base_is_pointer_array(const value_t ptr)
     ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
-static void esp_emit_deref_addr(pfile_t *pf, value_t ptr)
-{
-  variable_t    v;
-  unsigned long addr;
-  value_t       bofs;
+/* E3/Phase 8: the deref-ADDRESS family as recipes (shared by the read
+ * and the write paths).  The fact bits are ESP32-owned and opaque to
+ * libcore/access_recipe. */
+#define ESP_ACCESS_FACT_PTR_ARRAY   0x0001u
+#define ESP_ACCESS_FACT_SLOT        0x0002u  /* the element IS the slot   */
+#define ESP_ACCESS_FACT_RUNTIME_OFS 0x0004u
+#define ESP_ACCESS_FACT_CONST_OFS   0x0008u
+#define ESP_ACCESS_FACTS_ALL        0x000Fu
+#define ESP_ACCESS_OP_DEREF_ADDR    1u
 
-  v = value_variable_get(ptr);
-  addr = esp_var_ram(v);
-  bofs = value_baseofs_get(ptr);
-  /* THROUGH-access of a pointer-array element (`r = slots[i]`,
-   * `slots[i] = v` with the pointee def on the value): the baseofs
-   * selects a slot -- it is never an offset into a pointee.  Compose
-   * the slot address (&slots + i*ptrsz), then load the slot's content
-   * as the target address.  The pointer-def element form (binds
-   * `slots[i] is x`, WHEREIS) keeps the plain slot address below. */
-  if (esp_base_is_pointer_array(ptr)
-      && !esp_elem_is_pointer_array_slot(ptr)) {
-    if (bofs && !value_is_const(bofs)) {
-      esp_load_value(pf, bofs, ESP_REG_A5);
-      esp_emit_l32r(ESP_REG_A4, esp_pool_lit(addr));
+typedef struct esp_deref_ctx_ {
+  pfile_t         *pf;
+  value_t          ptr;
+  unsigned long    addr;
+} esp_deref_ctx_t;
+
+/* the constant offset of the value (0 when none) */
+static variable_const_t esp_deref_const_ofs(const esp_deref_ctx_t *c)
+{
+  variable_const_t ofs;
+
+  ofs = 0;
+  (void) value_baseofs_const_get(c->ptr, &ofs);
+  return ofs;
+}
+
+/* add the constant offset (<= 127 direct, else a literal add) */
+static void esp_deref_add_const(const esp_deref_ctx_t *c)
+{
+  variable_const_t ofs;
+
+  ofs = esp_deref_const_ofs(c);
+  if (ofs) {
+    /* constant indices arrive already byte-scaled by the front end
+     * (jal_expr.c const subscript path multiplies by the pointer size
+     * for pointer slots); only runtime indices need pstride */
+    if (ofs <= 127) {
+      (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A4, ESP_REG_A4,
+          (int) ofs);
+    } else {
+      esp_emit_l32r(ESP_REG_A5, esp_pool_lit((unsigned long) ofs));
       (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A4, ESP_REG_A4,
           (int) ESP_REG_A5);
-    } else {
-      variable_const_t ofs = 0;
-
-      (void) value_baseofs_const_get(ptr, &ofs);
-      esp_emit_l32r(ESP_REG_A4, esp_pool_lit(addr + (unsigned long) ofs));
     }
-    (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
+  }
+}
+
+/* THROUGH-access of a pointer-array element (`r = slots[i]`,
+ * `slots[i] = v` with the pointee def on the value): the baseofs selects
+ * a slot -- it is never an offset into a pointee.  Compose the slot
+ * address (&slots + i*ptrsz), then load the slot's content as the target
+ * address. */
+static void esp_deref_through_runtime(const access_recipe_key_t *key,
+    void *ctx)
+{
+  esp_deref_ctx_t *c;
+
+  c = (esp_deref_ctx_t *) ctx;
+  (void) key;
+  esp_load_value(c->pf, value_baseofs_get(c->ptr), ESP_REG_A5);
+  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(c->addr));
+  (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A4, ESP_REG_A4,
+      (int) ESP_REG_A5);
+  (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
+}
+
+static void esp_deref_through_const(const access_recipe_key_t *key,
+    void *ctx)
+{
+  esp_deref_ctx_t *c;
+
+  c = (esp_deref_ctx_t *) ctx;
+  (void) key;
+  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(c->addr
+      + (unsigned long) esp_deref_const_ofs(c)));
+  (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
+}
+
+/* an element of a pointer array (`var pointer slots[N] as ...`) is
+ * direct storage at &slots + i*ptrsz: no slot-load deref (the front end
+ * scales the index by the pointer size for pointer slots). */
+static void esp_deref_slot_runtime(const access_recipe_key_t *key,
+    void *ctx)
+{
+  esp_deref_ctx_t *c;
+
+  c = (esp_deref_ctx_t *) ctx;
+  (void) key;
+  esp_load_value(c->pf, value_baseofs_get(c->ptr), ESP_REG_A5);
+  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(c->addr));
+  (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A4, ESP_REG_A4,
+      (int) ESP_REG_A5);
+}
+
+static void esp_deref_slot_const(const access_recipe_key_t *key,
+    void *ctx)
+{
+  esp_deref_ctx_t *c;
+
+  c = (esp_deref_ctx_t *) ctx;
+  (void) key;
+  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(c->addr));
+  esp_deref_add_const(c);
+}
+
+/* a plain pointer with a runtime offset */
+static void esp_deref_linear_runtime(const access_recipe_key_t *key,
+    void *ctx)
+{
+  esp_deref_ctx_t *c;
+
+  c = (esp_deref_ctx_t *) ctx;
+  (void) key;
+  esp_load_value(c->pf, value_baseofs_get(c->ptr), ESP_REG_A5);
+  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(c->addr));
+  (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
+  (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A4, ESP_REG_A4,
+      (int) ESP_REG_A5);
+}
+
+/* a plain pointer with a constant (or absent) offset */
+static void esp_deref_linear_const(const access_recipe_key_t *key,
+    void *ctx)
+{
+  esp_deref_ctx_t *c;
+
+  c = (esp_deref_ctx_t *) ctx;
+  (void) key;
+  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(c->addr));
+  (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
+  esp_deref_add_const(c);
+}
+
+/* ENG A4: record one deref-address decision through the neutral recorder
+ * (columns: ordinal, operation, facts, matched).  A no-op unless the
+ * recorder is on. */
+static void esp_access_note(pfile_t *pf, const char *site, value_t v,
+    unsigned operation, unsigned facts, boolean_t matched)
+{
+  static const char *const cols[] = {
+    "ordinal", "operation", "facts", "matched"
+  };
+  static unsigned ordinal;
+  unsigned long   vals[4];
+  pfile_source_t *src;
+  const char     *name;
+
+  if (!access_record_on()) {
     return;
   }
-  /* an element of a pointer array (`var pointer slots[N] as ...`)
-   * is direct storage at &slots + i*ptrsz: the front end scales the
-   * index by the pointer size for pointer slots (both constant and
-   * runtime subscripts), so no striding here -- just skip the
-   * slot-load deref for such elements. Pointee-typed values (p[i] on
-   * `as var byte`, bare `p = x` store-through) keep the deref. */
-  if (bofs && !value_is_const(bofs)) {
-    esp_load_value(pf, bofs, ESP_REG_A5);
-    esp_emit_l32r(ESP_REG_A4, esp_pool_lit(addr));
-    if (!esp_elem_is_pointer_array_slot(ptr)) {
-      (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
-    }
-    (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A4, ESP_REG_A4,
-        (int) ESP_REG_A5);
-    return;
+  src = pfile_source_get(pf);
+  access_record_begin(pf, (src) ? pfile_source_name_get(src) : "?",
+      cols, (unsigned) (sizeof(cols) / sizeof(cols[0])));
+  name = "-";
+  if (v && value_variable_get(v) && (VARIABLE_NONE != value_variable_get(v))
+      && variable_name_get(value_variable_get(v))) {
+    name = variable_name_get(value_variable_get(v));
   }
-  esp_emit_l32r(ESP_REG_A4, esp_pool_lit(addr));
-  if (!esp_elem_is_pointer_array_slot(ptr)) {
-    (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
-  }
-  {
-    variable_const_t ofs = 0;
+  vals[0] = (unsigned long) ordinal++;
+  vals[1] = (unsigned long) operation;
+  vals[2] = (unsigned long) facts;
+  vals[3] = matched ? 1UL : 0UL;
+  access_record_row(pf, site, name, vals,
+      (unsigned) (sizeof(vals) / sizeof(vals[0])));
+}
 
-    (void) value_baseofs_const_get(ptr, &ofs);
-    if (ofs) {
-      /* constant indices arrive already byte-scaled by the front end
-       * (jal_expr.c const subscript path multiplies by the pointer
-       * size for pointer slots); only runtime indices need pstride */
-      if (ofs <= 127) {
-        (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A4, ESP_REG_A4,
-            (int) ofs);
-      } else {
-        esp_emit_l32r(ESP_REG_A5, esp_pool_lit((unsigned long) ofs));
-        (void) esp_code_alloc(ESP_OP_ADD, ESP_REG_A4, ESP_REG_A4,
-            (int) ESP_REG_A5);
-      }
+static const access_recipe_t esp_deref_recipes[] = {
+  /* through-access of a pointer-array element */
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    ESP_ACCESS_FACT_PTR_ARRAY | ESP_ACCESS_FACT_RUNTIME_OFS,
+    ESP_ACCESS_FACTS_ALL, esp_deref_through_runtime },
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    ESP_ACCESS_FACT_PTR_ARRAY, ESP_ACCESS_FACTS_ALL,
+    esp_deref_through_const },
+  /* the element IS the pointer slot */
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    ESP_ACCESS_FACT_PTR_ARRAY | ESP_ACCESS_FACT_SLOT
+      | ESP_ACCESS_FACT_RUNTIME_OFS, ESP_ACCESS_FACTS_ALL,
+    esp_deref_slot_runtime },
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    ESP_ACCESS_FACT_PTR_ARRAY | ESP_ACCESS_FACT_SLOT,
+    ESP_ACCESS_FACTS_ALL, esp_deref_slot_const },
+  /* a plain pointer */
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    ESP_ACCESS_FACT_RUNTIME_OFS, ESP_ACCESS_FACTS_ALL,
+    esp_deref_linear_runtime },
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    ESP_ACCESS_FACT_CONST_OFS, ESP_ACCESS_FACTS_ALL,
+    esp_deref_linear_const },
+  { ACCESS_RECIPE_KIND_ANY, ESP_ACCESS_OP_DEREF_ADDR,
+    0u, ESP_ACCESS_FACTS_ALL, esp_deref_linear_const }
+};
+
+static void esp_emit_deref_addr(pfile_t *pf, value_t ptr)
+{
+  esp_deref_ctx_t     ctx;
+  access_recipe_key_t key;
+  unsigned            facts;
+
+  ctx.pf   = pf;
+  ctx.ptr  = ptr;
+  ctx.addr = esp_var_ram(value_variable_get(ptr));
+  facts = 0;
+  if (esp_base_is_pointer_array(ptr)) {
+    facts |= ESP_ACCESS_FACT_PTR_ARRAY;
+    if (esp_elem_is_pointer_array_slot(ptr)) {
+      facts |= ESP_ACCESS_FACT_SLOT;
     }
+    if (value_baseofs_get(ptr) && !value_is_const(value_baseofs_get(ptr))) {
+      facts |= ESP_ACCESS_FACT_RUNTIME_OFS;
+    }
+  } else if (value_baseofs_get(ptr)
+      && value_is_const(value_baseofs_get(ptr))) {
+    facts |= ESP_ACCESS_FACT_CONST_OFS;
+  } else if (value_baseofs_get(ptr)) {
+    facts |= ESP_ACCESS_FACT_RUNTIME_OFS;
+  }
+  key.kind      = ACCESS_RECIPE_KIND_ANY;
+  key.operation = ESP_ACCESS_OP_DEREF_ADDR;
+  key.facts     = facts;
+  esp_access_note(pf, "deref:addr", ptr, ESP_ACCESS_OP_DEREF_ADDR, facts,
+      0 != access_recipe_find(esp_deref_recipes,
+        sizeof(esp_deref_recipes) / sizeof(esp_deref_recipes[0]), &key));
+  if (ACCESS_RECIPE_MISS == access_recipe_dispatch(esp_deref_recipes,
+        sizeof(esp_deref_recipes) / sizeof(esp_deref_recipes[0]),
+        &key, &ctx)) {
+    /* the table is total by construction; keep the plain shape (and the
+     * compile failing) if that ever stops being true */
+    pfile_log(pf, PFILE_LOG_ERR,
+        "internal error: no deref-address recipe for facts=0x%x", facts);
+    esp_emit_l32r(ESP_REG_A4, esp_pool_lit(ctx.addr));
+    (void) esp_code_alloc(ESP_OP_L32I, ESP_REG_A4, ESP_REG_A4, 0);
   }
 }
 
@@ -4017,7 +4205,8 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
         if (value_is_float(dst) != value_is_float(v1)) {
           /* int <-> float conversion assign */
           esp_load_value(pf, v1, ESP_REG_A2);
-          esp_float_call(pf, value_is_float(dst) ? 5U : 4U);
+          esp_float_call(pf, value_is_float(dst)
+              ? esp_float_tof_idx(v1) : esp_float_toi_idx(dst));
         } else {
           esp_load_value(pf, v1, ESP_REG_A2);
         }
@@ -4031,7 +4220,7 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
           /* (float)v2: convert in a2, move to a3 (_esp_i2f preserves
            * a3) */
           esp_load_value(pf, v2, ESP_REG_A2);
-          esp_float_call(pf, 5U);
+          esp_float_call(pf, esp_float_tof_idx(v2));
           (void) esp_code_alloc(ESP_OP_ADDI, ESP_REG_A3, ESP_REG_A2, 0);
         }
       } else {
@@ -4039,7 +4228,7 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
       }
       esp_load_value(pf, v1, ESP_REG_A2);
       if (!value_is_float(v1)) {
-        esp_float_call(pf, 5U);          /* (float)v1 in a2 */
+        esp_float_call(pf, esp_float_tof_idx(v1)); /* (float)v1 in a2 */
       }
       switch (op) {
         case OPERATOR_ADD:  hidx = 0; break;
@@ -4050,7 +4239,7 @@ void esp_op_generate(pfile_t *pf, const cmd_t cmd)
       }
       esp_float_call(pf, hidx);
       if (!value_is_float(dst)) {
-        esp_float_call(pf, 4U);          /* (int)result */
+        esp_float_call(pf, esp_float_toi_idx(dst)); /* (int)result */
       }
       esp_store_value(pf, dst, ESP_REG_A2);
       return;
@@ -4381,4 +4570,10 @@ void esp_op_reset(void)
   }
   /* wide RAM temporaries (kernel-held) */
   walg_reset();
+}
+
+/* public value load (the task kernel's affinity store uses it) */
+void esp_emit_value_load(pfile_t *pf, value_t val, unsigned reg)
+{
+  esp_load_value(pf, val, reg);
 }

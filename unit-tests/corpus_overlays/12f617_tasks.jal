@@ -20,11 +20,10 @@
 --
 --              For the result see this video: https://youtu.be/tOFy_s7aVnQ
 --
--- Note:        In order for this program to run you have to define the number
---              of tasks with the pragma task. This number equals the number of
---              tasks that need to run plus one for the main program which
---              counts as one task. So in this case the number of tasks is 4.
---              Only the main program can start a task.
+-- Note:        The scheduler sizes its slots from the task declarations;
+--              the main program counts as one task, so the number of
+--              slots is the number of tasks plus one (4 here). Only the
+--              main program can start a task.
 --
 
 include 12f617                 
@@ -38,9 +37,8 @@ pragma target WDT      disabled        ; No watchdog
 pragma target BROWNOUT enabled         ; Enable in case voltage becomes too low
 pragma target IOSCFS   F4MHZ           ; Set internal oscillator to 4 MHz
 
--- Set the number of tasks that need to run. Note that the main program counts
--- as one task so in this case 4 in total.
-pragma task 4
+-- The slot table is sized from the task declarations (main counts as one),
+-- so no explicit count is needed.
 
 
 -- Define the pins for the LEDs

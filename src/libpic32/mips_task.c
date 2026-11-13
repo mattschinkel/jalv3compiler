@@ -144,7 +144,8 @@ static const task_alg_ops_t mips_task_alg_ops = {
   mips_task_flag_store,
   mips_task_jump_entry,
   mips_emit_task_yield,
-  mips_emit_task_suicide
+  mips_emit_task_suicide,
+  0                         /* affinity_store: single-core */
 };
 
 void mips_task_zero(pfile_t *pf)

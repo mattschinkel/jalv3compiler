@@ -1,0 +1,131 @@
+-- Title: ESP32 (SMP) — cross-core task control
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    Phase 9 (SMP) control witness.  A worker task spins (yielding every
+--    iteration) while a driver task pauses it, resumes it, kills it and
+--    restarts it.  Both tasks are runnable from the start, so with two
+--    cores they normally run on different cores; the driver's control
+--    statements therefore cross cores in the common case.
+--
+--    Checks (each must hold):
+--      1. after _task_suspend the worker's tick count stops advancing;
+--      2. after _task_resume it advances again;
+--      3. after _task_kill it stops advancing;
+--      4. after _task_restart the worker re-enters its body (generation
+--         counter increments).
+--
+--    Then main resumes on whichever core is free, prints the verdict and
+--    kills the worker.
+--
+--    Expected transcript: "SMPX-BOOT" then "SMPX-OK".
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: esp32
+-- smp: 2
+-- uart_contains: SMPX-OK
+-- expect byte v_smp_ok 1
+-- @sim_validate end
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+include esp32_serial_hw
+include print
+
+pragma target enable_cores 2
+
+alias serial_data is serial_hw_data
+
+var volatile dword worker_ticks = 0
+var volatile dword worker_gen = 0
+var volatile dword checks = 0
+var volatile dword done = 0
+var volatile dword snap = 0
+var volatile dword guard = 0
+var volatile byte smp_ok = 0
+
+task worker() is
+   worker_gen = worker_gen + 1
+   forever loop
+      worker_ticks = worker_ticks + 1
+      _task_yield
+   end loop
+end task
+
+task driver() is
+   var volatile dword k
+   _task_suspend worker()
+   for 4 using k loop
+      _task_yield
+   end loop
+   snap = worker_ticks
+   for 4 using k loop
+      _task_yield
+   end loop
+   if worker_ticks == snap then
+      checks = checks + 1
+   end if
+
+   _task_resume worker()
+   for 4 using k loop
+      _task_yield
+   end loop
+   if worker_ticks > snap then
+      checks = checks + 1
+   end if
+
+   _task_kill worker()
+   for 4 using k loop
+      _task_yield
+   end loop
+   snap = worker_ticks
+   for 4 using k loop
+      _task_yield
+   end loop
+   if worker_ticks == snap then
+      checks = checks + 1
+   end if
+
+   _task_restart worker()
+   for 8 using k loop
+      _task_yield
+   end loop
+   if worker_gen >= 2 then
+      checks = checks + 1
+   end if
+
+   done = 1
+   _task_kill driver()
+end task
+
+print_string(serial_data, "SMPX-BOOT\r\n")
+
+_task_start worker()
+_task_start driver()
+_task_yield
+
+while (done == 0) & (guard < 2000000) loop
+   guard = guard + 1
+end loop
+
+if (done != 0) & (checks == 4) then
+   smp_ok = 1
+   print_string(serial_data, "SMPX-OK\r\n")
+else
+   print_string(serial_data, "SMPX-FAIL done=")
+   print_dword_dec(serial_data, done)
+   print_string(serial_data, " checks=")
+   print_dword_dec(serial_data, checks)
+   print_string(serial_data, " gen=")
+   print_dword_dec(serial_data, worker_gen)
+   print_string(serial_data, "\r\n")
+end if
+
+_task_kill worker()
+
+forever loop
+end loop

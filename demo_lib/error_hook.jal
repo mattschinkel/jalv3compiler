@@ -15,6 +15,8 @@
 --   [string invalid]     an invalid string operation
 --   [string error: N]    any other code (forward compatibility)
 --   [user error]         the application raised it
+--   [core out of range]  a task's core(...) pin named a missing core
+--   [core error: N]      any other core-pin code
 --   [error: N]           a future subsystem (source N) -- forward compatible
 --
 -- The handler can be tailored with two OPTIONAL aliases, defined BEFORE this
@@ -35,7 +37,8 @@
 -- (the error is consumed) and does nothing.
 --
 -- Cells the handler reads:
---    _error_source       which subsystem raised it (1 = string)
+--    _error_source       which subsystem raised it (1 = string, 2 = user,
+--                        3 = core)
 --    _string_error       the string code: 0 none, 1 heap full, 2 overflow,
 --                        3 invalid, 4 range (a character store past
 --                        COUNT(s) -- `s[i] = c` / `p[i] = c`; a write AT
@@ -92,9 +95,21 @@ procedure _error_hook() is
          if _error_source == _ERROR_SOURCE_USER then
             print_string(_error_device, "[user error]")
          else
-            print_string(_error_device, "[error: ")
-            print_byte_dec(_error_device, _error_source)
-            print_string(_error_device, "]")
+            if _error_source == _ERROR_SOURCE_CORE then
+               -- _core_error is consume-on-read: this is the ONLY read
+               err = _core_error
+               if err == _CORE_ERROR_RANGE then
+                  print_string(_error_device, "[core out of range]")
+               else
+                  print_string(_error_device, "[core error: ")
+                  print_byte_dec(_error_device, err)
+                  print_string(_error_device, "]")
+               end if
+            else
+               print_string(_error_device, "[error: ")
+               print_byte_dec(_error_device, _error_source)
+               print_string(_error_device, "]")
+            end if
          end if
          print_crlf(_error_device)
       end if

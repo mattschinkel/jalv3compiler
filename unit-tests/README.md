@@ -37,6 +37,24 @@ bin/beta/jalv3-x86-64 -s 'demo_lib;third_party/jallib/lib;tests' \
 The `run_plan_gate.sh` baseline (`plan-baselines/`) and the
 `run_access_matrix.sh --check` matrix + recipe-row coverage
 (`plan-matrix/`) pin both the decisions and the surface that made them.
+The per-backend plan-diff subsets go through the SAME gate (DX F12, no
+per-backend script fork):
+
+```sh
+unit-tests/run_plan_gate.sh bin/beta/jalv3-x86-64 --backend pic32
+unit-tests/run_plan_gate.sh bin/beta/jalv3-x86-64 --backend esp32   # or --update
+```
+
+Each back end records its family decisions through the neutral recorder
+(`src/libcore/access_record.h`, ENG A4): the row is
+`program,generation,site,var,ordinal,operation,facts,matched`, so the
+baseline pins the classification a back end makes. A compile failure in
+either mode prints the program, the log path and the exit status (DX F5).
+
+`test_isr_source_wiring.sh` runs the Phase 4 ISR source bodies on the QEMU
+targets (ESP32 UART, ESP32 on CPU interrupt 5, PIC32 UART1) and their
+negative controls (matrix route mismatch, muted source, priority 0),
+which must NOT dispatch.
 `test_access_cli.sh` pins the two options' argument validation (ENG S1):
 `-explain-access` takes only `<file>:<line>` with a decimal line in
 1..65535 (0, a typo, a negative, an overflow, trailing junk and an

@@ -37,6 +37,10 @@ typedef struct task_alg_ops_ {
   void (*emit_yield)(pfile_t *pf);
   /* self-kill: clear own slot, then yield away forever */
   void (*emit_suicide)(pfile_t *pf);
+  /* optional (multi-core back ends): store the slot's core affinity
+   * before the entry is made runnable.  `core` is the `_task_start`
+   * clause value, or VALUE_NONE for "any core".  NULL = single-core. */
+  void (*affinity_store)(pfile_t *pf, unsigned slot, value_t core);
 } task_alg_ops_t;
 
 /* scheduler variables (created on first use; GLOBAL + AUTO) */

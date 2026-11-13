@@ -48,6 +48,12 @@ void jal_parse_return(pfile_t *pf, const pfile_pos_t *start);
 #define JAL_PARSE_CALL_FLAG_START 0x0004
 
 value_t jal_parse_call(pfile_t *pf, value_t val, flag_t jal_parse_call_flag);
+/* `pragma target enable_cores N` in effect (1 when unset) */
+unsigned jal_target_enable_cores_get(pfile_t *pf);
+/* `_task_last_core[slot]` cell for `_task_core(proc())` (parse time) */
+value_t  jal_task_last_core_cell_get(pfile_t *pf);
+/* grow the cell to the final slot count (called after parsing) */
+void     jal_task_core_finalize(pfile_t *pf);
 
 void jal_parse_task(pfile_t *pf, const pfile_pos_t *start);
 void jal_parse_start(pfile_t *pf, const pfile_pos_t *start);

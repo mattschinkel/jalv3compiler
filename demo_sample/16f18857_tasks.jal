@@ -57,7 +57,6 @@ const PRINT_MAX_VAR_SIZE = 4
 
 include print
 include format
-pragma task 4          -- main + three workers
 
 -- Task bodies share the starter's stack (leaf frames): keep state in
 -- globals, never in task-local variables.

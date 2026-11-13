@@ -807,6 +807,155 @@ void falg_i2f_core(pfile_t *pf, const falg_ops_t *ops)
   RTN();
 }
 
+/* ---- cut 6: unsigned 32-bit conversions ---- */
+
+/* unsigned integer -> float: the magnitude is the whole word, so the
+ * signed kernel's sign-extract/negate step is skipped; the rounding is
+ * the same RNE, and the one extra case is the round-up carry past 2^32
+ * (a sum that wraps below the original value), which packs as 2^32. */
+void falg_u2f_core(pfile_t *pf, const falg_ops_t *ops)
+{
+  falg_brh_t br, br2, uj, uj2;
+
+  /* zero converts to 0.0 */
+  br2 = BR(FALG_BR_NEZ, 0, FA_OP1);
+  MI(FA_OP1, 0);
+  RTN();
+  BIND(br2);
+
+  /* exponent = 127 + 31 - clz = 158 - clz */
+  ops->clz(pf, FA_T3, FA_OP1);
+  MI(FA_T2, 158);
+  ALU(FALG_ALU_SUB, FA_EXP, FA_T2, FA_T3);
+
+  /* shift = 23 - (31 - clz) = clz - 8; >= 0 shifts left (exact) */
+  MI(FA_T2, 8);
+  ALU(FALG_ALU_SUB, FA_T3, FA_T3, FA_T2);
+  MI(FA_T2, 0);
+  br = BR(FALG_BR_LT, FA_T2, FA_T3);   /* t3 < 0: right path */
+  SSL(FA_MANT, FA_OP1, FA_T3);
+  uj = UJMP(FA_T0);
+  BIND(br);
+
+  /* |v| >= 2^24: shift right by k = -t3 with RNE on the discarded bits:
+   * (x + (half-1) + (q&1)) >> k */
+  ops->neg(pf, FA_T3);                 /* t3 = k > 0 */
+  SSR(FA_T1, FA_OP1, FA_T3);           /* q */
+  MI(FA_T2, 1);
+  ALU(FALG_ALU_AND, FA_STICKY, FA_T1, FA_T2);
+  ALU(FALG_ALU_SUB, FA_T2, FA_T3, FA_T2);       /* k - 1 */
+  MI(FA_MANT, 1);
+  SSL(FA_MANT, FA_MANT, FA_T2);        /* half */
+  MI(FA_T0, 1);
+  ALU(FALG_ALU_SUB, FA_MANT, FA_MANT, FA_T0);   /* half - 1 */
+  ALU(FALG_ALU_ADD, FA_MANT, FA_OP1, FA_MANT);  /* s = x + (half-1) */
+  ALU(FALG_ALU_ADD, FA_MANT, FA_MANT, FA_STICKY); /* s += q&1 */
+  /* the sum can wrap only near 2^32: then the value rounds to 2^32 */
+  br2 = BR(FALG_BR_LTU, FA_OP1, FA_MANT); /* s < x: wrapped */
+  SSR(FA_MANT, FA_MANT, FA_T3);         /* rounded quotient */
+  uj2 = UJMP(FA_T0);
+  BIND(br2);
+  PL(FA_MANT, FALG_IMPL << 1);          /* 2^24; the carry test below
+                                         * halves it and bumps exp once */
+  BIND(uj2);
+  /* rounding past the top of the mantissa carries into the exponent */
+  PL(FA_T0, FALG_IMPL << 1);
+  br2 = BR(FALG_BR_LTU, FA_T0, FA_MANT);
+  MI(FA_T2, 1);
+  SSR(FA_MANT, FA_MANT, FA_T2);
+  ALU(FALG_ALU_ADD, FA_EXP, FA_EXP, FA_T2);
+  BIND(br2);
+  BIND(uj);
+
+  /* assemble: OP1 = exp<<23 | (mant & 0x7FFFFF); no sign bit */
+  PL(FA_T2, FALG_MANT);
+  ALU(FALG_ALU_AND, FA_OP1, FA_MANT, FA_T2);
+  MI(FA_T3, 23);
+  SSL(FA_T3, FA_EXP, FA_T3);
+  ALU(FALG_ALU_OR, FA_OP1, FA_OP1, FA_T3);
+  RTN();
+}
+
+/* float -> unsigned 32-bit: truncating; saturates at 2^32-1 (finite),
+ * NaN -> 0.  Negative values keep the two's-complement behavior of the
+ * signed kernel (converting a negative float into an unsigned object is
+ * undefined in the language; the bit pattern is the defensible answer). */
+void falg_u2i_core(pfile_t *pf, const falg_ops_t *ops)
+{
+  falg_brh_t br, br2, bn, uj, uj2;
+
+  /* sign */
+  MI(FA_T3, 31);
+  ops->ssr_set(pf, FA_T3);
+  ops->srl_sar(pf, FA_SIGN, FA_OP1, FA_T3);
+  MI(FA_T3, 1);
+  ALU(FALG_ALU_AND, FA_SIGN, FA_SIGN, FA_T3);
+
+  /* exponent */
+  MI(FA_T3, 23);
+  ops->ssr_set(pf, FA_T3);
+  ops->srl_sar(pf, FA_EXP, FA_OP1, FA_T3);
+  EXT(FA_EXP, FA_EXP, 0, 8);
+
+  /* exp >= 159 (finite): >= 2^32 -> saturate to 0xFFFFFFFF */
+  MI(FA_T2, 159);
+  br = BR(FALG_BR_LTU, FA_T2, FA_EXP); /* exp < 159: in range */
+  MI(FA_T2, 255);
+  br2 = BR(FALG_BR_NE, FA_T2, FA_EXP); /* exp != 255: saturate */
+  MI(FA_T3, 9);
+  SSL(FA_T3, FA_OP1, FA_T3);
+  bn = BR(FALG_BR_EQZ, 0, FA_T3);      /* mant 0: +-inf */
+  MI(FA_OP1, 0);                       /* NaN -> 0 */
+  RTN();
+  BIND(br2);
+  BIND(bn);
+  PL(FA_OP1, 0xFFFFFFFFUL);
+  RTN();
+  BIND(br);
+
+  /* |value| < 1 (exp < 127): 0 */
+  MI(FA_T3, 127);
+  br = BR(FALG_BR_GEU, FA_T3, FA_EXP);
+  MI(FA_OP1, 0);
+  RTN();
+  BIND(br);
+
+  /* mantissa with the implicit bit */
+  PL(FA_T2, FALG_MANT);
+  ALU(FALG_ALU_AND, FA_MANT, FA_OP1, FA_T2);
+  PL(FA_T2, FALG_IMPL);
+  ALU(FALG_ALU_OR, FA_MANT, FA_MANT, FA_T2);
+
+  /* exp == 158 ([2^31, 2^32)): the 24-bit significand shifted left 8
+   * fills the unsigned word; exp <= 150 shifts right; 151..157 left */
+  MI(FA_T2, 158);
+  br = BR(FALG_BR_NE, FA_T2, FA_EXP);
+  MI(FA_T3, 8);
+  SSL(FA_OP1, FA_MANT, FA_T3);
+  uj = UJMP(FA_T0);
+  BIND(br);
+
+  MI(FA_T3, 150);
+  ALU(FALG_ALU_SUB, FA_T3, FA_EXP, FA_T3);   /* t3 = exp - 150 */
+  MI(FA_T2, 0);
+  br = BR(FALG_BR_GE, FA_T3, FA_T2);    /* t3 <= 0: right */
+  SSL(FA_OP1, FA_MANT, FA_T3);
+  uj2 = UJMP(FA_T0);
+  BIND(br);
+  MI(FA_T2, 0);
+  br = BR(FALG_BR_GE, FA_T2, FA_T3);    /* t3 >= 0: done */
+  ops->neg(pf, FA_T3);
+  SSR(FA_OP1, FA_MANT, FA_T3);
+  BIND(br);
+  BIND(uj2);
+  BIND(uj);
+
+  /* negate when the source was negative (two's complement) */
+  br = BR(FALG_BR_EQZ, 0, FA_SIGN);
+  ops->neg(pf, FA_OP1);
+  BIND(br);
+}
+
 void falg_f2i_core(pfile_t *pf, const falg_ops_t *ops)
 {
   falg_brh_t br, br2, bn;

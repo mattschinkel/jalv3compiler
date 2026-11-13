@@ -1,0 +1,130 @@
+-- Title: ESP32 (SMP) — contention: two tasks, both cores, no double-run
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALV2
+--
+-- Description:
+--    Phase 9 (SMP) contention witness.  Two tasks yield in a loop, so each
+--    core alternates claims and a task can migrate between cores.  Each
+--    task guards its critical section with its OWN busy word: a second
+--    concurrent instance of the same task would observe busy != 0 and bump
+--    the violation counter.  Every iteration also calls a procedure, which
+--    exercises the APP core's private stack for call frames.
+--
+--    Both tasks then leave, main resumes on whichever core is free and
+--    verifies: each task ran exactly _smp_iter times, its procedure ran
+--    _smp_iter times, and no duplicate-run was ever observed.
+--
+--    Expected transcript: "SMPC-BOOT" then "SMPC-OK".
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: esp32
+-- smp: 2
+-- uart_contains: SMPC-OK
+-- expect byte v_smp_ok 1
+-- @sim_validate end
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+include esp32_serial_hw
+include print
+
+pragma target enable_cores 2
+
+alias serial_data is serial_hw_data
+
+const _smp_iter = 300
+
+var volatile dword a_runs = 0
+var volatile dword b_runs = 0
+var volatile dword a_proc = 0
+var volatile dword b_proc = 0
+var volatile dword a_viol = 0
+var volatile dword b_viol = 0
+var volatile dword a_busy = 0
+var volatile dword b_busy = 0
+var volatile dword guard = 0
+var volatile byte smp_ok = 0
+-- per-core claim counter kept by the SMP dispatcher (one byte per core)
+var volatile byte _task_run_core[2]
+
+procedure _smp_bump_a() is
+   a_proc = a_proc + 1
+end procedure
+
+procedure _smp_bump_b() is
+   b_proc = b_proc + 1
+end procedure
+
+task alpha() is
+   var volatile dword i
+   i = 0
+   while i < _smp_iter loop
+      if a_busy != 0 then
+         a_viol = a_viol + 1
+      end if
+      a_busy = 1
+      _smp_bump_a()
+      a_runs = a_runs + 1
+      a_busy = 0
+      i = i + 1
+      _task_yield
+   end loop
+   _task_kill alpha()
+end task
+
+task beta() is
+   var volatile dword j
+   j = 0
+   while j < _smp_iter loop
+      if b_busy != 0 then
+         b_viol = b_viol + 1
+      end if
+      b_busy = 1
+      _smp_bump_b()
+      b_runs = b_runs + 1
+      b_busy = 0
+      j = j + 1
+      _task_yield
+   end loop
+   _task_kill beta()
+end task
+
+print_string(serial_data, "SMPC-BOOT\r\n")
+
+_task_start alpha()
+_task_start beta()
+_task_yield
+
+while ((a_runs < _smp_iter) | (b_runs < _smp_iter)) & (guard < 2000000) loop
+   guard = guard + 1
+end loop
+
+if (a_runs == _smp_iter) & (b_runs == _smp_iter) & (a_proc == _smp_iter) & (b_proc == _smp_iter) & (a_viol == 0) & (b_viol == 0) & (_task_run_core[0] != 0) & (_task_run_core[1] != 0) then
+   smp_ok = 1
+   print_string(serial_data, "SMPC-OK\r\n")
+else
+   print_string(serial_data, "SMPC-FAIL\r\n")
+   print_string(serial_data, " A=")
+   print_dword_dec(serial_data, a_runs)
+   print_string(serial_data, "/")
+   print_dword_dec(serial_data, a_proc)
+   print_string(serial_data, "/")
+   print_dword_dec(serial_data, a_viol)
+   print_string(serial_data, " C=")
+   print_dword_dec(serial_data, _task_run_core[0])
+   print_string(serial_data, "/")
+   print_dword_dec(serial_data, _task_run_core[1])
+   print_string(serial_data, " B=")
+   print_dword_dec(serial_data, b_runs)
+   print_string(serial_data, "/")
+   print_dword_dec(serial_data, b_proc)
+   print_string(serial_data, "/")
+   print_dword_dec(serial_data, b_viol)
+   print_string(serial_data, "\r\n")
+end if
+
+forever loop
+end loop

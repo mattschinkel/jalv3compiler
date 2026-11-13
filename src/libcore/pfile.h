@@ -170,7 +170,6 @@ ulong pfile_code_location_get(pfile_t *pf);
 void  pfile_data_range_add(pfile_t *pf, ulong lo, ulong hi);
 ulong pfile_data_high_get(const pfile_t *pf);
 
-void pfile_task_ct_set(pfile_t *pf, unsigned task_ct);
 
 int pfile_ch_get(pfile_t *pf);
 void pfile_ch_unget(pfile_t *pf, int ch);

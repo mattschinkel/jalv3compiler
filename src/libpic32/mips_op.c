@@ -40,6 +40,8 @@
 #include "../libcore/value.h"
 #include "../libcore/variable.h"
 #include "../libcore/label.h"
+#include "../libcore/access_record.h"
+#include "../libcore/pf_src.h"
 #include "../libcore/pf_proc.h"
 #include "../libcore/pf_log.h"
 #include "../libcore/vardef.h"
@@ -725,6 +727,39 @@ static void mips_ptr_read_linear_plain(const access_recipe_key_t *key,
   c->load = BOOLEAN_TRUE;
 }
 
+/* ENG A4: record one family decision through the neutral recorder
+ * (columns: ordinal, operation, facts, matched).  A no-op unless the
+ * recorder is on. */
+static void mips_access_note(pfile_t *pf, const char *site, value_t v,
+    unsigned operation, unsigned facts, boolean_t matched)
+{
+  static const char *const cols[] = {
+    "ordinal", "operation", "facts", "matched"
+  };
+  static unsigned ordinal;
+  unsigned long   vals[4];
+  pfile_source_t *src;
+  const char     *name;
+
+  if (!access_record_on()) {
+    return;
+  }
+  src = pfile_source_get(pf);
+  access_record_begin(pf, (src) ? pfile_source_name_get(src) : "?",
+      cols, (unsigned) (sizeof(cols) / sizeof(cols[0])));
+  name = "-";
+  if (v && value_variable_get(v) && (VARIABLE_NONE != value_variable_get(v))
+      && variable_name_get(value_variable_get(v))) {
+    name = variable_name_get(value_variable_get(v));
+  }
+  vals[0] = (unsigned long) ordinal++;
+  vals[1] = (unsigned long) operation;
+  vals[2] = (unsigned long) facts;
+  vals[3] = matched ? 1UL : 0UL;
+  access_record_row(pf, site, name, vals,
+      (unsigned) (sizeof(vals) / sizeof(vals[0])));
+}
+
 static const access_recipe_t mips_ptr_read_recipes[] = {
   /* a pointer-array element that IS a pointer: no pointee load */
   { ACCESS_RECIPE_KIND_ANY, MIPS_ACCESS_OP_PTR_READ,
@@ -753,27 +788,6 @@ static const access_recipe_t mips_ptr_read_recipes[] = {
     0u, MIPS_ACCESS_FACTS_ALL, mips_ptr_read_linear_plain }
 };
 
-/* always-on self-check of the table's mask rule (once per process): a row
- * may require only bits it compares */
-void mips_access_audit(pfile_t *pf)
-{
-  static boolean_t done;
-  size_t ii;
-
-  if (done) {
-    return;
-  }
-  done = BOOLEAN_TRUE;
-  for (ii = 0;
-      ii < sizeof(mips_ptr_read_recipes) / sizeof(mips_ptr_read_recipes[0]);
-      ii++) {
-    if (!access_recipe_row_consistent(&mips_ptr_read_recipes[ii])) {
-      pfile_log(pf, PFILE_LOG_ERR,
-          "internal error: inconsistent access recipe row %u",
-          (unsigned) ii);
-    }
-  }
-}
 
 static void mips_load_deref(pfile_t *pf, value_t val, unsigned reg)
 {
@@ -815,6 +829,10 @@ static void mips_load_deref(pfile_t *pf, value_t val, unsigned reg)
   key.kind      = ACCESS_RECIPE_KIND_ANY;
   key.operation = MIPS_ACCESS_OP_PTR_READ;
   key.facts     = facts;
+  mips_access_note(pf, "ptr:read", val, MIPS_ACCESS_OP_PTR_READ, facts,
+      0 != access_recipe_find(mips_ptr_read_recipes,
+        sizeof(mips_ptr_read_recipes) / sizeof(mips_ptr_read_recipes[0]),
+        &key));
   if (ACCESS_RECIPE_MISS == access_recipe_dispatch(mips_ptr_read_recipes,
         sizeof(mips_ptr_read_recipes) / sizeof(mips_ptr_read_recipes[0]),
         &key, &ctx)) {
@@ -835,13 +853,148 @@ static void mips_load_deref(pfile_t *pf, value_t val, unsigned reg)
  * `sz` is the pointee width (for `p = 10` the POINTER-typed dst is 2, so
  * the caller passes the source width).  Runtime index is loaded into $t2
  * *before* the pointer is loaded into $t0. */
+/* E3/Phase 8: the pointer-WRITE family as recipes, same fact bits and
+ * the same total-table contract as the pointer-read family above.  A
+ * store through a pointer hits an address only known at runtime, so the
+ * caller syncs homes before this runs and resets the caches after. */
+#define MIPS_ACCESS_OP_PTR_WRITE 2u
+
+typedef struct mips_ptr_write_ctx_ {
+  pfile_t         *pf;
+  value_t          dst;
+  value_t          ofs;
+  unsigned long    pa;      /* the pointer slot's RAM address */
+  unsigned         vreg;
+  unsigned         sz;
+} mips_ptr_write_ctx_t;
+
+/* the store itself: the address is in $t0 */
+static void mips_ptr_write_store(const mips_ptr_write_ctx_t *c)
+{
+  mips_opcode_t sop;
+
+  sop = mips_store_op(c->sz);
+  (void) mips_code_alloc(sop, c->vreg, MIPS_REG_T0, 0);
+}
+
+/* `slots[i] = v` with a runtime index: the baseofs selects the slot, so
+ * the selected slot's content (the pointee address) is loaded first */
+static void mips_ptr_write_slot_runtime(const access_recipe_key_t *key,
+    void *ctx)
+{
+  mips_ptr_write_ctx_t *c;
+
+  c = (mips_ptr_write_ctx_t *) ctx;
+  (void) key;
+  mips_load_value(c->pf, c->ofs, MIPS_REG_T2);
+  mips_emit_ram_ptr(MIPS_REG_T0, c->pa);
+  (void) mips_code_r_alloc(MIPS_OP_ADDU, MIPS_REG_T0, MIPS_REG_T0,
+      MIPS_REG_T2, 0);
+  (void) mips_code_alloc(MIPS_OP_LW, MIPS_REG_T0, MIPS_REG_T0, 0);
+  mips_ptr_write_store(c);
+}
+
+/* `slots[i] = v` with a constant (or absent) index */
+static void mips_ptr_write_slot_const(const access_recipe_key_t *key,
+    void *ctx)
+{
+  mips_ptr_write_ctx_t *c;
+  variable_const_t      ofs;
+
+  c = (mips_ptr_write_ctx_t *) ctx;
+  (void) key;
+  ofs = 0;
+  (void) value_baseofs_const_get(c->dst, &ofs);
+  mips_lw_abs(c->pf, c->pa + (unsigned long) ofs, MIPS_REG_T0);
+  mips_ptr_write_store(c);
+}
+
+/* a plain pointer with a runtime offset */
+static void mips_ptr_write_linear_runtime(const access_recipe_key_t *key,
+    void *ctx)
+{
+  mips_ptr_write_ctx_t *c;
+
+  c = (mips_ptr_write_ctx_t *) ctx;
+  (void) key;
+  mips_load_value(c->pf, c->ofs, MIPS_REG_T2);
+  mips_lw_abs(c->pf, c->pa, MIPS_REG_T0);
+  (void) mips_code_r_alloc(MIPS_OP_ADDU, MIPS_REG_T0, MIPS_REG_T0,
+      MIPS_REG_T2, 0);
+  mips_ptr_write_store(c);
+}
+
+/* a plain pointer with a constant (or absent) offset */
+static void mips_ptr_write_linear_const(const access_recipe_key_t *key,
+    void *ctx)
+{
+  mips_ptr_write_ctx_t *c;
+
+  c = (mips_ptr_write_ctx_t *) ctx;
+  (void) key;
+  mips_lw_abs(c->pf, c->pa, MIPS_REG_T0);
+  if (c->ofs && value_is_const(c->ofs)) {
+    mips_add_const_ofs(MIPS_REG_T0, MIPS_REG_T2,
+        value_const_get(c->ofs));
+  }
+  mips_ptr_write_store(c);
+}
+
+static const access_recipe_t mips_ptr_write_recipes[] = {
+  { ACCESS_RECIPE_KIND_ANY, MIPS_ACCESS_OP_PTR_WRITE,
+    MIPS_ACCESS_FACT_PTR_ARRAY | MIPS_ACCESS_FACT_RUNTIME_OFS,
+    MIPS_ACCESS_FACTS_ALL, mips_ptr_write_slot_runtime },
+  { ACCESS_RECIPE_KIND_ANY, MIPS_ACCESS_OP_PTR_WRITE,
+    MIPS_ACCESS_FACT_PTR_ARRAY, MIPS_ACCESS_FACTS_ALL,
+    mips_ptr_write_slot_const },
+  { ACCESS_RECIPE_KIND_ANY, MIPS_ACCESS_OP_PTR_WRITE,
+    MIPS_ACCESS_FACT_RUNTIME_OFS, MIPS_ACCESS_FACTS_ALL,
+    mips_ptr_write_linear_runtime },
+  { ACCESS_RECIPE_KIND_ANY, MIPS_ACCESS_OP_PTR_WRITE,
+    MIPS_ACCESS_FACT_CONST_OFS, MIPS_ACCESS_FACTS_ALL,
+    mips_ptr_write_linear_const },
+  { ACCESS_RECIPE_KIND_ANY, MIPS_ACCESS_OP_PTR_WRITE,
+    0u, MIPS_ACCESS_FACTS_ALL, mips_ptr_write_linear_const }
+};
+
+/* always-on self-check of the tables' mask rule (once per process): a row
+ * may require only bits it compares */
+void mips_access_audit(pfile_t *pf)
+{
+  static boolean_t done;
+  size_t ii;
+
+  if (done) {
+    return;
+  }
+  done = BOOLEAN_TRUE;
+  for (ii = 0;
+      ii < sizeof(mips_ptr_read_recipes) / sizeof(mips_ptr_read_recipes[0]);
+      ii++) {
+    if (!access_recipe_row_consistent(&mips_ptr_read_recipes[ii])) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "internal error: inconsistent pointer-read recipe row %u",
+          (unsigned) ii);
+    }
+  }
+  for (ii = 0;
+      ii < sizeof(mips_ptr_write_recipes)
+        / sizeof(mips_ptr_write_recipes[0]);
+      ii++) {
+    if (!access_recipe_row_consistent(&mips_ptr_write_recipes[ii])) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "internal error: inconsistent pointer-write recipe row %u",
+          (unsigned) ii);
+    }
+  }
+}
+
 static void mips_store_deref(pfile_t *pf, value_t dst, unsigned vreg,
     unsigned sz)
 {
-  variable_t    pv;
-  unsigned long pa;
-  value_t       b;
-  mips_opcode_t sop;
+  mips_ptr_write_ctx_t ctx;
+  access_recipe_key_t  key;
+  unsigned             facts;
 
   /* A store through a pointer hits an address only known at runtime.
    * Sync homes FIRST (the target's pre-store value belongs in RAM
@@ -850,46 +1003,41 @@ static void mips_store_deref(pfile_t *pf, value_t dst, unsigned vreg,
    * clobber the stored value; `p is v; p = 42` lost the 42 exactly
    * that way). */
   mips_deref_sync(pf);
-  pv = value_variable_get(dst);
-  pa = mips_var_ram(pv);
-  b = value_baseofs_get(dst);
+  ctx.pf   = pf;
+  ctx.dst  = dst;
+  ctx.ofs  = value_baseofs_get(dst);
+  ctx.pa   = mips_var_ram(value_variable_get(dst));
+  ctx.vreg = vreg;
+  ctx.sz   = sz;
+  facts = 0;
   if (mips_base_is_pointer_array(dst)) {
-    /* `slots[i] = v`: the baseofs selects the slot -- load the
-     * selected slot's content (the pointee address) before storing
-     * through it (the store-through lvalue keeps the POINTER def, and
-     * a front-end-dereferenced pointee value arrives here the same
-     * way through mips_store_value). */
-    if (b && !value_is_const(b)) {
-      mips_load_value(pf, b, MIPS_REG_T2);
-      mips_emit_ram_ptr(MIPS_REG_T0, pa);
-      (void) mips_code_r_alloc(MIPS_OP_ADDU, MIPS_REG_T0, MIPS_REG_T0,
-          MIPS_REG_T2, 0);
-      (void) mips_code_alloc(MIPS_OP_LW, MIPS_REG_T0, MIPS_REG_T0, 0);
-    } else {
-      variable_const_t ofs = 0;
-
-      (void) value_baseofs_const_get(dst, &ofs);
-      mips_lw_abs(pf, pa + (unsigned long) ofs, MIPS_REG_T0);
+    facts |= MIPS_ACCESS_FACT_PTR_ARRAY;
+    if (ctx.ofs && !value_is_const(ctx.ofs)) {
+      facts |= MIPS_ACCESS_FACT_RUNTIME_OFS;
     }
-    sop = mips_store_op(sz);
-    (void) mips_code_alloc(sop, vreg, MIPS_REG_T0, 0);
-    mips_reg_cache_reset();
-    mips_alloc_region_reset();
-    return;
+  } else if (ctx.ofs && value_is_const(ctx.ofs)) {
+    facts |= MIPS_ACCESS_FACT_CONST_OFS;
+  } else if (ctx.ofs) {
+    facts |= MIPS_ACCESS_FACT_RUNTIME_OFS;
   }
-  if (b && !value_is_const(b)) {
-    mips_load_value(pf, b, MIPS_REG_T2);
-    mips_lw_abs(pf, pa, MIPS_REG_T0);
-    (void) mips_code_r_alloc(MIPS_OP_ADDU, MIPS_REG_T0, MIPS_REG_T0,
-        MIPS_REG_T2, 0);
-  } else {
-    mips_lw_abs(pf, pa, MIPS_REG_T0);
-    if (b && value_is_const(b)) {
-      mips_add_const_ofs(MIPS_REG_T0, MIPS_REG_T2, value_const_get(b));
-    }
+  key.kind      = ACCESS_RECIPE_KIND_ANY;
+  key.operation = MIPS_ACCESS_OP_PTR_WRITE;
+  key.facts     = facts;
+  mips_access_note(pf, "ptr:write", dst, MIPS_ACCESS_OP_PTR_WRITE, facts,
+      0 != access_recipe_find(mips_ptr_write_recipes,
+        sizeof(mips_ptr_write_recipes)
+          / sizeof(mips_ptr_write_recipes[0]), &key));
+  if (ACCESS_RECIPE_MISS == access_recipe_dispatch(mips_ptr_write_recipes,
+        sizeof(mips_ptr_write_recipes)
+          / sizeof(mips_ptr_write_recipes[0]),
+        &key, &ctx)) {
+    /* the table is total by construction; keep the plain shape (and the
+     * compile failing) if that ever stops being true */
+    pfile_log(pf, PFILE_LOG_ERR,
+        "internal error: no pointer-write recipe for facts=0x%x", facts);
+    mips_lw_abs(pf, ctx.pa, MIPS_REG_T0);
+    mips_ptr_write_store(&ctx);
   }
-  sop = mips_store_op(sz);
-  (void) mips_code_alloc(sop, vreg, MIPS_REG_T0, 0);
   mips_reg_cache_reset();
   mips_alloc_region_reset();
 }

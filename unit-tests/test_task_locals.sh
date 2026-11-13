@@ -14,8 +14,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 fails=0
 
-body='pragma task 2
-task _tw() is
+body='task _tw() is
    var byte local_counter = 0
    local_counter = local_counter + 1
    _task_yield

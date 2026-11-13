@@ -155,7 +155,8 @@ void pfile_str_heap_defer_free(pfile_t *pf)
  *   flags    : PFILE_FLAG_* flags
  *   vectors  : back-end vectors
  *   arg      : back-end argument
- *   task_ct  : number of tasks
+ *   task_ct  : maximum task slots (the -task CLI option; 0 = derive
+ *              from the declared tasks)
  *   compiler : compiler name/version for the COD file
  *
  * RETURN
@@ -5451,11 +5452,9 @@ unsigned pfile_task_ct_get(pfile_t *pf)
   return (pf) ? pf->task_ct : 0;
 }
 
-/* Effective scheduler slot count: the `pragma task N` value (kept for
- * backwards compatibility / explicit sizing) grown to hold every
- * declared task plus main's slot 0, minimum 2.  Programs therefore no
- * longer need the pragma at all -- `task ... end task` alone sizes the
- * scheduler. */
+/* Effective scheduler slot count: every declared task plus main's slot
+ * 0, minimum 2, optionally pre-sized by the -task CLI option.  There is
+ * no language pragma: `task ... end task` alone sizes the scheduler. */
 unsigned pfile_task_slot_ct_get(pfile_t *pf)
 {
   pfile_proc_t *proc;
@@ -5476,13 +5475,6 @@ unsigned pfile_task_slot_ct_get(pfile_t *pf)
     ct = 2U;
   }
   return ct;
-}
-
-void pfile_task_ct_set(pfile_t *pf, unsigned ct)
-{
-  if (pf) {
-    pf->task_ct = ct;
-  }
 }
 
 FILE *pfile_asm_file_set(pfile_t *pf, FILE *f_asm)

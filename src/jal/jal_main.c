@@ -44,6 +44,7 @@
 #include "jal_blck.h"
 #include "jal_expr.h"
 #include "jal_file.h"
+#include "jal_proc.h"
 #include "jal_tokn.h"
 #include "jal_build.h"
 
@@ -773,6 +774,30 @@ static void jal_hex_temp_cleanup(void)
   }
 }
 
+/* `pragma target enable_cores N`: N may not exceed the selected target's
+ * core count (classic and PIC32 targets have one; ESP32 has two).  Runs
+ * once after parsing, before codegen, when the device include has set the
+ * target. */
+static void jal_target_cores_validate(pfile_t *pf)
+{
+  value_t       pragma;
+  unsigned long want;
+  unsigned      have;
+
+  pragma = pfile_value_find(pf, PFILE_LOG_NONE, "target_enable_cores");
+  if (!pragma) {
+    return;
+  }
+  want = (unsigned long) value_const_get(pragma);
+  value_release(pragma);
+  have = pic_core_ct_get(pf);
+  if (want > (unsigned long) have) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "target has %u core%s; pragma target enable_cores %lu is not "
+        "possible", have, (1U == have) ? "" : "s", want);
+  }
+}
+
 static void jal_reset_between_compiles(void)
 {
   jal_string_state_reset();
@@ -1457,6 +1482,8 @@ int main(int argc, char **argv)
 
           pfile_include_path_set(pf, inc_path);
           jal_file_process(pf, pre_include);
+          jal_target_cores_validate(pf);
+          jal_task_core_finalize(pf);
           if (!pfile_errct_get(pf) 
               /*|| pfile_flag_test(pf, PFILE_FLAG_DEBUG)*/) {
             pfile_stats_t stats;

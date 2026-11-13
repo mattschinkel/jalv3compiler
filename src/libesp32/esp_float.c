@@ -350,23 +350,36 @@ static void emit_f2i_core(void)
   falg_f2i_core(0, &esp_falg_ops);
 }
 
+/* ---- unsigned 32-bit conversions (cut 6): same register contract ---- */
+static void emit_u2f_core(void)
+{
+  falg_u2f_core(0, &esp_falg_ops);
+}
+
+static void emit_u2i_core(void)
+{
+  falg_u2i_core(0, &esp_falg_ops);
+}
+
 /* ---- registry + dispatch ---- */
 static struct {
   const char *name;
   boolean_t   used;
-} esp_fh[6] = {
+} esp_fh[8] = {
   {"_esp_fadd", BOOLEAN_FALSE},
   {"_esp_fsub", BOOLEAN_FALSE},
   {"_esp_fmul", BOOLEAN_FALSE},
   {"_esp_fdiv", BOOLEAN_FALSE},
   {"_esp_f2i",  BOOLEAN_FALSE},
-  {"_esp_i2f",  BOOLEAN_FALSE}
+  {"_esp_i2f",  BOOLEAN_FALSE},
+  {"_esp_u2f",  BOOLEAN_FALSE},
+  {"_esp_u2i",  BOOLEAN_FALSE}
 };
 
 void esp_float_reset(void)
 {
   unsigned i;
-  for (i = 0; i < 6; i++) {
+  for (i = 0; i < 8; i++) {
     esp_fh[i].used = BOOLEAN_FALSE;
   }
 }
@@ -384,7 +397,7 @@ void esp_float_intrinsics_create(pfile_t *pf)
 {
   unsigned i;
 
-  for (i = 0; i < 6; i++) {
+  for (i = 0; i < 8; i++) {
     if (!esp_fh[i].used) {
       continue;
     }
@@ -408,6 +421,8 @@ void esp_float_intrinsics_create(pfile_t *pf)
         case 3:  emit_div_core();               break; /* RTN inside */
         case 4:  emit_f2i_core();  RTN(); break;
         case 5:  emit_i2f_core();               break; /* RTN inside */
+        case 6:  emit_u2f_core();               break; /* RTN inside */
+        case 7:  emit_u2i_core();  RTN(); break; /* no internal RTN */
       }
       label_release(lbl);      /* list keeps the label alive */
     }

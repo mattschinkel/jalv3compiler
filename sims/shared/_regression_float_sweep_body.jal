@@ -1,0 +1,402 @@
+-- ------------------------------------------------------
+-- Title: Shared regression body — per-type float VALUE sweep
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 5 (SDCC float sweeps): the per-type value range body the other
+--    float batteries do not cover.  Each integer type is swept over a
+--    named value set -- conversion to float must be exact or round as the
+--    IEEE rule says, and the conversion back must return the expected
+--    value.  A render group checks the exact decimal text of the values
+--    whose shortest form is unambiguous on every target.  The float
+--    SPECIALS group (0, -0, 1.5, -1.5, 0.1, 1e-38, 1e38, +inf, -inf,
+--    NaN, plus the NaN-comparison negative control) runs only on the
+--    32-bit backs ends: the classic float path has no inf/NaN/denormal
+--    (the wrapper sets `_fsw_full`).
+--
+--    Not a duplicate of the existing batteries: `18f4620_float_str_battery`
+--    / `*_body_float_str` are the RENDERER battery, `*_float_ieee` is the
+--    IEEE arithmetic/spec battery, `*_float_chain` the relation chain.
+--
+--    Wrapper contract: define `const byte _fsw_full = 0|1` BEFORE the
+--    include, include `regression`/`regression_esp32`/`regression_pic32`
+--    and `strings_dynamic` first.  Expect `v__check_step` 8 and every
+--    `v__fsw_*` group byte 1, `v__fsw_nan_neg` 0.
+-- ------------------------------------------------------
+
+var volatile byte  _fsw_b  = 0
+var volatile sbyte _fsw_sb = 0
+var volatile word  _fsw_w  = 0
+var volatile sword _fsw_sw = 0
+var volatile dword _fsw_dw = 0
+var volatile sdword _fsw_sd = 0
+var volatile float _fsw_f  = 0.0
+var volatile float _fsw_g  = 0.0
+var byte _fsw_buf[48]
+var byte _fsw_n = 0
+
+var byte _fsw_byte = 0
+var byte _fsw_sbyte = 0
+var byte _fsw_word = 0
+var byte _fsw_sword = 0
+var byte _fsw_dword = 0
+var byte _fsw_sdword = 0
+var byte _fsw_render = 0
+var byte _fsw_specials = 0
+var byte _fsw_nan_neg = 0
+
+--------------------------------------------------------------------------------
+function _fsw_ok_byte(byte in v, float in e, byte in back) return byte is
+   var float f
+   var byte  b
+   f = float(v)
+   if f != e then return 0 end if
+   b = f
+   if b != back then return 0 end if
+   return 1
+end function
+--------------------------------------------------------------------------------
+function _fsw_ok_sbyte(sbyte in v, float in e, sbyte in back) return byte is
+   var float f
+   var sbyte b
+   f = float(v)
+   if f != e then return 0 end if
+   b = f
+   if b != back then return 0 end if
+   return 1
+end function
+--------------------------------------------------------------------------------
+function _fsw_ok_word(word in v, float in e, word in back) return byte is
+   var float f
+   var word  w
+   f = float(v)
+   if f != e then return 0 end if
+   w = f
+   if w != back then return 0 end if
+   return 1
+end function
+--------------------------------------------------------------------------------
+function _fsw_ok_sword(sword in v, float in e, sword in back) return byte is
+   var float f
+   var sword w
+   f = float(v)
+   if f != e then return 0 end if
+   w = f
+   if w != back then return 0 end if
+   return 1
+end function
+--------------------------------------------------------------------------------
+function _fsw_ok_dword(dword in v, float in e, dword in back) return byte is
+   var float f
+   var dword d
+   f = float(v)
+   if f != e then return 0 end if
+   d = f
+   if d != back then return 0 end if
+   return 1
+end function
+--------------------------------------------------------------------------------
+function _fsw_ok_sdword(sdword in v, float in e, sdword in back) return byte is
+   var float  f
+   var sdword d
+   f = float(v)
+   if f != e then return 0 end if
+   d = f
+   if d != back then return 0 end if
+   return 1
+end function
+--------------------------------------------------------------------------------
+-- exact decimal text of a float value: length and the first ten bytes
+--------------------------------------------------------------------------------
+function _fsw_r(float in e, byte in len,
+    byte in c0, byte in c1, byte in c2, byte in c3, byte in c4,
+    byte in c5, byte in c6, byte in c7, byte in c8, byte in c9) return byte is
+   var byte i
+   var byte m
+   _fsw_n = _string_float_str(e, _fsw_buf)
+   if _fsw_n != len then return 0 end if
+   i = 0
+   while i < len loop
+      m = 0
+      if i == 0 then
+         m = c0
+      end if
+      if i == 1 then
+         m = c1
+      end if
+      if i == 2 then
+         m = c2
+      end if
+      if i == 3 then
+         m = c3
+      end if
+      if i == 4 then
+         m = c4
+      end if
+      if i == 5 then
+         m = c5
+      end if
+      if i == 6 then
+         m = c6
+      end if
+      if i == 7 then
+         m = c7
+      end if
+      if i == 8 then
+         m = c8
+      end if
+      if i == 9 then
+         m = c9
+      end if
+      if _fsw_buf[i] != m then return 0 end if
+      i = i + 1
+   end loop
+   return 1
+end function
+
+--------------------------------------------------------------------------------
+regression_begin_run()
+
+-- 1. byte: {0,1,2,127,128,255}
+_fsw_byte = 1
+_fsw_b = 0
+if _fsw_ok_byte(_fsw_b, 0.0, 0) == 0 then _fsw_byte = 0 end if
+_fsw_b = 1
+if _fsw_ok_byte(_fsw_b, 1.0, 1) == 0 then _fsw_byte = 0 end if
+_fsw_b = 2
+if _fsw_ok_byte(_fsw_b, 2.0, 2) == 0 then _fsw_byte = 0 end if
+_fsw_b = 127
+if _fsw_ok_byte(_fsw_b, 127.0, 127) == 0 then _fsw_byte = 0 end if
+_fsw_b = 128
+if _fsw_ok_byte(_fsw_b, 128.0, 128) == 0 then _fsw_byte = 0 end if
+_fsw_b = 255
+if _fsw_ok_byte(_fsw_b, 255.0, 255) == 0 then _fsw_byte = 0 end if
+if _fsw_byte == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 2. sbyte: the signed analogue of the set {0,1,2,127,-1,-128}
+_fsw_sbyte = 1
+_fsw_sb = 0
+if _fsw_ok_sbyte(_fsw_sb, 0.0, 0) == 0 then _fsw_sbyte = 0 end if
+_fsw_sb = 1
+if _fsw_ok_sbyte(_fsw_sb, 1.0, 1) == 0 then _fsw_sbyte = 0 end if
+_fsw_sb = 2
+if _fsw_ok_sbyte(_fsw_sb, 2.0, 2) == 0 then _fsw_sbyte = 0 end if
+_fsw_sb = 127
+if _fsw_ok_sbyte(_fsw_sb, 127.0, 127) == 0 then _fsw_sbyte = 0 end if
+_fsw_sb = -1
+if _fsw_ok_sbyte(_fsw_sb, -1.0, -1) == 0 then _fsw_sbyte = 0 end if
+_fsw_sb = -128
+if _fsw_ok_sbyte(_fsw_sb, -128.0, -128) == 0 then _fsw_sbyte = 0 end if
+if _fsw_sbyte == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 3. word: {0,1,255,256,32767,32768,65535} -- exact in float32
+_fsw_word = 1
+_fsw_w = 0
+if _fsw_ok_word(_fsw_w, 0.0, 0) == 0 then _fsw_word = 0 end if
+_fsw_w = 1
+if _fsw_ok_word(_fsw_w, 1.0, 1) == 0 then _fsw_word = 0 end if
+_fsw_w = 255
+if _fsw_ok_word(_fsw_w, 255.0, 255) == 0 then _fsw_word = 0 end if
+_fsw_w = 256
+if _fsw_ok_word(_fsw_w, 256.0, 256) == 0 then _fsw_word = 0 end if
+_fsw_w = 32767
+if _fsw_ok_word(_fsw_w, 32767.0, 32767) == 0 then _fsw_word = 0 end if
+_fsw_w = 32768
+if _fsw_ok_word(_fsw_w, 32768.0, 32768) == 0 then _fsw_word = 0 end if
+_fsw_w = 65535
+if _fsw_ok_word(_fsw_w, 65535.0, 65535) == 0 then _fsw_word = 0 end if
+if _fsw_word == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 4. sword: {0,1,255,256,32767,-1,-32768}
+_fsw_sword = 1
+_fsw_sw = 0
+if _fsw_ok_sword(_fsw_sw, 0.0, 0) == 0 then _fsw_sword = 0 end if
+_fsw_sw = 1
+if _fsw_ok_sword(_fsw_sw, 1.0, 1) == 0 then _fsw_sword = 0 end if
+_fsw_sw = 255
+if _fsw_ok_sword(_fsw_sw, 255.0, 255) == 0 then _fsw_sword = 0 end if
+_fsw_sw = 256
+if _fsw_ok_sword(_fsw_sw, 256.0, 256) == 0 then _fsw_sword = 0 end if
+_fsw_sw = 32767
+if _fsw_ok_sword(_fsw_sw, 32767.0, 32767) == 0 then _fsw_sword = 0 end if
+_fsw_sw = -1
+if _fsw_ok_sword(_fsw_sw, -1.0, -1) == 0 then _fsw_sword = 0 end if
+_fsw_sw = -32768
+if _fsw_ok_sword(_fsw_sw, -32768.0, -32768) == 0 then _fsw_sword = 0 end if
+if _fsw_sword == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 5. dword: {0,1,65535,65536,2^31-1,2^31}; 2^31-1 rounds UP to 2^31
+_fsw_dword = 1
+_fsw_dw = 0
+if _fsw_ok_dword(_fsw_dw, 0.0, 0) == 0 then _fsw_dword = 0 end if
+_fsw_dw = 1
+if _fsw_ok_dword(_fsw_dw, 1.0, 1) == 0 then _fsw_dword = 0 end if
+_fsw_dw = 65535
+if _fsw_ok_dword(_fsw_dw, 65535.0, 65535) == 0 then _fsw_dword = 0 end if
+_fsw_dw = 65536
+if _fsw_ok_dword(_fsw_dw, 65536.0, 65536) == 0 then _fsw_dword = 0 end if
+-- 2^31-1 needs 31 mantissa bits: the IEEE backs round UP to 2^31
+-- (round-to-nearest-even); the classic pre-IEEE float truncates the
+-- 24-bit mantissa to 2^31-128 (measured).  Each target pins its own.
+_fsw_dw = 2147483647
+if _fsw_full != 0 then
+   -- IEEE RNE: 2^31-1 rounds UP to 2^31; the unsigned F2I gives it back
+   if _fsw_ok_dword(_fsw_dw, 2147483648.0, 2147483648) == 0 then
+      _fsw_dword = 0
+   end if
+else
+   if _fsw_ok_dword(_fsw_dw, 2147483520.0, 2147483520) == 0 then
+      _fsw_dword = 0
+   end if
+end if
+_fsw_dw = 2147483648
+if _fsw_ok_dword(_fsw_dw, 2147483648.0, 2147483648) == 0 then
+   _fsw_dword = 0
+end if
+if _fsw_full != 0 then
+   -- the top of the unsigned range: 2^32-1 rounds to 2^32 and F2I
+   -- saturates at 0xFFFFFFFF
+   _fsw_dw = 4294967295
+   if _fsw_ok_dword(_fsw_dw, 4294967296.0, 4294967295) == 0 then
+      _fsw_dword = 0
+   end if
+end if
+if _fsw_dword == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 6. sdword: {0,1,65535,65536,2^31-1,-2^31}
+_fsw_sdword = 1
+_fsw_sd = 0
+if _fsw_ok_sdword(_fsw_sd, 0.0, 0) == 0 then _fsw_sdword = 0 end if
+_fsw_sd = 1
+if _fsw_ok_sdword(_fsw_sd, 1.0, 1) == 0 then _fsw_sdword = 0 end if
+_fsw_sd = 65535
+if _fsw_ok_sdword(_fsw_sd, 65535.0, 65535) == 0 then _fsw_sdword = 0 end if
+_fsw_sd = 65536
+if _fsw_ok_sdword(_fsw_sd, 65536.0, 65536) == 0 then _fsw_sdword = 0 end if
+_fsw_sd = 2147483647
+if _fsw_full != 0 then
+   -- IEEE: rounds up to 2^31, saturating back to the type's maximum
+   if _fsw_ok_sdword(_fsw_sd, 2147483648.0, 2147483647) == 0 then
+      _fsw_sdword = 0
+   end if
+else
+   -- classic: truncates to 2^31-128 and converts back exactly
+   if _fsw_ok_sdword(_fsw_sd, 2147483520.0, 2147483520) == 0 then
+      _fsw_sdword = 0
+   end if
+end if
+_fsw_sd = -2147483647 - 1
+if _fsw_ok_sdword(_fsw_sd, -2147483648.0, -2147483647 - 1) == 0 then
+   _fsw_sdword = 0
+end if
+if _fsw_sdword == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 7. exact renderings (values whose shortest decimal is unambiguous)
+_fsw_render = 1
+if _fsw_r(0.0, 1, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(1.0, 1, 49, 0, 0, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(2.0, 1, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(127.0, 3, 49, 50, 55, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(128.0, 3, 49, 50, 56, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(255.0, 3, 50, 53, 53, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(256.0, 3, 50, 53, 54, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(65535.0, 5, 54, 53, 53, 51, 53, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(65536.0, 5, 54, 53, 53, 51, 54, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(16777216.0, 8, 49, 54, 55, 55, 55, 50, 49, 54, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(0.0 - 1.0, 2, 45, 49, 0, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(0.0 - 128.0, 4, 45, 49, 50, 56, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(1.5, 3, 49, 46, 53, 0, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(0.0 - 1.5, 4, 45, 49, 46, 53, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_r(0.25, 4, 48, 46, 50, 53, 0, 0, 0, 0, 0, 0) == 0 then
+   _fsw_render = 0
+end if
+if _fsw_render == 0 then _check_failed = true end if
+regression_checkpoint()
+
+-- 8. float specials (32-bit back ends only)
+_fsw_specials = 1
+if _fsw_full != 0 then
+   -- 1.5 and -1.5 are exact and ordered
+   _fsw_f = 1.5
+   if _fsw_f != 1.5 then _fsw_specials = 0 end if
+   _fsw_g = 0.0 - 1.5
+   if _fsw_g != -1.5 then _fsw_specials = 0 end if
+   if _fsw_g >= 0.0 then _fsw_specials = 0 end if
+   -- 0.1 is the nearest float32 to one tenth, and compares below 0.2
+   _fsw_f = 0.1
+   if _fsw_f != 0.1 then _fsw_specials = 0 end if
+   if _fsw_f >= 0.2 then _fsw_specials = 0 end if
+   -- negative zero: equals zero, but 1/-0 is -inf (checked below)
+   _fsw_f = 0.0
+   _fsw_g = 0.0 - _fsw_f
+   if _fsw_g != 0.0 then _fsw_specials = 0 end if
+   -- denormal 1e-38 is representable and positive
+   _fsw_f = 1e-38
+   if _fsw_f <= 0.0 then _fsw_specials = 0 end if
+   if _fsw_f >= 1e-37 then _fsw_specials = 0 end if
+   -- 1e38 is finite and below +inf
+   _fsw_f = 1e38
+   _fsw_f = _fsw_f * 2.0
+   if _fsw_f != _fsw_f then _fsw_specials = 0 end if
+   -- overflow to +inf
+   _fsw_f = 3.0e38
+   _fsw_f = _fsw_f * 2.0
+   _fsw_g = _fsw_f * 0.0
+   if _fsw_g == _fsw_g then _fsw_specials = 0 end if
+   if _fsw_f <= 3.4e38 then _fsw_specials = 0 end if
+   -- -inf from negating inf, ordered below everything finite
+   _fsw_g = 0.0 - _fsw_f
+   if _fsw_g >= 0.0 then _fsw_specials = 0 end if
+   if _fsw_g >= -3.4e38 then _fsw_specials = 0 end if
+   -- NaN: never equal to itself, never ordered
+   _fsw_nan_neg = 0
+   if _fsw_g == _fsw_g then _fsw_nan_neg = 1 end if
+   if _fsw_g < 0.0 then _fsw_specials = 0 end if
+   if _fsw_g > 0.0 then _fsw_specials = 0 end if
+end if
+-- the NaN-comparison NEGATIVE CONTROL: `nan == nan` must be false, so this
+-- stays 0 on every target (classic skips the specials and leaves it 0 too)
+if _fsw_nan_neg != 0 then _check_failed = true end if
+if _fsw_specials == 0 then _check_failed = true end if
+regression_checkpoint()
+
+regression_pass_led_if_clean()
+
+forever loop
+end loop

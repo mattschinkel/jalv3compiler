@@ -1,0 +1,61 @@
+-- Title: ESP32 (SMP) — the dispatcher runs a task on the APP core
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 9 (SMP): the APP core boots through the DPORT release, enters
+--    the shared cooperative dispatcher, claims the started task with
+--    S32C1I and runs it.  The task never yields again, so it consumes its
+--    core; the OTHER core then dispatches the main task's resume PC and
+--    this prints.  On a single core the task would monopolise the only
+--    CPU and the main task would never resume -- SMP-MISS.
+--
+--    Expected transcript: "SMP-BOOT" then "SMP-OK".
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: esp32
+-- smp: 2
+-- uart_contains: SMP-OK
+-- expect byte v_smp_ok 1
+-- @sim_validate end
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+pragma target clock 240_000_000
+pragma target OSC      PLL
+include esp32_clock
+include esp32_serial_hw
+include print
+
+pragma target enable_cores 2
+
+alias serial_data is serial_hw_data
+
+var volatile dword hits = 0
+var volatile dword guard = 0
+var volatile byte smp_ok = 0
+
+task painter() is
+   forever loop
+      hits = hits + 1
+   end loop
+end task
+
+print_string(serial_data, "SMP-BOOT\r\n")
+
+_task_start painter()
+_task_yield
+
+while (hits < 1000) & (guard < 2000000) loop
+   guard = guard + 1
+end loop
+
+if hits >= 1000 then
+   smp_ok = 1
+   print_string(serial_data, "SMP-OK\r\n")
+else
+   print_string(serial_data, "SMP-MISS\r\n")
+end if
+
+forever loop
+end loop

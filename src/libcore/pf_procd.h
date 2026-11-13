@@ -68,12 +68,11 @@ struct pfile_proc_ {
   const char         *name;
   int                 irq; /* PIC32 OFFx vector; -1 = unnumbered */
   /* string-flavored clone bookkeeping (docs/investigations/
-   * string_clone_design_20261105.md): where the body starts (right after
-   * is/begin), whether the body may be re-parsed at all (include, pragma
-   * or a nested routine inside it blocks that), and the lazily created
-   * string clone */
-  pfile_pos_t         body_pos;
-  boolean_t           body_pos_valid;
+   * string_clone_design_20261105.md): whether the body may be duplicated
+   * at all (include, pragma or a nested routine inside it blocks that),
+   * and the lazily created string clones.  The retired source re-parse's
+   * body_pos/body_pos_valid marker is gone: the body block's existence is
+   * the LABEL_FLAG_DEFINED predicate the clone already tests. */
   boolean_t           clone_blocked;
   pfile_proc_strclone_t *str_clones;
 };

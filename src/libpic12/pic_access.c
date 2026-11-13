@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../libcore/access_record.h"
 #include "../libcore/pf_log.h"
 #include "../libcore/pf_proc.h"
 #include "pic_access.h"
@@ -41,13 +42,11 @@ typedef struct pic_access_entry_ {
   pic_access_plan_t plan;
 } pic_access_entry_t;
 
-static FILE        *pic_access_log;
-static boolean_t    pic_access_log_broken;
-static boolean_t    pic_access_checked;
-static boolean_t    pic_access_on;
+/* the file, program and header plumbing lives in the neutral recorder
+ * (libcore/access_record); this module keeps only the classic site and
+ * ordinal bookkeeping */
 static unsigned long pic_access_generation;
-static char         pic_access_program[PIC_ACCESS_PROGRAM_MAX];
-static const char  *pic_access_dump_path;
+
 static pic_access_entry_t *pic_access_entries;
 static size_t       pic_access_entries_ct;
 static pic_access_entry_t *pic_access_var_entries;
@@ -906,50 +905,25 @@ void pic_access_plan_store(pfile_t *pf, const value_t val,
 
 boolean_t pic_access_record_on(void)
 {
-  if (!pic_access_checked) {
-    pic_access_checked = BOOLEAN_TRUE;
-    pic_access_on = pic_env_on("JALV2_ACCESS_RECORD");
-  }
-  return pic_access_on;
+  return access_record_on();
 }
 
 void pic_access_dump_set(const char *path)
 {
-  pic_access_dump_path = path;
-  pic_access_checked = BOOLEAN_TRUE;
-  pic_access_on = BOOLEAN_TRUE;
+  access_record_set_path(path);
 }
+
+/* the classic columns after (program,generation,site,var) */
+static const char *const pic_access_columns[] = {
+  "ordinal", "kind", "aop", "chunked", "holed", "sv_view", "runtime_map",
+  "value_map", "ptr_lookup", "ptr_read_call", "line"
+};
 
 void pic_access_record_begin(pfile_t *pf, const char *program)
 {
-  const char *path;
-
-  (void) pf;
-  if (!pic_access_record_on() || pic_access_log) {
-    return;
-  }
-  path = pic_access_dump_path;
-  if ((0 == path) || (0 == *path)) {
-    path = getenv("JALV2_ACCESS_RECORD_OUT");
-  }
-  if ((0 == path) || (0 == *path)) {
-    path = "plan.log";
-  }
-  pic_access_log = fopen(path, "a");
-  if (0 == pic_access_log) {
-    /* C5/S1: the recorder was requested, so a log that cannot be
-     * written is an error, not a silent degradation. */
-    pfile_log_force(pf, PFILE_LOG_ERR,
-        "internal error: access recorder cannot open %s", path);
-    return;
-  }
-  if (program) {
-    strncpy(pic_access_program, program, PIC_ACCESS_PROGRAM_MAX - 1);
-    pic_access_program[PIC_ACCESS_PROGRAM_MAX - 1] = 0;
-  }
-  fprintf(pic_access_log,
-      "# program,generation,site,var,ordinal,kind,aop,chunked,holed,sv_view,"
-      "runtime_map,value_map,ptr_lookup,ptr_read_call,line\n");
+  access_record_begin(pf, program, pic_access_columns,
+      (unsigned) (sizeof(pic_access_columns)
+        / sizeof(pic_access_columns[0])));
 }
 
 void pic_access_record_plan(pfile_t *pf, const char *site,
@@ -958,46 +932,35 @@ void pic_access_record_plan(pfile_t *pf, const char *site,
   const char *name;
   const char *file;
   char        site_id[PIC_ACCESS_SITE_MAX];
+  unsigned long vals[11];
   unsigned    line;
-  unsigned    ordinal;
 
-  if (!pic_access_record_on() || (0 == pic_access_log) || (0 == plan)
-      || (VARIABLE_NONE == var) || (0 == var) || pic_access_log_broken) {
+  if (!pic_access_record_on() || (0 == plan)
+      || (VARIABLE_NONE == var) || (0 == var)) {
     return;
   }
   name = variable_name_get(var);
   pic_access_site_id(pf, site, site_id, sizeof(site_id));
   pic_access_origin_get(pf, &file, &line);
-  ordinal = pic_access_ordinal++;
-  fprintf(pic_access_log,
-      "%s,%lu,%s,%s,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
-      pic_access_program,
-      pic_access_generation,
-      site_id,
-      (name) ? name : "-",
-      ordinal,
-      (unsigned) plan->kind,
-      (unsigned) plan->aop,
-      (unsigned) plan->chunked,
-      (unsigned) plan->holed,
-      (unsigned) plan->sv_view,
-      (unsigned) plan->runtime_map,
-      (unsigned) plan->value_map,
-      (unsigned) plan->ptr_lookup,
-      (unsigned) plan->ptr_read_call,
-      line);
-  if (pic_env_on("JALV2_ACCESS_LOG_FAULT") || (0 != ferror(pic_access_log))) {
-    /* C5/S1: while recording, a write failure is a hard error.  Report
-     * once and stop writing; the error count fails the compile. */
-    pic_access_log_broken = BOOLEAN_TRUE;
-    pfile_log_force(pf, PFILE_LOG_ERR,
-        "internal error: access recorder write failed");
-  }
+  vals[0]  = (unsigned long) pic_access_ordinal++;
+  vals[1]  = (unsigned long) plan->kind;
+  vals[2]  = (unsigned long) plan->aop;
+  vals[3]  = (unsigned long) plan->chunked;
+  vals[4]  = (unsigned long) plan->holed;
+  vals[5]  = (unsigned long) plan->sv_view;
+  vals[6]  = (unsigned long) plan->runtime_map;
+  vals[7]  = (unsigned long) plan->value_map;
+  vals[8]  = (unsigned long) plan->ptr_lookup;
+  vals[9]  = (unsigned long) plan->ptr_read_call;
+  vals[10] = (unsigned long) line;
+  access_record_row(pf, site_id, name, vals,
+      (unsigned) (sizeof(vals) / sizeof(vals[0])));
 }
 
 void pic_access_generation_bump(void)
 {
   pic_access_generation++;
+  access_record_generation_bump();
 }
 
 unsigned long pic_access_generation_get(void)
@@ -1007,10 +970,7 @@ unsigned long pic_access_generation_get(void)
 
 void pic_access_reset(void)
 {
-  if (pic_access_log) {
-    fclose(pic_access_log);
-    pic_access_log = 0;
-  }
+  access_record_reset();
   free(pic_access_entries);
   pic_access_entries = 0;
   pic_access_entries_ct = 0;
@@ -1018,11 +978,6 @@ void pic_access_reset(void)
   pic_access_var_entries = 0;
   pic_access_var_entries_ct = 0;
   pic_access_generation = 0;
-  pic_access_checked = BOOLEAN_FALSE;
-  pic_access_on = BOOLEAN_FALSE;
-  pic_access_dump_path = 0;
-  pic_access_program[0] = 0;
-  pic_access_log_broken = BOOLEAN_FALSE;
   pic_access_value_stores = 0;
   pic_access_var_stores = 0;
   pic_access_recipe_seen = 0;

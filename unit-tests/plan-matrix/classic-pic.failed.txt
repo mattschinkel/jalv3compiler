@@ -81,6 +81,7 @@ sims/gpsim/18f4620_compiler_regression_delay_timing.jal
 sims/gpsim/18f4620_compiler_regression_eeprom_github26.jal
 sims/gpsim/18f4620_compiler_regression_fixed_string.jal
 sims/gpsim/18f4620_compiler_regression_float.jal
+sims/gpsim/18f4620_compiler_regression_float_sweep.jal
 sims/gpsim/18f4620_compiler_regression_flow.jal
 sims/gpsim/18f4620_compiler_regression_indirect_args.jal
 sims/gpsim/18f4620_compiler_regression_isr.jal

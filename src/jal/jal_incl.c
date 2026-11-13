@@ -375,6 +375,21 @@ static void jal_parse_pragma_target_string_heap_size(pfile_t *pf)
   value_release(cexpr);
 }
 
+/* `pragma task N` was REMOVED: the slot table is sized automatically
+ * from the `task ... end task` declarations (plus main's slot 0), so an
+ * explicit count has no effect.  The name stays as a tombstone so old
+ * code gets one actionable diagnostic instead of a token cascade. */
+static void jal_parse_pragma_task_removed(pfile_t *pf)
+{
+  value_t cexpr;
+
+  pfile_log(pf, PFILE_LOG_ERR,
+      "pragma task was removed -- the scheduler sizes its slots from the "
+      "task declarations");
+  cexpr = jal_parse_expr(pf);
+  value_release(cexpr);
+}
+
 /* `pragma string heap <expr>` was REMOVED: the arena size is only
  * `const word _string_heap_size = <bytes>` in user source.  The name stays as
  * a tombstone so old code gets one actionable diagnostic instead of the
@@ -691,6 +706,51 @@ static void jal_parse_pragma_target_fat_pointers(pfile_t *pf)
 /* `pragma target oscillator <hz>` -- the external source frequency
  * (crystal or clock module); jallib readability: full words, no
  * datasheet abbreviations in sample files. */
+/* `pragma target enable_cores N` -- the number of cores the program may
+ * use (1 = single-core, the default; 2 = ESP32 PRO + APP).  The value is
+ * stored as `target_enable_cores` and read by the back end; the chip's
+ * own limit is checked after parsing (jal_target_cores_validate).  The
+ * pragma is top-down: a task's `core(...)` clause needs it above the
+ * statement. */
+static void jal_parse_pragma_target_enable_cores(pfile_t *pf)
+{
+  value_t cexpr;
+
+  cexpr = jal_parse_expr(pf);
+  if (cexpr) {
+    if (!value_is_const(cexpr)) {
+      pfile_log(pf, PFILE_LOG_ERR, "constant expression expected");
+    } else if (value_const_get(cexpr) < 1) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "pragma target enable_cores expects 1 or more (got %lu)",
+          (unsigned long) value_const_get(cexpr));
+    } else {
+      jal_variable_info_t inf;
+
+      jal_variable_info_init(&inf);
+      inf.name      = "target_enable_cores";
+      inf.ct        = 0;
+      inf.def_flags = VARIABLE_DEF_FLAG_CONST;
+      variable_release(
+          jal_variable_alloc(pf, &inf, BOOLEAN_FALSE, 1, &cexpr,
+            PFILE_VARIABLE_ALLOC_GLOBAL));
+    }
+    value_release(cexpr);
+  }
+}
+
+/* `pragma target second_core on|off` was REPLACED by the core count. */
+static void jal_parse_pragma_target_second_core_removed(pfile_t *pf)
+{
+  pfile_log(pf, PFILE_LOG_ERR,
+      "pragma target second_core was removed -- use "
+      "`pragma target enable_cores 2`");
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "on")
+      || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "off")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+}
+
 static void jal_parse_pragma_target_oscillator(pfile_t *pf)
 {
   jal_pragma_variable_assign(pf, "target_oscillator");
@@ -785,6 +845,8 @@ static void jal_parse_pragma_target(pfile_t *pf)
         {"osc",        jal_parse_pragma_target_osc},
         {"oscillator", jal_parse_pragma_target_oscillator},
     {"fat_pointers", jal_parse_pragma_target_fat_pointers},
+    {"enable_cores", jal_parse_pragma_target_enable_cores},
+    {"second_core", jal_parse_pragma_target_second_core_removed},
         {"wdt",   jal_parse_pragma_pic32_wdt},
         {"dmt",   jal_parse_pragma_pic32_dmt},
         {"debug", jal_parse_pragma_pic32_debug},
@@ -1389,23 +1451,6 @@ static void jal_parse_pragma_inline(pfile_t *pf)
   }
 }
 
-static void jal_parse_pragma_task(pfile_t *pf)
-{
-  value_t task_ct;
-
-  task_ct = jal_parse_expr(pf);
-  if (task_ct) {
-    if (!value_is_const(task_ct)) {
-      pfile_log(pf, PFILE_LOG_ERR, "constant expression expected");
-    } else if (value_const_get(task_ct) < 1) {
-      pfile_log(pf, PFILE_LOG_ERR, "constant out of range");
-    } else {
-      pfile_task_ct_set(pf, value_const_get(task_ct));
-    }
-    value_release(task_ct);
-  }
-}
-
 static void jal_parse_pragma_frame(pfile_t *pf)
 {
   pfile_proc_t *proc;
@@ -1875,11 +1920,12 @@ static const pragma_word_t base[] = {
     PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "fuse_def",   jal_parse_pragma_fuse_def, 
     PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN(    "task",       jal_parse_pragma_task_removed,
+    PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "inline",     jal_parse_pragma_inline, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "frame",      jal_parse_pragma_frame, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FN(    "nostack",    jal_parse_pragma_nostack, 
     PRAGMA_WORD_FLAG_ABSORB),
-  DEFINE_FN(    "task",       jal_parse_pragma_task, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_FOLLOW("fpu",        pragma_fpu),
   DEFINE_FOLLOW("isa",        pragma_isa),
   DEFINE_FOLLOW("string",     pragma_string),

@@ -859,10 +859,25 @@ void pic_assign_to_float(pfile_t *pf, value_t dst, value_t src)
 {
 
   if (value_is_const(src)) {
-    value_t tmp;
+    value_t          tmp;
+    variable_const_t n;
+    unsigned         bits;
 
-    tmp = pfile_constant_float_get(pf, value_const_get(src), 
-      value_def_get(dst));
+    /* A negative integer constant is stored SIGN-EXTENDED to the full
+     * 128-bit variable_const_t width.  Converting that straight to float
+     * yields 2^128, i.e. +inf: `float(-1)` on the classic core rendered
+     * "inf" (found 2026-11-12 by the Phase 5 value sweep).  Narrow to the
+     * value's own width first, then convert through a signed long. */
+    n    = value_const_get(src);
+    bits = (unsigned) value_byte_sz_get(src) * 8;
+    if (value_is_signed(src)) {
+      n = variable_const_sign_extend(n, bits);
+      tmp = pfile_constant_float_get(pf, (float) (signed long) n,
+          value_def_get(dst));
+    } else {
+      n = variable_const_mask_get(bits) & n;
+      tmp = pfile_constant_float_get(pf, (float) n, value_def_get(dst));
+    }
     pic_op(pf, OPERATOR_ASSIGN, dst, tmp, VALUE_NONE);
     value_release(tmp);
   } else {

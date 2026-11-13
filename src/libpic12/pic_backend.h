@@ -38,6 +38,9 @@ typedef struct pic_backend_s {
    * linear allocators) -- task bodies may then declare variables; a
    * frame-sharing back end (classic) keeps the var-in-task error */
   boolean_t      task_locals_allowed;
+  /* cores the target has (1 = single-core; 2 = ESP32 PRO+APP).  The
+   * classic back end has no descriptor and counts as 1. */
+  unsigned       core_ct;
 } pic_backend_t;
 
 #endif /* _pic_backend_h__ */

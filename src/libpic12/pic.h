@@ -337,6 +337,9 @@ extern const cmd_asm_semantics_t pic_asm_semantics;
  * 32-bit linear allocators) -- task bodies may declare variables;
  * classic cores keep the var-in-task error */
 boolean_t        pic_task_locals_allowed(pfile_t *pf);
+/* number of cores the selected target has (classic cores and the
+ * single-core 32-bit back ends report 1; ESP32 reports 2) */
+unsigned         pic_core_ct_get(pfile_t *pf);
 unsigned         pic_code_gen_pass_get(pfile_t *pf);
 /* Clock-tree solve hook (pragma target OSC/clock), routed through the
  * back-end registry; no-op when the target's back end has no solver

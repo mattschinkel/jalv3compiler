@@ -1,0 +1,39 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — per-type float value sweep
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    Phase 5 (SDCC float sweeps), full form on the M4K soft float: the
+--    per-type value range body (`sims/shared/_regression_float_sweep_body.jal`)
+--    with `_fsw_full = 1` (specials + the NaN-comparison negative
+--    control).
+--
+-- @sim_validate begin
+-- duration_s: 6.0
+-- machine: pic32mx7-explorer16
+-- compiler_args: -Wno-misc -Wno-conversion -Wno-truncate
+-- expect byte v__check_step 8
+-- expect byte v__fsw_byte 1
+-- expect byte v__fsw_sbyte 1
+-- expect byte v__fsw_word 1
+-- expect byte v__fsw_sword 1
+-- expect byte v__fsw_dword 1
+-- expect byte v__fsw_sdword 1
+-- expect byte v__fsw_render 1
+-- expect byte v__fsw_specials 1
+-- expect byte v__fsw_nan_neg 0
+-- @sim_validate end
+-- ------------------------------------------------------
+
+include regression_32mx270f256b_device
+include regression_pic32
+
+pragma target string_heap_size 64
+pragma string index byte
+include strings_dynamic
+
+const byte _fsw_full = 1
+
+include _regression_float_sweep_body

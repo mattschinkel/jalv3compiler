@@ -1,0 +1,52 @@
+-- ------------------------------------------------------
+-- Title: ESP32 compiler regression — UART-source ISR body
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A UART0-source interrupt (the TX_DONE flag, bit 14) routed through
+--    the interrupt matrix (PRO source `DPORT_PRO_UART_INTR_MAP`) into the
+--    level-1 CPU vector.  The handler clears and disables the source (the
+--    TXFIFO_EMPTY level bit re-asserts while the FIFO is empty, so a
+--    one-shot test disarms it) and bumps `tick`; main observes it and
+--    sets `done`.
+--
+--    This is Phase 4's UART-source ISR body for ESP32 (the timer-source
+--    body is `esp32_body_isr.jal`): the peripheral flag, the matrix map
+--    register and the CPU mask are all exercised, not just the handler.
+--
+-- @sim_validate begin
+-- duration_s: 5.0
+-- machine: esp32
+-- expect byte v_tick 1
+-- expect byte v_done 1
+-- @sim_validate end
+--
+-- Negative control (unit-tests/test_isr_source_wiring.sh): the same body
+-- with the matrix mapped to CPU interrupt 2 -- the handler is armed on 1,
+-- so it never dispatches.
+-- ------------------------------------------------------
+include esp32_xtensa_lx6
+
+var volatile byte tick = 0
+var volatile byte done = 0
+
+procedure _uart_isr() is
+   pragma interrupt
+   UART0_INT_CLR = 0xFFFFFFFF
+   UART0_INT_ENA = 0x00000000
+   tick = tick + 1
+end procedure
+
+UART0_INT_CLR = 0xFFFFFFFF
+-- UART_TX_DONE_INT (bit 14): a one-shot completion flag
+UART0_INT_ENA = 0x00004000
+DPORT_PRO_UART_INTR_MAP = 1
+UART0_FIFO = 0x41
+
+while tick == 0 loop
+end loop
+done = 1
+forever loop
+end loop

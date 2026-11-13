@@ -210,6 +210,12 @@ run_sh access_audit               unit-tests/test_access_audit.sh "$CC"
 # ENG S1: -explain-access / -dump-plan CLI validation (line grammar, path,
 # unreadable source, unwritable dump with atomic output, happy paths).
 run_sh access_cli                 unit-tests/test_access_cli.sh "$CC"
+# Phase 4: the ISR source bodies dispatch on QEMU and their negative
+# controls (mismatched CPU route, muted source, priority 0) do not.
+run_sh isr_source_wiring          unit-tests/test_isr_source_wiring.sh "$CC"
+# Phase 7: the string-clone eligibility decision after the body_pos
+# marker was deleted (forward/defined, guarded, empty, call-before-body).
+run_sh proc_clone_eligibility     unit-tests/test_proc_clone_eligibility.sh "$CC"
 run_sh openarray_pair_over_cap    unit-tests/test_openarray_pair_over_cap.sh "$CC"
 # DX F1: strict JALV2_* on/off parsing (FALSE/space/typos) and --features.
 run_sh env_switches              unit-tests/test_env_switches.sh "$CC"
@@ -234,6 +240,8 @@ run_sh build_deps                  unit-tests/test_build_deps.sh
 run_sh stack_depth_cfg             unit-tests/test_stack_depth_cfg.sh "$CC"
 run_py in_process_units            unit-tests/test_inprocess_units.py --compiler "$CC"
 run_sh task_locals                 unit-tests/test_task_locals.sh "$CC"
+run_sh task_yield_scope            unit-tests/test_task_yield_scope.sh "$CC"
+run_sh cores_pragma                unit-tests/test_cores_pragma.sh "$CC"
 run_movlb
 run_py pic18_v6_access_bank        unit-tests/test_pic18_v6_access_bank.py --compiler "$CC"
 run_py esp32_sfr_bit_alignment    unit-tests/test_esp32_sfr_bit_alignment.py --compiler "$CC"
@@ -259,6 +267,10 @@ run_py comment_docs                unit-tests/check_comment_docs.py
 run_sh access_recipes              unit-tests/test_access_recipes.sh
 # Step 2: the plan-diff gate over the pinned classic subset.
 run_sh access_plan_gate            unit-tests/run_plan_gate.sh "$CC"
+# ENG A4/DX F12: the per-backend plan-diff subset through the ONE gate
+# (no per-backend script fork)
+run_sh access_plan_gate_pic32      unit-tests/run_plan_gate.sh "$CC" --backend pic32
+run_sh access_plan_gate_esp32      unit-tests/run_plan_gate.sh "$CC" --backend esp32
 # E3: the neutral dispatcher, both back ends' table self-checks, and the
 # PIC32 pointer-read spike's byte-identical pin.
 run_sh access_recipe               unit-tests/test_access_recipe.sh "$CC"
