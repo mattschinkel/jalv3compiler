@@ -653,7 +653,6 @@ void pfile_value_def_type_check(pfile_t *pf, operator_t op,
       case OPERATOR_SUB:
       case OPERATOR_MUL:
       case OPERATOR_DIV:
-      case OPERATOR_MOD:
       case OPERATOR_LT:
       case OPERATOR_LE:
       case OPERATOR_GE:
@@ -668,6 +667,7 @@ void pfile_value_def_type_check(pfile_t *pf, operator_t op,
       case OPERATOR_DECR:
       case OPERATOR_LOGICAL:
         break;
+      case OPERATOR_MOD:
       case OPERATOR_ANDB:
       case OPERATOR_ORB:
       case OPERATOR_XORB:

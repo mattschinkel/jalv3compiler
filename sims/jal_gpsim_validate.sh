@@ -351,6 +351,25 @@ if [[ "$SKIP_GPSIM" == "1" ]]; then
   exit 0
 fi
 
+# --- sim result cache (JAL_SIM_CACHE=<root>; day-bucketed, engine-versioned) ---
+# Skip the gpsim run when this HEX + engine + source already passed today.
+# Compile, warnings-as-errors, check-config and check-asm-symbols above all
+# still ran, so only the simulator execution is elided.  Fail-safe: a bad or
+# empty lookup leaves CACHE_MARK empty and the run proceeds uncached.
+CACHE_MARK=""
+SIM_ENGINE_VER=""
+if [[ -n "${JAL_SIM_CACHE:-}" && "$NO_VALIDATE" -eq 0 \
+      && -z "$STEPS_CLI" && -z "$FREQ_CLI" && -z "$EXPECT_DWORD" ]]; then
+  SIM_ENGINE_VER="$(gpsim --version 2>&1 | head -1)"
+  CACHE_OUT="$(python3 "$ROOT/sims/sim_cache.py" lookup gpsim "$SIM_ENGINE_VER" "$HEX_ABS" "$JAL_ABS" 2>/dev/null || true)"
+  if [[ "$CACHE_OUT" == HIT\ * ]]; then
+    echo "SIMCACHE_HIT ${CACHE_OUT#HIT }"
+    exit 0
+  elif [[ "$CACHE_OUT" == MISS\ * ]]; then
+    CACHE_MARK="$JAL_SIM_CACHE/gpsim/$(date -u +%Y%m%d)/${CACHE_OUT#MISS }"
+  fi
+fi
+
 if [[ "$QUIET" -eq 0 ]]; then
   echo ""
   echo "--- gpsim (batch) ---"
@@ -491,4 +510,8 @@ if [[ "$VALIDATE_RC" -eq 0 && "$CHK_HW_STK" == "1" ]]; then
   fi
 fi
 
+if [[ "$VALIDATE_RC" -eq 0 && -n "$CACHE_MARK" ]]; then
+  mkdir -p "$(dirname "$CACHE_MARK")"
+  printf 'pass %s\n' "$SIM_ENGINE_VER" > "$CACHE_MARK"
+fi
 exit "$VALIDATE_RC"

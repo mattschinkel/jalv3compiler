@@ -535,11 +535,12 @@ static void pic_access_plan_compute(pfile_t *pf, const value_t val,
   if (plan->aop) {
     /* G3: a SCALAR-pointee slot under the fat engine holds a tagged fat
      * pointer, so the deref dispatches on the slot's tag (the slot staging
-     * has already loaded the slot's value; tag 0 keeps it).  An ARRAY-pointee
-     * slot stays on the walked-bind classification until surface 3. */
+     * has already loaded the slot's value; tag 0 keeps it).  S3: an
+     * ARRAY-pointee slot now holds the ordinary fat pointer VALUE too (the
+     * slot stores id + object-relative offset), so it classifies the same
+     * way under the engine. */
     plan->kind = (pic_fat_pointers_enabled(pf)
-        && (0 != pic_fat_object_ct()) && !plan->slot_pointee_array
-        && slot_const_ofs)
+        && (0 != pic_fat_object_ct()) && slot_const_ofs)
       ? PIC_ACCESS_FAT : PIC_ACCESS_RESOLVE;
   } else if (fat) {
     /* a fat deref overrides the staging: the tag decides at run time */
@@ -843,7 +844,9 @@ void pic_fat_deref_recipe(pfile_t *pf, const pic_access_plan_t *plan,
      * slot as a plain view of the pointer array with the slot byte offset
      * kept (a clone keeps only the low bytes: the value is a 2-/3-byte
      * pointer, not the pointee), so pv[top] is the slot's tag byte.  The
-     * slot offset is the ADDRESS here, not a data offset. */
+     * slot offset is the ADDRESS here, not a data offset.  S3: an
+     * ARRAY-pointee slot's pointee subscript rides in baseofs2, so hand it
+     * to the dispatch as the runtime object offset. */
     pv = value_clone(val);
     if (pv) {
       value_flag_clr(pv, VALUE_FLAG_INDIRECT);
@@ -852,8 +855,16 @@ void pic_fat_deref_recipe(pfile_t *pf, const pic_access_plan_t *plan,
     } else {
       pv = val;
     }
-    baseofs   = VALUE_NONE;
+    baseofs   = plan->slot_pointee_array
+        ? value_baseofs2_get(val) : VALUE_NONE;
     ofs_total = offset;
+    /* a CONSTANT pointee subscript folds into the access offset (the
+     * runtime-offset add skips const indexes); a RUNTIME one stays in
+     * baseofs so the dispatch joins it to the object offset below. */
+    if ((VALUE_NONE != baseofs) && value_is_const(baseofs)) {
+      ofs_total = offset + (size_t) value_const_get(baseofs);
+      baseofs   = VALUE_NONE;
+    }
   } else if ((VALUE_NONE != baseofs) || value_is_indirect(val)) {
     /* A SUBSCRIPTED pointer (`q[37]`) arrives as an indirect value with the
      * subscript as its base offset; the tag lives in the POINTER's high byte,
@@ -1108,6 +1119,15 @@ static void pic_fat_whereis_resolve_emit(pfile_t *pf)
  * decisions on a witness and catch classification drift even when the image
  * happens to be unchanged.  Off by default; the switch is read once, and the
  * OFF values follow the project rule (unset/0/false/no/off are OFF). */
+
+/* S3: an array-of-pointers element carries the slot index in baseofs and the
+ * pointee subscript in baseofs2 (the front-end offset split). */
+static boolean_t pic_value_slot_pointee_split(const value_t val)
+{
+  return value_flag_test(val, VALUE_FLAG_SLOT_POINTEE)
+    && (VALUE_NONE != value_baseofs2_get(val));
+}
+
 /*
  * NAME
  *   pic_indirect_setup
@@ -1127,6 +1147,7 @@ static void pic_fat_whereis_resolve_emit(pfile_t *pf)
 void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
 {
   value_t           baseofs;
+  value_t           baseofs_folded;
   pic_access_plan_t plan;
   boolean_t         aop;
   boolean_t         slot_pointee;
@@ -1154,6 +1175,31 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
 
   pic_stvar_fsr_mark(pf);
   baseofs = value_baseofs_get(val);
+  baseofs_folded = VALUE_NONE;
+  if (pic_value_slot_pointee_split(val)
+      && (PIC_ACCESS_FAT != plan.kind)) {
+    /* S3 gate-off re-fold: the classic physical-address path reads baseofs
+     * only, so fold the pointee subscript back in for a non-FAT access.
+     * baseofs2 is the front-end value (const or already-placed temp); a
+     * NEW runtime sum here would have no placement, so reuse it directly
+     * (slot 0 contributes nothing) or const-fold the two constants. */
+    value_t bo2;
+
+    bo2 = value_baseofs2_get(val);
+    if ((VALUE_NONE == baseofs)
+        || (value_is_const(baseofs) && (0 == value_const_get(baseofs)))) {
+      baseofs = bo2;
+    } else if (value_is_const(baseofs) && value_is_const(bo2)) {
+      baseofs_folded = pfile_constant_get(pf,
+          value_const_get(baseofs) + value_const_get(bo2),
+          VARIABLE_DEF_NONE);
+      baseofs = baseofs_folded;
+    } else {
+      /* non-zero slot index + runtime pointee subscript: the old slot-stride
+       * fold is the recorded off-by-stride gap; keep the pointee subscript */
+      baseofs = bo2;
+    }
+  }
   if (value_is_bit(val)) {
     offset += (value_bit_offset_get(val) + 7) / 8;
   }
@@ -1206,6 +1252,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
       pic_fat_whereis_resolve_emit(pf);
     }
     value_release(fsr);
+    if (baseofs_folded) {
+      value_release(baseofs_folded);
+    }
     return;
   }
 
@@ -1238,6 +1287,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
         pic_fsr_chunk_walk_emit_runtime(pf, value_variable_get(val),
             VALUE_NONE, offset + (size_t) value_const_get(baseofs));
         value_release(tmp);
+        if (baseofs_folded) {
+          value_release(baseofs_folded);
+        }
         return;
       }
       if (!((facts & PIC_ACCESS_FACT_VALUE_MAP) != 0u)
@@ -1286,6 +1338,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
               ? PIC_OPCODE_IRP_SET : PIC_OPCODE_IRP_CLR);
         }
         value_release(tmp);
+        if (baseofs_folded) {
+          value_release(baseofs_folded);
+        }
         return;
       }
       if ((VALUE_NONE != baseofs) && !value_is_const(baseofs)
@@ -1313,6 +1368,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
         pic_fsr_chunk_walk_emit_ofs(pf, walk_var, baseofs, offset,
             pic_is_16bit(pf) || pic_is_14bit_hybrid(pf));
         value_release(tmp);
+        if (baseofs_folded) {
+          value_release(baseofs_folded);
+        }
         return;
       }
     }
@@ -1426,6 +1484,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
               (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
                 ? BOOLEAN_TRUE : BOOLEAN_FALSE);
           value_release(tmp);
+          if (baseofs_folded) {
+            value_release(baseofs_folded);
+          }
           return;
         }
       }
@@ -1471,6 +1532,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
              * target; the common FSR/IRP tail below would re-stage
              * from the value's own storage and clobber it */
             value_release(tmp);
+            if (baseofs_folded) {
+              value_release(baseofs_folded);
+            }
             return;
           } else if (variable_is_array(value_variable_get(tmp))) {
             /* plain ARRAY element at a runtime index: the base is the
@@ -1507,6 +1571,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
           }
           pic_pointer_slot_deref_stage(pf);
           value_release(tmp);
+          if (baseofs_folded) {
+            value_release(baseofs_folded);
+          }
           return;
         } else if (slot_array) {
           /* the chunked arm above only runs once the chunk map exists (the
@@ -1542,6 +1609,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
           if (name && (strstr(name, "_device_put") ||
                        strstr(name, "_str_") ||
                        strstr(name, "___str"))) {
+            if (baseofs_folded) {
+              value_release(baseofs_folded);
+            }
             return;
           }
         }
@@ -1651,6 +1721,9 @@ void pic_indirect_setup(pfile_t *pf, value_t val, size_t offset)
     value_release(fsr);
   }
   pic_fat_deref_emit(pf, val, offset, &plan);
+  if (baseofs_folded) {
+    value_release(baseofs_folded);
+  }
 }
 
 /*

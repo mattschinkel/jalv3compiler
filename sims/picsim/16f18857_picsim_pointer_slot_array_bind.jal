@@ -5,12 +5,11 @@
 --
 -- Description:
 --    G3 surface-3 control: `pa[0] is big` binds the ARRAY (not an element),
---    then `pa[0][100]` subscripts through the loaded pointer.  Its base
---    offset is a POINTEE subscript, so the unescaped bind walk stays the
---    right classification (the slot store is deliberately NOT a fat bind --
---    the recipe's SLOT_POINTEE fact selects NOT_FAT_BIND) and slot 0
---    resolves through the walked bind.  This also exercises the
---    NOT_FAT_BIND recipe row under the fat engine.
+--    then `pa[0][100]` subscripts through the loaded pointer.  Under the fat
+--    engine the slot now holds the ordinary fat pointer `(id(big), 0)`
+--    (design D4), so the deref dispatches on the slot's tag and adds the
+--    constant object-relative subscript 100.  Gate-off keeps the walked-bind
+--    path, so the NOT_FAT_BIND recipe row stays exercised there.
 --
 -- @picsim_validate begin
 -- steps: 2000000

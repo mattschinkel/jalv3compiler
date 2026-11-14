@@ -3005,13 +3005,11 @@ static void esp_walg_bool_eq_finish(pfile_t *pf, value_t dst,
   esp_code_t br;
   esp_code_t ldone;
 
-  (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A9, 0,
-      (OPERATOR_NE == op) ? 0 : 1);    /* preset "relation false" */
+  (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A9, 0, 0);  /* preset false */
   br = esp_code_alloc(
       (OPERATOR_NE == op) ? ESP_OP_BEQZ : ESP_OP_BNEZ,
       0, ESP_REG_A8, 0);
-  (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A9, 0,
-      (OPERATOR_NE == op) ? 1 : 0);    /* relation true */
+  (void) esp_code_alloc(ESP_OP_MOVI, ESP_REG_A9, 0, 1);  /* relation true */
   ldone = esp_code_label_alloc();
   if (br) {
     br->target = ldone;

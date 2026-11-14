@@ -384,7 +384,7 @@ pf_const_t pfile_op_const_exec(pfile_t *pf,
     case OPERATOR_DECR:
       if (is_float) {
         n.type = PF_CONST_TYPE_FLOAT;
-        n.u.f = n1.u.f + 1;
+        n.u.f = n1.u.f - 1;
       } else {
         n.type = PF_CONST_TYPE_INTEGER;
         n.u.n = n1.u.n - 1;

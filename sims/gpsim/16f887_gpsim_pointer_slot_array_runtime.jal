@@ -5,8 +5,12 @@
 --
 -- Description:
 --    G3 S3 on the classic 14-bit core: `pa[0] is big`, then `pa[0][i]`
---    with a RUNTIME `i`.  The runtime offset is a POINTEE subscript, so the
---    classic chunk walk resolves it through `big`'s map.
+--    with a RUNTIME `i`.  The slot holds the ordinary fat pointer
+--    `(id(big), 0)` (design D4), so the deref dispatches on the slot's tag
+--    and adds the object-relative subscript `i`.
+--
+--    S3 loaded-pointer arm: `p = pa[0]` copies the stored fat pointer, so
+--    `s = p[37]` reads `big[37]`.
 --
 -- @gpsim_validate begin
 -- steps: 2000000
@@ -16,6 +20,7 @@
 --    measurement and its failing negative control in the fat pin are the
 --    proof)
 -- expect byte v_g 101
+-- expect byte v_s 99
 -- @gpsim_validate end
 -- ----------------------------------------------------------------------------
 
@@ -25,12 +30,17 @@ pragma target fat_pointers on
 var volatile byte big[200]
 var volatile byte i
 var volatile byte g = 0
+var volatile byte s = 0
 var pointer pa[2] as var byte[200]
+var pointer p as var byte[200]
 
+big[37] = 99
 big[100] = 101
 i = 100
 pa[0] is big
 g = pa[0][i]
+p = pa[0]
+s = p[37]
 
 forever loop
 end loop

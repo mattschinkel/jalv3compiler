@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import pty
 import re
@@ -238,6 +239,29 @@ def main() -> int:
     hexf = jal.with_suffix(".hex")
     equs = equ_map(asm.read_text()) if asm.exists() else {}
 
+    # --- sim result cache (JAL_SIM_CACHE=<root>; day-bucketed, engine-versioned) ---
+    # Skip the picsim run when this HEX + engine + source already passed today.
+    # Compile and symbol resolution above still ran, so only the simulator
+    # execution is elided.  Fail-safe: any missing input just skips caching.
+    cache_marker = None
+    cache_root = os.environ.get("JAL_SIM_CACHE")
+    if cache_root and args.steps is None and hexf.exists():
+        sys.path.insert(0, str(ROOT / "sims"))
+        import sim_cache
+        lib = picsim / "src" / "libpicsim.so"
+        if not lib.exists():
+            lib = picsim / "src" / "libpicsim.a"
+        lib_sha = hashlib.sha256(lib.read_bytes()).hexdigest()[:16]
+        runner_src = ROOT / "sims" / "picsim_runner.c"
+        runner_sha = (hashlib.sha256(runner_src.read_bytes()).hexdigest()[:16]
+                      if runner_src.exists() else "none")
+        eng_ver = lib_sha + "-" + runner_sha
+        key = sim_cache.compute_key("picsim", eng_ver, hexf, test)
+        cache_marker = sim_cache.marker_path(cache_root, "picsim", key)
+        if cache_marker.is_file():
+            print(f"PASS {test.name} (cached)")
+            return 0
+
     runner = build_runner(picsim, build)
     info, uart = run_runner(runner, picsim, spec, hexf, build, equs)
     ram = read_ram(build / "ram.txt")
@@ -274,6 +298,9 @@ def main() -> int:
         for f in failures:
             print(f"  {f}")
         return 1
+    if cache_marker is not None:
+        cache_marker.parent.mkdir(parents=True, exist_ok=True)
+        cache_marker.write_text("pass\n")
     print(f"PASS {test.name} ({spec['steps']} steps, {len(spec['expects'])} expects)")
     return 0
 

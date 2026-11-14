@@ -20,8 +20,9 @@
 #   6. it is SILENT by default (no audit output when the env is unset);
 #   7. U4: it runs on EVERY compile -- the JALV2_ALLOC_AUDIT_FAULT test hook
 #      (one injected violation, no other env set) must produce the
-#      placement-verdict warning, which is impossible if the audit were still
-#      gated behind JALV2_ALLOC_AUDIT.
+#      placement-verdict error and a non-zero exit, which is impossible if the
+#      audit were still gated behind JALV2_ALLOC_AUDIT.
+#   8. A7: the RAM report prints on a clean compile and agrees with the audit.
 #
 # A pre-fix compiler has no audit at all, so arm 1 fails there: the pin is
 # discriminating (jaldbg pin-check: new=PASS, old=FAIL).
@@ -70,12 +71,13 @@ else
   fails=$((fails + 1))
 fi
 
-# 7. always-on: the FAULT hook fires without JALV2_ALLOC_AUDIT
-if [ $rc_fault -eq 0 ] \
-    && grep -q "placement invariant violation" "$WORK/fault/log"; then
-  echo "ok   the audit runs without JALV2_ALLOC_AUDIT (fault verdict printed)"
+# 7. always-on: the FAULT hook fails the compile with an error verdict
+if [ $rc_fault -ne 0 ] \
+    && grep -q "error: alloc: 1 placement invariant violation" "$WORK/fault/log" \
+    && ! grep -q "^RAM:" "$WORK/fault/log"; then
+  echo "ok   the audit fails the compile on a violation (no RAM line, no image)"
 else
-  echo "FAIL: the always-on audit did not print the fault verdict (rc=$rc_fault)"
+  echo "FAIL: the error verdict did not fail the compile (rc=$rc_fault)"
   sed 's/^/     /' "$WORK/fault/log" | tail -10
   fails=$((fails + 1))
 fi
@@ -155,6 +157,30 @@ if [ $rc_plain -eq 0 ] && [ $rc_audit -eq 0 ] \
 else
   echo "FAIL: the audit changed the image"
   fails=$((fails + 1))
+fi
+
+# 8. A7: the RAM report prints on a clean compile and agrees with the audit
+if [ $rc_plain -eq 0 ] \
+    && grep -q "^RAM: data used [0-9]*/[0-9]* (free [0-9]*, largest [0-9]*); shared used [0-9]*/[0-9]* (free [0-9]*, largest [0-9]*)" "$WORK/plain/log"; then
+  echo "ok   the RAM report prints on a clean compile"
+else
+  echo "FAIL: the RAM report did not print on the clean witness (rc=$rc_plain)"
+  fails=$((fails + 1))
+fi
+if [ $rc_audit -eq 0 ]; then
+  ram_nums=$(grep "^RAM:" "$WORK/audit/log" | tail -1 \
+    | sed -n 's/.*data used \([0-9]*\)\/[0-9]* (free \([0-9]*\), largest \([0-9]*\)); shared used \([0-9]*\)\/[0-9]* (free \([0-9]*\), largest \([0-9]*\)).*/\1 \2 \3 \4 \5 \6/p')
+  set -- $ram_nums
+  dused=$(field "$WORK/audit/log" data_used)
+  sfree=$(field "$WORK/audit/log" shared_free)
+  slarge=$(field "$WORK/audit/log" shared_largest)
+  if [ "$1" = "$dused" ] && [ "$2" = "$dfree" ] && [ "$3" = "$dlarge" ] \
+      && [ "$4" = "$sused" ] && [ "$5" = "$sfree" ] && [ "$6" = "$slarge" ]; then
+    echo "ok   RAM report agrees with the audit"
+  else
+    echo "FAIL: RAM report disagrees with the audit (RAM: $ram_nums)"
+    fails=$((fails + 1))
+  fi
 fi
 
 echo ""

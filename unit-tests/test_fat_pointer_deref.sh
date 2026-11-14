@@ -1016,13 +1016,12 @@ else
   fails=$((fails + 1))
 fi
 
-# G3 regression control: a slot whose POINTEE is an ARRAY (`pa[0] is big`,
-# then `pa[0][100]`) keeps the walked-bind classification -- its base offset
-# is a POINTEE subscript, and HEAD resolved it correctly for slot 0.  The
-# scalar-pointee exclusion must not swallow this shape (it did in the first
-# cut of the fix; this arm catches a re-broadening).  Slot 1 is off by the
-# slot stride on HEAD too, so only slot 0 is measured (the pre-existing gap
-# for k>0 stays recorded).
+# G3 control: a slot whose POINTEE is an ARRAY (`pa[0] is big`, then
+# `pa[0][100]`) now dispatches under the fat engine (design D4): the slot
+# holds `(id(big), 0)` and the deref adds the constant subscript 100.
+# Gate-off keeps the walked-bind path (and the NOT_FAT_BIND row).  Slot 1 is
+# off by the slot stride on HEAD too, so only slot 0 is measured (the
+# pre-existing gap for k>0 stays recorded).
 cat > "$WORK/g3/g3_arr.jal" <<'JALG3A'
 -- @picsim_validate begin
 -- steps: 2000000
@@ -1314,10 +1313,11 @@ else
 fi
 
 # --- G3 S3: a pointer-to-ARRAY slot with a RUNTIME pointee subscript ------
-# `pa[0] is big`, then `pa[0][i]` with a runtime `i`.  An array-pointee
-# slot's base offset is a POINTEE subscript, so it must walk `big`'s chunk
-# map like a plain pointer; the runtime-walk branch used to exclude every
-# array-of-pointers element.
+# `pa[0] is big`, then `pa[0][i]` with a runtime `i`.  Under the fat engine
+# the slot holds the ordinary fat pointer `(id(big), 0)` (design D4), so the
+# deref dispatches on the slot's tag and adds the runtime subscript.  The
+# witness also carries the loaded-pointer arm: `p = pa[0]` copies the stored
+# fat pointer, so `s = p[37]` reads big[37].
 S3_14H="$REPO/sims/picsim/16f18857_picsim_pointer_slot_array_runtime.jal"
 S3_14="$REPO/sims/gpsim/16f887_gpsim_pointer_slot_array_runtime.jal"
 mkdir -p "$WORK/s3"
@@ -1362,21 +1362,26 @@ if command -v gpsim >/dev/null 2>&1; then
   else
     echo "ok   G3 S3 classic 14 negative control fails as it must"
   fi
-  # encoding: the deref walks the array's chunks with the runtime index; it
-  # must not stage the slot's bytes as the address.
+  # encoding: the runtime deref dispatches on the slot's tag (seg_addr) and
+  # the runtime index joins the object offset; the loaded-pointer copy reads
+  # the slot's bytes into p (movf v_pa -> movwf v_p), not the slot address.
   ( cd "$WORK/s3" && "$CC" \
       -s "$REPO/demo_lib;$REPO/third_party/jallib/lib;$REPO/sims/shared" \
       -no-codfile -asm s3_14h.asm -hex s3_14h.hex "$S3_14H" > enc.log 2>&1 )
-  s3_walk=$(awk '/g = pa\[0\]\[i\]/ { f = 1 } /forever/ { f = 0 } \
-      f && /call.*pic_chunkwalk_big/ { n++ } END { print n + 0 }' \
+  s3_disp=$(awk '/g = pa\[0\]\[i\]/ { f = 1 } /forever/ { f = 0 } \
+      f && /call.*pic_fat_seg_addr/ { n++ } END { print n + 0 }' \
       "$WORK/s3/s3_14h.asm" 2>/dev/null)
-  s3_slot=$(awk '/g = pa\[0\]\[i\]/ { f = 1 } /forever/ { f = 0 } \
-      f && /movf +v_pa/ { n++ } END { print n + 0 }' \
+  s3_add=$(awk '/g = pa\[0\]\[i\]/ { f = 1 } /forever/ { f = 0 } \
+      f && /addwf.*pic_chunk_t/ { n++ } END { print n + 0 }' \
       "$WORK/s3/s3_14h.asm" 2>/dev/null)
-  if [ "${s3_walk:-0}" -ge 1 ] && [ "${s3_slot:-1}" -eq 0 ]; then
-    echo "ok   G3 S3 encoding: the runtime subscript walks the array's chunks"
+  s3_copy=$(awk '/p = pa\[0\]/ { f = 1 } /s = p\[37\]/ { f = 0 } \
+      f && /movf +v_pa,/ { n++ } END { print n + 0 }' \
+      "$WORK/s3/s3_14h.asm" 2>/dev/null)
+  if [ "${s3_disp:-0}" -ge 1 ] && [ "${s3_add:-0}" -ge 1 ] \
+      && [ "${s3_copy:-0}" -ge 1 ]; then
+    echo "ok   G3 S3 encoding: the runtime subscript dispatches and the copy reads the slot"
   else
-    echo "FAIL: G3 S3 encoding (walk=$s3_walk slot_read=$s3_slot)"
+    echo "FAIL: G3 S3 encoding (dispatch=$s3_disp add=$s3_add copy=$s3_copy)"
     fails=$((fails + 1))
   fi
 else

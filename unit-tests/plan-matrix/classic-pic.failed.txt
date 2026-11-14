@@ -35,6 +35,7 @@ sims/gpsim/12f508_gpsim_optsem.jal
 sims/gpsim/12f508_gpsim_types.jal
 sims/gpsim/12f508_gpsim_wide.jal
 sims/gpsim/12f509_gpsim_core.jal
+sims/gpsim/16f887_gpsim_isr_chunk_walk.jal
 sims/gpsim/16f887_gpsim_pin_alias.jal
 sims/gpsim/16f887_gpsim_ptr_store_inout.jal
 sims/gpsim/16f887_gpsim_sfr_overlay.jal
@@ -192,7 +193,10 @@ sims/picsim/16f18857_picsim_github36_const_record_field_offset.jal
 sims/picsim/16f18857_picsim_github36_const_record_indexed_field.jal
 sims/picsim/16f18857_picsim_github36_runtime_index.jal
 sims/picsim/16f18857_picsim_i2c_software_smoke.jal
+sims/picsim/16f18857_picsim_indirect_frame.jal
+sims/picsim/16f18857_picsim_isr_chunked_local.jal
 sims/picsim/16f18857_picsim_isr_int0.jal
+sims/picsim/16f18857_picsim_isr_locals.jal
 sims/picsim/16f18857_picsim_isr_tmr0.jal
 sims/picsim/16f18857_picsim_minint_fold.jal
 sims/picsim/16f18857_picsim_native_array300.jal

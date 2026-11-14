@@ -1,0 +1,77 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness — an indirect procedure's frame larger than
+--    one bank window
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    A procedure called through a procedure pointer is marked INDIRECT and
+--    gets a permanent frame.  When that frame is larger than one bank window
+--    it used to be refused even though every object fits a window and the
+--    RAM exists (A3 increment 3: an indirect frame is permanent either way,
+--    so the automatic FRAME mark does not require one contiguous run).
+--
+--    Three 40-byte locals (122 bytes with the scalars) cannot fit one window
+--    on this part.  The procedure fills them through runtime subscripts and
+--    verifies the first/last byte of each through constant subscripts; main
+--    calls it through the pointer and checks the flag.
+--
+-- @picsim_validate begin
+--
+-- steps: 120000
+-- expect byte v__check_step 1
+-- expect byte v__ok 1
+--
+-- @picsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_16f18857_device
+include regression
+
+var pointer _slot as procedure()
+var volatile byte _ok = 1
+
+procedure _t() is
+   var byte a[40]
+   var byte b[40]
+   var byte c[40]
+   var byte i
+
+   for 40 using i loop
+      a[i] = i
+      b[i] = i + 1
+      c[i] = i + 2
+   end loop
+
+   -- constant subscripts: each object's first/last byte must be intact
+   if a[0] != 0 then
+      _ok = 0
+   end if
+   if a[39] != 39 then
+      _ok = 0
+   end if
+   if b[0] != 1 then
+      _ok = 0
+   end if
+   if b[39] != 40 then
+      _ok = 0
+   end if
+   if c[0] != 2 then
+      _ok = 0
+   end if
+   if c[39] != 41 then
+      _ok = 0
+   end if
+end procedure
+
+procedure _run() is
+   regression_begin_run()
+
+   _slot is _t
+   _slot()
+
+   regression_checkpoint()
+end procedure
+
+_run()
+regression_pass_led_if_clean()

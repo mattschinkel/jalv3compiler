@@ -201,6 +201,51 @@ void jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs)
   }
 }
 
+/* S3: the baseofs2 twin of jal_val_baseofs_add.  A pointer-slot element's
+ * pointee subscript accumulates in the SECOND base offset so the emitter can
+ * separate the slot address (baseofs) from the pointee offset (baseofs2).
+ * Mirrors jal_val_baseofs_add exactly, including the const-ROM-table lookup
+ * handling. */
+void jal_val_baseofs2_add(pfile_t *pf, value_t val, value_t ofs)
+{
+  value_t baseofs;
+  value_t rval;
+
+  rval = ofs;
+  if (ofs && value_is_lookup(ofs)) {
+    value_t tmp;
+
+    tmp = pfile_value_temp_get_from_def(pf, value_def_get(ofs));
+    if (tmp) {
+      pfile_cmd_op_add_assign(pf, OPERATOR_ASSIGN, &tmp, ofs);
+      rval = tmp;
+    }
+  }
+
+  baseofs = value_baseofs2_get(val);
+  if (VALUE_NONE == baseofs) {
+    value_baseofs2_set(val, rval);
+  } else if (value_is_const(baseofs) && value_is_const(rval)) {
+    value_t cval;
+
+    cval = pfile_constant_get(pf,
+        value_const_get(baseofs) + value_const_get(rval),
+        VARIABLE_DEF_NONE);
+    value_baseofs2_set(val, cval);
+    value_release(cval);
+  } else {
+    value_t tmp;
+
+    tmp = VALUE_NONE;
+    pfile_cmd_op_add(pf, OPERATOR_ADD, &tmp, baseofs, rval);
+    value_baseofs2_set(val, tmp);
+    value_release(tmp);
+  }
+  if (rval != ofs) {
+    value_release(rval);
+  }
+}
+
 static boolean_t jal_value_const_baseofs_get(value_t val,
     variable_const_t *baseofs_out)
 {
@@ -801,7 +846,14 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
               : value_sz_get(val));
             value_release(n);
             n = pfile_constant_get(pf, nc, VARIABLE_DEF_NONE);
-            jal_val_baseofs_add(pf, val, n);
+            if (array_pointer_slot) {
+              jal_val_baseofs_add(pf, val, n);
+              value_flag_set(val, VALUE_FLAG_SLOT_POINTEE);
+            } else if (value_flag_test(val, VALUE_FLAG_SLOT_POINTEE)) {
+              jal_val_baseofs2_add(pf, val, n);
+            } else {
+              jal_val_baseofs_add(pf, val, n);
+            }
           }
         } else {
           if (variable_def_flag_test(value_def_get(val),
@@ -900,7 +952,14 @@ boolean_t jal_parse_subscript(pfile_t *pf, value_t *pval,
                 value_release(sz);
               }
             }
-            jal_val_baseofs_add(pf, val, tmp);
+            if (array_pointer_slot) {
+              jal_val_baseofs_add(pf, val, tmp);
+              value_flag_set(val, VALUE_FLAG_SLOT_POINTEE);
+            } else if (value_flag_test(val, VALUE_FLAG_SLOT_POINTEE)) {
+              jal_val_baseofs2_add(pf, val, tmp);
+            } else {
+              jal_val_baseofs_add(pf, val, tmp);
+            }
             value_release(tmp);
           }
         }
@@ -1833,7 +1892,21 @@ static value_t value_get(pfile_t *pf)
           op = OPERATOR_NEG;
         }
         pf_token_get(pf, PF_TOKEN_NEXT); /* this one's done */
-        val = value_get(pf);   /* var is the next value */
+        if (jal_expr_depth >= JAL_EXPR_MAX_DEPTH) {
+          jal_expr_depth_error(pf);
+          /* swallow the rest of the unary chain so the unwind does not
+           * re-report the limit once per level (mirrors the '(' skip) */
+          while (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "!")
+              || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "-")
+              || pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "+")) {
+            pf_token_get(pf, PF_TOKEN_NEXT);
+          }
+          val = VALUE_NONE;
+        } else {
+          jal_expr_depth++;
+          val = value_get(pf);   /* var is the next value */
+          jal_expr_depth--;
+        }
         /* create the expression:
          *   _t# = var op
          *   and return _t#

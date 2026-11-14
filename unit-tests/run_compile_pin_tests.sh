@@ -206,6 +206,9 @@ run_sh fat_pointer_tags           unit-tests/test_fat_pointer_tags.sh "$CC"
 run_sh fat_pointer_deref          unit-tests/test_fat_pointer_deref.sh "$CC"
 run_sh alloc_segment_audit        unit-tests/test_alloc_segment_audit.sh "$CC"
 run_sh alloc_capacity             unit-tests/test_alloc_capacity.sh "$CC"
+# A3 increment 1: an ISR / indirect frame that cannot fit one bank window is
+# refused, never laid out from VARIABLE_BASE_UNKNOWN (silent aliasing before).
+run_sh frame_overflow             unit-tests/test_frame_overflow.sh "$CC"
 run_sh access_audit               unit-tests/test_access_audit.sh "$CC"
 # ENG S1: -explain-access / -dump-plan CLI validation (line grammar, path,
 # unreadable source, unwritable dump with atomic output, happy paths).

@@ -960,8 +960,13 @@ void pfile_proc_frame_sz_calc(pfile_proc_t *proc)
   proc->frame_sz = pfile_block_data_sz_calc(proc->block_root);
 }
 
+#define PFILE_PROC_REENTRANT_MAX_DEPTH 1000U
+
 void pfile_proc_reentrant_test(pfile_proc_t *proc, flag_t flag, unsigned depth)
 {
+  if (depth > PFILE_PROC_REENTRANT_MAX_DEPTH) {
+    return;
+  }
   pfile_proc_flag_set(proc, flag);
   /* if this is called in both the user & ISR context then it's
      reentrant */

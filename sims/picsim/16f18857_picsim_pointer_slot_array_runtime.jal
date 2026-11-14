@@ -6,16 +6,20 @@
 -- Description:
 --    G3 S3: `pa[0] is big` (the ARRAY, not an element), then
 --    `g = pa[0][i]` with a RUNTIME `i`.  The slot's base offset is a
---    POINTEE subscript, so the deref walks the array's chunk map exactly
---    like a plain pointer; the runtime-walk branch used to exclude every
---    array-of-pointers element, so a runtime subscript fell into the slot
---    staging and read the wrong byte.  (Slot 0 carries no slot-stride
---    ambiguity; a direct `pa[k][j]` with k>0 remains the recorded residual.)
+--    POINTEE subscript, so the deref resolves it as the slot's stored fat
+--    pointer plus the object-relative subscript (design D4): the slot holds
+--    `(id(big), 0)` and the dispatch adds `i`.
+--
+--    S3 loaded-pointer arm: `p = pa[0]` copies the stored fat pointer (not
+--    `&pa[0]`), so `s = p[37]` reads `big[37]` -- a subscript PAST the first
+--    chunk through a loaded pointer, which a physical-address slot could not
+--    resolve.
 --
 -- @picsim_validate begin
--- steps: 2000000
+-- steps: 3000000
 -- frequency_hz: auto
 -- expect byte v_g 101
+-- expect byte v_s 99
 -- @picsim_validate end
 -- ----------------------------------------------------------------------------
 
@@ -27,12 +31,17 @@ pragma target fat_pointers on
 var volatile byte big[400]
 var volatile byte i
 var volatile byte g = 0
+var volatile byte s = 0
 var pointer pa[2] as var byte[400]
+var pointer p as var byte[400]
 
+big[37] = 99
 big[100] = 101
 i = 100
 pa[0] is big
 g = pa[0][i]
+p = pa[0]
+s = p[37]
 
 forever loop
 end loop

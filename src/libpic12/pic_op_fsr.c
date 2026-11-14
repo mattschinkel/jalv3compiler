@@ -627,7 +627,7 @@ static label_t pic_chunk_walk_helper_find(pfile_t *pf, variable_t var)
     }
   }
   vnm = variable_name_get(var);
-  if (!vnm || (strlen(vnm) > 40)) {
+  if (!vnm || (strlen(vnm) > 37U)) {
     return LABEL_NONE;
   }
   sprintf(name, "_pic_chunkwalk_%s_%u", vnm,

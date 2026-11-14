@@ -90,15 +90,15 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Depends on:** none; the rollback-switch removal is the natural moment
   (so the classic half is deleted rather than ported).
 
-## Fat pointers — F5 hardening and the default flip
+## Fat pointers — F5 (DONE 2026-11-11; S3 split out below, `=0` retirement deferred)
 
-- **What:** F5's remaining work (ASan, code size, docs) plus the string-heap /
-  pointer-cast surface.  The **default flip landed 2026-11-11**
-  (`fixes/fix_fat_default_flip.md`): `JALV2_FAT_POINTERS` defaults **on**,
-  precedence is pragma > env > on, `JALV2_FAT_POINTERS=0` still restores the
-  classic images for one release (one `JALV2-NOTICE` per compile) and
-  `pragma target fat_pointers off` is the per-program opt-out.  The fat
-  default-flip blocker landed 2026-11-11: the 14H 3-byte pointer
+- **What:** every F5 surface except the G3 slot identity (tracked as the S3
+  residual below) is closed and the **default flip landed
+  2026-11-11** (`fixes/fix_fat_default_flip.md`): `JALV2_FAT_POINTERS`
+  defaults **on**, precedence is pragma > env > on, `JALV2_FAT_POINTERS=0`
+  still restores the classic images for one release (one `JALV2-NOTICE` per
+  compile) and `pragma target fat_pointers off` is the per-program opt-out.
+  The fat default-flip blocker landed 2026-11-11: the 14H 3-byte pointer
   form staged the ROM/UPPER byte as PCLATH for `_pic_indirect`, so an
   indirect device call jumped to the wrong page
   (`fixes/fix_fat_ptr3_indirect_page.md`); the fat-on L1 is green.  The
@@ -124,9 +124,12 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Why:** F2d (the O(1) `_obj_desc[]` dispatch) and the dynamic fat
   subscript landed 2026-11-09; the design's "mixed linear/fat comparison"
   and "offset overflow" edge cases turned out unreachable through JAL
-  (pointers auto-dereference; `pic_fat_cmp` stays a harness rule), so what
-  is left is hardening and the surface, not those cases.
-- **Pros:** Ships the capability by default once hardened; one less env knob.
+  (pointers auto-dereference; `pic_fat_cmp` stays a harness rule), the
+  survey's pointer-cast surface is "sound / not reachable" (§1.3), and the
+  string-heap append, walk-path null guard and code-size/docs items all
+  landed.  **Nothing on F5 is open**; the one deferred piece is the
+  rollback switch below.
+- **Pros:** Ships the capability by default; one less env knob.
 - **Cons:** The flip changes images for the 90 corpus programs with escaped
   pointers; the manifest was refreshed with the flip, and the switch is
   removed after one release.  **Retiring `=0` and deleting the classic-mode
@@ -139,44 +142,40 @@ here). Each entry names its evidence and the fix/investigation doc.
   3-byte automatic selection stays parked (size is fixed at parse time; the
   3-byte default removed the motivation) — reopen only if a pre-parse pass
   is scheduled.
-- **Effort:** human ~1 wk / CC ~1 d for the remaining surfaces.
-- **Priority:** P2.
-- **Depends on:** nothing; the owner's flip decision was made and landed.
+- **Effort:** none for F5; the `=0` retirement is part of the next release's
+  switch removal.
+- **Priority:** P3 (record; nothing to schedule here).
+- **Depends on:** nothing.
 
-## S3 residual — fat slot VALUE for array pointees (G3 identity)
+## S3 residual — fat slot VALUE for array pointees (G3 identity) — DONE 2026-11-14
 
-- **What:** a pointer slot bound to an ARRAY (`pa[0] is big`) stores a
-  physical address today.  `pa[0][i]` works (the S3 runtime-subscript
-  slice), but a **loaded** pointer does not carry the object identity, and
-  a direct `pa[k][j]` with `k>0` stays off by the slot stride.  Two
-  front-end facts block the fat-slot value:
-  1. a subscript chain carries ONE base offset (`k*psz + j` for `pa[k][j]`),
-     so the emitter cannot separate the slot address from the pointee
-     subscript;
-  2. `p is pa[0]` lowers as "the array the slot points to" (`&pa[0]`), not
-     as a copy of the pointer stored in the slot.
-  Deliver the front-end offset split (a second offset on the subscripted
-  value view), then make an array-pointee slot value fat under the engine
-  (design D4: the loaded value is TAG_DISPATCH, never the compile-time bind
-  walk).
+- **Status:** LANDED — `fixes/fix_fat_slot_array_identity.md`.  A pointer
+  slot bound to an ARRAY now stores the ordinary fat pointer value
+  `(id(big), offset)` under the engine (design D4), so a **loaded** pointer
+  (`p = pa[0]`) carries the object identity and `p[i]` reuses the O(1)
+  dispatch.  The front-end offset split (`baseofs2` + `VALUE_FLAG_SLOT_POINTEE`)
+  separates the slot address from the pointee subscript; the gate-off
+  physical path re-folds them and stays byte-identical (HEX manifest
+  **0 drift, 2940 identical**).
+- **What (for the record):** a pointer slot bound to an ARRAY (`pa[0] is big`)
+  stored a physical address.  `pa[0][i]` worked (the runtime-subscript
+  slice), but a loaded pointer carried no identity, and a direct `pa[k][j]`
+  with `k>0` stayed off by the slot stride.  Two front-end facts blocked the
+  fat-slot value: a subscript chain carried ONE base offset, and
+  `p = pa[0]` lowered as `&pa[0]`.
 - **Why:** completes G3's third surface ("pointer-to-ARRAY slot identity")
-  and closes the documented `k>0` gap; the current physical-address slot is
-  correct only while the pointer is used through the slot itself.
-- **Pros:** Removes the last known coordinate hole in the fat pointer
-  model; makes a loaded pointer composable (subscript, pass, copy).
-- **Cons:** The offset split touches every subscript lowering, so the
-  change is front-end-wide: the corpus HEX manifest must stay 0 drift for
-  programs without a pointer-array subscript, and the access matrix rows
-  for the slot shapes may shift (intentional refresh).
+  and closes the documented `k>0` gap for the loaded-pointer form.
 - **Context:** design memo
   `docs/investigations/fat_slot_g3_design_20261111.md` (D4/D5 + the
   measurement arms); landed slice `fixes/fix_fat_slot_array_subscript.md`;
   witnesses `sims/picsim/16f18857_picsim_pointer_slot_array_runtime.jal`
-  and `sims/gpsim/16f887_gpsim_pointer_slot_array_runtime.jal`; pin
-  `unit-tests/test_fat_pointer_deref.sh` (the G3 control arms).
+  and `sims/gpsim/16f887_gpsim_pointer_slot_array_runtime.jal` (loaded-pointer
+  arm added); pin `unit-tests/test_fat_pointer_deref.sh` (G3 S3 encoding
+  refreshed); access-matrix/coverage baseline refreshed (22/29 rows —
+  `NOT_FAT_BIND` is shadowed by `FAT_BIND` under the engine, the intentional
+  D4 flip).
 - **Effort:** human ~1 wk / CC ~1-2 d.
 - **Priority:** P2.
-- **Depends on:** nothing (independent of the classic-code removal).
 
 ## Recipe-row coverage fixtures (A12)
 
@@ -211,14 +210,17 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P3.
 - **Depends on:** none; E2's row identity does not affect it.
 
-## `WHEREIS` of a runtime subscript silently drops the offset
+## `WHEREIS` of a runtime subscript silently drops the offset (DONE 2026-11-14 — refused, `fixes/fix_whereis_runtime_subscript.md`)
 
 - **What:** `c = whereis(big[i])` with a runtime `i` returns the array BASE.
   On 16F18857 with `big[200]` at 0x22, `i = 100` emits `movlw 34; movwf c`
   and nothing else, so `c` is 0x22 for every `i`.  Pick one: refuse the shape
-  with one error (the documented form is "DATA address plus constant
-  offset", `unit-tests/syntax_test.jal:453`), or add the index at run time
-  after the chunk resolution.
+  with one error, or add the index at run time after the chunk resolution.
+  The user documentation (`doc/dita/jalv3/operators.dita` note 6) defines
+  WHEREIS for a variable, a procedure/function, a label and a constant
+  array — a subscripted element is not in the list; the only element shape in
+  the tree is the constant-offset `whereis(buffer[1])` at
+  `unit-tests/syntax_test.jal:453`.
 - **Why:** a silent wrong address.  `whereis(big[i]) - whereis(big[0])` is 0
   for every `i`, and a program that derives a pointer from it reads the wrong
   byte.  This is NOT the runtime-slot form fixed 2026-11-12
@@ -231,10 +233,11 @@ here). Each entry names its evidence and the fix/investigation doc.
   resolution, a different shape from the other walk sites.
 - **Context:** 12-line probe on 16F18857 (compiled 2026-11-12); the const
   subscript is chunk-resolved through `pic_var_chunk_addr_resolve` in
-  `src/libpic12/pic_op_assign.c`.  If the `whereis --recipe` item below
-  lands, it would print this decision.
+  `src/libpic12/pic_op_assign.c`.  The address-report item below landed
+  2026-11-14: a refused runtime subscript returns before the emit site, so it
+  prints no `whereis:` line (the error is the report).
 - **Effort:** human S / CC ~1 h (refuse) | ~3 h (support).
-- **Priority:** P2.
+- **Priority:** done (refused — the small variant; support deferred).
 - **Depends on:** none.
 
 ## Grown dynamic-string element read on the classic 14-bit core
@@ -260,7 +263,7 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P3.
 - **Depends on:** none.
 
-## Full front-end IR — residual
+## Full front-end IR — one accepted note (Phases 3/4/7 done)
 
 - **What:** Phases 3 and 4 landed (the block-dup clone at `2e65a20`, the
   phase-4 measured decision memo).  **Phase 7 landed 2026-11-12**
@@ -274,13 +277,15 @@ here). Each entry names its evidence and the fix/investigation doc.
   empty and call-before-body cases.  Remaining note: the accepted
   per-formal clone mask width (64-bit, ~31 array formals) stays recorded
   as unwitnessed.
-- **Why:** The original Phase 3/4 work is already in the tree; only the
-  cleanup and the accepted note remain.
+- **Why:** The original Phase 3/4 work is already in the tree; the cleanup
+  is in, and the only thing left is the accepted note below.
 - **Pros:** Removes the last stale state on the retired re-parse.
 - **Cons:** None; bookkeeping.
-- **Context:** Plan Phase 7; `docs/investigations/full_ir_phase4_decision_20261107.md`.
-- **Effort:** human ~3-5 d / CC ~1 d.
-- **Priority:** P2.
+- **Context:** Plan Phase 7; `docs/investigations/full_ir_phase4_decision_20261107.md`;
+  `fixes/fix_clone_eligibility_marker.md`.
+- **Effort:** human ~2-4 h / CC ~1 h — either write the ~31-formal clone
+  witness that drives the mask width, or retire the note.
+- **Priority:** P3.
 - **Depends on:** none.
 
 ## Access-recipe adoption on the 32-bit back ends (DONE 2026-11-12 — `fixes/fix_access_recipe_32bit_families.md`)
@@ -336,39 +341,36 @@ here). Each entry names its evidence and the fix/investigation doc.
   mutability) so a row's behavior is a function of the key alone.
 - **Priority:** P3 (closed).
 
-## ISR coverage gaps (ESP32 + PIC32)
+## ISR coverage gaps (closed 2026-11-12 — software half landed, hardware excluded)
 
-- **What:** (a) an external-pin (GPIO) or UART-source ISR body on each
-  target; (b) ESP32 interrupt levels > 1 (the PIC32 priority case landed);
-  (c) hardware evidence: the PIC32 ISR path on silicon and the real-silicon
-  check of the ESP32 vector-table 0x400-alignment rule (the compile defect is
-  fixed; the silicon half is open).
-  **Phase 4 landed 2026-11-12** (software half): UART-source bodies for
-  ESP32 (`esp32_body_isr_uart.jal`) and PIC32
-  (`32mx270f256b_isr_uart.jal`), an ESP32 body on CPU interrupt 5
-  (`esp32_body_isr_cpu5.jal`), and the negative controls as
-  `unit-tests/test_isr_source_wiring.sh` (matrix route mismatch, muted
-  source, priority 0 -- each must NOT dispatch).  The classic target
-  already had the external-pin INT0 body
-  (`16f18857_picsim_isr_int0.jal`).  ESP32 levels 2..7 stay a refused
-  shape by design (`pragma interrupt 6` and up is one error, pinned by
-  `test_esp32_isr_cpu_int.py`); (c) remains excluded under the user's
-  hardware-ISR exclusion.
-- **Why:** QEMU diverges from silicon; these are the remaining untested ISR
-  surfaces. Landed already: baseline single-source bodies
-  (`esp32_body_isr.jal`, `32mz1024efh064_isr.jal`), the dual-source body
+- **What:** nothing is open.  (a) the external-pin / UART-source gap is
+  closed by **Phase 4 (2026-11-12)**: UART-source bodies for ESP32
+  (`esp32_body_isr_uart.jal`) and PIC32 (`32mx270f256b_isr_uart.jal`), an
+  ESP32 body on CPU interrupt 5 (`esp32_body_isr_cpu5.jal`), and the
+  negative controls as `unit-tests/test_isr_source_wiring.sh` (matrix route
+  mismatch, muted source, priority 0 -- each must NOT dispatch); the classic
+  target already had the external-pin INT0 body
+  (`16f18857_picsim_isr_int0.jal`).  (b) ESP32 levels 2..7 stay a refused
+  shape **by design** (`pragma interrupt 6` and up is one error, pinned by
+  `test_esp32_isr_cpu_int.py`).  (c) the silicon half is excluded under the
+  owner's hardware-ISR exclusion, so it is not backlog work.
+- **Why:** QEMU diverges from silicon, which is why the software half needed
+  real bodies rather than compile-only coverage.  Already landed before
+  Phase 4: baseline single-source bodies (`esp32_body_isr.jal`,
+  `32mz1024efh064_isr.jal`), the dual-source body
   (`esp32_body_isr_dual.jal`, TIMG0+TIMG1), PIC32 multi-vector
   (`32mz1024efh064_mvec.jal`), PIC32 priorities
   (`32mx270f256b_isr_priority.jal`, `32mz1024efh064_isr_priority.jal`) and
   `pragma interrupt fast` (`32mz1024efh064_isr_fast.jal`).
-- **Pros:** Closes the benchmarked handoff pattern (ISR bumps `tick`, main
-  observes, parks on `done`) across both targets.
-- **Cons:** The hardware half needs the bench boards.
-- **Context:** Gap list in `/home/jal/AGENTS.md` ("Interrupt (ISR) test
-  coverage"); items (b) and (c) there have since landed on the PIC32 side.
-- **Effort:** human ~1-2 d / CC ~3-4 h (software half).
-- **Priority:** P3.
-- **Depends on:** bench access for (c).
+- **Pros:** The benchmarked handoff pattern (ISR bumps `tick`, main
+  observes, parks on `done`) is now covered on both targets.
+- **Cons:** The silicon half stays untested by decision, not by omission.
+- **Context:** gap list in `/home/jal/AGENTS.md` ("Interrupt (ISR) test
+  coverage"); `fixes/fix_isr_source_bodies.md` records the Phase 4 landing
+  and the excluded hardware half.
+- **Effort:** none.
+- **Priority:** P3 (record).
+- **Depends on:** nothing; (c) is excluded by owner decision.
 
 ## ESP32 second core — SMP dispatcher (Phase 9, silicon-validated)
 
@@ -404,11 +406,10 @@ here). Each entry names its evidence and the fix/investigation doc.
   claim's `BNE` was emitted as `bne a10, a0` (the register-branch
   encoder takes `(t, s)`), so every successful claim looked lost.
   Main's resume PC is now stored into slot 0 when the core has no
-  current slot.  **QEMU still does not run the DPORT-released core**
-  even though `-smp 2` reports two CPUs, so the witnesses stay parked out
-  of the suite (`sims/esp32/second_core/`, with the README recording both
-  results) until the model follows the silicon or a QEMU workaround is
-  found.
+  current slot.  **At that point QEMU did not run the DPORT-released core**
+  even though `-smp 2` reported two CPUs (superseded by the VALIDATION
+  bullet below, which found the cause in `fix_smp_dispatcher.md`); the
+  witnesses were parked at `sims/esp32/second_core/` meanwhile.
 - **VALIDATION 2026-11-12 (C7):** the three SMP bodies are in the ESP32
   suite (`esp32_body_smp_{dispatch,contention,control}.jal`, `smp: 2`,
   UART + `v_smp_ok` expectations).  QEMU runs the DPORT-released core
@@ -441,7 +442,7 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Remaining:** preemption stays out of this cut (it needs a per-core
   timer interrupt and context save).
 - **Priority:** P3.
-- **Depends on:** the ESP32 board for the second-core validation.
+- **Depends on:** nothing; silicon-validated 2026-11-12 on the owner's board.
 
 ## Hardware-bound ISR work — MZ nesting + MZ boot-flash ISR
 
@@ -488,8 +489,8 @@ here). Each entry names its evidence and the fix/investigation doc.
   once, linked into the image) as a target-portable feature, with a plan doc
   covering interface/implementation split, per-target ABI and calling
   convention, precise rebuild invalidation, and byte-identical module-cached
-  vs uncached output. Drop the hash-keyed parse cache; classic cores never
-  opt in.
+  vs uncached output.  Classic cores never opt in (the hash-keyed parse
+  cache this item used to name no longer exists in `src/`).
 - **Why:** Strategic direction updated 2026-09-23 (eventual x86/x64 host
   targets); deferred by decision 2026-09-25 while correctness/backlog items
   run.
@@ -501,13 +502,91 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P3.
 - **Depends on:** the original decision gate (measure a real large project).
 
-## `whereis --recipe` output
+## `whereis` address reporting in `-explain-access` (DONE 2026-11-14 — `fixes/fix_whereis_explain_access.md`)
 
-- **What:** Add the recipe to `whereis` address reporting.
-- **Why:** `whereis` already reports the physical address of a chunked byte; the recipe would explain the access that produced it.
-- **Pros:** One command explains both address and access.
-- **Cons:** No proven consumer yet; `whereis` resolves through the chunk map, not the plan.
-- **Context:** Revisit if a user asks for it.
-- **Effort:** human S / CC ~30min.
-- **Priority:** P3.
-- **Depends on:** none, but low value until requested.
+- **What:** `-explain-access <file>:<line>` now reports a WHEREIS resolved on
+  the line, not just the access rows.  The new `whereis:` line carries the
+  target name, the object-relative offset, the physical address and the
+  resolution path: `target=big ofs=100 addr=188 (0xbc) segments=3
+  resolve=chunk` (or `segments=1 resolve=linear`).  It prints in emission
+  order beside the line's access rows.  The hook is in
+  `pic_assign_from_value` after `pic_var_chunk_addr_resolve`, pass 2 only;
+  the last resolution wins so a layout trial cannot leak its address.
+- **Why:** `whereis` already resolved the physical address of a chunked byte
+  (`fix_whereis_chunk_addr.md`) but the value only appeared in the image;
+  a line containing only a WHEREIS reported `no access`.  One command now
+  explains where the object is and how the line will access it.
+- **No fabricated recipe:** WHEREIS is not an emitted access and resolves
+  through the chunk map, not the plan, so it has no recipe row.  The address
+  line is the join; the access rows are the recipe half and are unchanged.
+- **Context:** `fixes/fix_whereis_explain_access.md`; pin arms in
+  `unit-tests/test_access_cli.sh` (chunked + linear, both fail pre-fix);
+  images byte-identical against the HEAD binary.  A runtime-slot
+  `WHEREIS(pa[k])` has no compile-time address and prints no line.
+- **Effort:** delivered (~1 h).
+- **Priority:** done.
+
+## A3 — one placement policy (DONE 2026-11-13 — `fixes/fix_pic_mem_place.md`)
+
+- **What:** the placement subsystem now has **one entry**, `pic_mem_place()`:
+  a request carries a policy -- SINGLE (one window, with an optional defer),
+  FRAME (one contiguous run) and GROUP (window -> shared -> segmented);
+  deferral is a status (DEFERRED), never a policy.
+  Every class goes through it: volatile scalars, ISR locals, indirect and
+  re-entrant frames, leftover variables, `-no-var-reuse`, the normal alias
+  groups, and the emit-time scratch.  The group core was extracted verbatim
+  into `pic_group_place()` first (byte-identical), then routed through the
+  entry; the scatter's manual "need vs largest run" pre-check and its
+  duplicate defer code are gone, and `leftover` now uses the same search (a
+  leftover that cannot fit one window is segmented instead of refused).
+- **Why:** seven searches with seven failure behaviours are how the silent
+  `VARIABLE_BASE_UNKNOWN` bug happened (two paths allocated without checking
+  the result).  The guards closed that class; the entry makes it structurally
+  impossible for a class to grow its own variant again.
+- **Behavior:** byte-identical -- L2 HEX manifest 2940 identical / 0 changed,
+  access matrix 0 drift.  The only programs that can change are ones that
+  used to refuse (leftover / fragmented single-window objects), which now
+  defer and are placed.
+- **Descriptor:** `fixes/fix_pic_mem_descriptor.md` -- `pic_mem.h` now owns
+  the request (`pic_mem_request_t`: need/padding/slots/stride/chunkable/
+  bit-array/linear-only/pointer-target/virt/region/policy) and the result
+  view; the adapters read the variable once, and the search reads only the
+  request (grep-verified: zero variable-fact reads in the group placement).
+  Byte-identical (L2 2940 identical / 0 drift).
+- **Residual:** the `at` pin pass reserves bytes directly (no search); the
+  commit target is a variable/group (every placed object is
+  variable-backed today, including compiler scratch); the request is a pic12
+  backend API, and the 32-bit allocators remain separate by design.
+- **Context:** `fixes/fix_pic_mem_place.md`, the frame/walk fix docs,
+  `docs/investigations/unified_allocator_20261108.md` (A3).
+- **Facade finish** (`doc/designs/finish-placement-facade.md`): a review of
+  the landed A3 found the architecture correct but the facade unfinished --
+  dead DEFER/PINNED policies, hand-rolled FRAME requests, a three-way
+  element-stride rule, and `req->region` dead for GROUP.  Step 1 (drop the
+  dead policies, factor the inline defer into `pic_mem_place_defer()`),
+  step 2 (add `pic_mem_request_frame()`, route the three FRAME call sites
+  through it), step 3 (one `pic_mem_stride_get()` rule) and step 4 (drop
+  the dead region field) all landed 2026-11-13 byte-identical.
+- **Priority:** done; facade finished.
+
+## A7 — the always-on allocator report (DONE 2026-11-14 — `fixes/fix_alloc_report_a7.md`)
+
+- **What:** the allocator now reports its own usage.  One static helper
+  `pic_mem_usage_get()` computes data/shared used/free/largest; the end-of-
+  compile report (`pic_blist_info_log`) prints an INFO `RAM:` line, and the
+  always-on audit summary reads the same helper, so the two agree by
+  construction.  A placement-invariant violation is now an ERROR (U4 "a
+  violation is an internal error"): it fails the compile instead of warning.
+- **Why:** closes the A7 rung of `docs/investigations/unified_allocator_20261108.md`;
+  a clean compile could not answer "what did you place, where".
+- **Behavior:** image byte-identical (the report is console output); only the
+  fault path changed.  Pin `alloc_segment_audit` arms 7/8 assert the error
+  verdict and the RAM/audit agreement.
+- **Residual (deferred):** the ERR escape hatch (`JALV2_ALLOC_AUDIT=warn`
+  demote), and piece-3 model purity (the coverage check still reads
+  `pic_variable_storage_need_get` instead of the object view).
+- **Context:** `fixes/fix_alloc_report_a7.md`,
+  `doc/designs/finish-allocator-report.md`,
+  `doc/designs/finish-allocator-report.ceo-review.md`,
+  `docs/investigations/unified_allocator_20261108.md` (A7).
+- **Priority:** done; residual deferred.

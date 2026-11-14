@@ -44,6 +44,9 @@ variable_def_t jal_pointer_pointee_def_get(const value_t val);
 /* add an element offset to a value's baseofs (const fold or runtime ADD) */
 void   jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs);
 
+/* S3: add a pointee subscript to a value's baseofs2 (const fold/runtime ADD) */
+void   jal_val_baseofs2_add(pfile_t *pf, value_t val, value_t ofs);
+
 flag_t jal_parse_postfix(pfile_t *pf, value_t *pval,
     value_t opt_locked_jvals[JAL_VAL_TYPE_CT]);
 

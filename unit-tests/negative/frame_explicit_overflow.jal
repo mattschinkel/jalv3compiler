@@ -1,0 +1,32 @@
+-- negative: a user `pragma frame` still needs ONE contiguous frame
+--
+-- The explicit pragma is distinguished from the automatic FRAME mark every
+-- indirect/re-entrant proc gets; only the automatic form may be scattered
+-- or chunked.  The explicit request must stay one frame.
+--
+-- Expected: 1 error, "no space for the frame of '_t'".
+--
+include 16f18857
+pragma target clock 8_000_000
+
+var pointer _slot as procedure()
+
+procedure _t() is
+   pragma frame
+   var byte a[40]
+   var byte b[40]
+   var byte c[40]
+   var byte i
+   for 40 using i loop
+      a[i] = i
+      b[i] = i
+      c[i] = i
+   end loop
+end procedure
+
+procedure _run() is
+   _slot is _t
+   _slot()
+end procedure
+
+_run()

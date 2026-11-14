@@ -37,6 +37,7 @@
 #   unit-tests/run_gates.sh --compiler PATH   # compiler for L0/L1 (unit/compare
 #                                          # always test ./bin/beta/jalv3-x86-64)
 #   unit-tests/run_gates.sh --no-san          # L3 without the ASan corpus
+#   unit-tests/run_gates.sh --no-cache        # force a full run (no sim-result cache)
 #
 # HEX A/B: unit-tests/manifest/hex_manifest.txt via unit-tests/hex_manifest.py
 # — committed with every compiler change, so ONE corpus run is both the test
@@ -182,6 +183,7 @@ WITNESSES=()
 LEGACY_QUICK=0
 FAST=0
 NO_PINS=0
+NO_CACHE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -198,6 +200,7 @@ while [[ $# -gt 0 ]]; do
     --quick)           LEGACY_QUICK=1; shift ;;
     --fast)            FAST=1; shift ;;
     --no-pins)         NO_PINS=1; shift ;;
+    --no-cache)        NO_CACHE=1; shift ;;
     -h|--help)         awk '/^set /{exit} NR>=2{print}' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -227,6 +230,19 @@ case "$LEVEL" in
   0|1|2|3) ;;
   *) echo "error: --level must be 0..3" >&2; exit 2 ;;
 esac
+# Sim-result cache (sims/sim_cache.py): applied ONLY to the four runtime-suite
+# gates below via an explicit env prefix — never exported globally, because the
+# compile-pin suite and witness checks also run the validate scripts and depend
+# on their real output.  Iterations reuse today's verified passes; the L3
+# landing run and --no-cache are always full, and the first run of a new UTC
+# day is full regardless (markers are day-bucketed).
+SIM_CACHE_DIR="$ROOT/sims/.simcache"
+SIM_CACHE_ON=$(( LEVEL < 3 && NO_CACHE == 0 ))
+if (( SIM_CACHE_ON )); then
+  SIM_CACHE_ENV=(env "JAL_SIM_CACHE=$SIM_CACHE_DIR")
+else
+  SIM_CACHE_ENV=(env -u JAL_SIM_CACHE)
+fi
 # worker count: JALV2_TEST_JOBS overrides the default 16 (same env var and
 # default as the unit/gpsim/QEMU suite runners; CLI flags always win)
 # (e.g. share the host: JALV2_TEST_JOBS=8 unit-tests/run_gates.sh ...)
@@ -372,7 +388,7 @@ witness_check() {  # compile 0 errors; run the QEMU gate when the block exists
   fi
   if grep -q '@sim_validate begin' "$w"; then
     echo "witness carries an @sim_validate block — running its QEMU gate"
-    ./sims/jal_sim_validate.sh --compiler "$COMPILER" "$w"
+    env -u JAL_SIM_CACHE ./sims/jal_sim_validate.sh --compiler "$COMPILER" "$w"
   else
     echo "OK: $(tail -1 <<<"$out")"
   fi
@@ -387,6 +403,7 @@ fi
 if (( DRY )); then
   echo ""
   echo "dry run — would execute:"
+  echo "  sim cache: $( (( SIM_CACHE_ON )) && echo on || echo off )"
   echo "  L0 build (incremental make)"
   echo "  L0 syntax smoke"
   for w in "${WITNESSES[@]}"; do echo "  L0 witness: $w"; done
@@ -460,11 +477,11 @@ if (( LEVEL >= 1 )); then
   RAN_PIC32=0; RAN_ESP32=0
   if (( SEL_GPSIM )); then
     gate "L1 gpsim (classic runtime)" \
-      python3 sims/run_regression_suite.py --jobs "$JOBS" --quiet
+      "${SIM_CACHE_ENV[@]}" python3 sims/run_regression_suite.py --jobs "$JOBS" --quiet
   fi
   if (( SEL_PIC32 )); then
     gate "L1 pic32 qemu" \
-      python3 sims/run_pic32_regression.py --run --compiler "$COMPILER"
+      "${SIM_CACHE_ENV[@]}" python3 sims/run_pic32_regression.py --run --compiler "$COMPILER"
     gate "L1 pic32mx clock/fuse words" \
       python3 sims/test_pic32mx_clock_words.py --compiler "$COMPILER"
     gate "L1 pic32mz config-pragma words" \
@@ -473,7 +490,7 @@ if (( LEVEL >= 1 )); then
   fi
   if (( SEL_ESP32 )); then
     gate "L1 esp32 qemu" \
-      python3 sims/run_esp32_regression.py --jobs "$ESP32_JOBS" --run \
+      "${SIM_CACHE_ENV[@]}" python3 sims/run_esp32_regression.py --jobs "$ESP32_JOBS" --run \
         --compiler "$COMPILER"
     RAN_ESP32=1
   fi
@@ -489,7 +506,7 @@ if (( LEVEL >= 1 )); then
     skip "L1 compile-pin regressions (--no-pins)"
   else
     gate "L1 compile-pin regressions" \
-      "$ROOT/unit-tests/run_compile_pin_tests.sh" "$COMPILER"
+      env -u JAL_SIM_CACHE "$ROOT/unit-tests/run_compile_pin_tests.sh" "$COMPILER"
   fi
   # The demo kit is compile-only everywhere (no runtime gate touches it), so
   # the compile check is its whole safety net.  It used to run only at L3,
@@ -522,7 +539,7 @@ if (( LEVEL >= 1 )); then
     skip "L1 picsim 16F18857 suite (--fast)"
   elif [[ -n "${PICSIM_DIR:-}" ]] && { [[ -e "$PICSIM_DIR/src/libpicsim.a" ]] || [[ -e "$PICSIM_DIR/src/libpicsim.so" ]]; }; then
     gate "L1 picsim 16F18857 suite" \
-      python3 sims/run_picsim_regression.py --picsim "$PICSIM_DIR" --compiler "$COMPILER"
+      "${SIM_CACHE_ENV[@]}" python3 sims/run_picsim_regression.py --picsim "$PICSIM_DIR" --compiler "$COMPILER"
   else
     skip "L1 picsim 16F18857 suite (set PICSIM_DIR to a built picsim tree)"
   fi

@@ -13,30 +13,12 @@
 #define pic_var_h__
 
 #include "pic.h"
+#include "pic_mem.h"   /* the placement request/result model */
 extern unsigned pic_blist_max;   /* max amount used     */
 extern unsigned pic_blist_cur;   /* current amount used */
 extern unsigned pic_blist_total; /* total available */
 extern unsigned pic_blist_placed; /* bytes reserved by explicit `at` placements */
 unsigned pic_data_bank_free_bytes_get(void); /* bytes still free on the data bank list */
-
-/*
- * U0 of the segmented memory model: ONE description of an object's memory
- * layout.  This is a VIEW, not a registry -- it borrows the chunk map's
- * arrays when the object is segmented and uses an inline single segment
- * otherwise, so it cannot disagree with the allocator and has no lifetime
- * of its own.  Consumers migrate to it one at a time (U0b); U3 deletes the
- * parallel accessors once every consumer reads the object.
- */
-typedef struct pic_mem_object_ {
-  variable_t             var;
-  variable_sz_t          size;      /* def size: bytes (bits for bit arrays) */
-  variable_sz_t          stride;    /* element size in bytes, 1 for scalars */
-  variable_ct_t          seg_ct;    /* number of physical segments */
-  variable_base_t        one_base;  /* contiguous case: segment 0 base */
-  variable_sz_t          one_len;   /* contiguous case: segment 0 length */
-  const variable_base_t *seg_base;  /* segmented case: borrowed from the map */
-  const variable_sz_t   *seg_len;
-} pic_mem_object_t;
 
 /* Fill `obj` from `var`'s current placement.  FALSE when the variable is
  * unplaced and has no chunk map (nothing to describe). */

@@ -2670,10 +2670,10 @@ static int pic_tag_dump(pfile_t *pf, pfile_write_t where,
     if (0 == sz) {
       /*
        *  `where' isn't open, so make an appropriate guess
-       *  12 = 3 underscores + 8 digits for n, which would be
+       *  14 = 3 underscores + 10 digits for n, which would be
        *  truly odd
        */
-      sz = strlen(pre) + strlen(name) + 12;
+      sz = strlen(pre) + strlen(name) + 14;
     }
     dir = pfile_COD_dir_get(pf);
     lbl = MALLOC(1 + sz);
@@ -3896,7 +3896,7 @@ label_t pic_lookup_label_find(pfile_t *pf, variable_t var, unsigned flags)
   if (!vnm) {
     return LABEL_NONE;
   }
-  sz = 19 + strlen(vnm); /* '_lookup_\0' + name */
+  sz = 20 + strlen(vnm); /* '_lookup_' + name + '_' + 10-digit tag + NUL */
   name = MALLOC(sz);
   lbl = LABEL_NONE;
   if (name) {
@@ -6798,11 +6798,12 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
                * slot value can be loaded and subscripted later), so the fat
                * engine must give the target an id BEFORE the descriptor
                * tables are built.  Gate-off keeps the physical-address path
-               * and the old escape analysis. */
+               * and the old escape analysis.  S3: this now includes the
+               * ARRAY-pointee slot -- its stored value is the ordinary fat
+               * pointer (design D4), so it needs the id just as early. */
               if (pic_fat_pointers_enabled(pf)
                   && (VARIABLE_NONE != pv)
-                  && pic_value_is_array_of_pointers(ops[oi])
-                  && !pic_value_slot_pointee_array(ops[oi])) {
+                  && pic_value_is_array_of_pointers(ops[oi])) {
                 pic_var_pointer_bind_escape(pv);
               }
               continue; /* the bind's own destination */

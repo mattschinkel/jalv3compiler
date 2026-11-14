@@ -57,6 +57,8 @@ TABLE = [
      ["cannot cast a string to a numeric type"]),
     ("const_to_out.jal",
      ["type mismatch"]),
+    ("whereis_runtime_subscript.jal",
+     ["WHEREIS() of a runtime subscript is not supported"]),
     ("pragma_string_heap_removed.jal",
      ["pragma string heap was removed",
       "dynamic string storage requires `pragma target string_heap_size"]),

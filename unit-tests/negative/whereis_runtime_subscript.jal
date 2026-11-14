@@ -1,0 +1,11 @@
+-- negative: WHEREIS() of a runtime subscript is refused
+include 16f18857
+
+var byte big[200]
+var byte c
+var byte i
+
+pin_b0_direction = output
+i = 100
+c = whereis(big[i])
+pin_b0 = c

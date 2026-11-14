@@ -84,6 +84,13 @@ boolean_t pic_var_isr_get(pfile_t *pf, boolean_t alloc, pic_var_isr_t *dst);
 void pic_var_isr_release(pfile_t *pf, pic_var_isr_t *dst);
 
 void    pic_var_isr_entry(pfile_t *pf);
+
+/* ISR safety for the runtime chunk/fat walk: the walk's loop state lives in
+ * compiler-owned globals, so the ISR boundary saves and restores it.  Both
+ * no-op when the program has no walk or no interrupt (the save slots are
+ * created only then -- see pic_var_chunk_prepare_emit). */
+void    pic_var_walk_isr_save(pfile_t *pf);
+void    pic_var_walk_isr_restore(pfile_t *pf);
 void    pic_var_isr_exit(pfile_t *pf);
 
 value_t pic_var_stkptr_get(pfile_t *pf);

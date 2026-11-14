@@ -5474,6 +5474,12 @@ unsigned pfile_task_slot_ct_get(pfile_t *pf)
   if (ct < 2U) {
     ct = 2U;
   }
+  if (ct > 256U) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "too many tasks (%u); the scheduler supports at most 256 slots",
+        ct);
+    ct = 256U;
+  }
   return ct;
 }
 

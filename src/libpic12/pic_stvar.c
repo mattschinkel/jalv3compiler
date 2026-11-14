@@ -789,6 +789,75 @@ static void pic_isr_reg_get(pfile_t *pf, unsigned flag, pic_isr_reg_get_t *dst)
     }
 }
 
+/* Copy the runtime walk state between its working globals and the ISR save
+ * slots.  The slots are created in pic_var_chunk_prepare_emit only when the
+ * program has both a chunked walk and an interrupt, so this is a no-op (no
+ * code) otherwise.  The walk's loop state is global by construction: the
+ * classic per-variable ladder consumes `_pic_chunk_t`, and the fat segment
+ * walk also uses `_pic_chunk_cnt/base/span1`, so an interrupt that walks
+ * must preserve all four. */
+static void pic_isr_walk_copy(pfile_t *pf, const char *src_name,
+    const char *dst_name, unsigned sz)
+{
+  variable_t src;
+  variable_t dst;
+  value_t    sval;
+  value_t    dval;
+  unsigned   ii;
+
+  src = pfile_variable_find(pf, PFILE_LOG_NONE, src_name, 0);
+  dst = pfile_variable_find(pf, PFILE_LOG_NONE, dst_name, 0);
+  if (src && dst) {
+    sval = value_alloc(src);
+    dval = value_alloc(dst);
+    if (sval && dval) {
+      for (ii = 0; ii < sz; ii++) {
+        (void) pic_instr_append_f_d(pf, PIC_OPCODE_MOVF, sval, ii,
+            PIC_OPDST_W);
+        (void) pic_instr_append_f(pf, PIC_OPCODE_MOVWF, dval, ii);
+      }
+    }
+    if (sval) {
+      value_release(sval);
+    }
+    if (dval) {
+      value_release(dval);
+    }
+  }
+  if (src) {
+    variable_release(src);
+  }
+  if (dst) {
+    variable_release(dst);
+  }
+}
+
+void pic_var_walk_isr_save(pfile_t *pf)
+{
+  pic_isr_walk_copy(pf, "_pic_chunk_t", "_pic_isr_chunk_t", 2);
+  pic_isr_walk_copy(pf, "_pic_chunk_cnt", "_pic_isr_chunk_cnt", 1);
+  pic_isr_walk_copy(pf, "_pic_chunk_base", "_pic_isr_chunk_base", 2);
+  pic_isr_walk_copy(pf, "_pic_chunk_span1", "_pic_isr_chunk_span1", 1);
+  /* the fat dispatch's id cell: set immediately before CALL _pic_fat_seg_addr
+   * and read by it, so an interrupt between the two would name the wrong
+   * object */
+  pic_isr_walk_copy(pf, "_pic_fat_id", "_pic_isr_fat_id", 1);
+  /* runtime WHEREIS: the resolved address (pointer) + the staging cell */
+  pic_isr_walk_copy(pf, "_pic_fat_whereis", "_pic_isr_fat_whereis",
+      (unsigned) pic_pointer_size_get(pf) + 2U);
+}
+
+void pic_var_walk_isr_restore(pfile_t *pf)
+{
+  pic_isr_walk_copy(pf, "_pic_isr_chunk_t", "_pic_chunk_t", 2);
+  pic_isr_walk_copy(pf, "_pic_isr_chunk_cnt", "_pic_chunk_cnt", 1);
+  pic_isr_walk_copy(pf, "_pic_isr_chunk_base", "_pic_chunk_base", 2);
+  pic_isr_walk_copy(pf, "_pic_isr_chunk_span1", "_pic_chunk_span1", 1);
+  pic_isr_walk_copy(pf, "_pic_isr_fat_id", "_pic_fat_id", 1);
+  pic_isr_walk_copy(pf, "_pic_isr_fat_whereis", "_pic_fat_whereis",
+      (unsigned) pic_pointer_size_get(pf) + 2U);
+}
+
 void pic_var_isr_entry(pfile_t *pf)
 {
   size_t  ii;
@@ -828,6 +897,8 @@ void pic_var_isr_entry(pfile_t *pf)
     value_release(isr_val);
     value_release(user_val);
   }
+  /* an ISR that walks must not clobber the interrupted walk's state */
+  pic_var_walk_isr_save(pf);
   pic_instr_append_n(pf, PIC_OPCODE_GOTO, lbl_isr);
   label_release(lbl_isr);
 }
@@ -838,6 +909,9 @@ void pic_var_isr_exit(pfile_t *pf)
   value_t user_val;
   value_t isr_val;
 
+  /* restore the walk state before the value state (and before the
+   * PCLATH/STATUS/W restore that pic_isr_cleanup emits) */
+  pic_var_walk_isr_restore(pf);
   for (ii = COUNT(pic_isr_var_map); ii; ii--) {
     user_val = (pic_isr_var_map[ii - 1].user_name)
       ? pfile_value_find(pf, PFILE_LOG_NONE,

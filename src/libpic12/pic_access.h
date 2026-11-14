@@ -178,6 +178,15 @@ void          pic_access_explain_note(pfile_t *pf, const char *site,
                   variable_t var, const pic_access_plan_t *plan,
                   unsigned operation,
                   const pic_access_recipe_t *recipe);
+/* WHEREIS address reporting: the compile-time address a line resolved, the
+ * object it landed in and the resolution path (a linear base+offset add or
+ * a chunk-map walk).  WHEREIS is not an emitted access, so it has no recipe
+ * row; the address prints beside the access rows of the same source line,
+ * in emission order.  The last resolution wins, because a layout trial
+ * resolves before the installed layout does. */
+void          pic_access_explain_whereis(pfile_t *pf, variable_t var,
+                  const char *target, variable_const_t ofs,
+                  variable_base_t addr);
 int           pic_access_explain_print(void);
 
 #endif /* pic_access_h__ */

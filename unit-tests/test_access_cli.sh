@@ -145,6 +145,49 @@ else
   fail "-explain-access happy path" "$WORK/explain_ok.log"
 fi
 
+# --- 6. the WHEREIS address report ----------------------------------------
+# WHEREIS is not an emitted access, so it has no recipe row; the explain
+# report prints the resolved address, the object and the resolution path
+# beside the line's access rows.
+WHEREIS_WITNESS="$WORK/whereis_explain.jal"
+cat > "$WHEREIS_WITNESS" <<'WEOF'
+include 16f887
+
+var volatile byte big[200]
+var volatile byte wa = 0
+
+wa = whereis(big[100])
+WEOF
+
+if run "$WORK/whereis.log" -explain-access "$WHEREIS_WITNESS:6" \
+    "$WHEREIS_WITNESS" \
+    && grep -q "^whereis: .* line=6 .*target=big ofs=100 addr=" \
+        "$WORK/whereis.log" \
+    && grep -q "segments=.* resolve=chunk" "$WORK/whereis.log"; then
+  echo "ok   -explain-access reports the WHEREIS address"
+else
+  fail "WHEREIS explain report" "$WORK/whereis.log"
+fi
+
+# a contiguous target resolves linearly; the report must say so
+cat > "$WHEREIS_WITNESS" <<'WEOF'
+include 16f887
+
+var volatile byte x = 7
+var volatile byte wa = 0
+
+wa = whereis(x)
+WEOF
+
+if run "$WORK/whereis_linear.log" -explain-access "$WHEREIS_WITNESS:6" \
+    "$WHEREIS_WITNESS" \
+    && grep -q "^whereis: .*target=x ofs=0 addr=.*segments=1 resolve=linear" \
+        "$WORK/whereis_linear.log"; then
+  echo "ok   -explain-access reports a linear WHEREIS"
+else
+  fail "linear WHEREIS explain report" "$WORK/whereis_linear.log"
+fi
+
 if (( fails )); then
   echo "FAIL: $fails access-CLI check(s)"
   exit 1

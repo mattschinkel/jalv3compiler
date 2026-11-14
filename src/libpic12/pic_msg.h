@@ -40,6 +40,8 @@
 #define PIC_MSG_DBG_DIV_SZ              "...divide %u bits"
 #define PIC_MSG_DBG_BANK                "...bank %u...%u"
 #define PIC_MSG_DBG_DATA_USED           "...data used %u"
+#define PIC_MSG_RAM_USED                "RAM: data used %u/%u (free %u, largest %u);" \
+                                        " shared used %u/%u (free %u, largest %u)"
 
 #endif /* pic_msg_h__ */
 

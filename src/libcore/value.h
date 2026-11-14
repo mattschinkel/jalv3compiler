@@ -28,6 +28,8 @@
                                           was a poitner */
 #define VALUE_FLAG_PTR_SLOT_RAW 0x0020U /* read pointer slot storage bytes */
 #define VALUE_FLAG_DEAD         0x0040U /* refcount reached 0: any use is a bug */
+#define VALUE_FLAG_SLOT_POINTEE 0x0080U /* S3: array-of-pointers element whose
+                                         pointee subscript rides in baseofs2 */
 
 value_t   value_alloc(variable_t var);
 void      value_lock(value_t val);
@@ -65,6 +67,8 @@ const char   *value_name_get(const value_t val);
 
 value_t       value_baseofs_get(const value_t val);
 void          value_baseofs_set(value_t val, value_t ofs);
+value_t       value_baseofs2_get(const value_t val);
+void          value_baseofs2_set(value_t val, value_t ofs);
 boolean_t     value_baseofs_depends(const value_t val, const value_t dep);
 
 variable_const_t value_const_get(const value_t val);

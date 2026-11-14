@@ -119,6 +119,9 @@ static uchar pic_emu_data_mem_read(
     unsigned               mem,
     flag_t                 flags)
 {
+  if (mem >= PIC_DATA_MEM_SIZE) {
+    return 0U;   /* unimplemented data memory reads as 0 */
+  }
   if ((flags & PIC_EMU_DATA_MEM_READ_FLAG_CHECK)
     && (0 == ((state->imem[mem] & 0xf0)))) {
     printf("%s:%u uninitialized memory read (%u)!\n", 
@@ -141,6 +144,9 @@ static void pic_emu_data_mem_write(
 {
   UNUSED(fpos);
 
+  if (mem >= PIC_DATA_MEM_SIZE) {
+    return;      /* unimplemented data memory: discard the write */
+  }
   if ((state->imem[mem] & 0xf0) != 0xf0) {
     state->imem[mem] += 0x10;
   }

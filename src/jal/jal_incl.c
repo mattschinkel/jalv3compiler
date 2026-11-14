@@ -1461,6 +1461,7 @@ static void jal_parse_pragma_frame(pfile_t *pf)
       "pragma frame can only be used in a procedure or function!");
   } else {
     pfile_proc_flag_set(proc, PFILE_PROC_FLAG_FRAME);
+    pfile_proc_flag_set(proc, PFILE_PROC_FLAG_FRAME_EXPLICIT);
   }
 }
 

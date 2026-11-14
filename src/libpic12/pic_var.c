@@ -168,6 +168,9 @@ typedef struct pic_var_state_ {
   variable_t                  *openarray_blocked;
   size_t                       openarray_blocked_used;
   size_t                       openarray_blocked_alloc;
+  /* A3 increment 3: a local that cannot fit one window is deferred to the
+   * group/chunk placement with a unique virtual base out of this counter */
+  size_t                       defer_used;
   /* every variable placed by pic_variable_late_alloc, with the placement
    * generation of its address: a layout trial emits code (which creates
    * scratch such as `_pic_temp`) AFTER its own placement, so such a variable
@@ -347,38 +350,42 @@ static pic_variable_chunk_map_t *pic_variable_chunk_map_find(variable_t var)
   return 0;
 }
 
+/* The one element-size rule: a non-bit array whose element def byte size
+ * divides the storage size gets that size (chunk boundaries fall on whole
+ * elements); everything else -- scalars, bit arrays, the bitbucket -- is 1
+ * (bit/byte addressed, no multi-byte-element straddle). */
+static variable_sz_t pic_mem_stride_get(variable_t var, variable_sz_t total)
+{
+  variable_def_t        def;
+  variable_def_member_t mbr;
+  variable_def_t        edef;
+  variable_sz_t         esz;
+
+  def = variable_def_get(var);
+  if (!def || (VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(def))) {
+    return 1;
+  }
+  mbr = variable_def_member_get(def);
+  edef = mbr ? variable_def_member_def_get(mbr) : 0;
+  if (!edef || variable_def_flag_test(edef, VARIABLE_DEF_FLAG_BIT)) {
+    return 1;
+  }
+  esz = variable_def_byte_sz_get(edef);
+  return ((esz >= 1) && (0 == (total % esz))) ? esz : 1;
+}
+
 /* U0: fill the object view (see pic_var.h).  `stride` mirrors the holed
  * placement's element-size rule: a non-bit array's element def, and 1 when
  * the element is a bit (packed) or the size is not a whole multiple. */
 boolean_t pic_mem_object_get(variable_t var, pic_mem_object_t *obj)
 {
-  variable_def_t        def;
-  variable_def_member_t mbr;
-
   memset(obj, 0, sizeof(*obj));
   if (!var || (VARIABLE_NONE == var)) {
     return BOOLEAN_FALSE;
   }
   obj->var    = var;
   obj->size   = variable_sz_get(var);
-  obj->stride = 1;
-  def = variable_def_get(var);
-  if (def && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def))) {
-    mbr = variable_def_member_get(def);
-    if (mbr) {
-      variable_def_t edef;
-      variable_sz_t  esz;
-
-      edef = variable_def_member_def_get(mbr);
-      if (edef
-          && !variable_def_flag_test(edef, VARIABLE_DEF_FLAG_BIT)) {
-        esz = variable_def_byte_sz_get(edef);
-        if ((esz >= 1) && (0 == (obj->size % esz))) {
-          obj->stride = esz;
-        }
-      }
-    }
-  }
+  obj->stride = pic_mem_stride_get(var, obj->size);
   {
     pic_variable_chunk_map_t *map;
 
@@ -963,6 +970,8 @@ variable_t pic_var_chunk_walk_arg_get(void)
  * pointer-slot WHEREIS (pic_fat_whereis_resolve_emit fills it and stages
  * FSR there, so the caller's INDF read yields the physical address).
  * Created on first use; like the walk scratch it must survive placement. */
+static boolean_t pic_var_has_interrupt(pfile_t *pf);
+
 variable_t pic_var_whereis_scratch_get(pfile_t *pf)
 {
   if (VARIABLE_NONE == pic_var.whereis_scratch) {
@@ -971,6 +980,15 @@ variable_t pic_var_whereis_scratch_get(pfile_t *pf)
     pic_var.whereis_scratch = pic_var_chunk_global_create(pf,
         "_pic_fat_whereis",
         (variable_sz_t) (pic_pointer_size_get(pf) + 2));
+    /* created during emission, after the prepare pass: give it its ISR save
+     * slot now (same hazard as the walk -- the fill and the INDF read are
+     * separated by instructions an interrupt can land between) */
+    if (pic_var.whereis_scratch && pic_var_has_interrupt(pf)) {
+      if (!pic_var_chunk_global_create(pf, "_pic_isr_fat_whereis",
+          (variable_sz_t) (pic_pointer_size_get(pf) + 2))) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+    }
   }
   return pic_var.whereis_scratch;
 }
@@ -1941,6 +1959,22 @@ static void pic_var_u3_sync_ir(const cmd_t cmd_head, pic_var_u3_pair_t *pairs,
   }
 }
 
+/* does the program have an interrupt entry point?  Used to decide whether the
+ * walk scratch needs ISR save slots (see pic_var_chunk_prepare_emit). */
+static boolean_t pic_var_has_interrupt(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  for (proc = pfile_proc_root_get(pf);
+       proc;
+       proc = pfile_proc_next(proc)) {
+    if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INTERRUPT)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 void pic_var_chunk_prepare_emit(pfile_t *pf)
 {
   size_t              pi;
@@ -2298,6 +2332,42 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
   /* F2d: the O(1) dispatch's descriptors + `_obj_desc[]`, after the final
    * placement (their contents are the placed segment bases) */
   pic_fat_desc_prepare(pf);
+  /* 6. the compiler scratch ISR save slots.  The runtime walk and the fat
+   * dispatch keep cross-instruction state in compiler-owned globals, so an
+   * interrupt that performs its own chunked access overwrites the
+   * interrupted access' state (measured: a 150-byte sum read 10775 instead
+   * of 11175 when a TMR0 handler read a 120-byte array).  The ISR entry/exit
+   * already save the compiler's value state; give this scratch the same
+   * treatment.  Created only when the program has an interrupt AND the
+   * scratch exists, so nothing else changes. */
+  if (pic_var_has_interrupt(pf)) {
+    variable_t save;
+
+    if (pic_var.chunk_g_cnt) {
+      save = pic_var_chunk_global_create(pf, "_pic_isr_chunk_t", 2);
+      if (!save) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+      save = pic_var_chunk_global_create(pf, "_pic_isr_chunk_cnt", 1);
+      if (!save) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+      save = pic_var_chunk_global_create(pf, "_pic_isr_chunk_base", 2);
+      if (!save) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+      save = pic_var_chunk_global_create(pf, "_pic_isr_chunk_span1", 1);
+      if (!save) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+    }
+    if (pic_fat_id_get() && (VARIABLE_NONE != pic_fat_id_get())) {
+      save = pic_var_chunk_global_create(pf, "_pic_isr_fat_id", 1);
+      if (!save) {
+        pfile_log_syserr(pf, ENOMEM);
+      }
+    }
+  }
   /* P3: placement is final here (the map is the last piece of it), so this
    * is the one point where the whole object model can be checked. */
   pic_var_segment_audit(pf);
@@ -3033,10 +3103,6 @@ static variable_sz_t pic_data_biggest(const pic_bank_info_t *blist)
  * per-region (U1c merges them); callers ask the MAP for a region instead of
  * naming a list, which is what lets U1c change the representation without
  * touching them. */
-typedef enum pic_mem_region_ {
-  PIC_MEM_REGION_DATA = 0,
-  PIC_MEM_REGION_SHARED
-} pic_mem_region_t;
 
 static pic_bank_info_t **pic_mem_map_list(pic_mem_map_t *map,
     pic_mem_region_t region)
@@ -3088,69 +3154,99 @@ static unsigned pic_mem_map_largest_run(const pic_mem_map_t *map,
   return (unsigned) pic_data_biggest(list);
 }
 
-static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
-  pic_mem_map_t *map, pic_mem_region_t region, variable_t vptr)
+/* One refusal wording for any placement that cannot fit a bank window: the
+ * per-variable path and the frame paths share it, so a frame that does not
+ * fit reads the same way as a variable that does not fit (A3).  `where` is
+ * an optional "proc:" prefix; `what` is the subject. */
+static void pic_var_refusal_log(pfile_t *pf, const char *where,
+    const char *what, variable_sz_t need, variable_sz_t padding,
+    const pic_mem_map_t *map, pic_mem_region_t region)
 {
-  variable_sz_t   need;
-  variable_ct_t   pointer_slots;
-  variable_base_t base;
-  boolean_t       rc;
+  char     padmsg[32];
+  unsigned regions;
 
-  need = pic_variable_storage_need_get(pf, vptr, &pointer_slots);
-  assert(need);
-  /* first we'll see if the entire thing can fit in a bank.
-     If so, good! */
-
-  base = pic_mem_map_alloc(pf, map, region, need, pointer_slots);
-  if (pic_env_on("JALV2_DBG_REFUSAL")) {
-    fprintf(stderr, "DBG first %-18s need=%u base=0x%x\n",
-        variable_name_get(vptr) ? variable_name_get(vptr) : "?",
-        (unsigned) need, (unsigned) base);
+  padmsg[0] = '\0';
+  if (padding) {
+    sprintf(padmsg, " + %u slot padding", (unsigned) padding);
   }
-  rc   = BOOLEAN_FALSE;
-  if (VARIABLE_BASE_UNKNOWN == base) {
-    char                   padmsg[32];
-    char                   where[96];
-    variable_sz_t          padding;
-    unsigned               regions;
+  regions = pic_mem_map_segments(map, region);
+  /* Say what the numbers mean: `available` used to print only the largest
+   * single run, which reads like total free RAM (a 192-byte array was
+   * refused with "available=3966"), and it never said that the allocation
+   * must fit ONE bank window. */
+  pfile_log(pf, PFILE_LOG_ERR,
+      "no space for %s%s (need=%u%s; must fit one %u-byte bank window; "
+      "%u bytes free in %u region%s, largest run %u)",
+      where ? where : "", what,
+      (unsigned) need, padmsg,
+      (unsigned) pic_target_bank_size_get(pf),
+      (unsigned) pic_mem_map_free_bytes(map, region), regions,
+      (1 == regions) ? "" : "s",
+      (unsigned) pic_mem_map_largest_run(map, region));
+}
 
-    padding = pic_pointer_slot_padding_get(pf, pointer_slots);
-    padmsg[0] = '\0';
-    if (padding) {
-      sprintf(padmsg, " + %u slot padding", (unsigned) padding);
-    }
-    where[0] = '\0';
-    if (proc && pfile_proc_tag_get(proc)) {
-      sprintf(where, "%s:", pfile_proc_tag_get(proc));
-    }
-    regions = pic_mem_map_segments(map, region);
-    /* Say what the numbers mean: `available` used to print only the largest
-     * single run, which reads like total free RAM (a 192-byte array was
-     * refused with "available=3966"), and it never said that the allocation
-     * must fit ONE bank window. */
-    pfile_log(pf, PFILE_LOG_ERR,
-        "no space for %s%s (need=%u%s; must fit one %u-byte bank window; "
-        "%u bytes free in %u region%s, largest run %u)",
-        where, variable_name_get(vptr),
-        (unsigned) need, padmsg,
-        (unsigned) pic_target_bank_size_get(pf),
-        (unsigned) pic_mem_map_free_bytes(map, region), regions,
-        (1 == regions) ? "" : "s",
-        (unsigned) pic_mem_map_largest_run(map, region));
-    variable_flag_set(vptr, VARIABLE_FLAG_ALLOC_FAIL);
-  } else {
-    assert(VARIABLE_BASE_UNKNOWN == variable_base_get(vptr, 0));
-    rc = BOOLEAN_TRUE;
-    variable_base_set(vptr, base, 0);
+/* A frame is one contiguous run (the re-entrant push/pop is a byte copy from
+ * its base), so it takes the same single-window check as a variable.  A3
+ * increment 1: when that fails, say so instead of laying the frame out from
+ * an unknown base -- UNKNOWN plus a member offset wraps into a small integer
+ * and silently aliases SFRs and low RAM. */
+static void pic_var_frame_refusal(pfile_t *pf, pfile_proc_t *proc,
+    variable_sz_t need)
+{
+  char        what[128];
+  const char *tag;
+  unsigned    tl;
+
+  tag = (proc && pfile_proc_tag_get(proc)) ? pfile_proc_tag_get(proc) : "?";
+  tl = (unsigned) strlen(tag);
+  if (tl > 112U) {
+    tl = 112U;
   }
-  return rc;
+  sprintf(what, "the frame of '%.*s'", (int) tl, tag);
+  pic_var_refusal_log(pf, NULL, what, need, 0, &pic_var.map,
+      PIC_MEM_REGION_DATA);
+}
+
+/* Keep a refused frame out of the per-variable passes: they would place it
+ * member by member and silently change the layout the refusal is about. */
+static void pic_frame_mark_failed(pfile_proc_t *proc)
+{
+  pfile_block_t *blk;
+
+  for (blk = pfile_proc_block_root_get(proc);
+       blk;
+       blk = pfile_block_next(blk)) {
+    variable_t vptr;
+
+    for (vptr = pfile_block_variable_list_head(blk);
+         vptr;
+         vptr = variable_link_get(vptr)) {
+      variable_flag_set(vptr, VARIABLE_FLAG_ALLOC_FAIL);
+    }
+  }
+}
+
+/* the SINGLE policy through the one entry (see pic_mem_place) */
+static boolean_t pic_variable_base_set(pfile_t *pf, pfile_proc_t *proc,
+  pic_mem_region_t region, variable_t vptr)
+{
+  pic_mem_request_t req;
+
+  pic_mem_request_var(pf, vptr, PIC_MEM_PLACE_SINGLE, &req);
+  req.proc   = proc;
+  req.region = region;
+  req.report = BOOLEAN_TRUE;
+  if (PIC_MEM_OK == pic_mem_place(pf, &req)) {
+    return BOOLEAN_TRUE;
+  }
+  variable_flag_set(vptr, VARIABLE_FLAG_ALLOC_FAIL);
+  return BOOLEAN_FALSE;
 }
 
 boolean_t pic_variable_alloc_one(pfile_t *pf, pfile_proc_t *proc,
     variable_t var)
 {
-  return pic_variable_base_set(pf, proc, &pic_var.map,
-      PIC_MEM_REGION_DATA, var);
+  return pic_variable_base_set(pf, proc, PIC_MEM_REGION_DATA, var);
 }
 
 /* find all variables that the user has placed & make sure these
@@ -3216,7 +3312,7 @@ static void pic_variable_alloc_block(pfile_t *pf, pfile_proc_t *proc,
     }
   }
   /* If no changes were made here, no changes will be made below. */
-  if ((var_ct == 0) || (change_ct > 0)) {
+  if ((var_ct == 0) || (change_ct > 0) || pic_var.defer_used) {
     /* next, recurse into all procedures this one calls and
      * allocate *those* variables */
     for (cblk = pfile_block_child_get(blk);
@@ -3275,11 +3371,86 @@ static void pic_variable_alloc_proc(pfile_t *pf, pfile_proc_t *proc)
 
 
 /* allocate all variables out of a single block. base holds the block */
+/* place one procedure's AUTO locals one at a time, each object inside one
+ * bank window.  Used by the ISR fallback and by the indirect-frame fallback.
+ * A pinned local already has an address: keep it and seal it.  The caller
+ * has already ruled out the procs that need ONE contiguous frame
+ * (re-entrant, or the user's `pragma frame`). */
+/* A deferred local's virtual base: well above any real offset, so it can
+ * never collide with another group's virtual base.  Placement (the fixup)
+ * overwrites it with the physical address. */
+#define PIC_VAR_DEFER_BASE 0x80000000u
+
+static boolean_t pic_var_proc_place_scattered(pfile_t *pf,
+    pfile_proc_t *proc, boolean_t *deferred)
+{
+  pfile_block_t *blk;
+
+  if (deferred) {
+    *deferred = BOOLEAN_FALSE;
+  }
+  for (blk = pfile_proc_block_root_get(proc);
+       blk;
+       blk = pfile_block_next(blk)) {
+    variable_t vptr;
+
+    for (vptr = pfile_block_variable_list_head(blk);
+         vptr;
+         vptr = variable_link_get(vptr)) {
+      if (!variable_is_auto(vptr)) {
+        continue;
+      }
+      if (VARIABLE_BASE_UNKNOWN == variable_base_get(vptr, 0)) {
+        pic_mem_request_t sreq;
+        pic_mem_status_t    sst;
+
+        pic_mem_request_var(pf, vptr, PIC_MEM_PLACE_SINGLE, &sreq);
+        sreq.proc      = proc;
+        sreq.may_defer = BOOLEAN_TRUE;
+        sreq.report    = BOOLEAN_TRUE;
+        sst = pic_mem_place(pf, &sreq);
+        if (PIC_MEM_REFUSED == sst) {
+          return BOOLEAN_FALSE;
+        }
+        if (PIC_MEM_DEFERRED == sst) {
+          /* handed to the group/chunk pass with a virtual base of its own */
+          if (deferred) {
+            *deferred = BOOLEAN_TRUE;
+          }
+          continue;
+        }
+      }
+      variable_flag_set(vptr, VARIABLE_FLAG_STICKY);
+      variable_flag_clr(vptr, VARIABLE_FLAG_AUTO);
+    }
+  }
+  return BOOLEAN_TRUE;
+}
+
+/* does this proc require one contiguous frame?  Re-entrant procs do (their
+ * push/pop is a byte copy from the frame base); so does a user
+ * `pragma frame`.  The automatic FRAME mark every indirect proc gets does
+ * not: its locals are permanent either way, so they may be placed one by
+ * one when the frame does not fit. */
+static boolean_t pic_var_proc_needs_one_frame(pfile_proc_t *proc)
+{
+  return (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_REENTRANT)
+      || pfile_proc_flag_test(proc, PFILE_PROC_FLAG_FRAME_EXPLICIT))
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
 static void pic_block_data_alloc(pfile_t *pf, pfile_block_t *blk, 
   variable_base_t base)
 {
   variable_t vptr;
 
+  /* A3 increment 1: never lay a frame out from an unknown base.  UNKNOWN
+   * plus a member offset wraps into a small integer (0xFFFF + 30 = 0x1D),
+   * which silently aliases SFRs and low RAM -- the unguarded sibling of the
+   * 2026-10-29 proc-frame straddle defect.  The callers refuse instead. */
+  if (VARIABLE_BASE_UNKNOWN == base) {
+    return;
+  }
   {
     int loop_count = 0;
     for (vptr = pfile_block_variable_list_head(blk);
@@ -3306,22 +3477,56 @@ static void pic_block_data_alloc(pfile_t *pf, pfile_block_t *blk,
  * reuse data space, but it's far easier to just say dataspace for all 
  * functions called indirectly cannot be reused
  */
+static void pic_variable_alloc_callees(pfile_t *pf, pfile_proc_t *proc);
+
 static void pic_variable_alloc_indirect_proc(pfile_t *pf, pfile_proc_t *proc)
 {
-  variable_base_t base;
-  size_t          ct;
-  pfile_proc_t   *cproc;
+  variable_base_t     base;
+  boolean_t           deferred;
+  boolean_t           needs_one;
+  pic_mem_request_t freq;
 
+  deferred = BOOLEAN_FALSE;
   if (pfile_proc_frame_sz_get(proc)) {
-    base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, 
-      pfile_proc_frame_sz_get(proc), 0);
-    pic_block_data_alloc(pf, pfile_proc_block_root_get(proc), base);
-    pfile_proc_frame_set(proc, base, pf);
+    needs_one = pic_var_proc_needs_one_frame(proc);
+    /* only log the frame refusal when there is no fallback */
+    pic_mem_request_frame(proc,
+        (variable_sz_t) pfile_proc_frame_sz_get(proc), needs_one, &base,
+        &freq);
+    if (PIC_MEM_OK == pic_mem_place(pf, &freq)) {
+      pic_block_data_alloc(pf, pfile_proc_block_root_get(proc), base);
+      pfile_proc_frame_set(proc, base, pf);
+    } else if (needs_one) {
+      pic_frame_mark_failed(proc);
+      return;
+    } else {
+      /* the automatic frame mark does not require one contiguous run --
+       * the locals are permanent either way -- so place them one by one
+       * when the block does not fit (the entry refused silently) */
+      if (!pic_var_proc_place_scattered(pf, proc, &deferred)) {
+        pic_frame_mark_failed(proc);
+        return;
+      }
+      if (!deferred) {
+        pfile_proc_frame_sz_calc(proc); /* every AUTO flag was cleared */
+      }
+    }
   }
   /* now...anything *called* by this procedure must also be allocated
    * in permanent, non-reusable store because I don't track indirect
    * references
-   */ 
+   */
+  pic_variable_alloc_callees(pf, proc);
+}
+
+/* allocate the frames of everything this procedure calls (the caller has
+ * already dealt with this proc's own frame).  A deferred local stays AUTO
+ * for the group placement, so this proc must NOT be re-entered as a frame. */
+static void pic_variable_alloc_callees(pfile_t *pf, pfile_proc_t *proc)
+{
+  size_t        ct;
+  pfile_proc_t *cproc;
+
   for (ct = 0; (cproc = pfile_proc_calls_get(proc, ct)) != 0; ct++) {
     if (!pfile_proc_flag_test(cproc, PFILE_PROC_FLAG_VISITED)) {
       pfile_proc_flag_set(cproc, PFILE_PROC_FLAG_VISITED);
@@ -3348,6 +3553,44 @@ static void pic_variable_alloc_indirect(pfile_t *pf)
   }
 }
 
+/* A3 increment 2: when the shared ISR block cannot fit one bank window, place
+ * each ISR local on its own -- every object still inside one window, so the
+ * access stays LINEAR and no walk scratch is involved.  The cost is the ISR
+ * overlay: all interrupt entry points share one frame today, so the fallback
+ * uses the SUM of the frames instead of the largest.  Only programs that
+ * could not be placed at all before take this path, so the layouts of
+ * programs that place today are untouched.
+ *
+ * A proc that needs one contiguous frame -- re-entrant (its push/pop is a
+ * byte copy from the frame base) or `pragma frame` -- cannot be scattered and
+ * keeps the refusal.  `pic_cmdo` marks every re-entrant/indirect proc FRAME,
+ * so this is the re-entrant case here (an indirect proc is not an ISR). */
+static boolean_t pic_var_isr_place_scattered(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  for (proc = pfile_proc_root_get(pf);
+       proc;
+       proc = pfile_proc_next(proc)) {
+    if (!pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INTERRUPT)) {
+      continue;
+    }
+    if (pic_var_proc_needs_one_frame(proc)) {
+      pic_mem_request_t freq;
+
+      pic_mem_request_frame(proc,
+          (variable_sz_t) pfile_proc_frame_sz_get(proc), BOOLEAN_TRUE, 0,
+          &freq);
+      (void) pic_mem_place(pf, &freq);   /* logs the one frame refusal */
+      return BOOLEAN_FALSE;
+    }
+    if (!pic_var_proc_place_scattered(pf, proc, 0)) {
+      return BOOLEAN_FALSE;
+    }
+  }
+  return BOOLEAN_TRUE;
+}
+
 /* all interrupt entry points share the same variable space, so...
      1. calculate the maximum size needed
      2. allocate a single block that size
@@ -3368,9 +3611,42 @@ static void pic_variable_alloc_isr(pfile_t *pf)
     }
   }
 
-  isr_block = (sz)
-    ? pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, sz, 0)
-    : VARIABLE_BASE_UNKNOWN;
+  isr_block = VARIABLE_BASE_UNKNOWN;
+  if (sz) {
+    pic_mem_request_t freq;
+
+    /* the fallback reports per proc, so this frame request is silent */
+    pic_mem_request_frame(0, (variable_sz_t) sz, BOOLEAN_FALSE, &isr_block,
+        &freq);
+    if (PIC_MEM_OK != pic_mem_place(pf, &freq)) {
+      isr_block = VARIABLE_BASE_UNKNOWN;
+    }
+  }
+  if (sz && (VARIABLE_BASE_UNKNOWN == isr_block)) {
+    /* the shared block is one contiguous run; when it does not fit, place
+     * the ISR locals one by one (A3 increment 2) instead of refusing */
+    if (!pic_var_isr_place_scattered(pf)) {
+      for (proc = pfile_proc_root_get(pf);
+           proc;
+           proc = pfile_proc_next(proc)) {
+        if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INTERRUPT)) {
+          pic_frame_mark_failed(proc);
+        }
+      }
+      return;
+    }
+    /* the locals are placed (or deferred to the group/chunk placement);
+     * a deferred one is still AUTO, so never re-enter this proc as a frame:
+     * only its callees' frames remain */
+    for (proc = pfile_proc_root_get(pf);
+         proc;
+         proc = pfile_proc_next(proc)) {
+      if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INTERRUPT)) {
+        pic_variable_alloc_callees(pf, proc);
+      }
+    }
+    return;
+  }
 
   for (proc = pfile_proc_root_get(pf);
        proc;
@@ -3378,24 +3654,26 @@ static void pic_variable_alloc_isr(pfile_t *pf)
     if (pfile_proc_flag_test(proc, PFILE_PROC_FLAG_INTERRUPT)) {
       pfile_block_t *blk;
 
-      /* allocate all of the procedure's variables out of isr_block */
-      pic_block_data_alloc(pf, pfile_proc_block_root_get(proc), isr_block);
-      /* remove the AUTO flag from all of the procedure's variables */
-      for (blk = pfile_proc_block_root_get(proc);
-           blk;
-           blk = pfile_block_next(blk)) {
-        variable_t vptr;
+      if (VARIABLE_BASE_UNKNOWN != isr_block) {
+        /* allocate all of the procedure's variables out of isr_block */
+        pic_block_data_alloc(pf, pfile_proc_block_root_get(proc), isr_block);
+        /* remove the AUTO flag from all of the procedure's variables */
+        for (blk = pfile_proc_block_root_get(proc);
+             blk;
+             blk = pfile_block_next(blk)) {
+          variable_t vptr;
 
-        for (vptr = pfile_block_variable_list_head(blk);
-             vptr;
-             vptr = variable_link_get(vptr)) {
-          variable_flag_clr(vptr, VARIABLE_FLAG_AUTO);
+          for (vptr = pfile_block_variable_list_head(blk);
+               vptr;
+               vptr = variable_link_get(vptr)) {
+            variable_flag_clr(vptr, VARIABLE_FLAG_AUTO);
+          }
         }
       }
       /* recalc the frame size (should be 0) */
       pfile_proc_frame_sz_calc(proc);
       /* allocate anything called by this proc */
-      pic_variable_alloc_indirect_proc(pf, proc);
+      pic_variable_alloc_callees(pf, proc);
     }
   }
 }
@@ -3668,11 +3946,22 @@ static boolean_t pic_variable_is_bit_array(variable_t var)
  * Returns BOOLEAN_TRUE when the allocation succeeded and the group's
  * bases were set; the caller then continues with the next group. */
 static boolean_t pic_variable_group_place_shared(pfile_t *pf,
-    struct variable_ **data, size_t *pii, size_t jj,
-    variable_sz_t sz_reqd, variable_ct_t pointer_slots_reqd,
-    variable_sz_t rm_reqd, variable_base_t virt_base)
+    const pic_mem_request_t *req, size_t *pii)
 {
-  variable_base_t base;
+  struct variable_ **data;
+  size_t            jj;
+  variable_sz_t     sz_reqd;
+  variable_ct_t     pointer_slots_reqd;
+  variable_sz_t     rm_reqd;
+  variable_base_t   virt_base;
+  variable_base_t   base;
+
+  data   = req->members;
+  jj     = req->member_ct;
+  sz_reqd            = req->need;
+  pointer_slots_reqd = req->slots;
+  rm_reqd            = req->padded;
+  virt_base          = req->virt;
 
   /* The shared window can overlap the data area (a 12-bit part declares
    * its whole GPR block `pragma shared'), so the shared list may offer
@@ -3795,22 +4084,6 @@ static void pic_software_stack_calc(pfile_t *pf)
 }
 
 
-/* element size (bytes) of an array member, for chunk-boundary
- * alignment checks; 1 when not an array / not derivable */
-static variable_sz_t pic_var_elem_sz_get(variable_t var)
-{
-  variable_def_t        def;
-  variable_def_member_t mbr;
-  variable_def_t        edef;
-  variable_sz_t         esz;
-
-  def  = variable_def_get(var);
-  mbr  = def ? variable_def_member_get(def) : 0;
-  edef = mbr ? variable_def_member_def_get(mbr) : 0;
-  esz  = edef ? variable_def_byte_sz_get(edef) : 0;
-  return esz ? esz : 1;
-}
-
 /* Alias groups (frame reuse): a chunked group placement is physical
  * storage shared by every member, but each member's subscript walk
  * consults ITS OWN chunk map -- the map the multibank path registers
@@ -3849,7 +4122,7 @@ static boolean_t pic_var_group_member_chunk_maps(pfile_t *pf,
       variable_sz_t   *psz;
       variable_ct_t    pct;
 
-      esz = pic_var_elem_sz_get(memb);
+      esz = pic_mem_stride_get(memb, msz);
       /* pass A: coverage + element-boundary alignment of the prefix */
       cov = 0;
       for (cix = 0; (cix < chunk_ct) && (cov < msz); cix++) {
@@ -3926,6 +4199,539 @@ static boolean_t pic_var_group_member_chunk_maps(pfile_t *pf,
 /* place every candidate group physically (the original fixup loop);
  * runs the fragmentation analysis and software-stack sizing against
  * the resulting layout (both read-only) */
+/* Place one alias group (every variable sharing one virtual base): the
+ * contiguous window first, then the shared window for a small array, then the
+ * chunked multi-bank run.  `*pii` advances over the members that were placed.
+ * FALSE means the driver must stop: a refusal was recorded (the final install
+ * reports it) or ENOMEM was logged.  Body extracted verbatim from the old
+ * fixup loop; the only change is that every exit routes through `done` so the
+ * member index is written back once. */
+static boolean_t pic_group_place(pfile_t *pf, const pic_mem_request_t *req)
+{
+  struct variable_ **data;
+  size_t            ii;
+  size_t            jj;
+  variable_sz_t     sz_reqd;
+  variable_ct_t     pointer_slots_reqd;
+  variable_sz_t     rm_reqd;
+  variable_base_t   virt_base;
+  variable_sz_t     elem_sz;
+  boolean_t         placed;
+  variable_base_t   base;
+
+  data   = req->members;
+  ii     = *req->placed;
+  jj     = req->member_ct;
+  sz_reqd            = req->need;
+  pointer_slots_reqd = req->slots;
+  rm_reqd            = req->padded;
+  virt_base          = req->virt;
+  elem_sz            = req->stride;
+  placed = BOOLEAN_FALSE;
+  base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, sz_reqd,
+      pointer_slots_reqd);
+  if (pic_env_on("JALV2_DBG_REFUSAL")) {
+    fprintf(stderr, "DBG place %-16s sz=%u base=0x%x free=%u\n",
+        req->name ? req->name : "?",
+        (unsigned) sz_reqd, (unsigned) base,
+        (unsigned) pic_data_bank_free_bytes_get());
+  }
+  if (VARIABLE_BASE_UNKNOWN == base) {
+    unsigned bank_size = pic_target_bank_size_get(pf);
+    /* Multi-bank: always remove from the sorted free-list head so partial
+     * consumption of a node is not skipped (old for-loop advanced with ->link
+     * after pic_blist_remove, which could also use freed memory).
+     *
+     * Chunk-walkable variables (arrays) whose single contiguous
+     * allocation failed ALSO take this path even when they are smaller
+     * than the bank size: the usable contiguous run of a window is
+     * far below the bank size once SFRs and the shared window are
+     * carved out (16F1455: ~80-91 B of a 128-byte bank), so the old
+     * sz_reqd > bank_size gate left arrays of e.g. 96..128 bytes
+     * unplaceable when a chunked placement was perfectly legal
+     * (2026-10-26 band 1). A small chunkable array still prefers the
+     * shared window first (MOVLB-free addressing). */
+    if ((sz_reqd <= bank_size)
+        && req->chunkable
+        && pic_variable_group_place_shared(pf, req, &ii)) {
+      placed = BOOLEAN_TRUE;
+      goto done;
+    }
+    if ((sz_reqd > bank_size) || req->chunkable) {
+      /* Try to allocate across multiple banks. Arrays SMALLER than
+       * the bank size also take this path when their single
+       * contiguous allocation failed above: a window's usable run is
+       * well below the bank size once SFRs and the shared window
+       * are carved out (16F1455: ~75-91 B of a 128-byte bank), so
+       * the old sz_reqd > bank_size gate left e.g. 96..128-byte
+       * arrays unplaceable although a chunked placement is legal
+       * (2026-10-26 band 1). */
+      variable_sz_t remaining = sz_reqd;
+      variable_base_t first_base = VARIABLE_BASE_UNKNOWN;
+      pic_bank_info_t *current_bank;
+      variable_ct_t chunk_ct;
+      variable_ct_t chunk_alloc;
+      variable_base_t *chunk_base;
+      variable_sz_t *chunk_sz;
+      variable_sz_t best_run;
+
+      chunk_ct = 0;
+      chunk_alloc = 0;
+      chunk_base = 0;
+      chunk_sz = 0;
+      for (current_bank = pic_var.map.data; current_bank;
+          current_bank = current_bank->link) {
+        chunk_alloc++;
+      }
+      if (chunk_alloc) {
+        chunk_base = MALLOC(chunk_alloc * sizeof(*chunk_base));
+        chunk_sz   = MALLOC(chunk_alloc * sizeof(*chunk_sz));
+        if (!chunk_base || !chunk_sz) {
+          FREE(chunk_base);
+          FREE(chunk_sz);
+          pfile_log_syserr(pf, ENOMEM);
+          goto done;
+        }
+      }
+
+      /* Check if allocation is possible across banks.
+       *
+       * Pass 1 prefers a CONTIGUOUS chunk run (next.lo ==
+       * prev.hi+1): every non-bit-array variable is addressed
+       * LINEARLY as base+offset, so a run with a gap would place
+       * bytes over the gap -- overlapping fixed `at` pins and other
+       * variables (the classic concat-witness corruption: a
+       * 368-byte scratch chunked over the 0x77/0x78 regression
+       * pins).  At a gap the run restarts at the current node and
+       * the scan continues, so a contiguous multi-window span
+       * (e.g. across bank-boundary node splits) still wins.
+       *
+       * Pass 2 keeps the original gap-tolerant fill for fragmented
+       * maps (16Fxxx banks are physically non-contiguous -- SFR
+       * holes -- and arrays larger than one bank can ONLY be
+       * placed across the holes; indices landing in a hole alias
+       * that storage, which long-green tests like the 16f877
+       * 260-byte pointer witness rely on never touching). */
+      {
+        unsigned passno;
+        variable_sz_t run_sz;
+
+        /* pass 0: contiguous-only; pass 1: gap-tolerant fallback */
+        best_run = 0;
+        for (passno = 0; passno < 2; passno++) {
+          boolean_t contiguous_only = (0 == passno)
+            ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+
+          remaining = sz_reqd;
+          run_sz    = 0;
+          chunk_ct = 0;
+          first_base = VARIABLE_BASE_UNKNOWN;
+          /* Layer 2: holed chunks are placeable for LINEAR arrays too
+           * (runtime subscripts walk the map, const subscripts resolve
+           * through pic_var_chunk_addr_resolve), but a multi-byte ELEMENT
+           * must never straddle a hole -- trim every non-final chunk down
+           * to a whole multiple of the element size.  The stride comes from
+           * the request (pic_mem_request_group derives it from the array's
+           * element def exactly as the old code here did). */
+          for (current_bank = pic_var.map.data; current_bank && remaining > 0; current_bank = current_bank->link) {
+            /* walk the node in NON-reserved segments: the shared /
+             * access-window bytes inside the node are reserved for
+             * access-window residents and must become holes for the
+             * chunk walk (2026-10-26 band 2: chunks that consumed
+             * them stranded _pic_state/_pic_temp and overlapped live
+             * scalars) */
+            variable_base_t seg_lo[PIC_NODE_MAX_SEG];
+            variable_base_t seg_hi[PIC_NODE_MAX_SEG];
+            variable_ct_t   seg_ct;
+            variable_ct_t   seg_ix;
+
+            seg_ct = pic_node_chunk_segments_get(pf,
+              current_bank->lo, current_bank->hi,
+              seg_lo, seg_hi, PIC_NODE_MAX_SEG);
+            for (seg_ix = 0; (seg_ix < seg_ct) && (remaining > 0); seg_ix++) {
+              variable_sz_t available = seg_hi[seg_ix] - seg_lo[seg_ix] + 1;
+              variable_sz_t chunk_size = (remaining > available) ? available : remaining;
+
+              if (contiguous_only && (chunk_ct > 0)
+                  && (seg_lo[seg_ix]
+                    != (variable_base_t) (chunk_base[chunk_ct - 1]
+                      + chunk_sz[chunk_ct - 1]))) {
+                /* gap before this segment: restart the run here */
+                if (run_sz > best_run) {
+                  best_run = run_sz;
+                }
+                run_sz = 0;
+                remaining = sz_reqd;
+                chunk_ct = 0;
+                first_base = VARIABLE_BASE_UNKNOWN;
+                chunk_size = (remaining > available) ? available : remaining;
+              }
+              /* element alignment: a non-final chunk (more remaining
+               * after it) ends at a hole, so it must hold whole
+               * elements only */
+              if (!contiguous_only && (remaining > chunk_size)) {
+                chunk_size -= chunk_size % elem_sz;
+              }
+              if (chunk_size > 0) {
+                if (first_base == VARIABLE_BASE_UNKNOWN) {
+                  first_base = seg_lo[seg_ix];
+                }
+                chunk_base[chunk_ct] = seg_lo[seg_ix];
+                chunk_sz[chunk_ct] = chunk_size;
+                chunk_ct++;
+                if (contiguous_only) {
+                  run_sz += chunk_size;
+                }
+                remaining -= chunk_size;
+              }
+            }
+          }
+          if (contiguous_only && (run_sz > best_run)) {
+            best_run = run_sz;
+          }
+          if (0 == remaining) {
+            /* Layer 2: a holed run places for chunk-walking bit arrays
+             * AND for linear arrays (runtime subscripts walk the chunk
+             * map; const subscripts resolve at compile time). The one
+             * unsound case is a POINTER-BOUND variable: pointer
+             * arithmetic is linear (*p + i) and cannot walk, so keep
+             * the trial-safe refusal for those (the driver reports the
+             * error on the final install). */
+            if ((1 == passno)
+              && !req->bit_array
+              && !pic_fat_pointers_enabled(pf)
+              && req->linear_only
+              && (chunk_ct > 1)) {
+              variable_ct_t ci;
+              boolean_t holed;
+
+              holed = BOOLEAN_FALSE;
+              for (ci = 1; ci < chunk_ct; ci++) {
+                if (chunk_base[ci]
+                    != (variable_base_t) (chunk_base[ci - 1]
+                      + chunk_sz[ci - 1])) {
+                  holed = BOOLEAN_TRUE;
+                  break;
+                }
+              }
+              if (holed) {
+                if (!pic_var.refused) {
+                  pic_var.refused      = BOOLEAN_TRUE;
+                  pic_var.refused_ptr  = req->pointer_target;
+                  pic_var.refused_call = !pic_var.refused_ptr;
+                  pic_var.refused_var  = data[ii];
+                  pic_var.refused_sz   = sz_reqd;
+                  pic_var.refused_best = best_run;
+                }
+                FREE(chunk_base);
+                FREE(chunk_sz);
+                break;
+              }
+            }
+            break;
+          }
+        }
+      }
+
+      if (pic_var.refused && (VARIABLE_BASE_UNKNOWN == base)) {
+        /* refused above; stop placing (the driver reports it) */
+        goto done;
+      } else if (remaining == 0
+          && pic_var_group_member_chunk_maps(pf, data, ii, jj,
+            chunk_base, chunk_sz, chunk_ct)) {
+        /* Multi-bank allocation is possible - now actually do it */
+        base = first_base;
+        /* remove the ACCEPTED chunks by base (a contiguous run may
+         * start deeper in the sorted list than the head node) */
+        {
+          variable_ct_t ci;
+
+          for (ci = 0; ci < chunk_ct; ci++) {
+            pic_blist_remove(pf, &pic_var.map.data, chunk_base[ci],
+              chunk_sz[ci]);
+          }
+        }
+
+        pfile_log(pf, PFILE_LOG_DEBUG,
+          "Large array (%u bytes) allocated across multiple banks starting at 0x%04X. "
+          "This may impact performance due to bank switching overhead.",
+          (unsigned)sz_reqd, (unsigned)base);
+        pic_fixup_varalloc_log(pf, data, ii, sz_reqd, pointer_slots_reqd,
+            rm_reqd, virt_base, base, "multibank");
+        if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
+          variable_ct_t dbg_ci;
+          for (dbg_ci = 0; dbg_ci < chunk_ct; dbg_ci++) {
+            fprintf(stderr,
+              "jal CHUNKMAP r%u %s[%u] = 0x%04X..0x%04X\n",
+              (unsigned) pic_var.dbg_round,
+              req->name ? req->name : "?", dbg_ci,
+              (unsigned) chunk_base[dbg_ci],
+              (unsigned) (chunk_base[dbg_ci] + chunk_sz[dbg_ci] - 1));
+          }
+        }
+        pic_variable_chunk_map_set(pf, data[ii], chunk_ct,
+            chunk_base, chunk_sz);
+        pic_var_chunk_map_propagate(pf, data[ii]);
+        /* Update data area usage counter for multi-bank allocation */
+        pic_blist_max += sz_reqd;
+        /* Mark all variables in this group as allocated */
+        while (ii < jj) {
+          variable_base_set(data[ii], base, 0);
+          ii++;
+        }
+        FREE(chunk_base);
+        FREE(chunk_sz);
+        placed = BOOLEAN_TRUE;
+      goto done;
+      } else {
+        /* TRIAL-SAFE no-room refusal: a losing layout candidate must
+         * not poison errct with a hard error -- the driver reports the
+         * refusal when the FINAL install fails the same way. */
+        if (!pic_var.refused) {
+          pic_var.refused      = BOOLEAN_TRUE;
+          pic_var.refused_ptr  = BOOLEAN_FALSE;
+          pic_var.refused_var  = data[ii];
+          pic_var.refused_sz   = sz_reqd;
+          pic_var.refused_best = best_run;
+        }
+        FREE(chunk_base);
+        FREE(chunk_sz);
+        goto done;
+      }
+    } else {
+      /* Try to allocate from shared memory as fallback */
+      if (!pic_variable_group_place_shared(pf, req, &ii)) {
+        /* TRIAL-SAFE no-room refusal, as above (no contiguous-run
+         * figure here: the first-fit search does not compute one) */
+        if (!pic_var.refused) {
+          pic_var.refused      = BOOLEAN_TRUE;
+          pic_var.refused_ptr  = BOOLEAN_FALSE;
+          pic_var.refused_var  = data[ii];
+          pic_var.refused_sz   = sz_reqd;
+          pic_var.refused_best = 0;
+        }
+        goto done;
+      }
+      placed = BOOLEAN_TRUE;
+      goto done;
+    }
+  } else {
+    pic_fixup_varalloc_log(pf, data, ii, sz_reqd, pointer_slots_reqd,
+        rm_reqd, virt_base, base, "data");
+    pfile_log(pf, PFILE_LOG_DEBUG, "register %u mapped to %u",
+        variable_base_get(data[ii], 0),
+        base);
+    while (ii < jj) {
+      variable_base_set(data[ii], base, 0);
+      ii++;
+    }
+  }
+  placed = BOOLEAN_TRUE;
+done:
+  *req->placed = ii;
+  return placed;
+}
+
+/* Build the request for one variable (SINGLE): the facts placement needs,
+ * read once here and never again by the search.  The chunking facts are
+ * left false; the GROUP adapter fills them. */
+void pic_mem_request_var(pfile_t *pf, variable_t var,
+    pic_mem_place_policy_t policy, pic_mem_request_t *req)
+{
+  variable_ct_t slots;
+  variable_sz_t need;
+
+  memset(req, 0, sizeof(*req));
+  need = pic_variable_storage_need_get(pf, var, &slots);
+  req->policy = policy;
+  req->region = PIC_MEM_REGION_DATA;
+  req->var    = var;
+  req->name   = variable_name_get(var);
+  req->need   = need;
+  req->slots  = slots;
+  req->padded = need + pic_pointer_slot_padding_get(pf, slots);
+  req->stride = 1;
+}
+
+/* Build the request for one contiguous frame (FRAME): a raw byte run with
+ * no variable -- the base is written back through `req->base`. */
+void pic_mem_request_frame(pfile_proc_t *proc, variable_sz_t need,
+    boolean_t report, variable_base_t *base, pic_mem_request_t *req)
+{
+  memset(req, 0, sizeof(*req));
+  req->policy = PIC_MEM_PLACE_FRAME;
+  req->region = PIC_MEM_REGION_DATA;
+  req->proc   = proc;
+  req->need   = need;
+  req->report = report;
+  req->base   = base;
+}
+
+/* Build the request for one alias group.  The group's need/padding are the
+ * LARGEST member's (ties keep the first); the chunking facts come from the
+ * HEAD, exactly as the placement has always read them. */
+void pic_mem_request_group(pfile_t *pf, struct variable_ **members,
+    size_t *pii, size_t jj, pic_mem_request_t *req)
+{
+  variable_t    head;
+  variable_sz_t need;
+  variable_sz_t rm;
+  variable_ct_t slots;
+  size_t        j;
+
+  memset(req, 0, sizeof(*req));
+  head = members[*pii];
+  need = pic_variable_storage_need_get(pf, head, &slots);
+  rm   = need + pic_pointer_slot_padding_get(pf, slots);
+  for (j = *pii + 1; j < jj; j++) {
+    variable_sz_t vneed;
+    variable_sz_t vrm;
+    variable_ct_t vslots;
+
+    vneed = pic_variable_storage_need_get(pf, members[j], &vslots);
+    vrm   = vneed + pic_pointer_slot_padding_get(pf, vslots);
+    if (vrm > rm) {
+      need  = vneed;
+      slots = vslots;
+      rm    = vrm;
+    }
+  }
+  req->policy    = PIC_MEM_PLACE_GROUP;
+  /* no req->region: the group search order (data window -> shared window ->
+   * segmented) is intrinsic to pic_group_place, not a request fact */
+  req->need      = need;
+  req->padded    = rm;
+  req->slots     = slots;
+  req->virt      = variable_base_get(head, 0);
+  req->name      = variable_name_get(head);
+  req->stride    = pic_mem_stride_get(head, need);
+  req->bit_array = pic_variable_is_bit_array(head) ? BOOLEAN_TRUE
+    : BOOLEAN_FALSE;
+  req->chunkable  = (variable_is_array(head) || req->bit_array)
+    ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  req->linear_only = (pic_var_pointer_bind_escaped_target(head)
+      || pic_var_escapes_to_call(head)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  req->pointer_target = pic_var_pointer_target_test(head);
+  req->members    = members;
+  req->member_ct  = jj;
+  req->placed     = pii;
+  req->report     = BOOLEAN_TRUE;
+  if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
+    /* alias-group membership: every member shares the physical placement;
+     * chunk maps, however, are per-variable -- see the multibank branch */
+    size_t dbg_ix;
+
+    fprintf(stderr, "jal GROUP r%u virt=0x%04X sz=%u members:",
+        (unsigned) pic_var.dbg_round, (unsigned) req->virt,
+        (unsigned) need);
+    for (dbg_ix = *pii; dbg_ix < jj; dbg_ix++) {
+      fprintf(stderr, " %s(%uB,arr=%d,bitarr=%d)",
+          variable_name_get(members[dbg_ix])
+            ? variable_name_get(members[dbg_ix]) : "?",
+          (unsigned) pic_variable_storage_need_get(pf, members[dbg_ix], 0),
+          (int) variable_is_array(members[dbg_ix]),
+          (int) pic_variable_is_bit_array(members[dbg_ix]));
+    }
+    fprintf(stderr, "\n");
+  }
+}
+
+/* A3 facade: the one deferral.  A SINGLE object that cannot fit one window
+ * is handed to the later group pass with a virtual base of its own (that
+ * pass runs once for the program). */
+static pic_mem_status_t pic_mem_place_defer(const pic_mem_request_t *req)
+{
+  variable_base_set(req->var,
+      (variable_base_t) (PIC_VAR_DEFER_BASE + pic_var.defer_used), 0);
+  if (pic_env_on("JALV2_DBG_REFUSAL")) {
+    fprintf(stderr, "DBG defer %-20s need=%u run=%u base=0x%lx\n",
+        req->name ? req->name : "?",
+        (unsigned) req->need,
+        (unsigned) pic_mem_map_largest_run(&pic_var.map,
+            PIC_MEM_REGION_DATA),
+        (unsigned long) variable_base_get(req->var, 0));
+  }
+  pic_var.defer_used++;
+  return PIC_MEM_DEFERRED;
+}
+
+/* A3: the one placement entry.  Every class states a policy here; the
+ * search order, the deferral rule and the refusal wording live here, so a
+ * class cannot grow its own variant by accident. */
+pic_mem_status_t pic_mem_place(pfile_t *pf, const pic_mem_request_t *req)
+{
+  variable_base_t base;
+
+  if (!req) {
+    return PIC_MEM_REFUSED;
+  }
+  switch (req->policy) {
+    case PIC_MEM_PLACE_SINGLE: {
+      assert(req->need);
+      base = pic_mem_map_alloc(pf, &pic_var.map, req->region, req->need,
+          req->slots);
+      if (pic_env_on("JALV2_DBG_REFUSAL")) {
+        fprintf(stderr, "DBG first %-18s need=%u base=0x%x\n",
+            req->name ? req->name : "?",
+            (unsigned) req->need, (unsigned) base);
+      }
+      if (VARIABLE_BASE_UNKNOWN != base) {
+        assert(VARIABLE_BASE_UNKNOWN == variable_base_get(req->var, 0));
+        variable_base_set(req->var, base, 0);
+        if (req->base) {
+          *req->base = base;
+        }
+        return PIC_MEM_OK;
+      }
+      if (req->may_defer
+          && pfile_flag_test(pf, PFILE_FLAG_OPT_VARIABLE_REUSE)) {
+        /* the object cannot fit one window: hand it to the group pass with
+         * a virtual base of its own (that pass runs once for the program) */
+        return pic_mem_place_defer(req);
+      }
+      if (req->report) {
+        char        where[96];
+        const char *tag;
+        unsigned    tl;
+
+        where[0] = '\0';
+        tag = (req->proc) ? pfile_proc_tag_get(req->proc) : NULL;
+        if (tag) {
+          tl = (unsigned) strlen(tag);
+          if (tl > 94U) {
+            tl = 94U;
+          }
+          sprintf(where, "%.*s:", (int) tl, tag);
+        }
+        pic_var_refusal_log(pf, where, req->name ? req->name : "?",
+            req->need, (variable_sz_t) (req->padded - req->need),
+            &pic_var.map, req->region);
+      }
+      return PIC_MEM_REFUSED;
+    }
+
+    case PIC_MEM_PLACE_FRAME:
+      base = pic_mem_map_alloc(pf, &pic_var.map, req->region, req->need, 0);
+      if (VARIABLE_BASE_UNKNOWN != base) {
+        if (req->base) {
+          *req->base = base;
+        }
+        return PIC_MEM_OK;
+      }
+      if (req->report) {
+        pic_var_frame_refusal(pf, req->proc, req->need);
+      }
+      return PIC_MEM_REFUSED;
+
+    case PIC_MEM_PLACE_GROUP:
+      if (!req->members || !req->placed) {
+        return PIC_MEM_REFUSED;
+      }
+      return pic_group_place(pf, req) ? PIC_MEM_OK : PIC_MEM_REFUSED;
+  }
+  return PIC_MEM_REFUSED;
+}
+
 static void pic_variable_fixup_place(pfile_t *pf,
     struct variable_ **data, size_t used)
 {
@@ -3941,385 +4747,19 @@ static void pic_variable_fixup_place(pfile_t *pf,
    */
   ii = 0;
   while (ii < used) {
-    size_t          jj;
-    size_t          sz_reqd; /* largest storage required at position */
-    variable_ct_t   pointer_slots_reqd;
-    variable_sz_t   rm_reqd;
-    variable_base_t base;
-    variable_base_t virt_base;
+    size_t            jj;
+    pic_mem_request_t req;
 
-    /* Process variable allocation normally */
-
-    sz_reqd = pic_variable_storage_need_get(pf, data[ii],
-        &pointer_slots_reqd);
-    rm_reqd = sz_reqd + pic_pointer_slot_padding_get(pf, pointer_slots_reqd);
+    /* every variable sharing one virtual base is one alias group */
     for (jj = ii + 1;
          (jj < used)
          && (variable_base_get(data[ii], 0)
            == variable_base_get(data[jj], 0));
          jj++) {
-      size_t vsz;
-      variable_ct_t pointer_slots;
-      variable_sz_t rm;
-
-      vsz = pic_variable_storage_need_get(pf, data[jj],
-          &pointer_slots);
-      rm = vsz + pic_pointer_slot_padding_get(pf, pointer_slots);
-      if (rm > rm_reqd) {
-        sz_reqd = vsz;
-        pointer_slots_reqd = pointer_slots;
-        rm_reqd = rm;
-      }
     }
-    virt_base = variable_base_get(data[ii], 0);
-    if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
-      /* alias-group membership: every member shares the physical
-       * placement below (frame reuse); chunk maps, however, are
-       * per-variable -- see the multibank branch */
-      size_t dbg_ix;
-
-      fprintf(stderr, "jal GROUP r%u virt=0x%04X sz=%u members:",
-          (unsigned) pic_var.dbg_round, (unsigned) virt_base,
-          (unsigned) sz_reqd);
-      for (dbg_ix = ii; dbg_ix < jj; dbg_ix++) {
-        fprintf(stderr, " %s(%uB,arr=%d,bitarr=%d)",
-            variable_name_get(data[dbg_ix]) ? variable_name_get(data[dbg_ix]) : "?",
-            (unsigned) pic_variable_storage_need_get(pf, data[dbg_ix], 0),
-            (int) variable_is_array(data[dbg_ix]),
-            (int) pic_variable_is_bit_array(data[dbg_ix]));
-      }
-      fprintf(stderr, "\n");
-    }
-    base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, sz_reqd,
-        pointer_slots_reqd);
-    if (pic_env_on("JALV2_DBG_REFUSAL")) {
-      fprintf(stderr, "DBG place %-16s sz=%u base=0x%x free=%u\n",
-          variable_name_get(data[ii]) ? variable_name_get(data[ii]) : "?",
-          (unsigned) sz_reqd, (unsigned) base,
-          (unsigned) pic_data_bank_free_bytes_get());
-    }
-    if (VARIABLE_BASE_UNKNOWN == base) {
-      unsigned bank_size = pic_target_bank_size_get(pf);
-      /* Multi-bank: always remove from the sorted free-list head so partial
-       * consumption of a node is not skipped (old for-loop advanced with ->link
-       * after pic_blist_remove, which could also use freed memory).
-       *
-       * Chunk-walkable variables (arrays) whose single contiguous
-       * allocation failed ALSO take this path even when they are smaller
-       * than the bank size: the usable contiguous run of a window is
-       * far below the bank size once SFRs and the shared window are
-       * carved out (16F1455: ~80-91 B of a 128-byte bank), so the old
-       * sz_reqd > bank_size gate left arrays of e.g. 96..128 bytes
-       * unplaceable when a chunked placement was perfectly legal
-       * (2026-10-26 band 1). A small chunkable array still prefers the
-       * shared window first (MOVLB-free addressing). */
-      if ((sz_reqd <= bank_size)
-          && (variable_is_array(data[ii])
-            || pic_variable_is_bit_array(data[ii]))
-          && pic_variable_group_place_shared(pf, data, &ii, jj, sz_reqd,
-              pointer_slots_reqd, rm_reqd, virt_base)) {
-        continue;
-      }
-      if ((sz_reqd > bank_size)
-          || (variable_is_array(data[ii])
-            || pic_variable_is_bit_array(data[ii]))) {
-        /* Try to allocate across multiple banks. Arrays SMALLER than
-         * the bank size also take this path when their single
-         * contiguous allocation failed above: a window's usable run is
-         * well below the bank size once SFRs and the shared window
-         * are carved out (16F1455: ~75-91 B of a 128-byte bank), so
-         * the old sz_reqd > bank_size gate left e.g. 96..128-byte
-         * arrays unplaceable although a chunked placement is legal
-         * (2026-10-26 band 1). */
-        variable_sz_t remaining = sz_reqd;
-        variable_base_t first_base = VARIABLE_BASE_UNKNOWN;
-        pic_bank_info_t *current_bank;
-        variable_ct_t chunk_ct;
-        variable_ct_t chunk_alloc;
-        variable_base_t *chunk_base;
-        variable_sz_t *chunk_sz;
-        variable_sz_t best_run;
-
-        chunk_ct = 0;
-        chunk_alloc = 0;
-        chunk_base = 0;
-        chunk_sz = 0;
-        for (current_bank = pic_var.map.data; current_bank;
-            current_bank = current_bank->link) {
-          chunk_alloc++;
-        }
-        if (chunk_alloc) {
-          chunk_base = MALLOC(chunk_alloc * sizeof(*chunk_base));
-          chunk_sz   = MALLOC(chunk_alloc * sizeof(*chunk_sz));
-          if (!chunk_base || !chunk_sz) {
-            FREE(chunk_base);
-            FREE(chunk_sz);
-            pfile_log_syserr(pf, ENOMEM);
-            break;
-          }
-        }
-
-        /* Check if allocation is possible across banks.
-         *
-         * Pass 1 prefers a CONTIGUOUS chunk run (next.lo ==
-         * prev.hi+1): every non-bit-array variable is addressed
-         * LINEARLY as base+offset, so a run with a gap would place
-         * bytes over the gap -- overlapping fixed `at` pins and other
-         * variables (the classic concat-witness corruption: a
-         * 368-byte scratch chunked over the 0x77/0x78 regression
-         * pins).  At a gap the run restarts at the current node and
-         * the scan continues, so a contiguous multi-window span
-         * (e.g. across bank-boundary node splits) still wins.
-         *
-         * Pass 2 keeps the original gap-tolerant fill for fragmented
-         * maps (16Fxxx banks are physically non-contiguous -- SFR
-         * holes -- and arrays larger than one bank can ONLY be
-         * placed across the holes; indices landing in a hole alias
-         * that storage, which long-green tests like the 16f877
-         * 260-byte pointer witness rely on never touching). */
-        {
-          unsigned passno;
-          variable_sz_t run_sz;
-
-          /* pass 0: contiguous-only; pass 1: gap-tolerant fallback */
-          best_run = 0;
-          for (passno = 0; passno < 2; passno++) {
-            boolean_t contiguous_only = (0 == passno)
-              ? BOOLEAN_TRUE : BOOLEAN_FALSE;
-            variable_sz_t elem_sz;
-
-            remaining = sz_reqd;
-            run_sz    = 0;
-            chunk_ct = 0;
-            first_base = VARIABLE_BASE_UNKNOWN;
-            /* Layer 2: holed chunks are placeable for LINEAR arrays too
-             * (runtime subscripts walk the map, const subscripts resolve
-             * through pic_var_chunk_addr_resolve), but a multi-byte
-             * ELEMENT must never straddle a hole -- trim every non-final
-             * chunk down to a whole multiple of the element size so the
-             * straddling tail bytes stay free for other variables. Byte
-             * elements (and bit arrays, which pack densely and always
-             * walked) trim by 1 = no-op. */
-            elem_sz = 1;
-            if (!pic_variable_is_bit_array(data[ii])) {
-              variable_def_t        adef;
-              variable_def_member_t ambr;
-              variable_def_t        edef;
-
-              /* The ELEMENT size is what must not straddle a hole: read
-               * the member (element) def, not the array def (whose size
-               * is the whole array), and convert with
-               * variable_def_byte_sz_get (variable_def_sz_get is bits for
-               * bit-flagged defs, bytes otherwise -- the old
-               * (sz + 7) / 8 on the ARRAY def produced a bogus huge
-               * elem_sz whenever sz_reqd % ceil(sz_reqd / 8) == 0, which
-               * trimmed every non-final chunk down to nothing). */
-              adef = variable_def_get(data[ii]);
-              ambr = adef ? variable_def_member_get(adef) : 0;
-              edef = ambr ? variable_def_member_def_get(ambr)
-                          : VARIABLE_DEF_NONE;
-              if (edef) {
-                variable_sz_t esz;
-
-                esz = variable_def_byte_sz_get(edef);
-                if ((esz >= 1)
-                    && (0 == (sz_reqd % esz))) {
-                  elem_sz = esz;
-                }
-              }
-            }
-            for (current_bank = pic_var.map.data; current_bank && remaining > 0; current_bank = current_bank->link) {
-              /* walk the node in NON-reserved segments: the shared /
-               * access-window bytes inside the node are reserved for
-               * access-window residents and must become holes for the
-               * chunk walk (2026-10-26 band 2: chunks that consumed
-               * them stranded _pic_state/_pic_temp and overlapped live
-               * scalars) */
-              variable_base_t seg_lo[PIC_NODE_MAX_SEG];
-              variable_base_t seg_hi[PIC_NODE_MAX_SEG];
-              variable_ct_t   seg_ct;
-              variable_ct_t   seg_ix;
-
-              seg_ct = pic_node_chunk_segments_get(pf,
-                current_bank->lo, current_bank->hi,
-                seg_lo, seg_hi, PIC_NODE_MAX_SEG);
-              for (seg_ix = 0; (seg_ix < seg_ct) && (remaining > 0); seg_ix++) {
-                variable_sz_t available = seg_hi[seg_ix] - seg_lo[seg_ix] + 1;
-                variable_sz_t chunk_size = (remaining > available) ? available : remaining;
-
-                if (contiguous_only && (chunk_ct > 0)
-                    && (seg_lo[seg_ix]
-                      != (variable_base_t) (chunk_base[chunk_ct - 1]
-                        + chunk_sz[chunk_ct - 1]))) {
-                  /* gap before this segment: restart the run here */
-                  if (run_sz > best_run) {
-                    best_run = run_sz;
-                  }
-                  run_sz = 0;
-                  remaining = sz_reqd;
-                  chunk_ct = 0;
-                  first_base = VARIABLE_BASE_UNKNOWN;
-                  chunk_size = (remaining > available) ? available : remaining;
-                }
-                /* element alignment: a non-final chunk (more remaining
-                 * after it) ends at a hole, so it must hold whole
-                 * elements only */
-                if (!contiguous_only && (remaining > chunk_size)) {
-                  chunk_size -= chunk_size % elem_sz;
-                }
-                if (chunk_size > 0) {
-                  if (first_base == VARIABLE_BASE_UNKNOWN) {
-                    first_base = seg_lo[seg_ix];
-                  }
-                  chunk_base[chunk_ct] = seg_lo[seg_ix];
-                  chunk_sz[chunk_ct] = chunk_size;
-                  chunk_ct++;
-                  if (contiguous_only) {
-                    run_sz += chunk_size;
-                  }
-                  remaining -= chunk_size;
-                }
-              }
-            }
-            if (contiguous_only && (run_sz > best_run)) {
-              best_run = run_sz;
-            }
-            if (0 == remaining) {
-              /* Layer 2: a holed run places for chunk-walking bit arrays
-               * AND for linear arrays (runtime subscripts walk the chunk
-               * map; const subscripts resolve at compile time). The one
-               * unsound case is a POINTER-BOUND variable: pointer
-               * arithmetic is linear (*p + i) and cannot walk, so keep
-               * the trial-safe refusal for those (the driver reports the
-               * error on the final install). */
-              if ((1 == passno)
-                && !pic_variable_is_bit_array(data[ii])
-                && !pic_fat_pointers_enabled(pf)
-                && (pic_var_pointer_bind_escaped_target(data[ii])
-                  || pic_var_escapes_to_call(data[ii]))
-                && (chunk_ct > 1)) {
-                variable_ct_t ci;
-                boolean_t holed;
-
-                holed = BOOLEAN_FALSE;
-                for (ci = 1; ci < chunk_ct; ci++) {
-                  if (chunk_base[ci]
-                      != (variable_base_t) (chunk_base[ci - 1]
-                        + chunk_sz[ci - 1])) {
-                    holed = BOOLEAN_TRUE;
-                    break;
-                  }
-                }
-                if (holed) {
-                  if (!pic_var.refused) {
-                    pic_var.refused      = BOOLEAN_TRUE;
-                    pic_var.refused_ptr  = pic_var_pointer_target_test(
-                                              data[ii]);
-                    pic_var.refused_call = !pic_var.refused_ptr;
-                    pic_var.refused_var  = data[ii];
-                    pic_var.refused_sz   = sz_reqd;
-                    pic_var.refused_best = best_run;
-                  }
-                  FREE(chunk_base);
-                  FREE(chunk_sz);
-                  break;
-                }
-              }
-              break;
-            }
-          }
-        }
-
-        if (pic_var.refused && (VARIABLE_BASE_UNKNOWN == base)) {
-          /* refused above; stop placing (the driver reports it) */
-          break;
-        } else if (remaining == 0
-            && pic_var_group_member_chunk_maps(pf, data, ii, jj,
-              chunk_base, chunk_sz, chunk_ct)) {
-          /* Multi-bank allocation is possible - now actually do it */
-          base = first_base;
-          /* remove the ACCEPTED chunks by base (a contiguous run may
-           * start deeper in the sorted list than the head node) */
-          {
-            variable_ct_t ci;
-
-            for (ci = 0; ci < chunk_ct; ci++) {
-              pic_blist_remove(pf, &pic_var.map.data, chunk_base[ci],
-                chunk_sz[ci]);
-            }
-          }
-
-          pfile_log(pf, PFILE_LOG_DEBUG,
-            "Large array (%u bytes) allocated across multiple banks starting at 0x%04X. "
-            "This may impact performance due to bank switching overhead.",
-            (unsigned)sz_reqd, (unsigned)base);
-          pic_fixup_varalloc_log(pf, data, ii, sz_reqd, pointer_slots_reqd,
-              rm_reqd, virt_base, base, "multibank");
-          if (pfile_debug_sub_test(pf, PFILE_DBGSUB_VALLOC)) {
-            variable_ct_t dbg_ci;
-            for (dbg_ci = 0; dbg_ci < chunk_ct; dbg_ci++) {
-              fprintf(stderr,
-                "jal CHUNKMAP r%u %s[%u] = 0x%04X..0x%04X\n",
-                (unsigned) pic_var.dbg_round, variable_name_get(data[ii]), dbg_ci,
-                (unsigned) chunk_base[dbg_ci],
-                (unsigned) (chunk_base[dbg_ci] + chunk_sz[dbg_ci] - 1));
-            }
-          }
-          pic_variable_chunk_map_set(pf, data[ii], chunk_ct,
-              chunk_base, chunk_sz);
-          pic_var_chunk_map_propagate(pf, data[ii]);
-          /* Update data area usage counter for multi-bank allocation */
-          pic_blist_max += sz_reqd;
-          /* Mark all variables in this group as allocated */
-          while (ii < jj) {
-            variable_base_set(data[ii], base, 0);
-            ii++;
-          }
-          FREE(chunk_base);
-          FREE(chunk_sz);
-          continue;  /* Skip to next variable group */
-        } else {
-          /* TRIAL-SAFE no-room refusal: a losing layout candidate must
-           * not poison errct with a hard error -- the driver reports the
-           * refusal when the FINAL install fails the same way. */
-          if (!pic_var.refused) {
-            pic_var.refused      = BOOLEAN_TRUE;
-            pic_var.refused_ptr  = BOOLEAN_FALSE;
-            pic_var.refused_var  = data[ii];
-            pic_var.refused_sz   = sz_reqd;
-            pic_var.refused_best = best_run;
-          }
-          FREE(chunk_base);
-          FREE(chunk_sz);
-          break;
-        }
-      } else {
-        /* Try to allocate from shared memory as fallback */
-        if (!pic_variable_group_place_shared(pf, data, &ii, jj, sz_reqd,
-              pointer_slots_reqd, rm_reqd, virt_base)) {
-          /* TRIAL-SAFE no-room refusal, as above (no contiguous-run
-           * figure here: the first-fit search does not compute one) */
-          if (!pic_var.refused) {
-            pic_var.refused      = BOOLEAN_TRUE;
-            pic_var.refused_ptr  = BOOLEAN_FALSE;
-            pic_var.refused_var  = data[ii];
-            pic_var.refused_sz   = sz_reqd;
-            pic_var.refused_best = 0;
-          }
-          break;
-        }
-        continue;
-      }
-    } else {
-      pic_fixup_varalloc_log(pf, data, ii, sz_reqd, pointer_slots_reqd,
-          rm_reqd, virt_base, base, "data");
-      pfile_log(pf, PFILE_LOG_DEBUG, "register %u mapped to %u",
-          variable_base_get(data[ii], 0),
-          base);
-      while (ii < jj) {
-        variable_base_set(data[ii], base, 0);
-        ii++;
-      }
+    pic_mem_request_group(pf, data, &ii, jj, &req);
+    if (PIC_MEM_REFUSED == pic_mem_place(pf, &req)) {
+      break;
     }
   }
   pic_analyze_memory_fragmentation(pf);
@@ -4878,8 +5318,7 @@ static void pic_variable_alloc_leftover(pfile_t *pf)
 
       for (vptr = pfile_block_variable_list_head(blk); vptr;
           vptr = variable_link_get(vptr)) {
-        variable_base_t base;
-        variable_sz_t   var_size;
+        variable_sz_t var_size;
 
         if (!variable_is_auto(vptr) || variable_is_sticky(vptr)
             || variable_flag_test(vptr, VARIABLE_FLAG_ALLOC_FAIL)) {
@@ -4905,9 +5344,15 @@ static void pic_variable_alloc_leftover(pfile_t *pf)
         if (!var_size) {
           continue;
         }
-        base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, var_size, 0);
-        if (VARIABLE_BASE_UNKNOWN != base) {
-          variable_base_set(vptr, base, 0);
+        {
+          pic_mem_request_t lreq;
+
+          pic_mem_request_var(pf, vptr, PIC_MEM_PLACE_SINGLE, &lreq);
+          lreq.may_defer = BOOLEAN_TRUE;
+          lreq.report    = BOOLEAN_TRUE;
+          if (PIC_MEM_REFUSED == pic_mem_place(pf, &lreq)) {
+            variable_flag_set(vptr, VARIABLE_FLAG_ALLOC_FAIL);
+          }
         }
       }
     }
@@ -4935,33 +5380,16 @@ static void pic_variable_alloc_no_reuse(pfile_t *pf)
            vptr = variable_link_get(vptr)) {
         if (variable_is_auto(vptr)
             && !variable_is_sticky(vptr)) {
-          variable_base_t base;
-          variable_ct_t  pointer_slots;
-          variable_sz_t  var_size;
+          pic_mem_request_t nreq;
 
           if (!variable_is_used(vptr) && !variable_is_assigned(vptr)) {
             variable_base_set(vptr, VARIABLE_BASE_UNKNOWN, 0);
             continue;
           }
-          var_size = pic_variable_storage_need_get(pf, vptr, &pointer_slots);
-          base = pic_mem_map_alloc(pf, &pic_var.map, PIC_MEM_REGION_DATA, 
-            var_size, pointer_slots);
-          if (VARIABLE_BASE_UNKNOWN == base) {
-            unsigned bank_size = pic_target_bank_size_get(pf);
-            if (var_size > bank_size) {
-              pfile_log(pf, PFILE_LOG_ERR, 
-                "Variable '%s' size (%u bytes) exceeds bank boundary (%u bytes). "
-                "Consider splitting into smaller arrays or using different data types.",
-                variable_name_get(vptr), var_size, bank_size);
-            } else {
-              pfile_log(pf, PFILE_LOG_ERR, 
-                "Variable '%s' array size (%u bytes) exceeds bank boundary (%u bytes). "
-                "Consider splitting into smaller arrays or using different data types.",
-                variable_name_get(vptr), var_size, bank_size);
-            }
+          pic_mem_request_var(pf, vptr, PIC_MEM_PLACE_SINGLE, &nreq);
+          nreq.report = BOOLEAN_TRUE;   /* one refusal, from the entry */
+          if (PIC_MEM_REFUSED == pic_mem_place(pf, &nreq)) {
             err = BOOLEAN_TRUE;
-          } else {
-            variable_base_set(vptr, base, 0);
           }
         }
       }
@@ -5216,6 +5644,38 @@ static unsigned pic_var_list_largest(const pic_bank_info_t *list)
   return largest;
 }
 
+/* A7: the one usage computation.  Both the always-on audit summary and the
+ * end-of-compile RAM report derive the six capacity numbers here, so they
+ * cannot disagree.  `used' is declared minus free (it includes the pins and
+ * every reservation); `largest' is the biggest free run; `total' is the
+ * declared area (the pragma ranges). */
+struct pic_mem_usage_ {
+  unsigned data_used;
+  unsigned data_free;
+  unsigned data_largest;
+  unsigned data_total;
+  unsigned shared_used;
+  unsigned shared_free;
+  unsigned shared_largest;
+  unsigned shared_total;
+};
+
+static void pic_mem_usage_get(struct pic_mem_usage_ *u)
+{
+  u->data_total     = pic_var_list_bytes(pic_var.map.data_pragma);
+  u->data_free      = pic_mem_map_free_bytes(&pic_var.map,
+                        PIC_MEM_REGION_DATA);
+  u->data_largest   = pic_var_list_largest(pic_var.map.data);
+  u->data_used      = (u->data_total >= u->data_free)
+    ? u->data_total - u->data_free : 0;
+  u->shared_total   = pic_var_list_bytes(pic_var.map.shared_pragma);
+  u->shared_free    = pic_mem_map_free_bytes(&pic_var.map,
+                        PIC_MEM_REGION_SHARED);
+  u->shared_largest = pic_var_list_largest(pic_var.map.shared);
+  u->shared_used    = (u->shared_total >= u->shared_free)
+    ? u->shared_total - u->shared_free : 0;
+}
+
 static void pic_var_segment_audit(pfile_t *pf)
 {
   pic_variable_chunk_map_t *map;
@@ -5375,22 +5835,18 @@ static void pic_var_segment_audit(pfile_t *pf)
    * `largest' is the biggest free run, i.e. the biggest object that can be
    * placed without segmenting. */
   {
-    unsigned data_total;
-    unsigned shared_total;
+    struct pic_mem_usage_ u;
 
-    data_total    = pic_var_list_bytes(pic_var.map.data_pragma);
-    data_free     = pic_mem_map_free_bytes(&pic_var.map, PIC_MEM_REGION_DATA);
-    data_largest  = pic_var_list_largest(pic_var.map.data);
-    data_used     = (data_total >= data_free) ? data_total - data_free : 0;
-    shared_total  = pic_var_list_bytes(pic_var.map.shared_pragma);
-    shared_free   = pic_mem_map_free_bytes(&pic_var.map,
-                        PIC_MEM_REGION_SHARED);
-    shared_largest = pic_var_list_largest(pic_var.map.shared);
-    shared_used   = (shared_total >= shared_free)
-      ? shared_total - shared_free : 0;
+    pic_mem_usage_get(&u);
+    data_used      = u.data_used;
+    data_free      = u.data_free;
+    data_largest   = u.data_largest;
+    shared_used    = u.shared_used;
+    shared_free    = u.shared_free;
+    shared_largest = u.shared_largest;
   }
   if (violations) {
-    pfile_log(pf, PFILE_LOG_WARN,
+    pfile_log(pf, PFILE_LOG_ERR,
         "alloc: %u placement invariant violation(s) (objects=%u segments=%u);"
         " the image may place storage across a boundary",
         (unsigned) violations, (unsigned) objects, (unsigned) segments);
@@ -5720,8 +6176,12 @@ unsigned pic_data_bank_free_bytes_get(void)
 
 void pic_blist_info_log(pfile_t *pf)
 {
-  UNUSED(pf);
+  struct pic_mem_usage_ u;
 
+  pic_mem_usage_get(&u);
+  pfile_log(pf, PFILE_LOG_INFO, PIC_MSG_RAM_USED,
+      u.data_used, u.data_total, u.data_free, u.data_largest,
+      u.shared_used, u.shared_total, u.shared_free, u.shared_largest);
 }
 
 void pic_blist_free(pfile_t *pf)

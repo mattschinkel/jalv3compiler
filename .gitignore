@@ -67,6 +67,7 @@ unit-tests/reports/
 sims/reports/
 sims/report_archive/
 sims/output_compare/
+sims/.simcache/
 
 # superseded samples kept locally
 demo_sample/old/
@@ -77,6 +78,9 @@ tmp/
 .zcodeignore
 bin/beta/jalv3-x86-64-san
 bin/beta/jalv3-x86-64-cov
+# Build-provenance note (untracked 2026-11-14): toolchain/command/smoke record
+# kept beside the .exe on disk, never committed.
+bin/beta/jalv3-x86-64.exe.provenance
 unit-tests/.cache/
 
 # RETIRED name (renamed 2026-11-02): the Windows build is now

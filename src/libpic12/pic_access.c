@@ -30,6 +30,7 @@
 #include "../libcore/pf_log.h"
 #include "../libcore/pf_proc.h"
 #include "pic_access.h"
+#include "pic_var.h"
 
 #define PIC_ACCESS_PROGRAM_MAX 256
 #define PIC_ACCESS_RECIPE_MAX  32   /* coverage bitmap width */
@@ -73,6 +74,10 @@ typedef struct pic_access_event_ {
   unsigned operation;
   unsigned action;
   boolean_t body;     /* the matched row is a run body (FAT deref) */
+  boolean_t whereis;  /* a WHEREIS address, not an emitted access */
+  variable_base_t addr;
+  variable_const_t ofs;
+  unsigned  segments;
   char     site[PIC_ACCESS_SITE_MAX];
   char     var[64];
 } pic_access_event_t;
@@ -345,8 +350,61 @@ void pic_access_explain_note(pfile_t *pf, const char *label, variable_t var,
   ev->operation = operation;
   ev->action = action;
   ev->body = body;
+  /* the array is reused across compiles in one process; a slot that held a
+   * WHEREIS event must not keep the flag when it becomes an access row */
+  ev->whereis = BOOLEAN_FALSE;
   pic_access_copy(ev->site, sizeof(ev->site), site_id);
   pic_access_copy(ev->var, sizeof(ev->var), (name) ? name : "-");
+}
+
+void pic_access_explain_whereis(pfile_t *pf, variable_t var,
+    const char *target, variable_const_t ofs, variable_base_t addr)
+{
+  const char      *file;
+  unsigned         line;
+  unsigned         segments;
+  pic_mem_object_t obj;
+  size_t           ii;
+  pic_access_event_t *ev;
+
+  if (!pic_access_explain_on) {
+    return;
+  }
+  pic_access_origin_get(pf, &file, &line);
+  if ((line != pic_access_explain_line) || (0 == file)
+      || (0 != strcmp(file, pic_access_explain_file))) {
+    return;
+  }
+  segments = 0;
+  if (pic_mem_object_get(var, &obj)) {
+    segments = (unsigned) obj.seg_ct;
+  }
+  /* a layout trial resolves the WHEREIS before the installed layout does;
+   * the last resolution carries the address the image will use */
+  for (ii = 0; ii < pic_access_event_ct; ii++) {
+    ev = &pic_access_events[ii];
+    if (ev->whereis && (ev->ofs == ofs)
+        && (0 == strcmp(ev->var, target))) {
+      ev->addr = addr;
+      ev->ofs = ofs;
+      ev->segments = segments;
+      return;
+    }
+  }
+  if (pic_access_event_ct >= PIC_ACCESS_EXPLAIN_MAX) {
+    pic_access_explain_overflow = BOOLEAN_TRUE;
+    return;
+  }
+  ev = &pic_access_events[pic_access_event_ct++];
+  memset(ev, 0, sizeof(*ev));
+  ev->seq = pic_access_event_seq++;
+  ev->ordinal = pic_access_note_ordinal++;
+  ev->whereis = BOOLEAN_TRUE;
+  ev->addr = addr;
+  ev->ofs = ofs;
+  ev->segments = segments;
+  pic_access_copy(ev->site, sizeof(ev->site), "-");
+  pic_access_copy(ev->var, sizeof(ev->var), target);
 }
 
 int pic_access_explain_print(void)
@@ -384,6 +442,15 @@ int pic_access_explain_print(void)
     const pic_access_event_t *ev;
 
     ev = &pic_access_events[ii];
+    if (ev->whereis) {
+      printf("whereis: program=%s line=%u ordinal=%u target=%s ofs=%u"
+          " addr=%u (0x%x) segments=%u resolve=%s\n",
+          pic_access_explain_program, pic_access_explain_line, ev->ordinal,
+          ev->var, (unsigned) ev->ofs, (unsigned) ev->addr,
+          (unsigned) ev->addr, ev->segments,
+          (ev->segments > 1) ? "chunk" : "linear");
+      continue;
+    }
     pic_access_facts_name(ev->facts, facts, sizeof(facts));
     printf("access: program=%s line=%u ordinal=%u site=%s var=%s kind=%s"
         " facts=%s op=%s recipe=%s\n",
@@ -476,15 +543,14 @@ void pic_access_key_fill(const pic_access_plan_t *plan, unsigned operation,
 static const pic_access_recipe_t pic_access_recipes[] = {
   { PIC_ACCESS_FAT, PIC_ACCESS_OP_DEREF, 0u, 0u,
     PIC_ACCESS_ACTION_NONE, pic_fat_deref_recipe },
-  /* G3: under the fat engine a SCALAR-pointee slot store IS a fat bind (the
-   * slot holds the tagged id + object-relative offset, so a runtime element
-   * offset needs no bind-time chunk walk).  An ARRAY-pointee slot keeps the
-   * physical-address/walked-bind path (its base offset is a pointee
-   * subscript), so SLOT_POINTEE is in the mask but not the facts. */
+  /* G3: under the fat engine a slot store IS a fat bind (the slot holds the
+   * tagged id + object-relative offset, so a runtime element offset needs no
+   * bind-time chunk walk).  S3: this now includes the ARRAY-pointee slot --
+   * its stored value is the ordinary fat pointer, so a loaded pointer carries
+   * the object identity (design D4). */
   { PIC_ACCESS_KIND_ANY, PIC_ACCESS_OP_BIND,
     PIC_ACCESS_FACT_AOP | PIC_ACCESS_FACT_FAT_ENGINE,
-    PIC_ACCESS_FACT_AOP | PIC_ACCESS_FACT_FAT_ENGINE
-      | PIC_ACCESS_FACT_SLOT_POINTEE,
+    PIC_ACCESS_FACT_AOP | PIC_ACCESS_FACT_FAT_ENGINE,
     PIC_ACCESS_ACTION_FAT_BIND, 0 },
   /* pointer write: the storage class and the indirect shape */
   { PIC_ACCESS_KIND_ANY, PIC_ACCESS_OP_PTR_WRITE,
@@ -592,9 +658,9 @@ static const pic_access_recipe_t pic_access_recipes[] = {
   { PIC_ACCESS_KIND_ANY, PIC_ACCESS_OP_INDIRECT_SLOT,
     0u, PIC_ACCESS_FACT_AOP,
     PIC_ACCESS_ACTION_SLOT_NOT, 0 },
-  /* a slot store is never a fat bind with the engine off, or for an
-   * ARRAY-pointee slot (the G3 FAT_BIND row above wins for the scalar case;
-   * this row is last so the other family's indices do not move) */
+  /* a slot store is never a fat bind with the engine off (the G3 FAT_BIND row
+   * above wins for BOTH slot shapes under the engine; this row is last so the
+   * other family's indices do not move) */
   { PIC_ACCESS_KIND_ANY, PIC_ACCESS_OP_BIND, PIC_ACCESS_FACT_AOP,
     PIC_ACCESS_FACT_AOP, PIC_ACCESS_ACTION_NOT_FAT_BIND, 0 }
 };

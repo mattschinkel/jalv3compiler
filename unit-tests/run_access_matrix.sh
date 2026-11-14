@@ -132,9 +132,10 @@ done < "$WORK/cov_corpus.txt"
 # compiled here with the gate env pinned (A15)
 cov_compile sims/picsim/16f18857_picsim_fat_pointer.jal fat
 cov_compile sims/gpsim/18f4620_gpsim_pointer_array_200.jal fat
-# G3 slot binds: the scalar-pointee runtime offset (FAT_BIND) and the
-# array-pointee control (NOT_FAT_BIND) -- the two BIND rows the engine-off
-# corpus cannot reach.
+# G3 slot binds: the scalar-pointee runtime offset and the array-pointee
+# control are both FAT_BIND under the engine (design D4); NOT_FAT_BIND is
+# now shadowed by FAT_BIND (pic_fat_bind_forced only consults the recipe
+# with the engine on), so its row stays unexercised.
 cov_compile sims/picsim/16f18857_picsim_pointer_slot_runtime_ofs.jal fat
 cov_compile sims/gpsim/16f887_gpsim_pointer_slot_runtime_ofs.jal fat
 cov_compile sims/picsim/16f18857_picsim_pointer_slot_array_bind.jal fat

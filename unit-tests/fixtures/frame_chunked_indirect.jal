@@ -1,0 +1,26 @@
+-- positive (compile): an indirect procedure's single local larger than one
+-- bank window is placed
+--
+-- A3 increment 3: the automatic FRAME mark does not require one contiguous
+-- run (the locals are permanent either way), so an object that cannot fit a
+-- window is deferred to the group/chunk placement.
+--
+include 16f18857
+pragma target clock 8_000_000
+
+var pointer _slot as procedure()
+
+procedure _t() is
+   var byte big[100]
+   var byte i
+   for 100 using i loop
+      big[i] = i
+   end loop
+end procedure
+
+procedure _run() is
+   _slot is _t
+   _slot()
+end procedure
+
+_run()

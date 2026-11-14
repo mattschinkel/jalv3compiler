@@ -7048,7 +7048,9 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
         FREE(save);
         return VALUE_NONE;
       }
-      txt = MALLOC((size_t) ct * 33U + 2U);
+      /* one[40] below caps each rendered element at 39 chars, so size the
+       * buffer for the worst case (pad clamped there, natural <= 32). */
+      txt = MALLOC((size_t) ct * 39U + 2U);
       if (!txt) {
         pfile_log_syserr(pf, ENOMEM);
         value_release(operand);
@@ -7074,6 +7076,9 @@ value_t jal_string_cast_parse_emit(pfile_t *pf)
 
           natural = (16U == eb) ? (2U * esz) : ((2U == eb) ? (8U * esz) : 1U);
           width = (pad > natural) ? pad : natural;
+          if (width > (unsigned) (sizeof(one) - 1U)) {
+            width = (unsigned) (sizeof(one) - 1U);
+          }
           w2 = ev;
           od = 0;
           do {
@@ -7508,7 +7513,7 @@ value_t jal_string_builtin_parse_emit(pfile_t *pf, const char *name)
      * `_string_heap_compact()` is what the strings_dynamic wrappers call from the
      * wrapper body; it must stay NOP+defer or we recurse into the same JAL
      * procedure instead of expanding the pcode (gpsim: compact “fails”). */
-    if (0 == strcmp(name, "string_heap_compact")
+    if (0 == strcmp(name_buf, "string_heap_compact")
         && jal_string_heap_compact_jal_call_emit(pf, result)) {
       goto done;
     }

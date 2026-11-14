@@ -1,0 +1,23 @@
+-- negative: a re-entrant proc still needs ONE contiguous frame
+--
+-- A re-entrant frame is pushed/popped byte by byte from the frame base, so a
+-- frame larger than one window cannot be scattered or chunked.  The refusal
+-- must stay.
+--
+-- Expected: 1 error, "no space for the frame of '_t'".
+--
+include 16f18857
+pragma target clock 8_000_000
+
+procedure _t(byte in n) is
+   var byte big[100]
+   var byte i
+   for 100 using i loop
+      big[i] = n
+   end loop
+   if n > 0 then
+      _t(n - 1)
+   end if
+end procedure
+
+_t(2)

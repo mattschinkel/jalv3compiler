@@ -380,14 +380,21 @@ void pic_assign_array_to_pointer(pfile_t *pf, value_t dst, value_t src)
 void pic_assign_ptr_to_ptr(pfile_t *pf, value_t dst, value_t src)
 {
   variable_sz_t ii;
+  boolean_t     src_slot;
 
   /* nb: src might have baseofs set if it is called indirectly or the
    *     function is re-entrant. In either case, src will be an offset
    *     into pic_temp
    */
   /*assert(!value_baseofs_get(src));*/
+  /* S3: a pointer-slot element (`pa[k]`) keeps its baseofs as the SLOT byte
+   * offset, so the copy below reads the stored pointer VALUE from slot k
+   * rather than slot 0 / the slot's address. */
+  src_slot = value_flag_test(src, VALUE_FLAG_SLOT_POINTEE);
   src = value_clone(src);
-  value_baseofs_set(src, VALUE_NONE);
+  if (!src_slot) {
+    value_baseofs_set(src, VALUE_NONE);
+  }
   value_indirect_clear(src);
 
   assert(!value_baseofs_get(dst));

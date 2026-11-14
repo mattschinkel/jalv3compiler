@@ -35,6 +35,9 @@ struct value_
   unsigned        id;
   variable_t      var;       /* base variable                */
   value_t         baseofs;   /* offset from base of variable */
+  value_t         baseofs2;  /* S3: pointee-relative offset of a value
+                              *   reached through a pointer slot; the slot
+                              *   index stays in baseofs */
   variable_def_t  def;       /* the definition               */
   flag_t          flags;
   unsigned        bitofs_delta;
@@ -248,6 +251,7 @@ value_t value_clone(value_t src)
 {
   variable_t      var;
   value_t         baseofs;
+  value_t         baseofs2;
   variable_def_t  def;
   value_t         val;
   flag_t          flags;
@@ -255,6 +259,7 @@ value_t value_clone(value_t src)
 
   var     = value_variable_get(src);
   baseofs = value_baseofs_get(src);
+  baseofs2 = value_baseofs2_get(src);
   def     = value_def_get(src);
   flags   = value_flag_get_all(src);
   bitofs_delta = value_bit_offset_get(src)
@@ -263,6 +268,7 @@ value_t value_clone(value_t src)
   val = value_alloc(var);
   if (val) {
     value_baseofs_set(val, baseofs);
+    value_baseofs2_set(val, baseofs2);
     value_def_set(val, def);
     value_flag_set_all(val, flags);
     value_bit_offset_delta_set(val, bitofs_delta);
@@ -616,6 +622,33 @@ value_t value_baseofs_get(const value_t val)
 
   ptr = value_element_seek(val, BOOLEAN_FALSE);
   return (ptr) ? ptr->baseofs : 0;
+}
+
+value_t value_baseofs2_get(const value_t val)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_FALSE);
+  return (ptr) ? ptr->baseofs2 : 0;
+}
+
+void value_baseofs2_set(value_t val, value_t baseofs2)
+{
+  struct value_ *ptr;
+
+  ptr = value_element_seek(val, BOOLEAN_TRUE);
+  if (ptr && (ptr->baseofs2 != baseofs2)) {
+    if (baseofs2) {
+      value_lock(baseofs2);
+    }
+    ptr = value_element_seek(val, BOOLEAN_TRUE);
+    if (ptr->baseofs2) {
+      value_release(ptr->baseofs2);
+    }
+    ptr = value_element_seek(val, BOOLEAN_TRUE);
+    ptr->baseofs2 = baseofs2;
+    ptr->access_valid = BOOLEAN_FALSE;
+  }
 }
 
 boolean_t value_baseofs_depends(const value_t val, const value_t dep)

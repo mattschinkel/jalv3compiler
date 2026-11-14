@@ -36,6 +36,10 @@
 #define PFILE_PROC_FLAG_FRAME        0x0800 /* this procedure's variables
                                                must be put into a single
                                                frame */
+/* the single frame is a USER request (`pragma frame`), not the automatic
+ * mark every indirect/re-entrant proc gets; only the explicit form forbids
+ * per-variable placement when the frame does not fit one bank window */
+#define PFILE_PROC_FLAG_FRAME_EXPLICIT 0x4000
 #define PFILE_PROC_FLAG_NOSTACK      0x1000 /* execute calls without using
                                                the stack */
 /* This procedure (transitively) can REALLOCATE a heap string: it appends,

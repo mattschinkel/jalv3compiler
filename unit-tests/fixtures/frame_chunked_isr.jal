@@ -1,0 +1,25 @@
+-- positive (compile): an ISR local larger than one bank window is placed
+--
+-- A3 increment 3: the object is deferred to the group/chunk placement, split
+-- across windows, and its runtime subscripts walk the chunk map.  This
+-- fixture pins that it COMPILES with every ISR local placed; the runtime
+-- proof is sims/picsim/16f18857_picsim_isr_chunked_local.jal.
+--
+include 16f18857
+pragma target clock 8_000_000
+
+procedure _ext_isr() is
+   pragma interrupt
+   var byte big[200]
+   var byte i
+   for 200 using i loop
+      big[i] = i
+   end loop
+end procedure
+
+procedure _run() is
+   var byte k
+   k = 0
+end procedure
+
+_run()

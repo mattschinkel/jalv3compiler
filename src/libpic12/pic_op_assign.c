@@ -47,12 +47,14 @@ static boolean_t pic_assign_ptr_var_copy(value_t dst, value_t src)
 {
   variable_t dv;
   variable_t sv;
+  boolean_t  src_slot;
 
-  /* a pointer-to-array value arrives marked INDIRECT (the front end models
-   * the decay as a dereference); pic_assign_ptr_to_ptr clears both flags and
-   * copies the value bytes, which is exactly what a pointer copy needs.  A
-   * real subscript read carries a base offset, so that stays excluded. */
-  if ((VALUE_NONE != value_baseofs_get(src))
+  /* S3: a pointer-slot element (`pa[0]`) carries the slot byte offset in
+   * baseofs and the SLOT_POINTEE flag; a pointer copy must move the pointer
+   * VALUE stored in the slot, so accept that shape (baseofs stays the slot
+   * offset and is read by pic_assign_ptr_to_ptr). */
+  src_slot = value_flag_test(src, VALUE_FLAG_SLOT_POINTEE);
+  if (((!src_slot) && (VALUE_NONE != value_baseofs_get(src)))
       || (VALUE_NONE != value_baseofs_get(dst))) {
     return BOOLEAN_FALSE;
   }
@@ -61,10 +63,16 @@ static boolean_t pic_assign_ptr_var_copy(value_t dst, value_t src)
   if ((0 == dv) || (0 == sv) || (VARIABLE_NONE == dv) || (VARIABLE_NONE == sv)) {
     return BOOLEAN_FALSE;
   }
-  if ((VARIABLE_DEF_TYPE_POINTER
-        != variable_def_type_get(variable_def_get(dv)))
-      || (VARIABLE_DEF_TYPE_POINTER
-        != variable_def_type_get(variable_def_get(sv)))) {
+  if (VARIABLE_DEF_TYPE_POINTER
+        != variable_def_type_get(variable_def_get(dv))) {
+    return BOOLEAN_FALSE;
+  }
+  if (src_slot) {
+    if (!pic_value_is_array_of_pointers(src)) {
+      return BOOLEAN_FALSE;
+    }
+  } else if (VARIABLE_DEF_TYPE_POINTER
+        != variable_def_type_get(variable_def_get(sv))) {
     return BOOLEAN_FALSE;
   }
   return BOOLEAN_TRUE;
@@ -530,10 +538,31 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
   {
     variable_const_t offset;
     variable_base_t  base;
+    variable_t       sv;
+    boolean_t        addr_from_data;
+
+    sv = value_variable_get(src);
+    addr_from_data = (sv && VARIABLE_NONE != sv
+        && (variable_data_get(sv) || variable_is_lookup(sv)));
 
     if (!value_baseofs_const_get(src, &offset)) {
       value_t base_val;
 
+      /* a runtime base offset is only valid when the base is already the
+       * physical address (a contiguous object, e.g. PIC18 GPR); a chunked
+       * object's element address needs the runtime chunk walk, which
+       * WHEREIS does not run.  A ROM/lookup target keeps its data label
+       * (its base is UNKNOWN by design), so it is not refused here. */
+      if (!addr_from_data
+          && value_name_get(src)
+          && (VARIABLE_BASE_UNKNOWN == value_base_get(src))) {
+        if (pic_code_gen_pass_get(pf) == 2) {
+          pfile_log(pf, PFILE_LOG_ERR,
+              "WHEREIS() of a runtime subscript is not supported;"
+              " use a constant index");
+        }
+        return;
+      }
       base_val = pfile_constant_get(pf, value_base_get(src),
           VARIABLE_DEF_NONE);
       pic_op(pf, OPERATOR_ASSIGN, dst, base_val, VALUE_NONE);
@@ -551,6 +580,26 @@ static void pic_assign_from_value(pfile_t *pf, value_t dst, value_t src)
      * objects are returned unchanged, so nothing else moves. */
     if (value_variable_get(src)) {
       base = pic_var_chunk_addr_resolve(value_variable_get(src), base);
+    }
+    /* a runtime subscript leaves the base unresolved after the chunk pass
+     * (its index is not a constant offset), so no address can be handed out.
+     *  A ROM/lookup target keeps its data label, so it is not refused. */
+    if (!addr_from_data && value_name_get(src)
+        && (VARIABLE_BASE_UNKNOWN == base)) {
+      if (pic_code_gen_pass_get(pf) == 2) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "WHEREIS() of a runtime subscript is not supported;"
+            " use a constant index");
+      }
+      return;
+    }
+    /* WHEREIS: report the resolved address beside the line's access rows
+     * (-explain-access only; console output, never the image).  A layout
+     * trial reports first; the note keeps the last resolution, which is the
+     * installed layout's. */
+    if ((pic_code_gen_pass_get(pf) == 2) && !addr_from_data && sv
+        && (VARIABLE_NONE != sv) && value_name_get(src)) {
+      pic_access_explain_whereis(pf, sv, value_name_get(src), offset, base);
     }
     pic_indirect_setup3(pf, dst, VALUE_NONE, VALUE_NONE, 0, &ipos);
     pic_instr_append_w_kn(pf, PIC_OPCODE_MOVLW, base);
@@ -959,6 +1008,7 @@ void pic_op_assign(pfile_t *pf, operator_t op, value_t dst,
     /* this might happen during some internal work, ignore it */
   } else if ((OPERATOR_POINTER_ASSIGN == op
         || (OPERATOR_ASSIGN == op && !value_flag_test(dst, VALUE_FLAG_INDIRECT)))
+      && !value_flag_test(src, VALUE_FLAG_SLOT_POINTEE)
       && pic_try_bind_array_to_pointer_slot(pf, dst, src)) {
     /* `slot[i] = x` is OPERATOR_ASSIGN with INDIRECT (store through the slot's
      * pointer); do not run array-to-pointer bind (that would treat RHS as an

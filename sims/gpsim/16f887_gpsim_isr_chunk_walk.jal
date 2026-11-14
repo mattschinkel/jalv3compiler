@@ -1,0 +1,96 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC16F887 gpsim — an ISR walking a chunked array must not corrupt
+--    the interrupted walk
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    The runtime chunk walk keeps its loop state in compiler-owned GLOBALS
+--    (`_pic_chunk_t` = the remaining offset, `_pic_chunk_cnt/base/span` for
+--    the fat walk).  An interrupt that performs its own chunked access while
+--    the main line is inside a walk therefore overwrites the main walk's
+--    offset: the interrupted ladder resumes with the ISR's leftover and
+--    reads the wrong element.
+--
+--    Main sums `big[i]` (150 bytes -> multi-chunk on this part) with a
+--    runtime index; TMR0 interrupts every 512 cycles and reads `small[j]`
+--    (120 bytes -> multi-chunk) with its own runtime index.  The main sum
+--    must be 0+1+...+149 = 11175; a corrupted walk changes it.
+--
+--    The pre-fix run is expected to fail (the point of the witness).
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect word_le v__sum 11175
+-- expect byte v__cw_bad 0
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var byte big[150]
+var byte small[120]
+var volatile word _sum = 0
+var volatile byte _isr_sink = 0
+var volatile byte _cw_bad = 0
+var volatile byte _isr_j = 0
+var volatile byte _isr_cnt = 0
+
+procedure _t0_isr() is
+   pragma interrupt
+
+   if !INTCON_T0IF then
+      return
+   end if
+   INTCON_T0IF = off
+   _isr_cnt = _isr_cnt + 1
+   _isr_sink = small[_isr_j]
+   _isr_j = _isr_j + 1
+   if _isr_j == 120 then
+      _isr_j = 0
+   end if
+end procedure
+
+procedure _run() is
+   var byte i
+   var word s
+
+   regression_begin_run()
+
+   for 150 using i loop
+      big[i] = i
+   end loop
+   for 120 using i loop
+      small[i] = 1
+   end loop
+
+   OPTION_REG_T0CS = low
+   OPTION_REG_PSA = low
+   OPTION_REG_PS = 0b000      -- 1:2 -> overflow every 512 cycles
+   TMR0 = 0
+   INTCON_T0IE = on
+   INTCON_GIE = on
+
+   s = 0
+   for 150 using i loop
+      s = s + big[i]
+   end loop
+
+   INTCON_GIE = off
+   INTCON_T0IE = off
+
+   _sum = s
+   if s != 11175 then
+      _cw_bad = 1
+   end if
+   if _isr_cnt < 2 then
+      _cw_bad = 1                 -- the ISR never ran: the witness is vacuous
+   end if
+   regression_checkpoint()
+end procedure
+
+_run()
+regression_pass_led_if_clean()
