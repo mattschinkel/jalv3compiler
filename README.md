@@ -5,13 +5,6 @@ JAL is a high-level programming language designed to simplify development
 for Microchip PIC microcontrollers by abstracting away many of the complexities 
 of low-level hardware programming. Its syntax is loosely based on Pascal.
 
-**About half of this compiler is new or modified code.** Measured against the last
-JALv2 release (2.5r9) it is based on, roughly **50% of the code by line
-count** in `src/` is new fork work (51,354 of 101,276 lines), including
-two complete back ends. Original copyright notices are retained in every
-derived file; modified files carry a Co-author or New author: Matthew Schinkel mark.
-See NOTICE for full attribution.
-
 ## New in JALv3 — what this means for your programs
 
 - **New target families: PIC32 (MIPS32) and ESP32 (Xtensa LX6)** — in
@@ -50,62 +43,6 @@ See NOTICE for full attribution.
 - Prebuilt **Linux and Windows x86-64 binaries** in [bin/beta/](bin/beta/),
   with the historical jalv2 releases preserved in `bin/old_versions/`
 
-### Runtime error hook
-
-A failed dynamic-string operation sets `_string_error` (0 none, 1 heap full,
-2 overflow, 3 invalid) and `_error_source`. Define a procedure named
-`_error_hook` and the compiler calls it at the point of failure — no
-parameters, no registration; the name is the opt-in. The flags are cleared
-when the hook returns (delivered once, then gone); with no hook they are left
-set for polling.
-
-```jal
--- define it before the code that can fail (after the include it needs)
-procedure _error_hook() is
-   var byte err
-   if _error_source == _ERROR_SOURCE_STRING then
-      err = _string_error                   -- read ONCE: the read clears it
-      if err != _STRING_ERROR_NONE then
-         if err == _STRING_ERROR_HEAP_FULL then
-            print_string(serial, "[heap full]")
-         else
-            print_string(serial, "[string error: ")
-            print_byte_dec(serial, err)
-            print_string(serial, "]")
-         end if
-         print_crlf(serial)
-      end if
-   end if
-end procedure
-```
-
-Two things to keep in mind: `_string_error` is consume-on-read, so read it into a
-variable first and compare that (testing the cell and then reading it sees 0);
-and JAL has no `else if` — nest the second test in an `else` block.
-
-A ready-made handler lives in `demo_lib/error_hook.jal` — include it instead of
-writing your own, and customise it with two optional aliases defined before the
-include:
-
-```jal
-include print
-alias _error_device is serial_data     -- print the error there
-alias _error_bit    is led             -- latch a flag/LED (cleared by the app)
-include error_hook
-```
-
-The handler reports every error the compiler can raise (`[string heap full]`,
-`[string overflow]`, `[string invalid]`, any other code as `[string error: N]`,
-`[user error]` for application raises, and `[error: N]` for future subsystems)
-through the aliased device, sets the aliased bit (NOT cleared: it is a latched
-flag), and the error cells are cleared when the handler returns. `demo_sample/16f1825_error_hook_library.jal`
-is a complete example.
-
-Constants: `_STRING_ERROR_NONE`/`_HEAP_FULL`/`_OVERFLOW`/`_INVALID` and
-`_ERROR_SOURCE_STRING`/`_ERROR_SOURCE_USER` (JAL identifiers are
-case-insensitive). Application code can raise through the same hook:
-`_error_source = _ERROR_SOURCE_USER`, `_error_hook()`, `_error_source = 0`.
-
 ## Device files and libraries
 
 Device files and include files for classic PICs live in the jallib
@@ -125,7 +62,12 @@ libraries built for jalv3 are in [demo_sample/](demo_sample/) and
   all green: **2937/2937 unit, 196/196 gpsim, 170/170 PIC32 QEMU,
   47/47 ESP32 QEMU**
 
-See [README.txt](README.txt) for the release history.
+**About half of this compiler is new or modified code.** Measured against the last
+JALv2 release (2.5r9) it is based on, roughly **50% of the code by line
+count** in `src/` is new fork work (51,354 of 101,276 lines), including
+two complete back ends. Original copyright notices are retained in every
+derived file; modified files carry a Co-author or New author: Matthew Schinkel mark.
+See NOTICE for full attribution.
 
 Have fun!
 
