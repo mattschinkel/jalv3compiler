@@ -31,7 +31,7 @@ var volatile byte ok = 0
 var volatile byte pok = 0
 var volatile byte done = 0
 
-procedure pure_check(byte in x[], word in n) is
+procedure pure_check(byref in x[], word in n) is
    if (n == 5) & (x[0] == "a") & (x[4] == "e") then
       ok = 1
    end if

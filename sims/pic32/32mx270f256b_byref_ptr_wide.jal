@@ -1,0 +1,71 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC32MX270F256B -- wide-pointee pointer actual through byref
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--   A qword pointer passed to `byref in out a[]` is a byte view of its
+--   pointee: _is_qword_pointer() true, COUNT 8, and an 8-byte qword
+--   read/write through the `at` overlay.  A byte/qword mixed call keeps the
+--   runtime tag.
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_r 0x5a
+-- @sim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_32mx270f256b_device
+
+var volatile byte r
+
+procedure qwrite(byref in out a[]) is
+   var qword v at a
+   v = 0x1122334455667788
+   if _is_qword_pointer() then
+      r = r | 0x01
+   end if
+   if byte(COUNT(a)) == 8 then
+      r = r | 0x02
+   end if
+end procedure
+
+procedure qread(byref in a[]) is
+   var qword v at a
+   if v == 0x1122334455667788 then
+      r = r | 0x04
+   end if
+end procedure
+
+procedure kind(byref in a[]) is
+   if _is_qword_pointer() then
+      r = r | 0x08
+   end if
+   if _is_byte_pointer() then
+      r = r | 0x10
+   end if
+end procedure
+
+var qword qa[1]
+var byte ba[1]
+var pointer pq as var qword
+var pointer pb as var byte
+
+procedure p_run() is
+   r = 0
+   pq is qa[0]
+   pb is ba[0]
+   qwrite(pq)
+   qread(pq)
+   if qa[0] == 0x1122334455667788 then
+      r = r | 0x20
+   end if
+   kind(pq)
+   kind(pb)
+   if r == 0x3F then
+      r = 0x5A
+   end if
+end procedure
+
+p_run()

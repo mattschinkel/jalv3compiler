@@ -1,0 +1,56 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref big-array read + write (uniform data memory)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    The enhanced-midrange twin of the 16F887 byref big-array witness.  On
+--    16F18857 the data memory is uniform (no SFR holes), so `big[300]` is one
+--    contiguous run and the byref formal needs no chunk map; this pins that
+--    the big-array byref shape reads and writes correctly on the twin.
+--
+-- @picsim_validate begin
+--
+-- steps: 600000
+-- expect byte v__check_step 2
+-- expect byte v__ck_w0 0x78
+-- expect byte v__ck_w1 0x56
+-- expect byte v__ck_lo 0x78
+-- expect byte v__ck_hi 0x56
+--
+-- @picsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_16f18857_device
+include regression
+
+var volatile byte _ck_lo = 0
+var volatile byte _ck_hi = 0
+var volatile byte _ck_w0 = 0
+var volatile byte _ck_w1 = 0
+
+procedure peek(byref in arr[]) is
+   _ck_lo = arr[0]
+   _ck_hi = arr[299]
+end procedure
+
+procedure bump(byref in out arr[]) is
+   arr[0] = 0x78
+   arr[299] = 0x56
+end procedure
+
+var byte big[300]
+
+procedure run() is
+   regression_begin_run()
+   bump(big)
+   _ck_w0 = big[0]
+   _ck_w1 = big[299]
+   regression_checkpoint()
+   peek(big)
+   regression_checkpoint()
+   regression_pass_led_if_clean()
+end procedure
+
+run()

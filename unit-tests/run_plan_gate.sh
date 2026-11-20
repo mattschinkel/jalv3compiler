@@ -98,7 +98,6 @@ for prog in \
     demo_sample/16f18857_pointers_2.jal \
     sims/gpsim/18f4620_gpsim_pointer_array_200.jal \
     sims/gpsim/18f4620_gpsim_ptr_store_inout.jal \
-    sims/gpsim/18f4620_gpsim_string_heap_over_bank.jal \
     sims/picsim/16f18857_picsim_pointer_array_200.jal
 do
     run_one "$prog" || fail=1

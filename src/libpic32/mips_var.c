@@ -148,8 +148,15 @@ void mips_var_ensure(pfile_t *pf, variable_t v)
   if (VARIABLE_BASE_UNKNOWN != variable_base_get(v, 0)) {
     return;
   }
-  if (variable_is_pure_const(v)) {
+  /* A const that OWNS its bytes (has data) always lives in the flash
+   * pool, even when the assign counter was bumped: a byref scalar view
+   * (`at` alias) of a string/const literal bumps the literal through
+   * its master, which is not a real write -- the bytes stay read-only. */
+  if (mips_var_is_flash_const(v)) {
     mips_const_pool_add(v);
+    return;
+  }
+  if (variable_is_pure_const(v)) {
     return;
   }
   sz = mips_def_storage_sz(pf, def);

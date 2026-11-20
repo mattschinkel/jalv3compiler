@@ -1,0 +1,91 @@
+-- ------------------------------------------------------
+-- Title: 16F887 gpsim witness: byref `at` overlay via subscript form
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    Pins the `at <array>[N]` SUBSCRIPT form (the `value_baseofs` parse path,
+--    distinct from the `at arr + N` const-offset path pinned in T3):
+--    * a byref formal is a raw byte reference, so `at arr[N]` is BYTE offset N
+--      for any actual element type: over `byte b[4]` it hits b[N]; over
+--      `word ww[2]` it hits byte N, so `arr[1]` is the HIGH byte of ww[0],
+--      not the second word;
+--    * a non-byref typed array is ELEMENT-scaled: `at lw[1]` over a word
+--      array is byte offset 2 (the low byte of the second word);
+--    * the overlay reference walks the byref chunk map, so `at arr[N]` at a
+--      far offset resolves across the 16F887 SFR holes: `arr[299]` over
+--      `big[300]` lands in `big[299]` (not the linear-thin-pointer alias
+--      `big[43]`), and `arr[150]` lands in `big[150]`.
+--    Writes through the overlays land in the caller's storage with no copy-back.
+--
+-- @gpsim_validate begin
+-- steps: 60000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_b 0xAA
+-- expect byte v_b+1 0xBB
+-- expect byte v_b+2 0x00
+-- expect byte v_b+3 0x00
+-- expect word_le v_ww 0xBBAA
+-- expect word_le v_ww+2 0x0000
+-- expect word_le v_lw 0x0000
+-- expect word_le v_lw+2 0x00CC
+-- expect byte v__ck0 0x78
+-- expect byte v__ck1 0x56
+-- expect byte v__ck2 0x3C
+-- expect byte v__ck3 0x56
+-- expect byte v__ck4 0x00
+-- expect byte v__ck5 0x3C
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte b[4]    = { 0, 0, 0, 0 }
+var volatile word ww[2]   = { 0, 0 }
+var volatile word lw[2]   = { 0, 0 }
+var volatile byte big[300]
+var volatile byte _ck0 = 0
+var volatile byte _ck1 = 0
+var volatile byte _ck2 = 0
+var volatile byte _ck3 = 0
+var volatile byte _ck4 = 0
+var volatile byte _ck5 = 0
+
+-- byref formal: `at arr[N]` is byte offset N for any actual element type
+procedure byref_bytes(byref in out arr[]) is
+   var byte e0 at arr[0]
+   var byte e1 at arr[1]
+   e0 = 0xAA
+   e1 = 0xBB
+end procedure
+
+-- non-byref word array: `at lw[1]` is element-scaled (byte offset 2)
+procedure local_word() is
+   var byte x at lw[1]
+   x = 0xCC
+end procedure
+
+-- byref formal, far offsets: `at arr[N]` walks the chunk map across holes
+procedure bump_at(byref in out arr[]) is
+   var byte x0 at arr[0]
+   var byte x1 at arr[299]
+   var byte x2 at arr[150]
+   x0 = 0x78
+   x1 = 0x56
+   x2 = 0x3C
+   _ck0 = x0
+   _ck1 = x1
+   _ck2 = x2
+end procedure
+
+byref_bytes(b)
+byref_bytes(ww)
+local_word()
+bump_at(big)
+_ck3 = big[299]
+_ck4 = big[43]
+_ck5 = big[150]
+regression_checkpoint()

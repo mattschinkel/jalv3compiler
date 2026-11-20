@@ -102,6 +102,7 @@ static const char *const jal_compiler_name_prefixes[] = {
   "_pic_strviewbase", /* classic-core string-view base cell       */
   "_string_argbase",  /* string-view payload base staging         */
   "_strp_",           /* string-flavored clone of a procedure     */
+  "_byrefarg",        /* byref call-site alias of the actual      */
   0
 };
 
@@ -268,7 +269,8 @@ variable_t jal_variable_alloc(pfile_t *pf,
           def_flags, 0);
       variable_def_member_add(adef, 0, vvdef, inf->ct);
       vvdef = adef;
-    } else if (def_flags & VARIABLE_DEF_FLAG_BYREF) {
+    } else if ((def_flags & VARIABLE_DEF_FLAG_BYREF)
+        && (VARIABLE_DEF_TYPE_ARRAY != variable_def_type_get(vvdef))) {
       variable_def_t rdef;
 
       rdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_REFERENCE,
@@ -466,6 +468,51 @@ const char *jal_value_type_to_name(char *dst, size_t dst_sz,
   return dst;
 }
 
+/*
+ * An `at` overlay whose master is a pointer (a byref formal, or a plain
+ * `var pointer p`) aliases the POINTEE, not the pointer slot.  The
+ * overlay's compile-time master/base yields the slot address; the pointee
+ * is a runtime value, so a value referencing the overlay must carry the
+ * same indirect shape `arr[i]` does: variable = the pointer master,
+ * def = the overlay's own def (its re-type),
+ * VALUE_FLAG_POINTER|VALUE_FLAG_INDIRECT, and the overlay's byte offset
+ * as the baseofs.  The back ends already load through that shape
+ * (pic_indirect_get / mips / esp), so no new address machinery is needed.
+ */
+static void jal_value_decorate_at_indirect(pfile_t *pf, value_t val)
+{
+  variable_t      var;
+  variable_t      master;
+  variable_def_t  def;
+  variable_base_t base;
+
+  var = value_variable_get(val);
+  if (!var) {
+    return;
+  }
+  master = variable_master_get(var);
+  if ((VARIABLE_NONE == master)
+      || variable_is_alias(var)
+      || !variable_is_pointer(master)) {
+    return;
+  }
+  def  = variable_def_get(var);
+  base = variable_base_real_get(var, 0);
+  value_variable_set(val, master);
+  value_def_set(val, def);
+  value_flag_set(val, VALUE_FLAG_POINTER | VALUE_FLAG_INDIRECT);
+  if (VARIABLE_BASE_UNKNOWN != base) {
+    value_t cval;
+
+    cval = pfile_constant_get(pf, (variable_const_t) base, VARIABLE_DEF_NONE);
+    if (cval) {
+      value_baseofs_set(val, cval);
+      value_release(cval);
+    }
+  }
+  variable_use_ct_bump(master, CTR_BUMP_INCR);
+}
+
 /* Registry-only lookup shared by jal_value_find (token-guarded, with
  * error recovery against the current token) and jal_value_find_by_name
  * (callers holding an explicit saved name -- e.g. a pointer's recorded
@@ -634,6 +681,14 @@ static boolean_t jal_value_find_registry(pfile_t *pf, const char *name,
       variable_release(var[ii]);
     } else {
       val[ii] = VALUE_NONE;
+    }
+  }
+
+  /* Decorate `at` overlays whose master is a pointer (byref formals and
+   * plain pointer masters): references alias the pointee, not the slot. */
+  for (ii = JAL_VAL_TYPE_MIN; ii < JAL_VAL_TYPE_CT; ii++) {
+    if (val[ii]) {
+      jal_value_decorate_at_indirect(pf, val[ii]);
     }
   }
 
@@ -1889,7 +1944,41 @@ void jal_parse_var_common(pfile_t *pf,
     which = PF_TOKEN_NEXT;
   }
   ptr = pf_token_get(pf, which);
-  vdef = jal_vdef_get(pf, flags);
+  if (dst && pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "byref")) {
+    /* `byref` is a type keyword, formal-only: a raw byte reference.  The
+     * def is a byte element carrying BYREF; the flag pickup below folds it
+     * into `flags` for the formal. */
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    flags |= VARIABLE_DEF_FLAG_BYREF;
+    vdef = variable_def_alloc("byte", VARIABLE_DEF_TYPE_INTEGER,
+        VARIABLE_DEF_FLAG_BYREF, 1);
+    if (!vdef) {
+      pfile_log_syserr(pf, ENOMEM);
+      return;
+    }
+  } else {
+    vdef = jal_vdef_get(pf, flags);
+  }
+  /* a FORMAL `pointer in q`: the bare `pointer` type has no pointee, so the
+   * `var pointer name as pointee` declaration path would trigger.  Give it
+   * the default byte pointee (a pointer-to-byte) so it parses as a plain
+   * type + direction + name, and so the call site recognises it as a data
+   * pointer and passes the ADDRESS instead of the pointee. */
+  if (dst && vdef
+      && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
+      && !variable_def_member_get(vdef)) {
+    variable_def_t pdef;
+    variable_def_t bdef;
+
+    bdef = variable_def_alloc("byte", VARIABLE_DEF_TYPE_INTEGER,
+        VARIABLE_DEF_FLAG_NONE, 1);
+    pdef = variable_def_alloc("pointer", VARIABLE_DEF_TYPE_POINTER,
+        VARIABLE_DEF_FLAG_NONE, pfile_pointer_width_get(pf));
+    if (pdef && bdef) {
+      variable_def_member_add(pdef, 0, bdef, 1);
+      vdef = pdef;
+    }
+  }
   which = PF_TOKEN_CURRENT;
   flags |= variable_def_flags_get_all(vdef);
   type_dim_ct = 0;
@@ -1997,6 +2086,9 @@ void jal_parse_var_common(pfile_t *pf,
     }
 
     if (dst) {
+      boolean_t byref_modifier_seen;
+
+      byref_modifier_seen = BOOLEAN_FALSE;
       if (pf_token_is(pf, which, PFILE_LOG_NONE, "in")) {
         inf.def_flags |= VARIABLE_DEF_FLAG_IN;
         which = PF_TOKEN_NEXT;
@@ -2010,24 +2102,25 @@ void jal_parse_var_common(pfile_t *pf,
         which = PF_TOKEN_CURRENT;
       }
       if (pf_token_is(pf, which, PFILE_LOG_NONE, "byref")) {
-        inf.def_flags |= VARIABLE_DEF_FLAG_BYREF;
+        pfile_log(pf, PFILE_LOG_ERR,
+          "'byref' is a type, not a modifier: write `byref in name[]` "
+          "(the old `byte byref x` form is removed)");
         which = PF_TOKEN_NEXT;
+        byref_modifier_seen = BOOLEAN_TRUE;
       } else {
         which = PF_TOKEN_CURRENT;
       }
       if (inf.def_flags & VARIABLE_DEF_FLAG_BYREF) {
-        if (inf.def_flags & (VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT)) {
-          pfile_log(pf, PFILE_LOG_ERR, 
-            "byref cannot be combined with in or out");
-          inf.def_flags &= ~(VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT);
-        }
         if (inf.def_flags & VARIABLE_DEF_FLAG_VOLATILE) {
           pfile_log(pf, PFILE_LOG_ERR,
             "byref cannot be combined with volatile");
           inf.def_flags &= ~VARIABLE_DEF_FLAG_VOLATILE;
         }
-      } else if (!(inf.def_flags 
-        & (VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT))) {
+      }
+      /* the old modifier form has its own error; do not add the
+       * direction diagnostic on top of it */
+      if (!byref_modifier_seen
+          && !(inf.def_flags & (VARIABLE_DEF_FLAG_IN | VARIABLE_DEF_FLAG_OUT))) {
         pfile_log(pf, PFILE_LOG_ERR, "in and/or out required");
       }
     }
@@ -2123,6 +2216,10 @@ void jal_parse_var_common(pfile_t *pf,
             BOOLEAN_TRUE);
         inf.ct = 0;
       }
+      if ((inf.def_flags & VARIABLE_DEF_FLAG_BYREF) && !dim_ct) {
+        pfile_log(pf, PFILE_LOG_ERR,
+          "'byref' requires an array parameter: write `byref in name[]`");
+      }
       if (dims_heap) {
         free(dims);
       }
@@ -2212,7 +2309,18 @@ void jal_parse_var_common(pfile_t *pf,
         } else {
           ptr    = pf_token_get(pf, PF_TOKEN_CURRENT);
           inf.master = pfile_variable_find(pf, PFILE_LOG_NONE, ptr, 0);
+          if (inf.master
+              && variable_def_flag_test(variable_def_get(inf.master),
+                  VARIABLE_DEF_FLAG_STRING)) {
+            pfile_log(pf, PFILE_LOG_ERR,
+              "'at' cannot overlay a string variable; pass it to a `byref` "
+              "formal to alias its characters");
+          }
           variable_flag_set(inf.master, VARIABLE_FLAG_UNREPLACEABLE);
+          /* `at` on a byref formal (or any pointer master) aliases the
+           * pointee -- a runtime value.  The overlay variable keeps the
+           * master + compile-time byte offset; jal_value_find_registry
+           * decorates references with the pointer-deref value shape. */
           /* if this is a bit variable, the master will be set to
              _bit_bucket. We need to remove that */
           if (inf.master && !variable_is_const(inf.master)) {

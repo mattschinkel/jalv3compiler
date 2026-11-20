@@ -133,9 +133,9 @@ done < "$WORK/cov_corpus.txt"
 cov_compile sims/picsim/16f18857_picsim_fat_pointer.jal fat
 cov_compile sims/gpsim/18f4620_gpsim_pointer_array_200.jal fat
 # G3 slot binds: the scalar-pointee runtime offset and the array-pointee
-# control are both FAT_BIND under the engine (design D4); NOT_FAT_BIND is
-# now shadowed by FAT_BIND (pic_fat_bind_forced only consults the recipe
-# with the engine on), so its row stays unexercised.
+# control are both FAT_BIND under the engine (design D4).  The old
+# NOT_FAT_BIND row is retired: no key can select it (the engine-on slot bind
+# is FAT_BIND, and the engine-off path returns before the recipe table).
 cov_compile sims/picsim/16f18857_picsim_pointer_slot_runtime_ofs.jal fat
 cov_compile sims/gpsim/16f887_gpsim_pointer_slot_runtime_ofs.jal fat
 cov_compile sims/picsim/16f18857_picsim_pointer_slot_array_bind.jal fat

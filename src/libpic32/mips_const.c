@@ -72,10 +72,27 @@ static unsigned long mips_const_ofs_of(variable_t v)
 
 boolean_t mips_var_is_flash_const(variable_t v)
 {
-  if (!v || !variable_is_const(v)) {
+  variable_t m;
+
+  if (!v) {
     return BOOLEAN_FALSE;
   }
-  return variable_data_get(v) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  if (variable_is_const(v) && variable_data_get(v)) {
+    return BOOLEAN_TRUE;
+  }
+  /* A const overlay (`at` alias, e.g. the byref scalar view of a string
+   * literal) has no data of its own: its bytes live in its flash-const
+   * master.  The alias's own ARRAY def is not CONST (only its member is),
+   * so check the master chain for a const that owns the bytes. */
+  for (m = variable_master_get(v); m; m = variable_master_get(m)) {
+    if (!variable_is_const(m)) {
+      return BOOLEAN_FALSE;
+    }
+    if (variable_data_get(m)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
 }
 
 /* A pool entry is live only when codegen materialized its address
@@ -138,7 +155,17 @@ void mips_emit_flash_addr(unsigned reg, variable_t v, unsigned long extra)
 {
   mips_code_t lui;
   mips_code_t ori;
+  variable_t  m;
 
+  /* The const pool is keyed by variable; a fixup must name the variable
+   * that actually OWNS the bytes.  A const overlay (the byref scalar
+   * view of a literal) stores no data -- its master does -- so fold the
+   * alias's own base into `extra` and fix up the master instead. */
+  m = variable_master_get(v);
+  if (m && mips_var_is_flash_const(m)) {
+    extra += (unsigned long) variable_base_real_get(v, 0);
+    v = m;
+  }
   lui = mips_code_alloc(MIPS_OP_LUI, reg, 0, 0);
   ori = mips_code_alloc(MIPS_OP_ORI, reg, reg, 0);
   if (mips_const_state.cfix_ct >= mips_const_state.cfix_cap) {

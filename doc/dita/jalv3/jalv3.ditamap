@@ -102,6 +102,8 @@
 
   <chapter href="procedures_functions.dita">
     <topicref href="optional_parameters.dita"/>
+
+    <topicref href="byref.dita"/>
   </chapter>
 
   <chapter href="pseudo_variables.dita"/>

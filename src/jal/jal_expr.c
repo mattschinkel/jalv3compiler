@@ -18,6 +18,7 @@
 #include "../libcore/pf_block.h"
 #include "../libcore/pf_expr.h"
 #include "../libcore/variable.h"
+#include "../libcore/byref_tag.h"
 #include "../libcore/pf_proc.h"
 #include "jal_proc.h"
 #include "../libcore/task_alg.h"
@@ -1844,6 +1845,216 @@ static void jal_expr_skip_to_close(pfile_t *pf)
   }
 }
 
+/* Hidden byref type tag predicates.  The tag is a bitmask (see
+ * libcore/byref_tag.h); each predicate is `(tag & mask) == value', so the
+ * single-type fold can replace the tag with its constant and the back end
+ * folds the AND/EQ chain.  `_is_byte()' etc. ignore the SIGNED bit, keeping
+ * the old size-based behaviour for sbyte/sword/sdword; the `_is_s*()'
+ * predicates test it.  Array/pointer predicates test the matching element or
+ * pointee code; `_is_array()'/`_is_pointer()'/`_is_string()' are the
+ * kind-only tests. */
+typedef struct jal_byref_is_ {
+  const char *name;
+  unsigned    mask;
+  unsigned    value;
+} jal_byref_is_t;
+
+static const jal_byref_is_t jal_byref_is[] = {
+  { "_is_byte",            BYREF_TAG_SCALAR_MASK, BYREF_TAG_BYTE },
+  { "_is_word",            BYREF_TAG_SCALAR_MASK, BYREF_TAG_WORD },
+  { "_is_dword",           BYREF_TAG_SCALAR_MASK, BYREF_TAG_DWORD },
+  { "_is_qword",           BYREF_TAG_SCALAR_MASK, BYREF_TAG_QWORD },
+  { "_is_oword",           BYREF_TAG_SCALAR_MASK, BYREF_TAG_OWORD },
+  { "_is_float",           BYREF_TAG_SCALAR_MASK, BYREF_TAG_FLOAT },
+  { "_is_sbyte",           BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_BYTE },
+  { "_is_sword",           BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_WORD },
+  { "_is_sdword",          BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_DWORD },
+  { "_is_sqword",          BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_QWORD },
+  { "_is_soword",          BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_OWORD },
+  { "_is_string",          BYREF_TAG_STRING_MASK, BYREF_TAG_STRING },
+  { "_is_array",           BYREF_TAG_ARRAY, BYREF_TAG_ARRAY },
+  { "_is_pointer",         BYREF_TAG_POINTER, BYREF_TAG_POINTER },
+  { "_is_byte_array",      BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_ARRAY | BYREF_TAG_BYTE },
+  { "_is_word_array",      BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_ARRAY | BYREF_TAG_WORD },
+  { "_is_dword_array",     BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_ARRAY | BYREF_TAG_DWORD },
+  { "_is_qword_array",     BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_ARRAY | BYREF_TAG_QWORD },
+  { "_is_oword_array",     BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_ARRAY | BYREF_TAG_OWORD },
+  { "_is_float_array",     BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_ARRAY | BYREF_TAG_FLOAT },
+  { "_is_sbyte_array",     BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_ARRAY | BYREF_TAG_BYTE },
+  { "_is_sword_array",     BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_ARRAY | BYREF_TAG_WORD },
+  { "_is_sdword_array",    BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_ARRAY | BYREF_TAG_DWORD },
+  { "_is_sqword_array",    BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_ARRAY | BYREF_TAG_QWORD },
+  { "_is_soword_array",    BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_ARRAY | BYREF_TAG_OWORD },
+  { "_is_byte_pointer",    BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_POINTER | BYREF_TAG_BYTE },
+  { "_is_word_pointer",    BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_POINTER | BYREF_TAG_WORD },
+  { "_is_dword_pointer",   BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_POINTER | BYREF_TAG_DWORD },
+  { "_is_qword_pointer",   BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_POINTER | BYREF_TAG_QWORD },
+  { "_is_oword_pointer",   BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_POINTER | BYREF_TAG_OWORD },
+  { "_is_float_pointer",   BYREF_TAG_SCALAR_MASK,
+      BYREF_TAG_POINTER | BYREF_TAG_FLOAT },
+  { "_is_sbyte_pointer",   BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_POINTER | BYREF_TAG_BYTE },
+  { "_is_sword_pointer",   BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_POINTER | BYREF_TAG_WORD },
+  { "_is_sdword_pointer",  BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_POINTER | BYREF_TAG_DWORD },
+  { "_is_sqword_pointer",  BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_POINTER | BYREF_TAG_QWORD },
+  { "_is_soword_pointer",  BYREF_TAG_SIGNED_MASK,
+      BYREF_TAG_SIGNED | BYREF_TAG_POINTER | BYREF_TAG_OWORD }
+};
+
+/* A `pragma byref_clone on' body re-flavors its byref formal as a dynamic
+ * string handle, so it has no hidden tag member.  Its one formal is a
+ * string; `_is_string()' is then statically true and every other predicate
+ * false. */
+static boolean_t jal_proc_has_dynamic_string_formal(pfile_proc_t *proc)
+{
+  variable_def_member_t mbr;
+
+  if (!proc || (PFILE_PROC_NONE == proc)) {
+    return BOOLEAN_FALSE;
+  }
+  for (mbr = variable_def_member_get(pfile_proc_def_get(proc));
+       mbr; mbr = variable_def_member_link_get(mbr)) {
+    variable_def_t mdef;
+    flag_t         flags;
+
+    mdef = variable_def_member_def_get(mbr);
+    if (!mdef) {
+      continue;
+    }
+    flags = variable_def_flags_get_all(mdef);
+    if ((flags & VARIABLE_DEF_FLAG_STRING)
+        && (flags & VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static value_t value_get_byref_is(pfile_t *pf, unsigned mask,
+    unsigned value)
+{
+  pfile_proc_t         *proc;
+  variable_def_member_t mbr;
+  size_t                ii;
+  size_t                hit_ii = 0;
+  size_t                ct = 0;
+  value_t               pv;
+  value_t               tval;
+  value_t               maskval;
+  value_t               cval;
+  value_t               andval;
+  value_t               dst;
+
+  proc = pfile_proc_active_get(pf);
+  if (proc && (PFILE_PROC_NONE != proc)) {
+    for (ii = 0, mbr = variable_def_member_get(pfile_proc_def_get(proc));
+         mbr; ii++, mbr = variable_def_member_link_get(mbr)) {
+      const char *tag;
+
+      tag = variable_def_member_tag_get(mbr);
+      if (tag && ('_' == tag[0]) && (strlen(tag) > 4)
+          && !strcmp(tag + strlen(tag) - 4, "_tag")) {
+        if (!ct) {
+          hit_ii = ii;
+        }
+        ct++;
+      }
+    }
+  }
+  pf_token_get(pf, PF_TOKEN_NEXT);              /* the predicate name */
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_ERR, "(")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, ")")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR, "')' expected");
+  }
+  if (1 != ct) {
+    variable_def_t bdef;
+
+    if ((0 == ct) && jal_proc_has_dynamic_string_formal(proc)) {
+      /* a string- clone body: the formal is a string, so only
+       * `_is_string()' is true */
+      bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
+          VARIABLE_DEF_FLAG_NONE, 1);
+      return pfile_constant_get(pf,
+          (BYREF_TAG_STRING == value) ? 1 : 0, bdef);
+    }
+    pfile_log(pf, PFILE_LOG_ERR,
+      "`_is_*()` needs exactly one byref formal in this procedure (found %lu)",
+      (ulong) ct);
+    bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
+        VARIABLE_DEF_FLAG_NONE, 1);
+    return pfile_constant_get(pf, 0, bdef);
+  }
+  pv = (hit_ii < pfile_proc_param_ct_get(proc))
+    ? pfile_proc_param_get(proc, hit_ii)
+    : VALUE_NONE;
+  if (!pv) {
+    variable_def_t bdef;
+
+    pfile_log(pf, PFILE_LOG_ERR, "byref type tag is not available");
+    bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_BOOLEAN,
+        VARIABLE_DEF_FLAG_NONE, 1);
+    return pfile_constant_get(pf, 0, bdef);
+  }
+  tval    = value_clone(pv);
+  maskval = pfile_constant_get(pf, mask, VARIABLE_DEF_NONE);
+  cval    = pfile_constant_get(pf, value, VARIABLE_DEF_NONE);
+  andval  = VALUE_NONE;
+  dst     = VALUE_NONE;
+  if (tval && maskval && cval) {
+    pfile_cmd_op_add(pf, OPERATOR_ANDB, &andval, tval, maskval);
+    if (andval) {
+      pfile_cmd_op_add(pf, OPERATOR_EQ, &dst, andval, cval);
+    }
+  }
+  value_release(tval);
+  value_release(maskval);
+  value_release(cval);
+  value_release(andval);
+  return dst;
+}
+
+static value_t value_get_byref_is_named(pfile_t *pf)
+{
+  size_t ii;
+
+  for (ii = 0; ii < COUNT(jal_byref_is); ii++) {
+    if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE,
+          jal_byref_is[ii].name)) {
+      return value_get_byref_is(pf, jal_byref_is[ii].mask,
+          jal_byref_is[ii].value);
+    }
+  }
+  return VALUE_NONE;
+}
+
 /*
  * NAME
  *   value_get
@@ -1868,6 +2079,8 @@ static value_t value_get(pfile_t *pf)
   val = VALUE_NONE;
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "count")) {
     val = value_get_count(pf);
+  } else if (VALUE_NONE != (val = value_get_byref_is_named(pf))) {
+    /* the predicate built `(tag & mask) == value' */
   } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "_length")) {
     val = value_get_length(pf);
   } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "whereis")) {

@@ -1,0 +1,45 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref string actual write-through, no clone
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the no-clone rule for a byref formal: an `in out` call with a
+--    dynamic string actual writes the payload in place (sv[0] becomes 'A'),
+--    COUNT stays the text length, and `_is_string()` sees tag 3.  No
+--    string-flavor clone is emitted for the byref formal.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 80000
+-- expect byte v__check_step 1
+-- expect byte v__ck_ch 65
+-- expect byte v__ck_is 1
+-- expect byte v__ck_cnt 2
+-- @picsim_validate end
+
+pragma target string_heap_size 64
+include regression_16f18857_device
+include regression
+include strings_dynamic
+
+var volatile byte _ck_ch = 0
+var volatile byte _ck_is = 0
+var volatile byte _ck_cnt = 0
+
+procedure seta(byref in out arr[]) is
+   arr[0] = 65
+   if _is_string() then
+      _ck_is = 1
+   end if
+   _ck_cnt = byte(COUNT(arr))
+end procedure
+
+var string sv
+
+sv = "AB"
+seta(sv)
+_ck_ch = sv[0]
+
+regression_checkpoint()

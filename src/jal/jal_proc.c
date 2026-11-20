@@ -17,6 +17,7 @@
 #include <assert.h>
 #include "../libutils/mem.h"
 #include "../libcore/cmd_brch.h"
+#include "../libcore/cmd_op.h"
 #include "../libcore/pf_msg.h"
 #include "../libcore/pf_cmd.h"
 #include "../libcore/pfile.h"
@@ -24,10 +25,12 @@
 #include "../libcore/pf_proc.h"
 #include "../libcore/pf_procd.h"
 #include "../libcore/vardef.h"
+#include "../libcore/byref_tag.h"
 #include "../libcore/task_alg.h"
 #include "../libpic12/pic.h"
 #include "jal_vdef.h"
 #include "jal_blck.h"
+#include "jal_tokn.h"
 #include "jal_build.h"
 #include "jal_expr.h"
 #include "jal_proc.h"
@@ -44,8 +47,8 @@
  *
  * Defaults are indexed by the proc_def MEMBER position (parms index at
  * the call site): registration resolves each declared param's member by
- * tag match, so the function-return slot and hidden _<name>_count
- * members need no special casing at fill time.  Direct calls only --
+ * tag match, so the function-return slot and hidden _<name>_count /
+ * _<name>_tag members need no special casing at fill time.  Direct calls only --
  * pointer-called procs keep the full-arity rule (signatures carry no
  * defaults). */
 typedef struct jal_opt_default_ {
@@ -58,6 +61,15 @@ typedef struct jal_opt_default_ {
 } jal_opt_default_t;
 
 static jal_opt_default_t *jal_opt_defaults;
+
+/* byref scalar-view alias counter (reset between compiles: the alias name
+ * must be deterministic for the two-compiles A4 gate) */
+static unsigned long jal_byref_view_seq;
+
+void jal_proc_state_reset(void)
+{
+  jal_byref_view_seq = 0;
+}
 
 static jal_opt_default_t *jal_opt_default_find(variable_def_t fn_def)
 {
@@ -74,9 +86,9 @@ static jal_opt_default_t *jal_opt_default_find(variable_def_t fn_def)
 /* Resolve declared-param ordinals to member indices at FIRST CALL, when
  * the function def is final (the return slot is inserted at member 0
  * AFTER the parameter list parses, so declaration-time indexing is off
- * by one).  The count-pair rule mirrors the argument loop's need_ct
- * detection exactly (INTEGER member whose next member is a POINTER =
- * hidden _<name>_count for an open-array formal). */
+ * by one).  The hidden-member rule mirrors the argument loop's detection
+ * exactly: an open-array formal's [_<name>_count, pointer] pair, and a
+ * byref formal's [_<name>_count, _<name>_tag, pointer] triple. */
 static void jal_opt_default_resolve(pfile_t *pf, jal_opt_default_t *entry)
 {
   variable_def_member_t mbr;
@@ -103,16 +115,34 @@ static void jal_opt_default_resolve(pfile_t *pf, jal_opt_default_t *entry)
   ordinal = 0;
   while (mbr && (ordinal < entry->params_ct)) {
     variable_def_member_t nxt;
+    variable_def_member_t nxt2;
+    const char           *mtag;
 
-    nxt = variable_def_member_link_get(mbr);
-    if (nxt
+    nxt  = variable_def_member_link_get(mbr);
+    nxt2 = nxt ? variable_def_member_link_get(nxt) : 0;
+    mtag = nxt ? variable_def_member_tag_get(nxt) : 0;
+    if ((VARIABLE_DEF_TYPE_INTEGER
+          == variable_def_type_get(variable_def_member_def_get(mbr)))
+        && nxt && nxt2 && mtag && (strlen(mtag) > 4)
+        && !strcmp(mtag + strlen(mtag) - 4, "_tag")
+        && (VARIABLE_DEF_TYPE_INTEGER
+          == variable_def_type_get(variable_def_member_def_get(nxt)))
+        && (VARIABLE_DEF_TYPE_POINTER
+          == variable_def_type_get(variable_def_member_def_get(nxt2)))) {
+      /* a byref formal's [_count, _tag, pointer] triple: no default (the
+       * declaration rejects optional byref), so only skip its members */
+      ordinal += 1;
+      midx    += 3;
+      mbr      = nxt2;
+    } else if (nxt
         && (VARIABLE_DEF_TYPE_INTEGER
           == variable_def_type_get(variable_def_member_def_get(mbr)))
         && (VARIABLE_DEF_TYPE_POINTER
           == variable_def_type_get(variable_def_member_def_get(nxt)))) {
       /* hidden count for the open-array param -- member order is
        * [_<name>_count, pointer] (the argument loop fills parms[ii-1]
-       * for a present actual), so the count comes FIRST */
+       * for a present actual), so the count comes FIRST; a byref formal
+       * adds _<name>_tag after the count (handled above) */
       if (entry->defs[ordinal]) {
         value_t ctv;
 
@@ -365,6 +395,16 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
       jal_parse_var_common(pf, statement_start, &var, flags,
           formal_name_optional,
           (formal_name_optional ? &formal_anon_idx : 0));
+      if (is_optional && variable_dflag_test(var, VARIABLE_DEF_FLAG_BYREF)) {
+        pfile_log(pf, PFILE_LOG_ERR,
+            "byref parameters cannot be optional");
+      }
+      if (formal_name_optional
+          && variable_dflag_test(var, VARIABLE_DEF_FLAG_BYREF)) {
+        /* the pointer-call path has no hidden count/tag marshalling */
+        pfile_log(pf, PFILE_LOG_ERR,
+            "byref parameters are not supported in function-pointer signatures");
+      }
       {
         value_t dval;
 
@@ -476,7 +516,8 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
             "OUT parameters are not allowed for TASKs");
       }
       if (variable_dflag_test(var, VARIABLE_DEF_FLAG_VOLATILE)
-          && !variable_master_get(var)) {
+          && !variable_master_get(var)
+          && !variable_is_pointer(var)) {
         /* this is really a function call or two */
         char *vname;
         char *vname_ptr;
@@ -569,6 +610,21 @@ void jal_parse_formal_parameter_list_after_open_paren(pfile_t *pf,
                   VARIABLE_DEF_FLAG_IN, 2), 1);
               FREE(vname);
             }
+            if (variable_dflag_test(var, VARIABLE_DEF_FLAG_BYREF)) {
+              /* hidden type tag, passed right after the count: 0 byte,
+               * 1 word, 2 dword, 3 string, 4 array, 5 pointer (6/7
+               * reserved).  The `_is_*` predicates read this member. */
+              vname = MALLOC(strlen(variable_name_get(var)) + 6);
+              if (!vname) {
+                pfile_log_syserr(pf, ENOMEM);
+              } else {
+                sprintf(vname, "_%s_tag", variable_name_get(var));
+                variable_def_member_add(proc_def, vname,
+                  variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+                    VARIABLE_DEF_FLAG_IN, 1), 1);
+                FREE(vname);
+              }
+            }
           }
           vdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
               variable_def_flags_get_all(variable_def_get(var))
@@ -652,6 +708,32 @@ static boolean_t jal_proc_strclone_mask_test(unsigned long mask, size_t bit)
     return BOOLEAN_FALSE;
   }
   return (mask & (1UL << bit)) ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+}
+
+/* is member IDX of the procedure's def a BYREF formal's pointer?  (used by
+ * the call-site remap to drop the [_count, _tag] pair that precedes it) */
+static boolean_t jal_proc_strclone_member_byref(pfile_proc_t *proc, size_t idx)
+{
+  variable_def_t       def;
+  variable_def_member_t mbr;
+  size_t               mi;
+
+  if (!proc || (PFILE_PROC_NONE == proc)) {
+    return BOOLEAN_FALSE;
+  }
+  def = pfile_proc_def_get(proc);
+  for (mbr = variable_def_member_get(def), mi = 0; mbr;
+       mbr = variable_def_member_link_get(mbr), mi++) {
+    variable_def_t mdef;
+
+    if (mi != idx) {
+      continue;
+    }
+    mdef = variable_def_member_def_get(mbr);
+    return (mdef && variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_BYREF))
+      ? BOOLEAN_TRUE : BOOLEAN_FALSE;
+  }
+  return BOOLEAN_FALSE;
 }
 
 /* may ORIG be DUPLICATED as a string-flavored clone at all?  (a
@@ -849,6 +931,22 @@ void jal_parse_procedure_common(pfile_t *pf, jal_parse_proc_type type,
         if (return_def) {
           return_def = variable_def_flags_change(return_def,
             variable_def_flags_get_all(return_def) | VARIABLE_DEF_FLAG_OUT);
+        }
+        /* a pointer return must carry the platform pointer width (fat
+         * pointers are wider than the nominal 2-byte "pointer" basetype);
+         * the bare type has no pointee member to preserve */
+        if (return_def
+            && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(return_def))
+            && (variable_def_sz_get(return_def) != pfile_pointer_width_get(pf))) {
+          variable_def_t wide;
+
+          wide = variable_def_alloc(0, VARIABLE_DEF_TYPE_POINTER,
+              variable_def_flags_get_all(return_def),
+              pfile_pointer_width_get(pf));
+          if (wide) {
+            variable_def_free(return_def);
+            return_def = wide;
+          }
         }
       }
     }
@@ -1192,7 +1290,7 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig,
   variable_def_t       def;
   variable_def_t       odef;
   variable_def_member_t mbr;
-  char                *skip_tags[8];
+  char                *skip_tags[16];
   size_t               skip_ct = 0;
   size_t               si;
   size_t               mi;
@@ -1224,6 +1322,17 @@ static variable_def_t jal_proc_strclone_def(pfile_t *pf, pfile_proc_t *orig,
         if (skip_tags[skip_ct]) {
           sprintf(skip_tags[skip_ct], "_%s_count", tag);
           skip_ct++;
+        }
+        /* a byref formal carries a hidden [_count, _tag, pointer] triple;
+         * the clone's string handle needs NEITHER, so drop the tag member
+         * too. */
+        if (variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_BYREF)
+            && (skip_ct < COUNT(skip_tags))) {
+          skip_tags[skip_ct] = MALLOC(strlen(tag) + 6);
+          if (skip_tags[skip_ct]) {
+            sprintf(skip_tags[skip_ct], "_%s_tag", tag);
+            skip_ct++;
+          }
         }
       }
     }
@@ -1505,6 +1614,84 @@ static boolean_t jal_proc_strclone_passon_ok(pfile_t *pf,
   return BOOLEAN_TRUE;
 }
 
+/* Is NAME the hidden tag member of one of the MASKED byref formals?  Those
+ * tag members are dropped from the clone def, but the duplicate body still
+ * reads the original tag; the clone's formal is a dynamic string, so the
+ * type is known and the body's tag read can become the string constant. */
+static boolean_t jal_proc_strclone_masked_tag(pfile_proc_t *orig,
+    unsigned long mask, const char *name)
+{
+  variable_def_member_t mbr;
+  size_t                mi;
+  size_t                len;
+
+  if (!orig || (PFILE_PROC_NONE == orig) || !name || ('_' != name[0])) {
+    return BOOLEAN_FALSE;
+  }
+  len = strlen(name);
+  for (mbr = variable_def_member_get(pfile_proc_def_get(orig)), mi = 0;
+       mbr; mbr = variable_def_member_link_get(mbr), mi++) {
+    variable_def_t mdef;
+    const char    *tag;
+    size_t         tlen;
+
+    if (!(mask & (1UL << mi))) {
+      continue;
+    }
+    mdef = variable_def_member_def_get(mbr);
+    tag  = variable_def_member_tag_get(mbr);
+    if (!mdef || !tag
+        || (VARIABLE_DEF_TYPE_POINTER != variable_def_type_get(mdef))
+        || !variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_OPENARRAY)
+        || !variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_BYREF)) {
+      continue;
+    }
+    tlen = strlen(tag);
+    if ((len == (tlen + 5))
+        && !strncmp(name + 1, tag, tlen)
+        && !strcmp(name + 1 + tlen, "_tag")) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static void jal_proc_strclone_tag_fix(pfile_t *pf, pfile_proc_t *orig,
+    cmd_t head, unsigned long mask)
+{
+  cmd_t cmd;
+
+  for (cmd = head; cmd; cmd = cmd_link_get(cmd)) {
+    value_t v;
+    value_t cv;
+
+    v = cmd_opval1_get(cmd);
+    if (v && jal_proc_strclone_masked_tag(orig, mask, value_name_get(v))) {
+      cv = pfile_constant_get(pf, BYREF_TAG_STRING, value_def_get(v));
+      if (cv) {
+        cmd_opval1_set(cmd, cv);
+        value_release(cv);
+      }
+    }
+    v = cmd_opval2_get(cmd);
+    if (v && jal_proc_strclone_masked_tag(orig, mask, value_name_get(v))) {
+      cv = pfile_constant_get(pf, BYREF_TAG_STRING, value_def_get(v));
+      if (cv) {
+        cmd_opval2_set(cmd, cv);
+        value_release(cv);
+      }
+    }
+    v = cmd_brval_get(cmd);
+    if (v && jal_proc_strclone_masked_tag(orig, mask, value_name_get(v))) {
+      cv = pfile_constant_get(pf, BYREF_TAG_STRING, value_def_get(v));
+      if (cv) {
+        cmd_brval_set(cmd, cv);
+        value_release(cv);
+      }
+    }
+  }
+}
+
 /* the clone's parameter for definition member TAG, or VALUE_NONE */
 static value_t jal_proc_strclone_param_by_tag(pfile_proc_t *clone,
     const char *tag)
@@ -1775,6 +1962,7 @@ static pfile_proc_t *jal_proc_strclone_get(pfile_t *pf, pfile_proc_t *orig,
         if (ok) {
           cmd_t head = mark ? cmd_link_get(mark) : pfile_cmdlist_get(pf);
 
+          jal_proc_strclone_tag_fix(pf, orig, head, mask);
           ok = jal_proc_strclone_passon_fix(pf, orig, proc, mask, head,
               pfile_cmdlist_tail_get(pf));
         }
@@ -1831,10 +2019,85 @@ void jal_parse_return(pfile_t *pf, const pfile_pos_t *statement_start)
 
     val = pfile_proc_param_get(proc, 0);
     if (val) {
-      expr = jal_parse_expr(pf);
-      if (expr) {
-        pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &val, expr, VALUE_NONE);
-        value_release(expr);
+      if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "byref")) {
+        /* `return byref` is deliberately not implemented: the caller-side
+         * auto-dereference does not survive the return marshalling (see the
+         * byref follow-up (a) in TODOS).  Name the alternative so this is
+         * one actionable error, not a parse cascade. */
+        pfile_log(pf, PFILE_LOG_ERR,
+            "`return byref` is not implemented: mutate the actual in place "
+            "inside the routine, or return an index into it");
+        pf_token_get(pf, PF_TOKEN_NEXT); /* `byref` */
+        if (jal_token_is_identifier(pf) && !jal_token_is_keyword(pf)) {
+          pf_token_get(pf, PF_TOKEN_NEXT); /* the formal name */
+        }
+      } else {
+        variable_def_t rdef = pfile_proc_return_def_get(proc);
+
+        if (rdef && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(rdef))
+            && jal_token_is_identifier(pf) && !jal_token_is_keyword(pf)) {
+          /* a pointer-returning function: `return p` returns the POINTER
+           * value (the address), not the rvalue deref jal_parse_expr gives.
+           * The return type decides the meaning; a scalar return type keeps
+           * the deref (the pointee) below. */
+          const char *nm = pf_token_get(pf, PF_TOKEN_CURRENT);
+
+          expr = pfile_value_find(pf, PFILE_LOG_ERR, nm);
+          if (expr) {
+            value_lock(expr);
+            if (VARIABLE_DEF_TYPE_POINTER != value_type_get(expr)) {
+              pfile_log(pf, PFILE_LOG_ERR,
+                  "return type is a pointer, but '%s' is not a pointer", nm);
+              pf_token_get(pf, PF_TOKEN_NEXT);
+              value_release(expr);
+              expr = VALUE_NONE;
+            } else {
+              /* widen to the platform pointer width so the assign copies the
+               * full fat pointer (the def is only the 2-byte address part) */
+              value_def_set(expr, rdef);
+              pf_token_get(pf, PF_TOKEN_NEXT);
+              {
+                /* the returned address must outlive the call: warn when the
+                 * pointer's bind target is a local of this function (its RAM
+                 * is overlaid after return) */
+                variable_t pvar = value_variable_get(expr);
+                value_t    target = pvar
+                  ? variable_pointer_whereis_target_get(pvar) : VALUE_NONE;
+
+                if (target) {
+                  variable_t  tvar = value_variable_get(target);
+                  const char *tname = tvar ? variable_name_get(tvar) : 0;
+
+                  /* a POINTER target (e.g. `p is arr[0]` on a byref formal)
+                   * means the address goes THROUGH to the pointee, which is
+                   * the caller's data -- safe.  Only a local non-pointer
+                   * target's own storage is overlaid after return. */
+                  if (tvar && tname && !variable_is_pointer(tvar)) {
+                    pfile_block_t *blk = pfile_proc_block_root_get(proc);
+                    variable_t     found = blk
+                      ? pfile_block_variable_find_shallow(blk, tname)
+                      : VARIABLE_NONE;
+
+                    if (found == tvar) {
+                      pfile_log(pf, PFILE_LOG_WARN,
+                          "returning a pointer to local variable '%s': its "
+                          "address is only valid during this call", tname);
+                    }
+                    if (found) {
+                      variable_release(found);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          expr = jal_parse_expr(pf);
+        }
+        if (expr) {
+          pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &val, expr, VALUE_NONE);
+          value_release(expr);
+        }
       }
     }
     pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
@@ -2098,15 +2361,205 @@ static void jal_call_fnptr_param_parse(pfile_t *pf, const char *ptr, variable_de
   *pmbr = mbr;
 }
 
+/* forward: defined with the IN-param parse, used by the OUT parse */
+static value_t jal_call_byref_scalar_view(pfile_t *pf, value_t actual);
+
+/* Descend an array def to its scalar leaf (a multidim array's element def
+ * is itself an array).  A string def is not an array and is returned as is. */
+static variable_def_t jal_byref_scalar_def(variable_def_t def)
+{
+  while (def && (VARIABLE_DEF_TYPE_ARRAY == variable_def_type_get(def))) {
+    variable_def_member_t mbr;
+
+    mbr = variable_def_member_get(def);
+    if (!mbr) {
+      break;
+    }
+    def = variable_def_member_def_get(mbr);
+  }
+  return def;
+}
+
+static unsigned jal_byref_type_code(variable_def_t def)
+{
+  variable_sz_t sz;
+
+  if (!def) {
+    return BYREF_TAG_BYTE;
+  }
+  if (VARIABLE_DEF_TYPE_FLOAT == variable_def_type_get(def)) {
+    return BYREF_TAG_FLOAT;
+  }
+  sz = variable_def_sz_get(def);
+  switch (sz) {
+    case 1:  return BYREF_TAG_BYTE;
+    case 2:  return BYREF_TAG_WORD;
+    case 4:  return BYREF_TAG_DWORD;
+    case 8:  return BYREF_TAG_QWORD;
+    case 16: return BYREF_TAG_OWORD;
+    default: return BYREF_TAG_BYTE;
+  }
+}
+
+/* The wide-pointer path views a numeric scalar (or an array of one) as
+ * bytes.  A pointer to a structure/pointer/string is not a type-tagged
+ * scalar view; leave those refused. */
+static boolean_t jal_byref_pointer_pointee_ok(value_t val)
+{
+  variable_def_member_t mbr;
+  variable_def_t        pdef;
+  variable_def_type_t   type;
+
+  if (!val || (VARIABLE_DEF_TYPE_POINTER != value_type_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  mbr  = variable_def_member_get(value_def_get(val));
+  pdef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  pdef = jal_byref_scalar_def(pdef);
+  if (!pdef) {
+    return BOOLEAN_FALSE;
+  }
+  type = variable_def_type_get(pdef);
+  return variable_def_type_is_number(type)
+    || (VARIABLE_DEF_TYPE_FLOAT == type);
+}
+
+static boolean_t jal_byref_pointer_pointee_const(value_t val)
+{
+  variable_def_member_t mbr;
+  variable_def_t        pdef;
+
+  if (!val || (VARIABLE_DEF_TYPE_POINTER != value_type_get(val))) {
+    return BOOLEAN_FALSE;
+  }
+  mbr  = variable_def_member_get(value_def_get(val));
+  pdef = mbr ? variable_def_member_def_get(mbr) : VARIABLE_DEF_NONE;
+  if (pdef && variable_def_flag_test(pdef, VARIABLE_DEF_FLAG_CONST)) {
+    return BOOLEAN_TRUE;
+  }
+  pdef = jal_byref_scalar_def(pdef);
+  return pdef && variable_def_flag_test(pdef, VARIABLE_DEF_FLAG_CONST);
+}
+
+static unsigned jal_byref_signed_bit(variable_def_t def)
+{
+  return (def && variable_def_flag_test(def, VARIABLE_DEF_FLAG_SIGNED))
+    ? BYREF_TAG_SIGNED : 0;
+}
+
+/* Hidden byref type tag: size/type code + STRING/ARRAY/POINTER/SIGNED.
+ * Computed from the ACTUAL's type before the call-site view rewrites the
+ * value.  An array carries its element code + ARRAY; a pointer carries its
+ * pointee code + POINTER; a pointer-to-string is marshalled as a string
+ * actual and therefore carries STRING only. */
+static unsigned jal_call_byref_tag(value_t val)
+{
+  variable_t            av;
+  variable_def_t        def;
+  variable_def_t        sdef;
+  variable_def_member_t mbr;
+
+  if (!val) {
+    return BYREF_TAG_BYTE;
+  }
+  if (value_dflag_test(val, VARIABLE_DEF_FLAG_STRING)
+      || value_dflag_test(val, VARIABLE_DEF_FLAG_STRING_DYNAMIC)
+      || jal_string_pointer_is(val)) {
+    return BYREF_TAG_STRING;
+  }
+  av = value_variable_get(val);
+  if (av) {
+    sdef = variable_def_get(av);
+    if (variable_is_pointer(av)) {
+      def = 0;
+      mbr = sdef ? variable_def_member_get(sdef) : 0;
+      if (mbr) {
+        def = jal_byref_scalar_def(variable_def_member_def_get(mbr));
+      }
+      return BYREF_TAG_POINTER | jal_byref_type_code(def)
+        | jal_byref_signed_bit(def);
+    }
+    if (variable_is_array(av)) {
+      def = 0;
+      mbr = sdef ? variable_def_member_get(sdef) : 0;
+      if (mbr) {
+        def = jal_byref_scalar_def(variable_def_member_def_get(mbr));
+      }
+      return BYREF_TAG_ARRAY | jal_byref_type_code(def)
+        | jal_byref_signed_bit(def);
+    }
+  }
+  def = value_def_get(val);
+  if (!def) {
+    def = variable_def_get(av);
+  }
+  return jal_byref_type_code(def) | jal_byref_signed_bit(def);
+}
+
+/* T6: record the tag constancy for the formal's hidden `_<formal>_tag`
+ * member (formal member index ii - 1) at a direct call site. */
+static void jal_call_byref_tag_record(value_t call_val, size_t ii,
+    unsigned tag)
+{
+  pfile_proc_t *callee = call_val ? value_proc_get(call_val) : PFILE_PROC_NONE;
+  value_t       tv;
+
+  if (!callee || (PFILE_PROC_NONE == callee)) {
+    return;
+  }
+  tv = pfile_proc_param_get(callee, ii - 1);
+  if (tv) {
+    variable_byref_tag_record(value_variable_get(tv), (int) tag);
+  }
+}
+
+/* A byref formal's hidden count is a BYTE size.  A pointer actual's
+ * value_ct is the number of POINTEE elements, so scale it by the pointee
+ * width for the wide-pointee path (a byte pointer stays unchanged).  A
+ * zero/unknown count means one pointee element. */
+static value_t jal_call_byref_pointer_count(pfile_t *pf, variable_def_t def,
+    value_t val, value_t ct_val)
+{
+  variable_def_t        pdef;
+  variable_def_member_t pmbr;
+  variable_sz_t         psz;
+  value_t               nct;
+  unsigned long         n;
+
+  if (!variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)
+      || !val || !ct_val || !value_is_const(ct_val)
+      || (VARIABLE_DEF_TYPE_POINTER != value_type_get(val))) {
+    return ct_val;
+  }
+  pmbr = variable_def_member_get(value_def_get(val));
+  pdef = pmbr ? variable_def_member_def_get(pmbr) : VARIABLE_DEF_NONE;
+  pdef = jal_byref_scalar_def(pdef);
+  psz = pdef ? variable_def_sz_get(pdef) : 1;
+  if (psz <= 1) {
+    return ct_val;
+  }
+  n = (unsigned long) value_const_get(ct_val);
+  if (!n) {
+    n = 1;
+  }
+  nct = pfile_constant_get(pf, n * psz, value_def_get(ct_val));
+  if (nct) {
+    value_release(ct_val);
+    return nct;
+  }
+  return ct_val;
+}
+
 /* OUT formal: a PUT procedure (its 'put is called after the callee
  * returns, value in tow) or a plain lvalue */
-static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, value_t call_val, unsigned long *clone_mask)
+static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, value_t *put_parms, boolean_t need_ct, boolean_t need_tag, value_t call_val, unsigned long *clone_mask)
 {
   value_t val;
   boolean_t str_refused = BOOLEAN_FALSE;
   boolean_t str_view = BOOLEAN_FALSE;
   boolean_t str_cloned = BOOLEAN_FALSE;
   value_t str_rt_len = VALUE_NONE;
+  unsigned byref_tag = 0;
 
   /* this needs to be a simple variable or PUT procedure */
   value_t jvals[JAL_VAL_TYPE_CT];
@@ -2162,6 +2615,16 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
     while (jal_parse_structure(pf, &val)
       || jal_parse_subscript(pf, &val, NULL))
       ; /* null body */
+  }
+  if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)) {
+    value_t view;
+
+    byref_tag = jal_call_byref_tag(val);
+    view = jal_call_byref_scalar_view(pf, val);
+    if (view) {
+      value_release(val);
+      val = view;
+    }
   }
   /* A `var pointer p as var string` actual for an `in out` (or `out`)
    * dynamic-string formal: pass the HANDLE VIEW -- the pointee def plus the
@@ -2261,7 +2724,9 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
         fval = pfile_proc_param_get(callee, ii);
         fvar = fval ? value_variable_get(fval) : VARIABLE_NONE;
       }
-      if (!jal_string_grow_aliases_other(callee, fvar, val)) {
+      if (!jal_string_grow_aliases_other(callee, fvar, val)
+          && (!variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)
+            || pfile_proc_flag_test(callee, PFILE_PROC_FLAG_BYREF_CLONE))) {
         *clone_mask |= (1UL << ii);
         str_cloned = BOOLEAN_TRUE;
         if (jal_string_pointer_is(val)) {
@@ -2379,7 +2844,22 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
           && variable_def_is_same(
                variable_def_member_def_get(variable_def_member_get(def)),
                variable_def_member_def_get(
-                 variable_def_member_get(value_def_get(val))))))) {
+                 variable_def_member_get(value_def_get(val)))))
+      /* a byref formal is a raw BYTE view: accept a pointer of any
+       * pointee width; the tag records the pointee type */
+      || (val
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && (VARIABLE_DEF_TYPE_POINTER
+              == variable_def_type_get(value_def_get(val)))
+          && variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)
+          && !variable_def_flag_test(value_def_get(val),
+               VARIABLE_DEF_FLAG_OPENARRAY)
+          && !jal_string_pointer_is(val)
+          && !str_view && !str_cloned
+          && variable_def_member_get(def)
+          && variable_def_member_get(value_def_get(val))
+          && jal_byref_pointer_pointee_ok(val)
+          && !jal_byref_pointer_pointee_const(val)))) {
     pfile_log(pf, PFILE_LOG_ERR, "type mismatch");
     value_release(val);
     val = VALUE_NONE;
@@ -2452,7 +2932,15 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
           value_release(ct_val);
           ct_val = VALUE_NONE;
         }
-        parms[ii - 1] = ct_val;
+        ct_val = jal_call_byref_pointer_count(pf, def, val, ct_val);
+        if (need_tag) {
+          parms[ii - 2] = ct_val;
+          parms[ii - 1] = pfile_constant_get(pf, byref_tag,
+              VARIABLE_DEF_NONE);
+          jal_call_byref_tag_record(call_val, ii, byref_tag);
+        } else {
+          parms[ii - 1] = ct_val;
+        }
         FREE(ct_name);
       }
     }
@@ -2466,7 +2954,97 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
 /* IN formal: parse the expression, apply the optional-empty-string
  * sentinel, marshal string actuals (byte-buffer + runtime length,
  * literal staging), type-check, and fill the hidden _count slot */
-static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, boolean_t need_ct, flag_t flags, value_t call_val)
+/* A byref formal is a raw byte-array alias of the ACTUAL's storage.  Convert
+ * a scalar or fixed-size array actual into a temp byte[sz] that overlays it
+ * (the `at` shape), so the open-array assign stores the actual's ADDRESS and
+ * the hidden count is the byte size.  Strings (payload marshalling),
+ * pointers (pointee alias) and packed bits are left to their existing paths. */
+static value_t jal_call_byref_scalar_view(pfile_t *pf, value_t actual)
+{
+  variable_t      av;
+  variable_sz_t   sz;
+  variable_def_t  sdef;
+  variable_def_t  bdef;
+  variable_def_t  adef;
+  variable_def_t  mdef;
+  variable_def_member_t mbr;
+  value_t         buf;
+  char            nbuf[32];
+  result_t        rc;
+
+  av = value_variable_get(actual);
+  if (!av) {
+    return VALUE_NONE;
+  }
+  sdef = variable_def_get(av);
+  if (sdef && variable_def_flag_test(sdef,
+        VARIABLE_DEF_FLAG_STRING | VARIABLE_DEF_FLAG_STRING_DYNAMIC)) {
+    /* a string actual keeps its payload marshalling (the open-array
+     * string view/snapshot), not a raw alias of the handle */
+    return VALUE_NONE;
+  }
+  if (variable_is_pointer(av)) {
+    /* a pointer actual aliases its POINTEE through the open-array
+     * pointer path, not the pointer slot */
+    return VALUE_NONE;
+  }
+  if (variable_is_array(av)) {
+    unsigned long total;
+
+    mbr  = variable_def_member_get(sdef);
+    mdef = mbr ? variable_def_member_def_get(mbr) : 0;
+    if (!mdef || variable_def_flag_test(mdef, VARIABLE_DEF_FLAG_BIT)) {
+      /* packed bits are not bytes: leave the actual to the normal
+       * open-array type check */
+      return VALUE_NONE;
+    }
+    /* the array def's size is already its total byte size */
+    total = (unsigned long) variable_sz_get(av);
+    if (total > 255) {
+      return VALUE_NONE;
+    }
+    sz = (variable_sz_t) total;
+  } else {
+    if (sdef && variable_def_flag_test(sdef, VARIABLE_DEF_FLAG_BIT)) {
+      /* a bit is one packed bit, not a writable byte view */
+      return VALUE_NONE;
+    }
+    sz = variable_sz_get(av);
+    if ((1 != sz) && (2 != sz) && (4 != sz) && (8 != sz) && (16 != sz)) {
+      pfile_log(pf, PFILE_LOG_ERR,
+          "byref of a %lu-byte scalar is not supported: pass an array",
+          (ulong) sz);
+      return VALUE_NONE;
+    }
+  }
+  if (!sz || (sz > 255)) {
+    return VALUE_NONE;
+  }
+  bdef = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
+      variable_is_const(av) ? VARIABLE_DEF_FLAG_CONST : VARIABLE_DEF_FLAG_NONE,
+      1);
+  /* the array def starts at size 0: `variable_def_member_add` below adds
+   * the byte size, so the alias is EXACTLY the actual's byte count (a
+   * nonzero start leaves one uninitialized trailing byte the ROM-table
+   * emit then reads out of bounds) */
+  adef = variable_def_alloc(0, VARIABLE_DEF_TYPE_ARRAY,
+      VARIABLE_DEF_FLAG_NONE, 0);
+  if (!bdef || !adef) {
+    return VALUE_NONE;
+  }
+  variable_def_member_add(adef, 0, bdef, (size_t) sz);
+  sprintf(nbuf, "_byrefarg%lu", jal_byref_view_seq++);
+  rc = pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_LOCAL, nbuf, adef, &buf);
+  if (RESULT_OK != rc) {
+    pfile_log_syserr(pf, rc);
+    return VALUE_NONE;
+  }
+  variable_master_set(value_variable_get(buf), av);
+  variable_base_set(value_variable_get(buf), 0, 0);
+  return buf;
+}
+
+static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t def, size_t ii, size_t param_ct, value_t *parms, boolean_t need_ct, boolean_t need_tag, flag_t flags, value_t call_val)
 {
   value_t val;
 
@@ -2476,6 +3054,7 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
   boolean_t      suppress_ptr_deref;
   boolean_t      opt_sentinel;
   value_t        str_rt_len = VALUE_NONE;
+  unsigned       byref_tag = 0;
 
   opt_sentinel = BOOLEAN_FALSE;
   suppress_ptr_deref = jal_formal_def_is_data_pointer_non_callable(
@@ -2486,6 +3065,29 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
   val = jal_parse_expr(pf);
   if (suppress_ptr_deref) {
     pfile_parse_call_data_ptr_arg_pop(pf);
+  }
+  /* a DYNAMIC (heap) string has no byte-array view: refusing it from a
+   * plain open-array formal (`byte in arr[]`) keeps the JALv2 byte-array
+   * idiom (`const byte s[] = "..."`, `var byte s[]`) and the string-flavor
+   * path, while pointing the new heap-string case at `byref in arr[]`. */
+  if (val
+      && variable_def_flag_test(def, VARIABLE_DEF_FLAG_OPENARRAY)
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)
+      && !variable_def_flag_test(def, VARIABLE_DEF_FLAG_STRING)
+      && jal_string_is_dynamic(val)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+        "a dynamic string cannot be passed to an open array formal "
+        "(e.g. `byte in arr[]`): use `byref in arr[]`");
+  }
+  if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)) {
+    value_t view;
+
+    byref_tag = jal_call_byref_tag(val);
+    view = jal_call_byref_scalar_view(pf, val);
+    if (view) {
+      value_release(val);
+      val = view;
+    }
   }
   /* Optional-formal empty-string sentinel: `report("")` on a
    * NON-string OPTIONAL formal means OMITTED -- fill the
@@ -2707,6 +3309,19 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
           && variable_def_is_same(
                variable_def_member_def_get(variable_def_member_get(def)),
                variable_def_member_def_get(variable_def_member_get(vdef))));
+    /* A byref formal is a raw BYTE view: the pointer's pointee may be
+     * wider (word/dword/qword/oword/float).  The callee indexes it as
+     * bytes, re-types via `at`, and the hidden tag records the pointee
+     * type, so the pointee defs do not have to match. */
+    ok = ok
+      || ((VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
+          && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
+          && variable_def_flag_test(def, VARIABLE_DEF_FLAG_BYREF)
+          && variable_def_flag_test(def, VARIABLE_DEF_FLAG_IN)
+          && !variable_def_flag_test(vdef, VARIABLE_DEF_FLAG_OPENARRAY)
+          && variable_def_member_get(def)
+          && variable_def_member_get(vdef)
+          && jal_byref_pointer_pointee_ok(val));
     if (val
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(def))
         && (VARIABLE_DEF_TYPE_POINTER == variable_def_type_get(vdef))
@@ -2799,7 +3414,15 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
           ct_val = str_rt_len;
           str_rt_len = VALUE_NONE;
         }
-        parms[ii - 1] = ct_val;
+        ct_val = jal_call_byref_pointer_count(pf, def, val, ct_val);
+        if (need_tag) {
+          parms[ii - 2] = ct_val;
+          parms[ii - 1] = pfile_constant_get(pf, byref_tag,
+              VARIABLE_DEF_NONE);
+          jal_call_byref_tag_record(call_val, ii, byref_tag);
+        } else {
+          parms[ii - 1] = ct_val;
+        }
         FREE(ct_name);
       }
     }
@@ -3128,6 +3751,10 @@ static value_t jal_parse_call_impl(pfile_t *pf, value_t call_val,
           const char *ptr;
           /*const char *vname;*/
           boolean_t   need_ct;
+          boolean_t   need_tag;
+          variable_def_member_t mbr2;
+          variable_def_member_t mbr3;
+          const char *mtag;
 
           /* skip either the opening '(' or the last ',' */
           if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, ",")) {
@@ -3141,19 +3768,42 @@ static value_t jal_parse_call_impl(pfile_t *pf, value_t call_val,
             value_release(val);
             continue;
           }
-          def = variable_def_member_def_get(mbr);
-          if ((ii + 1 < param_ct)
+          def   = variable_def_member_def_get(mbr);
+          need_tag = BOOLEAN_FALSE;
+          mbr2  = variable_def_member_link_get(mbr);
+          mbr3  = mbr2 ? variable_def_member_link_get(mbr2) : 0;
+          mtag  = mbr2 ? variable_def_member_tag_get(mbr2) : 0;
+          if ((ii + 2 < param_ct)
             && (VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(def))
+            && mbr2 && mbr3
+            && (VARIABLE_DEF_TYPE_INTEGER
+              == variable_def_type_get(variable_def_member_def_get(mbr2)))
+            && (VARIABLE_DEF_TYPE_POINTER
+              == variable_def_type_get(variable_def_member_def_get(mbr3)))
+            && mtag && (strlen(mtag) > 4)
+            && !strcmp(mtag + strlen(mtag) - 4, "_tag")) {
+            /*
+             * a byref formal's hidden pair: [_<name>_count,
+             * _<name>_tag, pointer].  Skip both; the argument parse
+             * fills parms[ii-2] (count) and parms[ii-1] (tag).
+             */
+            need_ct  = BOOLEAN_TRUE;
+            need_tag = BOOLEAN_TRUE;
+            mbr      = mbr3;
+            def      = variable_def_member_def_get(mbr);
+            ii      += 2;
+          } else if ((ii + 1 < param_ct)
+            && (VARIABLE_DEF_TYPE_INTEGER == variable_def_type_get(def))
+            && mbr2
             && VARIABLE_DEF_TYPE_POINTER
               == variable_def_type_get(
-                variable_def_member_def_get(
-                  variable_def_member_link_get(mbr)))) {
+                variable_def_member_def_get(mbr2))) {
             /*
              * this must be the count associated with the pointer. 
              * skip it, it will be filled in later 
              */
             need_ct = BOOLEAN_TRUE;
-            mbr     = variable_def_member_link_get(mbr);
+            mbr     = mbr2;
             def     = variable_def_member_def_get(mbr);
             ii++;
           } else {
@@ -3172,10 +3822,10 @@ static value_t jal_parse_call_impl(pfile_t *pf, value_t call_val,
                 &ii, &mbr);
           } else if (variable_def_flag_test(def, VARIABLE_DEF_FLAG_OUT)) {
             jal_call_out_param_parse(pf, ptr, def, ii, param_ct, parms,
-                put_parms, need_ct, call_val, &clone_mask);
+                put_parms, need_ct, need_tag, call_val, &clone_mask);
           } else {
             jal_call_in_param_parse(pf, ptr, def, ii, param_ct, parms,
-                need_ct, flags, call_val);
+                need_ct, need_tag, flags, call_val);
           }
         }
       }
@@ -3230,6 +3880,12 @@ static value_t jal_parse_call_impl(pfile_t *pf, value_t call_val,
           drop = BOOLEAN_FALSE;
           if (((ci + 1) < JAL_PROC_STRCLONE_MASK_BITS)
               && (clone_mask & (1UL << (ci + 1)))) {
+            drop = BOOLEAN_TRUE;
+          } else if (((ci + 2) < JAL_PROC_STRCLONE_MASK_BITS)
+              && (clone_mask & (1UL << (ci + 2)))
+              && jal_proc_strclone_member_byref(callee, ci + 2)) {
+            /* a byref formal's [_count, _tag, pointer] triple: drop the
+             * count slot too (ci+2 is the masked pointer) */
             drop = BOOLEAN_TRUE;
           }
           if ((0 == ci) || (parms[ci] && !drop)) {

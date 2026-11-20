@@ -1,0 +1,79 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F887 gpsim -- wide-pointee pointer actual through byref (14-bit)
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--   The 14-bit FSR path must also alias a qword pointer through the byref
+--   byte view: tag _is_qword_pointer(), COUNT 8, and an 8-byte read/write
+--   through the `at` overlay.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_q_in 0x01
+-- expect byte v_q_seen 0x88
+-- expect byte v_q_cnt 0x08
+-- expect byte v_q_wout 0x01
+-- expect byte v_q_wlo 0x04
+-- expect byte v_q_whi 0xde
+-- expect byte v_q_wcnt 0x08
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte q_in
+var volatile byte q_seen
+var volatile byte q_cnt
+var volatile byte q_wout
+var volatile byte q_wlo
+var volatile byte q_whi
+var volatile byte q_wcnt
+
+procedure qread(byref in a[]) is
+   var qword v at a
+   if _is_qword_pointer() then
+      q_in = 1
+   else
+      q_in = 2
+   end if
+   q_seen = byte(v)
+   q_cnt = byte(COUNT(a))
+end procedure
+
+procedure qwrite(byref in out a[]) is
+   var qword v at a
+   v = 0xDEADBEEF01020304
+   if _is_qword_pointer() then
+      q_wout = 1
+   else
+      q_wout = 2
+   end if
+   q_wcnt = byte(COUNT(a))
+end procedure
+
+var qword qa[1]
+var pointer pq as var qword
+
+procedure run() is
+   regression_begin_run()
+   qa[0] = 0x1122334455667788
+   q_in = 0
+   q_seen = 0
+   q_cnt = 0
+   q_wout = 0
+   q_wlo = 0
+   q_whi = 0
+   q_wcnt = 0
+   pq is qa[0]
+   qread(pq)
+   qwrite(pq)
+   q_wlo = byte(qa[0])
+   q_whi = byte(qa[0] >> 56)
+   regression_checkpoint()
+end procedure
+
+run()

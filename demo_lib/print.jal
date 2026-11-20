@@ -122,7 +122,7 @@ end procedure
 --            - string (array of bytes)
 -- Returns:   nothing
 -- --------------------------------------------------------------
-procedure print_string(volatile byte out device, byte in str[]) is
+procedure print_string(volatile byte out device, byref in str[]) is
    var word len = count(str)
    var byte i
    for len using i loop

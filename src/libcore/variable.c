@@ -1696,6 +1696,58 @@ boolean_t variable_is_const(const variable_t var)
   return variable_dflag_test(var, VARIABLE_DEF_FLAG_CONST);
 }
 
+/* T6 single-type byref fold: a byref `_<formal>_tag` variable's constant
+ * tag across every direct call site (0 byte .. 5 pointer), or -1 when the
+ * call sites disagree (so the runtime tag path stays).  Indirect/pointer
+ * calls never record a tag, leaving the variable unrecorded -> -1. */
+typedef struct {
+  variable_t var;
+  int        tag;
+} byref_tag_entry_t;
+
+static byref_tag_entry_t *byref_tag_tab;
+static size_t byref_tag_tab_used, byref_tag_tab_alloc;
+
+void variable_byref_tag_record(variable_t var, int tag)
+{
+  size_t ii;
+
+  for (ii = 0; ii < byref_tag_tab_used; ii++) {
+    if (byref_tag_tab[ii].var == var) {
+      if (byref_tag_tab[ii].tag != tag) {
+        byref_tag_tab[ii].tag = -1;
+      }
+      return;
+    }
+  }
+  if (byref_tag_tab_used == byref_tag_tab_alloc) {
+    size_t n = byref_tag_tab_alloc ? (2 * byref_tag_tab_alloc) : 16;
+    byref_tag_entry_t *t;
+
+    t = REALLOC(byref_tag_tab, n * sizeof(*t));
+    if (!t) {
+      return;
+    }
+    byref_tag_tab = t;
+    byref_tag_tab_alloc = n;
+  }
+  byref_tag_tab[byref_tag_tab_used].var = var;
+  byref_tag_tab[byref_tag_tab_used].tag = tag;
+  byref_tag_tab_used++;
+}
+
+int variable_byref_tag_const_get(variable_t var)
+{
+  size_t ii;
+
+  for (ii = 0; ii < byref_tag_tab_used; ii++) {
+    if (byref_tag_tab[ii].var == var) {
+      return byref_tag_tab[ii].tag;
+    }
+  }
+  return -1;
+}
+
 /* declared CONST and never assigned.  Const-folding
  * (pfile_block_variable_fixup) marks assigned-but-never-read variables
  * CONST, so the flag alone does not prove the cmd stream is free of

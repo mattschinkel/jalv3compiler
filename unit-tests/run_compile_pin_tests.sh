@@ -109,6 +109,23 @@ echo "compile-pin gate: compiler=$CC"
 
 # String / parser diagnostics
 run_sh string_error_paths          unit-tests/test_string_error_paths.sh "$CC"
+# A const actual through a byref formal emits ONE lookup table per const, not
+# one per call site: the byref `_byrefargN` view has no ROM of its own and
+# must share the flash-const master's table.
+run_sh byref_const_lookup_dedup    unit-tests/test_byref_const_lookup_dedup.sh "$CC"
+# Constant `_is_*()` relations must fold all the way to an unconditional/
+# absent branch; several nested predicates cost the same as the hand-written
+# body, while mixed actual types keep the runtime tag.
+run_sh byref_is_fold_branches     unit-tests/test_byref_is_fold_branches.sh "$CC"
+# A folded `_is_*` used inside `&'/`|' with a runtime condition must disappear:
+# the uniform expression costs the same as the hand-written condition.
+run_sh byref_is_fold_logical      unit-tests/test_byref_is_fold_logical.sh "$CC"
+# Full tag predicate set (qword/oword/float/signed/array-element/pointer):
+# uniform calls fold the tag; a mixed call keeps it.
+run_sh byref_is_full_set          unit-tests/test_byref_is_full_set.sh "$CC"
+# A pointer actual with a wider numeric/float pointee passes through the
+# byref byte view; uniform calls fold the tag.
+run_sh byref_ptr_wide            unit-tests/test_byref_ptr_wide.sh "$CC"
 # Typed front-end semantic subscript layer (the retired JALV2_FRONT_IR
 # switch is gone; the layer is the only lowering): the clone witnesses run
 # under gpsim and must keep passing as the single-arm pin.
@@ -138,6 +155,10 @@ run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$C
 # first string's text); the compiler's `_strargN` buffer is the case the
 # author can act on (docs/fixes/2026/fix_openarray_formal_chunk_map.md).
 run_sh string_arg_chunk_map        unit-tests/test_string_arg_chunk_map.sh "$CC"
+# `at <string-var>` aliases the handle (fixed RAM), never the heap payload,
+# so it is refused; the byref-formal overlay aliases the payload and stays.
+# docs/fixes/2026/fix_at_string_overlay_reject_20261118.md
+run_sh at_string_overlay_reject    unit-tests/test_at_string_overlay_reject.sh "$CC"
 # The USER-array half of the same defect: a formal fed two different multi-bank
 # user arrays addressed the second one with the first one's bank math.  Now
 # every such formal owns a map that each call site fills (and none is created
@@ -219,6 +240,13 @@ run_sh isr_source_wiring          unit-tests/test_isr_source_wiring.sh "$CC"
 # Phase 7: the string-clone eligibility decision after the body_pos
 # marker was deleted (forward/defined, guarded, empty, call-before-body).
 run_sh proc_clone_eligibility     unit-tests/test_proc_clone_eligibility.sh "$CC"
+run_sh byref_tag_fold             unit-tests/test_byref_tag_fold.sh "$CC"
+run_sh byref_rmw_word             unit-tests/test_byref_rmw_word.sh "$CC"
+run_sh byref_return_refusal       unit-tests/test_byref_return_refusal.sh "$CC"
+run_sh ptr_return_no_hang          unit-tests/test_ptr_return_no_hang.sh "$CC"
+run_sh ptr_return_typecheck        unit-tests/test_ptr_return_typecheck.sh "$CC"
+run_sh ptr_formal                 unit-tests/test_ptr_formal.sh "$CC"
+run_sh string_array_boundary       unit-tests/test_string_array_boundary.sh "$CC"
 run_sh openarray_pair_over_cap    unit-tests/test_openarray_pair_over_cap.sh "$CC"
 # DX F1: strict JALV2_* on/off parsing (FALSE/space/typos) and --features.
 run_sh env_switches              unit-tests/test_env_switches.sh "$CC"

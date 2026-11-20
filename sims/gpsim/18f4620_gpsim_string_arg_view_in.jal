@@ -39,14 +39,14 @@ var volatile byte ok3 = 0
 var volatile byte ok4 = 0
 
 -- constant and dynamic indexes, inside one boolean chain
-procedure peek(byte in x[], word in n) is
+procedure peek(byref in x[], word in n) is
    if (n == 5) & (x[0] == "a") & (x[4] == "e") then
       ok1 = 1
    end if
 end procedure
 
 -- a loop of dynamic reads through the formal
-procedure sum5(byte in x[], word in n) is
+procedure sum5(byref in x[], word in n) is
    var byte i = 0
    var byte tot = 0
    for 5 loop
@@ -59,7 +59,7 @@ procedure sum5(byte in x[], word in n) is
 end procedure
 
 -- a callee that grows a string is tainted: the IN side keeps the snapshot
-procedure mut_check(byte in x[], word in n) is
+procedure mut_check(byref in x[], word in n) is
    s = s & "!"
    if (n == 5) & (x[0] == "a") & (x[4] == "e") then
       ok4 = 1

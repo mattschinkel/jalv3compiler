@@ -309,6 +309,12 @@ void          variable_label_set(variable_t var, label_t lbl);
 
 boolean_t     variable_is_volatile(const variable_t var);
 boolean_t     variable_is_const(const variable_t var);
+
+/* T6 single-type byref fold: record a call site's tag for a byref
+ * `_<formal>_tag` variable and read back the program-wide constant tag
+ * (-1 when call sites disagree). */
+void          variable_byref_tag_record(variable_t var, int tag);
+int           variable_byref_tag_const_get(variable_t var);
 boolean_t     variable_is_pure_const(const variable_t var);
 boolean_t     variable_is_pseudo_const(const variable_t var);
 boolean_t     variable_is_auto(const variable_t var);

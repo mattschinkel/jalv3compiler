@@ -21,6 +21,15 @@ struct pfile_str_heap_defer_ {
   struct pfile_str_heap_defer_ *link;
   cmd_t   marker;
   value_t result;
+  /* the string value whose handle the retry re-reads: a compaction patches
+   * only registered (global) handles, so a formal's copy must be re-pointed
+   * after the compact */
+  value_t handle;
+  /* the procedure that owns the append site: the expansion runs after
+   * parsing with whatever procedure was last active, so the p-code it
+   * builds (temps, the outlined call's call edge) must be attributed to
+   * the site's procedure, not to the last one parsed */
+  pfile_proc_t *proc;
   /* prefer ONE outlined `CALL string_heap_compact` at expansion instead of
    * inlining the (large) compact body at this marker */
   boolean_t as_call;

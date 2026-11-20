@@ -1,0 +1,83 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref tag for string and pointer actuals
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the string (3) and pointer (5) tags of eng-review Q3.  A dynamic
+--    string actual is element-accessible (COUNT is the payload length, no
+--    clone), a byte-pointer actual aliases its POINTEE (COUNT 1), and a
+--    pointer-to-string actual takes the string tag (payload, COUNT 2), each
+--    selecting only its own `_is_*` predicate in the same body.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 120000
+-- expect byte v__check_step 1
+-- expect byte v__s_str 1
+-- expect byte v__s_ptr 0
+-- expect byte v__s_cnt 2
+-- expect byte v__q_str 0
+-- expect byte v__q_ptr 1
+-- expect byte v__q_cnt 1
+-- expect byte v__r_str 1
+-- expect byte v__r_ptr 0
+-- expect byte v__r_cnt 2
+-- @picsim_validate end
+
+pragma target string_heap_size 64
+include regression_16f18857_device
+include regression
+include strings_dynamic
+
+var volatile byte _p_str = 9
+var volatile byte _p_ptr = 9
+var volatile byte _p_cnt = 9
+var volatile byte _s_str = 9
+var volatile byte _s_ptr = 9
+var volatile byte _s_cnt = 9
+var volatile byte _q_str = 9
+var volatile byte _q_ptr = 9
+var volatile byte _q_cnt = 9
+var volatile byte _r_str = 9
+var volatile byte _r_ptr = 9
+var volatile byte _r_cnt = 9
+
+procedure probe(byref in arr[]) is
+   _p_str = 0
+   _p_ptr = 0
+   if _is_string() then
+      _p_str = 1
+   end if
+   if _is_pointer() then
+      _p_ptr = 1
+   end if
+   _p_cnt = byte(COUNT(arr))
+end procedure
+
+var string sv
+var byte bv
+var pointer pv as var byte
+var pointer ps as var string
+
+sv = "AB"
+probe(sv)
+_s_str = _p_str
+_s_ptr = _p_ptr
+_s_cnt = _p_cnt
+
+bv = 7
+pv is bv
+probe(pv)
+_q_str = _p_str
+_q_ptr = _p_ptr
+_q_cnt = _p_cnt
+
+ps is sv
+probe(ps)
+_r_str = _p_str
+_r_ptr = _p_ptr
+_r_cnt = _p_cnt
+
+regression_checkpoint()

@@ -1019,7 +1019,8 @@ fi
 # G3 control: a slot whose POINTEE is an ARRAY (`pa[0] is big`, then
 # `pa[0][100]`) now dispatches under the fat engine (design D4): the slot
 # holds `(id(big), 0)` and the deref adds the constant subscript 100.
-# Gate-off keeps the walked-bind path (and the NOT_FAT_BIND row).  Slot 1 is
+# Gate-off keeps the walked-bind path (the old NOT_FAT_BIND recipe row is
+# retired: the engine-off bind never consults the table).  Slot 1 is
 # off by the slot stride on HEAD too, so only slot 0 is measured (the
 # pre-existing gap for k>0 stays recorded).
 cat > "$WORK/g3/g3_arr.jal" <<'JALG3A'

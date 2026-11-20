@@ -128,6 +128,47 @@ else
   fail "the call-before-definition case" "$WORK/late.capture"
 fi
 
+# --- 5. byref default: the BYREF exclusion, no clone ----------------------
+cat > "$WORK/byref_default.jal" <<'EOF'
+include 16f887
+pragma target string_heap_size 64
+var string s
+procedure fill(byref in out arr[]) is
+   arr[0] = "A"
+end procedure
+s = "ab"
+fill(s)
+forever loop end loop
+EOF
+if compile "$WORK/byref_default.jal" "$WORK/byref_default.asm" "$WORK/byref_default.capture" \
+    && grep -q '^0 errors' "$WORK/byref_default.capture" \
+    && ! grep -q '_strp_fill_' "$WORK/byref_default.asm"; then
+  echo "ok   a byref formal is not cloned by default"
+else
+  fail "the byref-default case" "$WORK/byref_default.capture"
+fi
+
+# --- 6. pragma byref_clone on: the byref formal rejoins the clone ---------
+cat > "$WORK/byref_clone.jal" <<'EOF'
+include 16f887
+pragma target string_heap_size 64
+var string s
+procedure fill(byref in out arr[]) is
+   pragma byref_clone on
+   arr[0] = "A"
+end procedure
+s = "ab"
+fill(s)
+forever loop end loop
+EOF
+if compile "$WORK/byref_clone.jal" "$WORK/byref_clone.asm" "$WORK/byref_clone.capture" \
+    && grep -q '^0 errors' "$WORK/byref_clone.capture" \
+    && grep -q '_strp_fill_' "$WORK/byref_clone.asm"; then
+  echo "ok   pragma byref_clone on clones the byref formal"
+else
+  fail "the byref-clone case" "$WORK/byref_clone.capture"
+fi
+
 if (( fails )); then
   echo "FAIL: $fails clone-eligibility check(s)"
   exit 1

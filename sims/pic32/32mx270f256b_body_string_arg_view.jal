@@ -5,7 +5,7 @@
 -- Compiler: JALv2
 --
 -- Description:
---    A heap string actual bound to a `byte out x[]` / `byte in out x[]`
+--    A heap string actual bound to a `byte out x[]` / `byref in out x[]`
 --    formal is handed over as a payload VIEW (docs/fixes/2026/fix_string_arg_view.md).
 --    PIC32 is flat-addressed, so the view is the by-ref payload POINTER
 --    plus COUNT(s): the callee's writes land in the live payload, the
@@ -32,7 +32,7 @@ var volatile byte done = 0
 var volatile byte ok_io = 0
 var volatile byte ok_out = 0
 
-procedure poke(byte in out x[], byte in k, byte in v) is
+procedure poke(byref in out x[], byte in k, byte in v) is
    x[k] = v
 end procedure
 

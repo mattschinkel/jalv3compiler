@@ -6,135 +6,167 @@ workspace backlog ("TODO / pending work" — that
 section keeps the detailed history and links; the open entries are mirrored
 here). Each entry names its evidence and the fix/investigation doc.
 
-## PIC32/MIPS32: a `dword` procedure parameter appears to corrupt the caller (ROOT-CAUSED 2026-11-15 — program reads the EJTAG mailbox twice; not codegen)
+## `byref` — promote to a real feature (DECIDED 2026-11-16 — T1-T8 landed)
 
-- **What:** On PIC32, adding a procedure that takes a `dword` parameter and
-  calling it from one branch of an `if/elsif` chain changes the result of a
-  *different* branch that is never entered. A `byte` parameter or no parameter
-  at all is fine. Bisected on hardware (PIC32MX270F256B @ 40 MHz, driving the
-  EJTAG mailbox): the `PE_EXEC_VERSION` reply becomes `0x00000007` instead of
-  `0x00070301` — the low half (the version) is lost.
-- **Why:** Silent, and the symptom is far from the cause: correct-looking code
-  compiles and links, and the value that goes wrong is produced by a path the
-  new procedure never touches. It blocks the JAL rewrite of Microchip's PIC32
-  flash agent (`share/JALPIC_One_PIC32_share/pic32_flash_agent.jal`), whose
-  handlers take `dword` arguments.
-- **Root cause (2026-11-15, verified on the bench):** the test program reads
-  the FastData mailbox **twice per command**:
-  `cmd = mailbox >> 16` and `arg = mailbox & 0xFFFF`.  Every CPU access to
-  `0xFF200000` is paired with one host FastData operation (a host write is
-  consumed by a processor load, a host read supplied by a processor store), so
-  the second load stalls and the host's read returns a stale value instead of
-  the reply — `0x00000007`, the command half of the host's own `0x00070000`.
-  The `dword` parameter did not corrupt anything: `do_read(arg)` keeps `arg`
-  alive, `arg` forces the second load, and the passing build only passed
-  because dead-code elimination of the unused `arg` left one mailbox access
-  per host word.  Disassembly, QEMU and the bench A/B are in
-  `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`: the two reads appear at the loop
-  head, the version branch/reply/post are identical modulo `$gp` offsets, and
-  the same witness with `cmdword = mailbox` returns `0x00070301` on the
-  target.
-- **Fixed:** both witnesses (`witness_no_param.jal`, `witness_dword_param.jal`)
-  read once; `pic32_flash_agent.jal` reads the command word once and no longer posts
-  `0xCAFEBABE` at startup (with the handshake that post is consumed as the
-  first reply); `pic32_prog.py --flash-agent-addr` settles 0.1 s after `jump_to`.
-  Hardware after the fix: witness PASS `0x00070301`; flash agent version
-  `0x00070301`, `--verify-read` of its own image **3,188 bytes OK**, and a
-  vendor-programmed row read back 32/32 through the flash agent.
-- **Also fixed on the way (agent, not codegen):** `NVMCONSET = NVMCON_WR` wrote
-  the bit's 0/1 value instead of the `0x8000` mask, so no NVM operation ever
-  started (`flash_end` then saw WR already clear and reported success); row
-  program never set `NVMSRCADDR` and its buffer was cached; and the NVMOP
-  row/word codes were swapped (1 = word, 3 = row on MX1/2).  With those in,
-  the agent programs, erases pages and CRC-verifies on the bench (see the
-  "write path" entry below and `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`).
-- **Found while auditing "dword and larger":** a real, *different* codegen
-  defect in the same area — a PIC32 indirect call (any proc also called
-  through a pointer) with a `qword` formal strands the value cache across the
-  raw 8-byte copy, so a neighbouring 4-byte formal's next read is elided and
-  returns the qword's high word.  Fixed 2026-11-15
-  (`docs/fixes/2026/fix_mips_wide_assign_cache.md`), witness
-  `sims/pic32/32mx270f256b_param_wide_copy.jal` (pre-fix `0x1C`, post-fix
-  `0x1F`; 183 existing PIC32 images byte-identical).  It needs a qword
-  formal, so it does not explain the agent report.
-- **Context:** `docs/fixes/2026/fix_dword_param_report.md` has the full
-  bisection (six builds) and the observation recipe (write `0x00070000` to
-  `0xFF200000`, read back).  Both witnesses are built at 40 MHz with the
-  CHECON fix from `docs/fixes/2026/fix_pic32mx_flash_wait_states.md`, which is unrelated.
-- **Effort:** root cause + witness fix delivered; the agent write path is
-  bench-bound.
-- **Priority:** P3 (the reported corruption is closed; the agent write path
-  continues in its own entry below).
-- **Depends on:** nothing for the report; bench for the agent write path.
+- **Landed 2026-11-16 (`bcd62a0` + follow-up `7456916`):** T1 grammar and the
+  call-site address-of.  `byref <dir> arr[]` is a type-position reference
+  parameter; a scalar or fixed-size array actual is wrapped as a temp
+  `byte[]` alias (the `at` shape), so the open-array assign stores the
+  actual's ADDRESS and the hidden count is its BYTE size; the old
+  `byte byref x` modifier is a one-error refusal.  Follow-up fixes:
+  (a) the alias size was `element count × array size` — `word wbuf[2]`
+  reported COUNT 8 over 4 bytes (an out-of-bounds view); it is the array's
+  total byte size now, pinned by a word-array COUNT expectation on picsim
+  and gpsim (fails on `bcd62a0`, pin-checked); (b) string actuals keep the
+  string payload marshalling (`byref in` reads the text), pointer actuals
+  alias their POINTEE through the open-array pointer path (byte pointee;
+  wider pointees still type-mismatch), packed bit actuals are refused.
+  **T2 landed (same day, `d3bedac`):** each byref formal carries a hidden
+  `_<formal>_tag` byte after its count; the call site fills 0 byte, 1 word,
+  2 dword, 3 string, 4 array, 5 pointer, and `_is_byte/_is_word/_is_dword/
+  _is_string/_is_array/_is_pointer()` lower to `tag == N`, so one non-cloned
+  body branches on the actual's type (picsim word/byte/dword/array and
+  string/pointer witnesses, gpsim twin; pointer-to-string takes the string
+  tag).  v1 refusals: optional byref, byref formals in function-pointer
+  signatures, 8/16-byte scalar actuals; a predicate needs exactly one byref
+  formal in the procedure.
+  **T3 landed (same day):** `at` overlays a byref formal's pointee.  The
+  overlay keeps its master + compile-time byte offset; a value referencing it
+  is decorated with the pointer-deref shape (`VALUE_FLAG_POINTER |
+  VALUE_FLAG_INDIRECT` + baseofs) in `jal_value_find_registry`, so every read
+  and write aliases the pointee, not the pointer slot.  The guard keys on the
+  master being a pointer, so `at` on a plain `var pointer p` now derefs the
+  pointee too (was a silent slot read).  Witnesses: gpsim + picsim
+  `*_byref_at_overlay.jal` (word/dword-over-byte, byte offset, read + write).
+  **T5 landed (same day):** `pragma byref_clone on` (first line) rejoins a
+  byref formal to the string-flavor clone candidate set.  The clone def and
+  call-site remap drop BOTH hidden members of the byref `[_count, _tag,
+  pointer]` triple; without the pragma a byref formal is still never cloned.
+  Witness: `sims/picsim/16f18857_picsim_byref_clone.jal`; pin: two new cases
+  in `unit-tests/test_proc_clone_eligibility.sh`.
+  **T6 landed (same day):** the single-type tag fold.  `variable_byref_tag_record`
+  tracks each byref formal's tag across call sites; `pic_cmd_optimize` folds a
+  `_<formal>_tag == N` relation to `K == N` when the tag is program-wide
+  constant, so the backend drops the tag member and dead branches (constant
+  propagation, not cloning).  Pin: `unit-tests/test_byref_tag_fold.sh`.
+  **T7 landed (same day):** the DITA topic `doc/dita/jalv3/byref.dita`
+  (syntax, direction, tag predicates, no-clone + pragma, single-type fold,
+  refusals), linked from `jalv3.ditamap`.  Every implemented path already has
+  its witness from T1-T6.
+  **T8 landed (2026-11-17):** the multi-byte `at` overlay read (former
+  follow-up (c)).  `jal_sem_lower`'s formal-subscript read arm re-sets the
+  element's def to the DESTINATION's width after the dereference, so
+  `var word v at arr; v = v + 1` reads BOTH bytes and the low-byte carry
+  lands in the high byte.  Witness: `sims/picsim/16f18857_picsim_byref_rmw_word.jal`;
+  pin: `unit-tests/test_byref_rmw_word.sh`; doc
+  `docs/fixes/2026/fix_byref_overlay_read_20261117.md`.
+  Follow-ups: (a) `return byref` (Q1, settled in the eng review) is NOT yet
+  implemented -- `return byref arr` does not parse; it fell out of the T1-T7
+  breakdown and is not in the design's success criteria.  (e) **Landed
+  2026-11-17:** const string/array literals through a byref formal now read
+  from the const pool on every back end (the `print_string(byref)` gap):
+  classic `retlw`/`db`, pic32 and esp32 const pools, plus the `_byrefargN`
+  off-by-one and the unreset alias counter --
+  `docs/fixes/2026/fix_byref_const_literal_pool_20261117.md`.  (b) T4 (escape/fat
+  for scalar actuals) **Landed 2026-11-17:** the blocker was the PIC14 FSR
+  chunk-map hand-off (see the PIC14 FSR entry below); the single-layout
+  propagation now lands on classic 12/14-bit, and the byref/open-array
+  big-array + small-array witnesses pass on 16F887 and the 16F18857 twin
+  (`docs/fixes/2026/fix_pic14_fsr_escaped_target_20261117.md`).
+  (d) richer tag + predicate set.  The tag becomes a bitmask: element-size
+  bits 0x01 byte / 0x02 word / 0x04 dword / 0x08 string, plus 0x10 ARRAY and
+  0x20 POINTER provenance.  An array actual carries its ELEMENT size bits AND
+  0x10 (byte array = 0x11, word array = 0x12, dword array = 0x14); a pointer
+  carries its POINTEE's size bits AND 0x20.  Predicates: `_is_byte()` is
+  byte AND NOT array (a byte ARRAY must NOT fire `_is_byte`); `_is_word()`,
+  `_is_dword()`, `_is_string()` are likewise scalar-only; NEW
+  `_is_byte_array()`, `_is_word_array()`, `_is_dword_array()` fire for the
+  matching array element; `_is_array()` = any array (0x10);
+  `_is_pointer()` = 0x20.  **Landed 2026-11-18:** the bitmask tag and the
+  full predicate set (qword/oword/float, signed, element/pointee) are in;
+  8/16-byte scalar actuals are accepted; the `pragma byref_clone` body's
+  masked tag reads become the string constant after the body duplication.
+  See `docs/fixes/2026/fix_byref_bitmask_tag_20261118.md`.
+  **Wide pointer follow-up (2026-11-19):** a pointer actual with a numeric or
+  float pointee of any supported width now passes through the byref byte view
+  (COUNT becomes the pointee byte size); a pointer to a structure or another
+  pointer stays refused.  See
+  `docs/fixes/2026/fix_byref_wide_pointer_20261119.md`.
+- **Decision:** implement.  `byref` becomes a raw-array reference type in the
+  type position (`byref in arr[]`, `byref out arr[]`, `byref in out arr[]`):
+  the formal is a raw byte array aliasing the actual's storage, a hidden
+  runtime type tag + `_is_*` predicates let one non-cloned body branch on the
+  actual's type, the body re-types via `at` overlays, `return byref` returns
+  the pointee address, and pointers are in v1 coverage.  No clone except
+  `pragma byref_clone on` as the first line; single-type tag folding when the
+  type is provably constant.
+- **Design (recovered 2026-11-16):**
+  `docs/designs/byref_reference_design_20261116.md` (APPROVED, spec-reviewed
+  8/10); CEO plan + review
+  `docs/designs/byref_reference_ceo_plan_20261116.md`; eng review + Q1-Q9
+  contracts `docs/designs/byref_reference_eng_review_20261116.md`; test plan
+  `docs/designs/byref_reference_test_plan_20261116.md`.  These were generated
+  in the implementing session's scratch home
+  (`/home/jal/tmp/claudeui-home/.gstack/projects/jal/`) and copied into the
+  workspace docs tree; the `~/.gstack/...` paths inside them are the original
+  locations.
+- **Q1-Q9 (settled):** return-byref = address, read into the caller's typed var
+  (no alias); `at` on a byref formal uses the pointee address; tag = 1 hidden
+  byte (0 byte, 1 word, 2 dword, 3 string, 4 array, 5 pointer); scalar actuals
+  marked `PTR_ESCAPED` + placed pointer-accessible via the existing bind walk;
+  ISR/reentrant byref only on shared/global actuals; `pragma byref_clone on`
+  restores the string-flavor clone; `byte byref x` becomes a clean error;
+  pointer actual aliases the pointee.
+- **Work (T1-T7):** grammar -> call-site address-of + tag -> `at` pointee ->
+  escape/fat for scalars -> no-clone + pragma -> single-type fold -> witnesses
+  + DITA.  Gate: gpsim -> L2 -> `cost --asan` -> `pin-check`.  ~1 wk.
+- **Context:** `src/jal/jal_vdef.c` (2012 parse, 2173 volatile rule),
+  `src/jal/jal_proc.c:548`, `src/libcore/variable.h:83`.
+- **Effort:** human M (~1 wk).
+- **Priority:** P2 (promoted from P3 — owner decision).
+- **Depends on:** nothing.
 
-## PIC32 flash agent — write path (DONE 2026-11-15: NVMOP row/word were swapped)
+## PIC14 (16F887) — FSR/indirect access miscompiles bank-crossing targets (LANDED 2026-11-17)
 
-- **What:** `pic32_flash_agent.jal` now programs flash on the bench.  The payload was
-  never lost (a debug build returned the first and last row words intact);
-  the operation codes were reversed: on this MX1/2 part **1 = word program**
-  (`NVMDATA`), **3 = row program** (`NVMSRCADDR`), **4 = page erase**.  With
-  `NVMOP_ROW = 1` / `NVMOP_WORD = 3` the agent wrote one zero word for a "row"
-  and a whole stale-source row for a "word".  The early spare addresses
-  (`0x1D040000`, `0x1D050000`) were also past the end of the 256 KB array,
-  which is why their reads were zeros and their writes `WRERR`.
-- **Verified on the bench:** row program 32/32 words at `0x1D020000`; word
-  program `0xDEADBEEF` at `0x1D030000`; `--verify` CRC every row `ok` through
-  the agent; page erase (`NVMOP 4`) leaves the page erased while the agent keeps
-  running.
-- **Also landed in the same pass:** `NVMCONSET = WR_MASK` (the SET register
-  takes the mask, not the bit's 0/1 value), `NVMSRCADDR` set for row program
-  with the buffer at a KSEG1 alias, one mailbox read per command word, no
-  startup mailbox post, and a 0.1 s `--flash-agent-addr` settle (plus `--verify` now
-  enters the agent).
-- **Context:** `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`.
-- **Effort:** delivered.
-- **Priority:** P3 (done).
+- **What:** a large array passed to an open-array or byref formal wrote the
+  wrong register at high offsets, silently.  `var byte big[300]` ->
+  `bump(byref in out arr[])` -> `arr[299] = 0x56` read back 0x00; the same
+  shape failed with a regular `byte in out b[]` formal, so it was not
+  byref-specific.
+- **Why:** the single-layout chunk-map hand-off
+  (`pic_var_chunk_map_propagate`) copies an actual's chunk map onto its formal
+  by walking `pic_var.openarray_cmd_head`, but that head was set only at the
+  start of pass 2 while the propagator runs inside pass-1 placement.  PIC18/14H
+  re-place in the pass-2 layout trials (so the copy landed); classic 12/14-bit
+  has no trials, so the formal got no chunk map and its subscript classified
+  LINEAR, striding over the SFR holes.
+- **Fix:** set the open-array IR head in pass 1 on classic 12/14-bit
+  (`pic.c`), so the baked single-layout propagation sees the (actual -> formal)
+  pairs.  `docs/fixes/2026/fix_pic14_fsr_escaped_target_20261117.md`.
+- **Evidence:** `docs/investigations/pic14_fsr_linear_holes_20261116.md`;
+  witnesses `16f887_gpsim_byref_big_rw.jal`, `16f887_gpsim_openarray_big_rw.jal`,
+  `16f887_gpsim_byref_small_rw.jal`, and the 16F18857 picsim twins
+  `16f18857_picsim_byref_big_rw.jal` + `16f18857_picsim_byref_small_rw.jal`.
+- **Priority:** P2 (blocks byref T4; also affects plain open-array on PIC14).
+- **Depends on:** nothing.
 
-## PIC32 flash agent — RAM deployment (DONE 2026-11-15)
+## PIC32/MIPS32 `dword` parameter "corruption" — WITHDRAWN, not a compiler bug
 
-- **What:** the agent is now built for and downloaded into SRAM, the same RAM-loaded model
-  the host expects: no flash footprint, no app-layout change, and a
-  controller chip erase cannot remove it.  It is linked at `0xA0004000` — just
-  above the 16 KB window the PIC32 startup clears before `_main` — through
-  `pragma bootloader 0xA0004000`; `build_flash_agent_ram.py` produces `flash_agent_ram.hex` and
-  the raw little-endian word image `flash_agent_ram.bin`, and `pic32_prog.py` gained
-  `--flash-agent-load` (default `0xA0004000`; a vendor bootstrap image would need `0xA0000900`).
-- **Verified on the bench:** `pic32_prog.py --hex blink.hex --erase --program
-  --verify-read` with the defaults (our agent, no vendor binary) erases, downloads
-  723 words, programs 13 rows + 4 config words, and reads back 1,436 bytes
-  OK.  A vendor bootstrap image still loads with `--flash-agent <file> --flash-agent-load 0xA0000900`.
-- **Fixed on the way:** `next_word()` replaced its "wait for a value change"
-  loop with a single read.  With the FastData handshake each read consumes
-  one host word, so the old loop desynced on two identical data words in a
-  row — image rows contain them (padding, repeated instructions), which is
-  why the flash-resident agent programmed simple test rows but failed partway
-  through a real image.
-- **Not needed:** `-no-clear` (still ignored by the PIC32 back end); the
-  `0xA0004000` placement avoids the startup clear instead.  A flash-resident
-  monitor would still need it, or a reserved-region layout.
-- **Context:** `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`, `build_flash_agent_ram.py`,
-  `flash_agent_ram.bin`, `flash_agent_ram.hex`.
-- **Effort:** delivered.
-
-## Host tool: Microchip loader stub removed (DONE 2026-11-15)
-
-- **What:** `PE_LOADER` in `pic32_prog.py` is now an original 15-instruction
-  stub (destination, count, payload, then a `0xDEAD0000` start sentinel; copy
-  and jump), replacing the 42-halfword DS61145 sample.  The default agent image is our
-  `flash_agent_ram.bin`; `a vendor bootstrap image` is an optional bootstrap only.  Provenance notes
-  in `pic32_flash_agent.jal` now cite the published mailbox protocol and the documented
-  MX1/2 flash controller, and `share/JALPIC_One_PIC32_share/NOTICE` states
-  what is ours and what is excluded.
-- **Verified:** the stub downloads our agent (723 words, version `0x00070301`)
-  and a vendor bootstrap image (422 words) and both program and verify; the full
-  erase/program/read-back cycle passes with the defaults.
-- **Still private:** `a vendor bootstrap image` (out of tree, `jal-private/`) and
-  `the vendor disassembly notes` (disassembly listings).  Neither is needed by a
-  distributed tool: any working programmer can install ours, and ours programs every
-  subsequent image.
-- **Context:** `share/JALPIC_One_PIC32_share/NOTICE`, `pic32_prog.py`,
-  `build_flash_agent_ram.py`.
-- **Effort:** delivered.
+- **What:** Reported as a compiler codegen bug on 2026-11-15: a procedure taking
+  a `dword` parameter, called from one branch of an `if/elsif` chain, appeared
+  to corrupt a different branch.
+- **Verdict:** **Invalid.**  The test program read the EJTAG FastData mailbox
+  twice per command (`cmd = mailbox >> 16` then `arg = mailbox & 0xFFFF`).  Each
+  fastdata access consumes one host operation, so the second load stalls and the
+  next host read returns a stale value.  Keeping `arg` alive is what forced the
+  second read; in the "passing" build `arg` was dead and DCE removed it, which
+  made a broken test look correct.  Nothing was wrong with call codegen.
+- **Evidence:** `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md` — the
+  disassembly comparison (the only difference between the two builds is the
+  extra `lw` of the mailbox) and the bench A/B with the value fetched once.
+- **Lesson worth keeping:** a witness that changes a *branch* result by adding
+  an unrelated call is not automatically a codegen bug; instrument the access
+  that actually differs before filing.
 
 ## Land the E1+E2+E3 batch (DONE 2026-11-11 — commit `522468f`)
 
@@ -317,38 +349,40 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Effort:** human ~1 wk.
 - **Priority:** P2.
 
-## Recipe-row coverage fixtures (A12)
+## Recipe-row coverage fixtures (A12) — DONE 2026-11-18 (`docs/fixes/2026/fix_recipe_row_retire_20261118.md`)
 
-- **What:** Gate fixtures for the recipe rows no corpus program reaches.
-  **Phase 3 landed 2026-11-12**: rows **17** (FSR walk, holed) and **20**
-  (FSR dynamic, classic string-view) now have witnesses
+- **Final state:** the gate corpus exercises **22/28** recipe rows, and every
+  remaining row is accounted for.  **Phase 3 landed 2026-11-12**: rows **17**
+  (FSR walk, holed) and **20** (FSR dynamic, classic string-view) got
+  witnesses
   (`sims/picsim/16f18857_picsim_whereis_slot_runtime.jal`,
-  `sims/gpsim/16f887_gpsim_string_arg_view_in.jal`) and the baseline pins
-  **23/29**.  Rows **1, 25** were already covered.  The six remaining rows
-  are audited in `docs/fixes/2026/fix_recipe_row_fixtures.md`: **3, 4, 7, 9** are
+  `sims/gpsim/16f887_gpsim_string_arg_view_in.jal`); rows **1, 25** were
+  already covered.  The six remaining rows are audited in
+  `docs/fixes/2026/fix_recipe_row_fixtures.md`: **3, 4, 7, 9** are
   structurally unreachable through the current routers (a lookup write is
   refused before emit; the ptr-class router always sets PTR_LOOKUP at
   PTR_WRITE and the read rows 7/9 need a key the router never produces);
   **16** needs pointer-array formals, which the grammar lacks (only
   `pic_fsr0_add_dynamic_index` on a runtime-map variable would reach it);
   **22** has no constructible program (every classic string-view formal
-  takes the walk branch, i.e. the FSR_DYNAMIC_SV row).  Retiring the rows
-  is unsafe while their actions stay semantically load-bearing
-  (FSR_BIND_SV drives the classic view base add), so they stay uncovered
-  and pinned as the gap.
-- **Why:** A12 asserts every recipe row is exercised; the gate pins the set
-  that is and prints the gap.
-- **Pros:** Closes the exercisable part of the A12 obligation and records
-  why the rest are unreachable.
-- **Cons:** The residual six are unreachable only while the routers and the
-  grammar stay as they are; a pointer-formal or router change must revisit
-  rows 3/4/7/9/16/22.
+  takes the walk branch, i.e. the FSR_DYNAMIC_SV row).  Retiring them is
+  unsafe while their actions stay load-bearing (FSR_BIND_SV drives the
+  classic view base add), so they stay uncovered and pinned as the gap.
+- **2026-11-18 close-out:** row **28** (`NOT_FAT_BIND`), the seventh gap the
+  S3 slot-identity landing had introduced, was **retired** rather than
+  pinned: S3/D4 made every engine-on slot bind `FAT_BIND` (row 1) and the
+  engine-off path returns before the recipe table, so no key could select
+  row 28.  The table is 28 rows, the pinned baseline is 22/28, and the six
+  rows above are unchanged.  Re-probed against the new byref/pointer-formal
+  grammar: `pointer in x[]`, `var pointer x[] as var byte` and every other
+  pointer-array formal form are still parse errors, and a runtime write
+  through a classic string-view formal adds no new coverage (row 22 does not
+  fire), so no new fixture is constructible.
 - **Context:** `unit-tests/plan-matrix/coverage.txt` pins the current set and
   `run_access_matrix.sh --check` fails on regressions;
-  `docs/fixes/2026/fix_recipe_row_fixtures.md` records the row-by-row audit.
-- **Effort:** human ~1d for the residual if the grammar changes.
-- **Priority:** P3.
-- **Depends on:** none; E2's row identity does not affect it.
+  `docs/fixes/2026/fix_recipe_row_fixtures.md` records the row-by-row audit,
+  `docs/fixes/2026/fix_recipe_row_retire_20261118.md` records the retirement.
+- **Priority:** done.
 
 ## `WHEREIS` of a runtime subscript silently drops the offset (DONE 2026-11-14 — refused, `docs/fixes/2026/fix_whereis_runtime_subscript.md`)
 
@@ -380,27 +414,36 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** done (refused — the small variant; support deferred).
 - **Depends on:** none.
 
-## Grown dynamic-string element read on the classic 14-bit core
+## Grown dynamic-string element read on the classic 14-bit core (LANDED 2026-11-18)
 
 - **What:** A constant-index read of a dynamic string that has GROWN past its
-  first heap chunk (`last = s[79]` after 80 appends) stalls on classic 14.
-  The read emits `base + 6 + index` and a chunk walk over `_string_heap`; the
-  defect is not yet localized, so the first deliverable is a witness that
-  reproduces it and names the stage that stalls.
-- **Why:** recorded as a residual in `docs/fixes/2026/fix_string_heap_append.md`
-  (2026-11-11) and it reproduces with the pre-fix binary, so it is a
-  pre-existing defect rather than a regression from the growth policy; it
-  had no ticket until now.
-- **Pros:** A dynamic string becomes safely indexable after any growth, which
-  is the obvious next thing a user does with one.
-- **Cons:** Measure first: the stall may sit in the caller rather than the
-  read path, in which case the deliverable is a witness plus a record, not a
-  fix.
-- **Context:** "Residual" in `docs/fixes/2026/fix_string_heap_append.md`; the same
-  section records that `pragma string alloc best_fit` still only affects the
-  exact request.  Heap growth itself is fixed (2026-11-11).
-- **Effort:** human ~1 d.
-- **Priority:** P3.
+  first heap chunk (`last = s[79]` after 80 appends) stalled on classic 14.
+  The read itself is a 3-chunk walk and is fine: the append loop was
+  corrupting the heap at the growth that compacts (`len 63`), and the
+  last-byte read was the first access to expose it (the payload was wrong at
+  `s[0]`, `s[3]`, `s[40]` while `COUNT` and `s[79]` stayed right).
+- **Root cause (two defects):** (a) the deferred compact p-code expanded with
+  `pf->proc_active` still at `string_heap_compact`, so the compact's
+  bitbucket/temps landed in the *callee's* frame over `string_put`'s live
+  `dst` formal (no call edge was recorded from `string_put` either); the
+  compact's success-flag bit write shifted `dst.offset` (`0x48 -> 0x4A`).
+  (b) The outlined `string_put` body holds a COPY of the handle; the compact
+  patches only the registered (global) handles, so the retry copied from and
+  freed the stale block, whose free header landed in the new payload and
+  left a bogus free block.
+- **Fix:** the defer record now carries the site's procedure and string
+  value; the expansion runs in the site's procedure (call edge + frame
+  attribution), and the compact publishes its live-block count so the
+  append site re-points its own (formal) handle from the global work table
+  before retrying.  Global handles are unchanged (no repatch emitted).
+- **Evidence:** `docs/fixes/2026/fix_string_grow_compact_formal_20261118.md`;
+  witnesses `16f887_gpsim_string_heap_append_grow.jal` (whole payload:
+  s[0]/s[3]/s[40]/s[79]) and the 16F18857 picsim twin; pin
+  `unit-tests/test_string_heap_append.sh` (payload measurements + content
+  negative control); `jaldbg.py pin-check` new PASS / old FAIL.
+- **Note:** the 16F18857 form had the same root cause (shift +1) but its old
+  witness only read `s[79]`, which stayed correct.
+- **Priority:** done.
 - **Depends on:** none.
 
 ## Full front-end IR — one accepted note (Phases 3/4/7 done)

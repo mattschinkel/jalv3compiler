@@ -3526,6 +3526,17 @@ static void esp_load_address_of(pfile_t *pf, value_t val, unsigned reg)
   }
   v = value_variable_get(val);
 
+  /* A byref scalar view (`at` alias) of a const literal is not itself
+   * const-data (only its member def carries CONST); its address is the
+   * literal's IRAM data address, so resolve the owning master first. */
+  if (v && !(variable_is_const(v) && variable_data_get(v))) {
+    variable_t m = variable_master_get(v);
+
+    if (m && variable_is_const(m) && variable_data_get(m)) {
+      v = m;
+    }
+  }
+
   if (v && variable_is_const(v) && variable_data_get(v)) {
     /* const pool variable: address via the late-bound data literal
      * (its base is still UNKNOWN at translate time -- the data node

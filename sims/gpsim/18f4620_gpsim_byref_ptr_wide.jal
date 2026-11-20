@@ -1,0 +1,208 @@
+-- ----------------------------------------------------------------------------
+-- Title: 18F4620 gpsim -- wide-pointee pointer actuals through byref
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--   A pointer actual aliases its POINTEE through a byref byte view.  The
+--   pointee may be wider than a byte: the hidden tag records the pointee
+--   type, COUNT is the pointee byte size, and the callee re-types through an
+--   `at' overlay.  Covers qword read/write, mixed qword/byte pointers, and
+--   oword/dword/word/float pointees.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_q_in 0x01
+-- expect byte v_q_seen 0x88
+-- expect byte v_q_cnt 0x08
+-- expect byte v_q_wout 0x01
+-- expect byte v_q_wlo 0x04
+-- expect byte v_q_whi 0xde
+-- expect byte v_q_wcnt 0x08
+-- expect byte v_mix_out 0x03
+-- expect byte v_mix_cnt 0x01
+-- expect byte v_mix_qlo 0x88
+-- expect byte v_mix_qhi 0x11
+-- expect byte v_mix_blo 0x5a
+-- expect byte v_w_out 0x08
+-- expect byte v_w_cnt 0x04
+-- expect byte v_ow_lo 0x00
+-- expect byte v_ow_hi 0x11
+-- expect byte v_dw_lo 0x44
+-- expect byte v_dw_hi 0x11
+-- expect byte v_wd_lo 0xcd
+-- expect byte v_wd_hi 0xab
+-- expect byte v_fl_hi 0x3f
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte q_in
+var volatile byte q_seen
+var volatile byte q_cnt
+var volatile byte q_wout
+var volatile byte q_wlo
+var volatile byte q_whi
+var volatile byte q_wcnt
+var volatile byte mix_out
+var volatile byte mix_cnt
+var volatile byte mix_qlo
+var volatile byte mix_qhi
+var volatile byte mix_blo
+var volatile byte w_out
+var volatile byte w_cnt
+var volatile byte ow_lo
+var volatile byte ow_hi
+var volatile byte dw_lo
+var volatile byte dw_hi
+var volatile byte wd_lo
+var volatile byte wd_hi
+var volatile byte fl_hi
+
+procedure qread(byref in a[]) is
+   var qword v at a
+   if _is_qword_pointer() then
+      q_in = 1
+   else
+      q_in = 2
+   end if
+   q_seen = byte(v)
+   q_cnt = byte(COUNT(a))
+end procedure
+
+procedure qwrite(byref in out a[]) is
+   var qword v at a
+   v = 0xDEADBEEF01020304
+   if _is_qword_pointer() then
+      q_wout = 1
+   else
+      q_wout = 2
+   end if
+   q_wcnt = byte(COUNT(a))
+end procedure
+
+procedure mixptr(byref in out a[]) is
+   var qword qv at a
+   var byte bv at a
+   if _is_qword_pointer() then
+      qv = 0x1122334455667788
+      mix_out = mix_out | 0x01
+   end if
+   if _is_byte_pointer() then
+      bv = 0x5A
+      mix_out = mix_out | 0x02
+   end if
+   mix_cnt = byte(COUNT(a))
+end procedure
+
+procedure widths(byref in out a[]) is
+   var oword ov at a
+   var dword dv at a
+   var word wv at a
+   var float fv at a
+   var byte k
+   k = 0
+   if _is_oword_pointer() then
+      ov = 0x112233445566778899AABBCCDDEEFF00
+      k = k | 0x01
+   end if
+   if _is_dword_pointer() then
+      dv = 0x11223344
+      k = k | 0x02
+   end if
+   if _is_word_pointer() then
+      wv = 0xABCD
+      k = k | 0x04
+   end if
+   if _is_float_pointer() then
+      fv = 1.5
+      k = k | 0x08
+   end if
+   w_out = k
+   w_cnt = byte(COUNT(a))
+end procedure
+
+var qword qa[1]
+var qword qm[1]
+var byte ba[2]
+var oword oa[1]
+var dword da[1]
+var word wa[1]
+var pointer pq as var qword
+var pointer pmq as var qword
+var pointer pmb as var byte
+var pointer po as var oword
+var pointer pd as var dword
+var pointer pw as var word
+var pointer pf as var float
+
+var float fa[1]
+
+procedure fbits() is
+   var dword fd at fa
+   fl_hi = byte(fd >> 24)
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   qa[0] = 0x1122334455667788
+   q_in = 0
+   q_seen = 0
+   q_cnt = 0
+   q_wout = 0
+   q_wlo = 0
+   q_whi = 0
+   q_wcnt = 0
+   mix_out = 0
+   mix_cnt = 0
+   mix_qlo = 0
+   mix_qhi = 0
+   mix_blo = 0
+   w_out = 0
+   w_cnt = 0
+   ow_lo = 0
+   ow_hi = 0
+   dw_lo = 0
+   dw_hi = 0
+   wd_lo = 0
+   wd_hi = 0
+   fl_hi = 0
+
+   pq is qa[0]
+   qread(pq)
+   qwrite(pq)
+   q_wlo = byte(qa[0])
+   q_whi = byte(qa[0] >> 56)
+
+   pmq is qm[0]
+   pmb is ba[0]
+   mixptr(pmq)
+   mix_qlo = byte(qm[0])
+   mix_qhi = byte(qm[0] >> 56)
+   mixptr(pmb)
+   mix_blo = ba[0]
+
+   po is oa[0]
+   pd is da[0]
+   pw is wa[0]
+   pf is fa[0]
+   widths(po)
+   ow_lo = byte(oa[0])
+   ow_hi = byte(oa[0] >> 120)
+   widths(pd)
+   dw_lo = byte(da[0])
+   dw_hi = byte(da[0] >> 24)
+   widths(pw)
+   wd_lo = byte(wa[0])
+   wd_hi = byte(wa[0] >> 8)
+   widths(pf)
+   fbits()
+
+   regression_checkpoint()
+end procedure
+
+run()

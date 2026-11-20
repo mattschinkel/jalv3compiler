@@ -1,0 +1,65 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref `at` overlay (T3)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins T3: `at` overlays a byref formal's pointee. A byte-array actual
+--    passed to `byref in out arr[]` is re-typed through `var word w at arr`
+--    (word-over-byte), `var byte b at arr + 2` (byte offset), `var byte lo
+--    at arr` (read back), and `var dword d at arr` (dword-over-byte);
+--    writes/reads through the overlays land in the caller's storage with no
+--    copy-back.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 60000
+-- expect byte v__check_step 1
+-- expect byte v__ck_wlo 0x78
+-- expect byte v__ck_whi 0x56
+-- expect byte v__ck_b2  0xAA
+-- expect byte v__ck_d0  0x44
+-- expect byte v__ck_d1  0x33
+-- expect byte v__ck_d2  0x22
+-- expect byte v__ck_d3  0x11
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+
+var volatile byte _ck_wlo = 0
+var volatile byte _ck_whi = 0
+var volatile byte _ck_b2  = 0
+var volatile byte _ck_d0  = 0
+var volatile byte _ck_d1  = 0
+var volatile byte _ck_d2  = 0
+var volatile byte _ck_d3  = 0
+
+procedure word_overlay(byref in out arr[]) is
+   var word w at arr
+   var byte b at arr + 2
+   var byte lo at arr
+   w = 0x5678
+   b = 0xAA
+   _ck_wlo = lo
+end procedure
+
+procedure dword_overlay(byref in out arr[]) is
+   var dword d at arr
+   d = 0x11223344
+end procedure
+
+var byte z[4] = { 0x11, 0x22, 0x33, 0x44 }
+var byte zz[4] = { 0x00, 0x00, 0x00, 0x00 }
+
+word_overlay(z)
+_ck_whi = z[1]
+_ck_b2  = z[2]
+
+dword_overlay(zz)
+_ck_d0 = zz[0]
+_ck_d1 = zz[1]
+_ck_d2 = zz[2]
+_ck_d3 = zz[3]
+regression_checkpoint()

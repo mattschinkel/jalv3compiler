@@ -65,6 +65,8 @@ void jal_parse_task_resume(pfile_t *pf, const pfile_pos_t *start);
 void jal_parse_task_kill(pfile_t *pf, const pfile_pos_t *start);
 void jal_parse_task_restart(pfile_t *pf, const pfile_pos_t *start);
 
+void jal_proc_state_reset(void);
+
 #endif /* jal_proc_h__ */
 
 /* string-flavored clone (docs/investigations/string_clone_design_20261105.md):

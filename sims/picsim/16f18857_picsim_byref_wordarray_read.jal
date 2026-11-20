@@ -1,0 +1,45 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref word-array read
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the byref array byte view: a `word wbuf[2]` actual passed to
+--    `byref in arr[]` is read back as its 4 bytes (0x34 0x12 0x78 0x56), so
+--    the formal aliases the array's storage as a raw byte view, and COUNT is
+--    the BYTE size (4), not the element count times the array byte size.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 60000
+-- expect byte v__check_step 1
+-- expect byte v__ck_b0 0x34
+-- expect byte v__ck_b1 0x12
+-- expect byte v__ck_b2 0x78
+-- expect byte v__ck_b3 0x56
+-- expect word v__ck_cnt 4
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+
+var volatile byte _ck_b0 = 0
+var volatile byte _ck_b1 = 0
+var volatile byte _ck_b2 = 0
+var volatile byte _ck_b3 = 0
+var volatile word _ck_cnt = 0
+
+procedure dump(byref in arr[]) is
+   _ck_b0 = arr[0]
+   _ck_b1 = arr[1]
+   _ck_b2 = arr[2]
+   _ck_b3 = arr[3]
+   _ck_cnt = COUNT(arr)
+end procedure
+
+var word wbuf[2]
+wbuf[0] = 0x1234
+wbuf[1] = 0x5678
+dump(wbuf)
+regression_checkpoint()

@@ -164,7 +164,7 @@ if JALV2_ACCESS_COVERAGE=1 JALV2_FAT_POINTERS=1 JALV2_FAT_FORCE=1 \
     COV=$(grep 'jal access coverage' "$TMP/cov.log" | tail -1)
     CROWS=$(printf '%s\n' "$COV" | sed -n 's/.*rows=\([0-9]*\).*/\1/p')
     CBITS=$(printf '%s\n' "$COV" | sed -n 's/.*bitmap=\([0-9a-f]*\).*/\1/p')
-    if [ "$CROWS" = 29 ] && [ -n "$CBITS" ] && (( 0x$CBITS & 1 )); then
+    if [ "$CROWS" = 28 ] && [ -n "$CBITS" ] && (( 0x$CBITS & 1 )); then
         echo "PASS coverage report (rows=$CROWS fat row exercised)"
     else
         fail "coverage report ($COV)"

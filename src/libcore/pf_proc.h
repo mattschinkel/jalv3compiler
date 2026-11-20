@@ -51,6 +51,10 @@
  * yet is treated as "can" (conservative). */
 #define PFILE_PROC_FLAG_STRING_REALLOC 0x2000
 
+/* `pragma byref_clone on` on a procedure: its byref formals rejoin the
+ * string-flavor clone candidate set (the default is one non-cloned body). */
+#define PFILE_PROC_FLAG_BYREF_CLONE 0x8000
+
 /* def is a type function
      its first member is the return definition
      the remaining members are the parameters

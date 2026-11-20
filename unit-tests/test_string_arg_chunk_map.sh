@@ -191,7 +191,7 @@ include print
 pragma target string_heap_size 100
 var string a = "My string"
 var string other = "zz"
-procedure grow_and_read(byte in x[]) is
+procedure grow_and_read(byref in x[]) is
    var byte i = 0
    other = other & "!"
    for 8 loop

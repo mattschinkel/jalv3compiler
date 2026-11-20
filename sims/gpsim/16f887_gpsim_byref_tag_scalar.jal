@@ -1,0 +1,77 @@
+-- ------------------------------------------------------
+-- Title: 16F887 gpsim witness: byref hidden type tag and `_is_*` predicates
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    Pins the byref hidden tag on the classic PIC16 core: ONE non-cloned
+--    body called with a `word`, a `byte` and a `byte[3]` actual sets only
+--    its own `_is_word`/`_is_byte`/`_is_array` predicate, and COUNT is the
+--    byte size of the aliased storage.
+--
+-- @gpsim_validate begin
+-- steps: 80000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v__w_word 1
+-- expect byte v__b_byte 1
+-- expect byte v__a_arr 1
+-- expect byte v__w_cnt 2
+-- expect byte v__b_cnt 1
+-- expect byte v__a_cnt 3
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte _p_word = 9
+var volatile byte _p_byte = 9
+var volatile byte _p_arr = 9
+var volatile byte _p_cnt = 9
+var volatile byte _w_word = 9
+var volatile byte _b_byte = 9
+var volatile byte _a_arr = 9
+var volatile byte _w_cnt = 9
+var volatile byte _b_cnt = 9
+var volatile byte _a_cnt = 9
+
+procedure probe(byref in arr[]) is
+   _p_word = 0
+   _p_byte = 0
+   _p_arr = 0
+   if _is_word() then
+      _p_word = 1
+   end if
+   if _is_byte() then
+      _p_byte = 1
+   end if
+   if _is_array() then
+      _p_arr = 1
+   end if
+   _p_cnt = byte(COUNT(arr))
+end procedure
+
+var word wv
+var byte bv
+var byte av[3]
+
+wv = 0x1234
+probe(wv)
+_w_word = _p_word
+_w_cnt = _p_cnt
+
+bv = 5
+probe(bv)
+_b_byte = _p_byte
+_b_cnt = _p_cnt
+
+av[0] = 1
+av[1] = 2
+av[2] = 3
+probe(av)
+_a_arr = _p_arr
+_a_cnt = _p_cnt
+
+regression_checkpoint()

@@ -1,0 +1,246 @@
+-- ----------------------------------------------------------------------------
+-- Title: 18F4620 gpsim -- full byref tag predicate set
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--   Covers the bitmask tag predicates: qword/oword/float, signed scalars,
+--   byte element array, byte pointer, and the existing kind predicates.
+--   Uniform procedures fold their tag; `kind' is called with several types
+--   so its tag stays live.  The qword/oword scalar views are read through an
+--   `at' overlay to prove the 8/16-byte alias is real.
+--
+-- @gpsim_validate begin
+-- steps: 300000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_q_ok 0x01
+-- expect byte v_q_arr_ok 0x01
+-- expect byte v_q_seen 0x88
+-- expect byte v_o_ok 0x01
+-- expect byte v_o_arr_ok 0x01
+-- expect byte v_f_ok 0x01
+-- expect byte v_f_dword_bad 0x00
+-- expect byte v_f_arr_ok 0x01
+-- expect byte v_sb_ok 0x01
+-- expect byte v_sb_byte_ok 0x01
+-- expect byte v_sw_ok 0x01
+-- expect byte v_sd_ok 0x01
+-- expect byte v_sq_ok 0x01
+-- expect byte v_so_ok 0x01
+-- expect byte v_ba_ok 0x01
+-- expect byte v_ba_byte_bad 0x00
+-- expect byte v_bp_ok 0x01
+-- expect byte v_mix_q 0x01
+-- expect byte v_mix_ba 0x10
+-- expect byte v_mix_p 0x40
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte q_ok
+var volatile byte q_arr_ok
+var volatile byte q_seen
+var volatile byte o_ok
+var volatile byte o_arr_ok
+var volatile byte f_ok
+var volatile byte f_dword_bad
+var volatile byte f_arr_ok
+var volatile byte sb_ok
+var volatile byte sb_byte_ok
+var volatile byte sw_ok
+var volatile byte sd_ok
+var volatile byte sq_ok
+var volatile byte so_ok
+var volatile byte ba_ok
+var volatile byte ba_byte_bad
+var volatile byte bp_ok
+var volatile byte mix_q
+var volatile byte mix_ba
+var volatile byte mix_p
+
+procedure qs(byref in a[]) is
+   var qword v at a
+   if _is_qword() then
+      q_ok = 1
+   end if
+   if _is_qword_array() then
+      q_arr_ok = 2
+   end if
+   q_seen = byte(v)
+end procedure
+
+procedure qa(byref in a[]) is
+   var qword v at a
+   if _is_qword_array() then
+      q_arr_ok = 1
+   end if
+   q_seen = byte(v)
+end procedure
+
+procedure os(byref in a[]) is
+   if _is_oword() then
+      o_ok = 1
+   end if
+end procedure
+
+procedure oa(byref in a[]) is
+   if _is_oword_array() then
+      o_arr_ok = 1
+   end if
+end procedure
+
+procedure fs(byref in a[]) is
+   if _is_float() then
+      f_ok = 1
+   end if
+   if _is_dword() then
+      f_dword_bad = 1
+   end if
+end procedure
+
+procedure fa(byref in a[]) is
+   if _is_float_array() then
+      f_arr_ok = 1
+   end if
+end procedure
+
+procedure sbs(byref in a[]) is
+   if _is_sbyte() then
+      sb_ok = 1
+   end if
+   if _is_byte() then
+      sb_byte_ok = 1
+   end if
+end procedure
+
+procedure sws(byref in a[]) is
+   if _is_sword() then
+      sw_ok = 1
+   end if
+end procedure
+
+procedure sds(byref in a[]) is
+   if _is_sdword() then
+      sd_ok = 1
+   end if
+end procedure
+
+procedure sqs(byref in a[]) is
+   if _is_sqword() then
+      sq_ok = 1
+   end if
+end procedure
+
+procedure sos(byref in a[]) is
+   if _is_soword() then
+      so_ok = 1
+   end if
+end procedure
+
+procedure bas(byref in a[]) is
+   if _is_byte_array() then
+      ba_ok = 1
+   end if
+   if _is_byte() then
+      ba_byte_bad = 1
+   end if
+end procedure
+
+procedure bps(byref in a[]) is
+   if _is_byte_pointer() then
+      bp_ok = 1
+   end if
+end procedure
+
+procedure kind(byref in a[]) is
+   var byte k
+   k = 0
+   if _is_qword() then
+      k = k | 0x01
+   end if
+   if _is_oword() then
+      k = k | 0x02
+   end if
+   if _is_float() then
+      k = k | 0x04
+   end if
+   if _is_byte_array() then
+      k = k | 0x10
+   end if
+   if _is_qword_array() then
+      k = k | 0x20
+   end if
+   if _is_pointer() then
+      k = k | 0x40
+   end if
+   if _is_qword() then
+      mix_q = k
+   end if
+   if _is_byte_array() then
+      mix_ba = k
+   end if
+   if _is_pointer() then
+      mix_p = k
+   end if
+end procedure
+
+var qword q = 0x1122334455667788
+var qword q_arr[2] = {0x1122334455667788, 0}
+var oword o = 0x112233445566778899AABBCCDDEEFF00
+var oword o_arr[2]
+var float ff = 2.5
+var float f_arr[2]
+var sbyte sb = -1
+var sword sw = -1
+var sdword sd = -1
+var sqword sq = -1
+var soword so = -1
+var byte ba[2]
+var pointer pb as var byte
+
+procedure run() is
+   regression_begin_run()
+   q_ok = 0
+   q_arr_ok = 0
+   q_seen = 0
+   o_ok = 0
+   o_arr_ok = 0
+   f_ok = 0
+   f_dword_bad = 0
+   f_arr_ok = 0
+   sb_ok = 0
+   sb_byte_ok = 0
+   sw_ok = 0
+   sd_ok = 0
+   sq_ok = 0
+   so_ok = 0
+   ba_ok = 0
+   ba_byte_bad = 0
+   bp_ok = 0
+   mix_q = 0
+   mix_ba = 0
+   mix_p = 0
+   qs(q)
+   qa(q_arr)
+   os(o)
+   oa(o_arr)
+   fs(ff)
+   fa(f_arr)
+   sbs(sb)
+   sws(sw)
+   sds(sd)
+   sqs(sq)
+   sos(so)
+   bas(ba)
+   pb is ba[0]
+   bps(pb)
+   kind(q)
+   kind(ba)
+   kind(pb)
+   regression_checkpoint()
+end procedure
+
+run()

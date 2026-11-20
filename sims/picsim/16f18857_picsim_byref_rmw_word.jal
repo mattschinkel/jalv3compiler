@@ -1,0 +1,36 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: word read-modify-write through a byref `at` overlay
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the multi-byte indirect LOAD (TODO byref follow-up (c)).  A `word`
+--    overlay on a byref formal must read BOTH bytes, so `v = v + 1` with the
+--    low byte 0xFF carries into the high byte (0x12FF -> 0x1300).  The old
+--    code sized the load by the open-array's byte element and produced 0x0100.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 80000
+-- expect byte v__check_step 1
+-- expect byte v__ck_lo 0x00
+-- expect byte v__ck_hi 0x13
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+
+var volatile byte _ck_lo = 0
+var volatile byte _ck_hi = 0
+
+procedure bump(byref in out arr[]) is
+   var word v at arr
+   v = v + 1
+end procedure
+
+var word z = 0x12FF
+bump(z)
+_ck_lo = byte(z)
+_ck_hi = byte(z >> 8)
+regression_checkpoint()

@@ -1674,6 +1674,28 @@ static void jal_parse_pragma_nostack(pfile_t *pf)
   }
 }
 
+/* `pragma byref_clone on` re-enables the string-flavor clone for a byref
+ * formal (default: one non-cloned body).  Idempotent -- it only sets a
+ * flag on the active procedure, so the clone's body re-parse is harmless;
+ * this is what lets it live inside a body without the uncloneable guard. */
+static void jal_parse_pragma_byref_clone(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  proc = pfile_proc_active_get(pf);
+  if (!pfile_proc_parent_get(proc)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma byref_clone can only be used in a procedure or function!");
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "on")) {
+    pfile_proc_flag_set(proc, PFILE_PROC_FLAG_BYREF_CLONE);
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "off")) {
+    pfile_proc_flag_clr(proc, PFILE_PROC_FLAG_BYREF_CLONE);
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR, "pragma byref_clone expects `on` or `off`");
+  }
+  pf_token_get(pf, PF_TOKEN_NEXT);
+}
+
 
 static void jal_parse_pragma_speed(pfile_t *pf)
 {
@@ -2236,6 +2258,15 @@ void jal_parse_pragma(pfile_t *pf, const pfile_pos_t *statement_start)
   static const pragma_word_t *cmd;
 
   UNUSED(statement_start);
+  /* `pragma byref_clone on` is the ONE pragma allowed inside a body that
+   * keeps it cloneable (idempotent: it only sets a flag on the active
+   * procedure).  Handle it before the guard that marks every other pragma
+   * uncloneable (the re-parse would re-run the configuration). */
+  if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "byref_clone")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_parse_pragma_byref_clone(pf);
+    return;
+  }
   /* a pragma inside a body makes it uncloneable (the re-parse would
    * re-execute the configuration) */
   jal_proc_body_guard_note(pf);

@@ -1,0 +1,51 @@
+-- ------------------------------------------------------
+-- Title: 16F887 gpsim witness: byref scalar read + write
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    Pins the byref call-site address-of: a `word z` actual passed to a
+--    byref formal is read back as z's two bytes (low 0x34, high 0x12), and
+--    writes through `byref in out arr[]` land in z (0x78/0x56) with no
+--    copy-back step -- the pointer aliases z's storage.
+--
+-- @gpsim_validate begin
+-- steps: 60000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v__ck_lo 0x34
+-- expect byte v__ck_hi 0x12
+-- expect byte v__ck_w0 0x78
+-- expect byte v__ck_w1 0x56
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte _ck_lo = 0
+var volatile byte _ck_hi = 0
+var volatile byte _ck_w0 = 0
+var volatile byte _ck_w1 = 0
+
+procedure peek(byref in arr[]) is
+   _ck_lo = arr[0]
+   _ck_hi = arr[1]
+end procedure
+
+procedure bump(byref in out arr[]) is
+   arr[0] = 0x78
+   arr[1] = 0x56
+end procedure
+
+var word z = 0x1234
+var byte zlo at z
+var byte zhi at z + 1
+
+peek(z)
+regression_checkpoint()
+bump(z)
+_ck_w0 = zlo
+_ck_w1 = zhi
+regression_checkpoint()

@@ -44,20 +44,19 @@ boolean_t pic_fat_bind_forced(pfile_t *pf, value_t dst, value_t src)
   if (!pic_fat_pointers_enabled(pf)) {
     return BOOLEAN_FALSE;
   }
-  /* U2b (slots family): the bind recipe decides.  G3: a SCALAR-pointee slot
-   * store under the engine is FAT_BIND (the slot holds the tagged value); an
-   * ARRAY-pointee slot and the engine-off case are NOT_FAT_BIND.  The slot
-   * element value is typed as the pointee, so `value_is_pointer` is only the
+  /* U2b (slots family): the bind recipe decides.  G3: every slot store under
+   * the engine is FAT_BIND -- S1 made the scalar-pointee slot hold the tagged
+   * value and S3/D4 made the array-pointee slot hold the ordinary fat pointer
+   * value too, so the one FAT_ENGINE/AOP row answers both shapes.  The
+   * engine-off case returns above and never consults the table; that is why
+   * the retired NOT_FAT_BIND row had no reachable key left.  The slot element
+   * value is typed as the pointee, so `value_is_pointer` is only the
    * plain-variable test -- the aop fact supplies the slot case. */
   pic_access_plan_get(pf, dst, &plan);
   pic_access_key_fill(&plan, PIC_ACCESS_OP_BIND, &key);
   recipe = pic_access_recipe_find(&key);
   pic_access_explain_note(pf, "ptr:bind", value_variable_get(dst), &plan,
       PIC_ACCESS_OP_BIND, recipe);
-  if ((0 != recipe)
-      && (PIC_ACCESS_ACTION_NOT_FAT_BIND == recipe->action)) {
-    return BOOLEAN_FALSE;
-  }
   if (!value_is_pointer(dst) && !plan.aop) {
     return BOOLEAN_FALSE;
   }

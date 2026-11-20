@@ -10,8 +10,14 @@
 # capacity, grows geometrically, and compacts ONCE (the outlined
 # string_heap_compact call) before retrying.
 #
-#   1. the 14H and classic-14 runtime measurements (length and last byte);
-#   2. a failing negative control on each (length off by one);
+#   1. the 14H and classic-14 runtime measurements (length and the whole
+#      payload: s[0], s[3], s[40], s[79] -- the growth at len 63 compacts,
+#      and an outlined `string_put` body holds a COPY of the handle, so the
+#      retry must re-point it from the compaction's work table; the old
+#      code copied from and freed the stale block, overwriting s[3..5] with
+#      the stale block's free header);
+#   2. failing negative controls on each (length off by one, and a wrong
+#      first byte);
 #   3. the compact retry is in the emitted code (one outlined call);
 #   4. the witness really exercises a chunked heap (3 chunks).
 #
@@ -38,6 +44,8 @@ sed 's/expect byte v_len 80/expect byte v_len 81/' "$W14H" \
     > "$WORK/neg14h.jal"
 sed 's/expect byte v_len 80/expect byte v_len 81/' "$W14" \
     > "$WORK/neg14.jal"
+sed 's/expect byte v_first 0/expect byte v_first 1/' "$W14" \
+    > "$WORK/negcontent14.jal"
 
 # --- 1/2. runtime on both cores ------------------------------------------
 if [ -x "$PICSIM/src/libpicsim.so" ] || [ -x "$PICSIM/src/libpicsim.a" ] \
@@ -60,9 +68,16 @@ fi
 if command -v gpsim >/dev/null 2>&1; then
   if ( cd "$WORK" && bash "$REPO/sims/jal_gpsim_validate.sh" \
       --compiler "$CC" --quiet -s "$REPO/$LIBS" "$W14" > pos14.log 2>&1 ); then
-    echo "ok   append growth classic 14: 80 appends, count=80"
+    echo "ok   append growth classic 14: 80 appends, whole payload"
   else
     fail "append growth classic 14 measurement" "$WORK/pos14.log"
+  fi
+  if ( cd "$WORK" && bash "$REPO/sims/jal_gpsim_validate.sh" \
+      --compiler "$CC" --quiet -s "$REPO/$LIBS" "$WORK/negcontent14.jal" \
+      > negc14.log 2>&1 ); then
+    fail "append growth classic 14 content control PASSED"
+  else
+    echo "ok   append growth classic 14 content control fails as it must"
   fi
   if ( cd "$WORK" && bash "$REPO/sims/jal_gpsim_validate.sh" \
       --compiler "$CC" --quiet -s "$REPO/$LIBS" "$WORK/neg14.jal" \

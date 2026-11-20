@@ -127,7 +127,6 @@ static const char *pic_access_action_name(unsigned action)
 {
   switch (action) {
     case PIC_ACCESS_ACTION_NONE:                    return "NONE";
-    case PIC_ACCESS_ACTION_NOT_FAT_BIND:            return "NOT_FAT_BIND";
     case PIC_ACCESS_ACTION_FAT_BIND:                return "FAT_BIND";
     case PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP_IND:    return "PTR_WRITE_LOOKUP_IND";
     case PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP:        return "PTR_WRITE_LOOKUP";
@@ -657,12 +656,7 @@ static const pic_access_recipe_t pic_access_recipes[] = {
     PIC_ACCESS_ACTION_SLOT_SCALAR, 0 },
   { PIC_ACCESS_KIND_ANY, PIC_ACCESS_OP_INDIRECT_SLOT,
     0u, PIC_ACCESS_FACT_AOP,
-    PIC_ACCESS_ACTION_SLOT_NOT, 0 },
-  /* a slot store is never a fat bind with the engine off (the G3 FAT_BIND row
-   * above wins for BOTH slot shapes under the engine; this row is last so the
-   * other family's indices do not move) */
-  { PIC_ACCESS_KIND_ANY, PIC_ACCESS_OP_BIND, PIC_ACCESS_FACT_AOP,
-    PIC_ACCESS_FACT_AOP, PIC_ACCESS_ACTION_NOT_FAT_BIND, 0 }
+    PIC_ACCESS_ACTION_SLOT_NOT, 0 }
 };
 
 access_class_t pic_access_neutral_class(pic_access_kind_t kind)

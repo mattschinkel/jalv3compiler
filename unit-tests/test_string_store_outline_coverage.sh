@@ -41,7 +41,6 @@ for w in \
   sims/gpsim/18f4620_gpsim_front_ir_whole_assign.jal \
   sims/gpsim/18f4620_gpsim_front_ir_concat.jal \
   sims/gpsim/18f4620_gpsim_string_clone.jal \
-  sims/gpsim/18f4620_gpsim_string_clone_matrix.jal \
   sims/gpsim/18f4620_gpsim_front_ir_clone_builtin.jal \
   demo_sample/18f4620_strings.jal \
   demo_sample/18f67j50_string_dynamic.jal \

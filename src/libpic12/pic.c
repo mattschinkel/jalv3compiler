@@ -3886,6 +3886,8 @@ static void pic_preuser_init(pfile_t *pf, label_t lbl_user)
   }
 }
 
+static variable_t pic_lookup_label_variable(variable_t var);
+
 label_t pic_lookup_label_find(pfile_t *pf, variable_t var, unsigned flags)
 {
   size_t        sz;
@@ -3893,6 +3895,7 @@ label_t pic_lookup_label_find(pfile_t *pf, variable_t var, unsigned flags)
   char         *name;
   const char   *vnm;
 
+  var = pic_lookup_label_variable(var);
   vnm = variable_name_get(var);
   if (!vnm) {
     return LABEL_NONE;
@@ -3937,12 +3940,96 @@ static int lookup_inf_cmp(const void *A, const void *B)
   return (a->sz < b->sz) - (a->sz > b->sz);
 }
 
+/* A byref scalar view (`at` alias) of a const literal is a lookup variable
+ * with no data of its own: its ROM bytes live in its flash-const master.
+ * Return the variable that owns the bytes, or `var` when it already does. */
+static variable_t pic_lookup_data_var(variable_t var)
+{
+  variable_t m;
+
+  if (variable_data_get(var)) {
+    return var;
+  }
+  for (m = variable_master_get(var); m; m = variable_master_get(m)) {
+    if (variable_data_get(m)) {
+      return m;
+    }
+  }
+  return var;
+}
+
+/* A lookup variable with no ROM of its own is a byref `_byrefargN` view of
+ * a const actual: its bytes live in the flash-const master.  Share the
+ * master's table (and label) when the view starts at offset 0, so repeated
+ * calls to the same const emit ONE table.  A nonzero or unknown base keeps
+ * the view's own label: its bytes are not the master's first byte. */
+static variable_t pic_lookup_label_variable(variable_t var)
+{
+  variable_t dvar;
+
+  if (variable_data_get(var)) {
+    return var;
+  }
+  if (0 != variable_base_get(var, 0)) {
+    return var;
+  }
+  dvar = pic_lookup_data_var(var);
+  if ((dvar != var)
+      && (variable_sz_get(dvar) == variable_sz_get(var))
+      && variable_name_get(dvar)) {
+    return dvar;
+  }
+  return var;
+}
+
+typedef struct pic_lookup_emit_list_ {
+  variable_t *var;
+  size_t      alloc;
+  size_t      used;
+} pic_lookup_emit_list_t;
+
+static boolean_t pic_lookup_emit_list_has(const pic_lookup_emit_list_t *lst,
+    variable_t var)
+{
+  size_t ii;
+
+  for (ii = 0; ii < lst->used; ii++) {
+    if (lst->var[ii] == var) {
+      return BOOLEAN_TRUE;
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
+static void pic_lookup_emit_list_add(pfile_t *pf, pic_lookup_emit_list_t *lst,
+    variable_t var)
+{
+  if (lst->used == lst->alloc) {
+    size_t  alloc;
+    void   *tmp;
+
+    alloc = lst->alloc ? 2 * lst->alloc : 16;
+    tmp = REALLOC(lst->var, alloc * sizeof(*lst->var));
+    if (!tmp) {
+      pfile_log_syserr(pf, ENOMEM);
+      return;
+    }
+    lst->var   = tmp;
+    lst->alloc = alloc;
+  }
+  lst->var[lst->used++] = var;
+}
+
 /* this is used by the 16 bit architectures */
 static void pic_lookup_init_16bit(pfile_t *pf)
 {
   pfile_proc_t  *proc;
   label_t         lbl_lookup;
+  pic_lookup_emit_list_t emitted;
 
+  emitted.var   = 0;
+  emitted.alloc = 0;
+  emitted.used  = 0;
   lbl_lookup = LABEL_NONE;
   /* this needs to be marked VISITED to make sure no one tries to delete it */
   pic_instr_default_flag_set(pf, PIC_CODE_FLAG_VISITED);
@@ -3959,36 +4046,48 @@ static void pic_lookup_init_16bit(pfile_t *pf)
       for (var = pfile_block_variable_list_head(blk);
            var;
            var = variable_link_get(var)) {
-        if (variable_is_lookup(var) && variable_data_get(var)) {
-          size_t     sz;
-          void      *data;
+        if (variable_is_lookup(var)) {
+          variable_t dvar;
 
-          sz = variable_sz_get(var);
-          data = MALLOC(sz);
-          if (!data) {
-            pfile_log_syserr(pf, errno);
-          } else {
-            label_t    lbl;
-            pic_code_t code;
-            if (!lbl_lookup) {
-              /* this is a sentinel to let the pre-amble code know it needs
-                 to GOTO over this! */
-              lbl_lookup = pic_label_find(pf, PIC_LABEL_LOOKUP, BOOLEAN_TRUE);
-              label_release(lbl_lookup);
+          dvar = pic_lookup_label_variable(var);
+          if (!pic_lookup_emit_list_has(&emitted, dvar)) {
+            const void *vdata;
+
+            pic_lookup_emit_list_add(pf, &emitted, dvar);
+            vdata = variable_data_get(dvar);
+            if (vdata) {
+              size_t     sz;
+              void      *data;
+
+              sz = variable_sz_get(dvar);
+              data = MALLOC(sz);
+              if (!data) {
+                pfile_log_syserr(pf, errno);
+              } else {
+                label_t    lbl;
+                pic_code_t code;
+                if (!lbl_lookup) {
+                  /* this is a sentinel to let the pre-amble code know it needs
+                     to GOTO over this! */
+                  lbl_lookup = pic_label_find(pf, PIC_LABEL_LOOKUP, BOOLEAN_TRUE);
+                  label_release(lbl_lookup);
+                }
+                memcpy(data, vdata, sz);
+                lbl = pic_lookup_label_find(pf, dvar,
+                  PIC_LOOKUP_LABEL_FIND_FLAG_ALLOC
+                  | PIC_LOOKUP_LABEL_FIND_FLAG_DATA);
+                pic_instr_append_label(pf, lbl);
+                label_release(lbl);
+                code = pic_instr_append(pf, PIC_OPCODE_DB);
+                pic_code_data_set(code, sz, data);
+              }
             }
-            memcpy(data, variable_data_get(var), sz);
-            lbl = pic_lookup_label_find(pf, var,
-              PIC_LOOKUP_LABEL_FIND_FLAG_ALLOC
-              | PIC_LOOKUP_LABEL_FIND_FLAG_DATA);
-            pic_instr_append_label(pf, lbl);
-            label_release(lbl);
-            code = pic_instr_append(pf, PIC_OPCODE_DB);
-            pic_code_data_set(code, sz, data);
           }
         }
       }
     }
   }
+  FREE(emitted.var);
   pic_instr_default_flag_clr(pf, PIC_CODE_FLAG_VISITED);
 }
 
@@ -4016,26 +4115,40 @@ static void pic_lookup_init_14bit(pfile_t *pf)
            var;
            var = variable_link_get(var)) {
         if (variable_is_lookup(var)) {
-          /* create the lookup table */
-          if (lookup_inf.used == lookup_inf.alloc) {
-            void  *tmp;
-            size_t tmp_sz;
-            size_t tmp_ct;
+          variable_t dvar;
+          size_t     ii;
+          boolean_t  seen;
 
-            tmp_ct = (lookup_inf.alloc) ? 2 * lookup_inf.alloc : 16;
-            tmp_sz = tmp_ct * sizeof(*lookup_inf.data);
-            tmp = REALLOC(lookup_inf.data, tmp_sz);
-            if (!tmp) {
-              pfile_log_syserr(pf, ENOMEM);
-            } else {
-              lookup_inf.alloc = tmp_ct;
-              lookup_inf.data  = tmp;
+          dvar = pic_lookup_label_variable(var);
+          seen = BOOLEAN_FALSE;
+          for (ii = 0; ii < lookup_inf.used; ii++) {
+            if (lookup_inf.data[ii].var == dvar) {
+              seen = BOOLEAN_TRUE;
+              break;
             }
           }
-          if (lookup_inf.used < lookup_inf.alloc) {
-            lookup_inf.data[lookup_inf.used].var = var;
-            lookup_inf.data[lookup_inf.used].sz  = variable_sz_get(var);
-            lookup_inf.used++;
+          if (!seen) {
+            /* create the lookup table */
+            if (lookup_inf.used == lookup_inf.alloc) {
+              void  *tmp;
+              size_t tmp_sz;
+              size_t tmp_ct;
+
+              tmp_ct = (lookup_inf.alloc) ? 2 * lookup_inf.alloc : 16;
+              tmp_sz = tmp_ct * sizeof(*lookup_inf.data);
+              tmp = REALLOC(lookup_inf.data, tmp_sz);
+              if (!tmp) {
+                pfile_log_syserr(pf, ENOMEM);
+              } else {
+                lookup_inf.alloc = tmp_ct;
+                lookup_inf.data  = tmp;
+              }
+            }
+            if (lookup_inf.used < lookup_inf.alloc) {
+              lookup_inf.data[lookup_inf.used].var = dvar;
+              lookup_inf.data[lookup_inf.used].sz  = variable_sz_get(dvar);
+              lookup_inf.used++;
+            }
           }
         }
       }
@@ -4126,7 +4239,8 @@ static void pic_lookup_init_14bit(pfile_t *pf)
 
           for (jj = 0; jj < lookup_inf.data[ii].sz; jj++) {
             pic_instr_append_w_kn(pf, PIC_OPCODE_RETLW,
-              variable_const_get(lookup_inf.data[ii].var, def, jj));
+              variable_const_get(pic_lookup_data_var(lookup_inf.data[ii].var),
+                def, jj));
           }
           pc += lookup_inf.data[ii].sz;
           for (jj = ii + 1; jj < lookup_inf.used; jj++) {
@@ -6510,8 +6624,14 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
 
     /* U3: the CALL command is the pair channel between the passes; record
      * the program list once so placement-time propagation and the capture
-     * pass can walk it. */
-    if (2 == pic_state.code_gen_pass) {
+     * pass can walk it.  Placement runs in pass 1; PIC18/14H re-place in
+     * the pass-2 layout trials (after this head is set), but classic 12/14-bit
+     * has no trials, so set the head in pass 1 there or the baked
+     * single-layout chunk-map propagation never sees a pair. */
+    if ((2 == pic_state.code_gen_pass)
+        || ((1 == pic_state.code_gen_pass)
+            && !pic_is_16bit(pf)
+            && !pic_is_14bit_hybrid(pf))) {
       pic_var_openarray_ir_set(cmd);
     }
 

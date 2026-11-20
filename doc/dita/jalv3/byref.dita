@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="byref" xml:lang="en-US">
+  <title>byref reference parameters</title>
+
+  <body>
+    <p>A procedure or function parameter can be declared
+    <codeph>byref</codeph> so the caller passes a <i>reference</i> to the
+    actual's storage rather than a value: the formal aliases the actual's
+    bytes as a raw byte array, and the body re-types them with
+    <xref href="variables.dita">at</xref> overlays.</p>
+
+    <codeblock>procedure bump(byref in out arr[]) is
+   var word v at arr
+   v = v + 1
+end procedure</codeblock>
+
+    <section>
+      <title>Direction</title>
+
+      <p><codeph>byref</codeph> is a type-position keyword with a direction:
+      <codeph>byref in arr[]</codeph> (read-only), <codeph>byref out arr[]</codeph>
+      (write-only) and <codeph>byref in out arr[]</codeph> (read-write). The
+      direction is permission on the alias, not a copy-back: <codeph>out</codeph>
+      and <codeph>in out</codeph> write the caller's storage immediately.</p>
+
+      <p>Any scalar, array or string actual converts to a byte view of its
+      storage: a <codeph>word</codeph> is a 2-byte view, a <codeph>dword</codeph>
+      or <codeph>float</codeph> a 4-byte view, a <codeph>qword</codeph> 8 bytes
+      and an <codeph>oword</codeph> 16 bytes; an array is its total byte size.
+      A string actual keeps its payload marshalling and stays
+      element-accessible.</p>
+    </section>
+
+    <section>
+      <title>Type tag and predicates</title>
+
+      <p>Each byref formal carries one hidden runtime tag byte. Bits 0..2 are
+      the size/type code: 0 byte, 1 word, 2 dword, 3 qword, 4 oword, 5 float.
+      Bit 3 is string, bit 4 array, bit 5 pointer and bit 6 signed. An array
+      carries its ELEMENT code plus ARRAY; a pointer carries its POINTEE code
+      plus POINTER. A pointer-to-string actual is marshalled as a string and
+      carries STRING only. The predicates lower to
+      <codeph>(tag &amp; mask) == value</codeph>, so a single-type call folds
+      them to constants.</p>
+
+      <p>Scalar size predicates (the SIGNED bit is ignored, so
+      <codeph>_is_byte()</codeph> is true for both byte and sbyte):
+      <codeph>_is_byte()</codeph>, <codeph>_is_word()</codeph>,
+      <codeph>_is_dword()</codeph>, <codeph>_is_qword()</codeph>,
+      <codeph>_is_oword()</codeph>, <codeph>_is_float()</codeph>. Signed
+      predicates: <codeph>_is_sbyte()</codeph>, <codeph>_is_sword()</codeph>,
+      <codeph>_is_sdword()</codeph>, <codeph>_is_sqword()</codeph>,
+      <codeph>_is_soword()</codeph>. Kind predicates:
+      <codeph>_is_string()</codeph>, <codeph>_is_array()</codeph>,
+      <codeph>_is_pointer()</codeph>.</p>
+
+      <p>Element and pointee predicates: <codeph>_is_byte_array()</codeph>,
+      <codeph>_is_word_array()</codeph>, <codeph>_is_dword_array()</codeph>,
+      <codeph>_is_qword_array()</codeph>, <codeph>_is_oword_array()</codeph>,
+      <codeph>_is_float_array()</codeph>, their <codeph>_is_s*_array()</codeph>
+      twins, and the matching <codeph>_is_byte_pointer()</codeph> ..
+      <codeph>_is_float_pointer()</codeph> and
+      <codeph>_is_s*_pointer()</codeph> set. A fixed
+      <codeph>const byte[] = "..."</codeph> is an array, so it tests
+      <codeph>_is_array()</codeph>, not <codeph>_is_string()</codeph>; a
+      dynamic string and a pointer-to-string test
+      <codeph>_is_string()</codeph>.</p>
+
+      <p>A procedure may have exactly one byref formal for the predicates to
+      be unambiguous.</p>
+    </section>
+
+    <section>
+      <title>No clone</title>
+
+      <p>A byref procedure compiles to ONE body regardless of the actual's
+      type — the tag branches it instead of the compiler cloning it.
+      <codeph>pragma byref_clone on</codeph> as the first line of a procedure
+      opts that procedure back into the string-flavor clone. The clone's
+      re-flavored formal is a string, so inside that clone
+      <codeph>_is_string()</codeph> is true and the other predicates are
+      false.</p>
+
+      <p>When every call site passes the same type, the compiler folds the tag
+      and the predicates to constants and drops the dead branches, so the
+      routine costs the same as a typed parameter.</p>
+    </section>
+
+    <section>
+      <title>Refusals</title>
+
+      <ul>
+        <li>the old <codeph>byte byref x</codeph> modifier form is a clean
+        error naming the type-position syntax;</li>
+        <li>a banked (chunked) array cannot be passed byref — the reference is
+        linear and cannot walk the holes; pass an open array instead;</li>
+        <li><codeph>optional byref</codeph> and byref formals in
+        function-pointer signatures are refused;</li>
+        <li>a pointer actual may have a numeric or float pointee of any
+        supported width (byte, word, dword, qword, oword, float); the
+        hidden count is the pointee byte size and the pointer predicates
+        report the pointee type. A pointer to a structure or another
+        pointer is not a scalar view and is refused.</li>
+      </ul>
+    </section>
+  </body>
+</topic>

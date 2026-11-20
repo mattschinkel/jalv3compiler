@@ -223,6 +223,7 @@ void pfile_pointer_slot_bind_check(pfile_t *pf);
 /* Dynamic string handle registry: built after p-code analysis, consumed by PIC
  * asm to emit v__string_handle_count / v__string_reg_n equates. */
 void pfile_dynstr_reg_build(pfile_t *pf);
+boolean_t pfile_dynstr_reg_has(pfile_t *pf, variable_t var);
 size_t pfile_dynstr_reg_ct_get(const pfile_t *pf);
 variable_t pfile_dynstr_reg_get(const pfile_t *pf, size_t i);
 
@@ -340,6 +341,8 @@ pfile_token_ct_t pfile_token_ct_get(pfile_t *pf);
 
 /* dynamic string: deferred `string_heap_compact` (NOP in cmd list, expanded in dump) */
 void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result);
+void pfile_str_heap_defer_add_handle(pfile_t *pf, cmd_t marker,
+    value_t result, value_t handle, boolean_t as_call);
 void pfile_str_heap_defer_add_ex(pfile_t *pf, cmd_t marker, value_t result,
     boolean_t as_call);
 void pfile_str_heap_defer_free(pfile_t *pf);

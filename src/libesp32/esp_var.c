@@ -90,10 +90,17 @@ void esp_var_ensure(pfile_t *pf, variable_t v)
     }
     return;
   }
-  if (variable_is_pure_const(v)) {
-    /* 3e: const data gets IRAM data nodes (see variable_is_pure_const
-     * for why the assignment count matters) */
+  if (esp_var_is_const_data(v)) {
+    /* 3e: const data gets IRAM data nodes.  A byref scalar view (`at`
+     * alias) of a const literal bumps the literal's assign counter
+     * through its master, so `variable_is_pure_const` alone would place
+     * the literal in RAM -- the bytes are still read-only, keep them in
+     * the const pool (mirrors mips_var_ensure). */
     esp_const_pool_add(v);
+    return;
+  }
+  if (variable_is_pure_const(v)) {
+    /* const with no initializer data: fold into immediates, no base */
     return;
   }
   master = variable_master_get(v);

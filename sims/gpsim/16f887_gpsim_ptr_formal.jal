@@ -1,0 +1,48 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F887 gpsim witness: data-pointer formals (`pointer in q`)
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    `pointer in q` passes the ADDRESS (the pointer value), not the pointee.
+--    The body reads the pointee (`x = q`), writes through it (`q = x`), and
+--    `pointer in out q` retargets the CALLER's pointer (`q is y`).
+--
+-- ----------------------------------------------------------------------------
+
+-- @gpsim_validate begin
+-- steps: 800000
+-- expect byte v__check_step 1
+-- expect byte v__ck_read 0x42
+-- expect byte v__ck_write 0x43
+-- expect byte v__ck_retarget 0x22
+-- @gpsim_validate end
+
+include regression_16f887_device
+include regression
+
+var volatile byte _ck_read = 0
+var volatile byte _ck_write = 0
+var volatile byte _ck_retarget = 0
+var byte g = 0x42
+var byte g2 = 0x22
+var pointer p as var byte
+p is g
+
+procedure rd(pointer in q) is
+   _ck_read = q
+end procedure
+procedure wr(pointer in q) is
+   q = 0x43
+end procedure
+procedure rt(pointer in out q) is
+   q is g2
+end procedure
+
+rd(p)
+wr(p)
+_ck_write = g
+rt(p)
+var byte v at p
+_ck_retarget = v
+regression_checkpoint()

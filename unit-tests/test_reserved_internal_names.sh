@@ -206,6 +206,16 @@ EOF
 expect_one_error "BSS block prefix" "$WORK/r_bss.jal" \
   "uses the compiler-reserved prefix '_pic_bss_'"
 
+# the byref call-site alias temp (docs/fixes/2026/fix_byref_20261116.md)
+cat >"$WORK/r_byrefarg.jal" <<'EOF'
+include 16f877
+var byte _byrefarg0
+forever loop
+end loop
+EOF
+expect_one_error "byref alias temp prefix" "$WORK/r_byrefarg.jal" \
+  "uses the compiler-reserved prefix '_byrefarg'"
+
 cat >"$WORK/r_put.jal" <<'EOF'
 include 16f877
 pragma target string_heap_size 64

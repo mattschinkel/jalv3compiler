@@ -1175,6 +1175,12 @@ static void jal_sem_lower(pfile_t *pf)
 
           if (ev && (value_is_pointer(ev) || value_is_array(ev))) {
             value_dereference(ev);
+            /* the element's width is the DESTINATION's: a word overlay
+             * (`var word v at arr`) reads a word, while the deref's pointee
+             * def is only the open-array's byte element */
+            if (dst && (value_sz_get(ev) != value_sz_get(dst))) {
+              value_def_set(ev, value_def_get(dst));
+            }
           }
           pfile_cmd_op_add(pf, OPERATOR_ASSIGN, &d, ev, VALUE_NONE);
           value_release(ev);

@@ -137,6 +137,10 @@ void jal_string_core_gate(pfile_t *pf)
 #define _STRING_HEAP_NAME      "_string_heap"
 #define _STRING_FREE_HEAD_NAME "_string_free_head"
 #define _STRING_ERROR_NAME     "_string_error"
+/* the compaction's live-block count and work table, read back after the
+ * compact runs to re-point a string formal's handle copy */
+#define _STRING_CPT_N_NAME     "_string_cpt_n"
+#define _STRING_CPT_WORK_NAME  "_pfile_strc_cpt"
 
 #define _STRING_ERROR_NONE      0
 #define _STRING_ERROR_HEAP_FULL 1
@@ -1538,6 +1542,8 @@ boolean_t jal_string_runtime_ensure(pfile_t *pf)
 
   if (!jal_string_global_index_alloc(pf, _STRING_FREE_HEAD_NAME,
       VARIABLE_DEF_FLAG_NONE, 0)
+      || !jal_string_global_byte_alloc(pf, _STRING_CPT_N_NAME,
+        VARIABLE_DEF_FLAG_NONE, 0)
       || !jal_string_global_byte_alloc(pf, _STRING_ERROR_NAME,
         VARIABLE_DEF_FLAG_NONE, _STRING_ERROR_NONE)
       || !jal_string_global_const_alloc(pf, "_string_error_none",
@@ -2473,7 +2479,8 @@ boolean_t jal_string_subscript_write_emit(pfile_t *pf, value_t dst,
               CMD_BRANCHCOND_NONE, heap_full_lbl, VALUE_NONE, VALUE_NONE, 0);
         } else {
           pfile_cmd_add(pf, nopc);
-          pfile_str_heap_defer_add_ex(pf, nopc, cpt_res, BOOLEAN_TRUE);
+          pfile_str_heap_defer_add_handle(pf, nopc, cpt_res, base,
+              BOOLEAN_TRUE);
           jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, cpt_res, 0,
               CMD_BRANCHCOND_TRUE, heap_full_lbl);
           pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO,
@@ -8202,6 +8209,82 @@ static void jal_str_cpt_reg_patch_all_emit(pfile_t *pf, value_t w, value_t n,
   }
 }
 
+/* The append retry re-reads the handle from the string VALUE it is
+ * building.  A compaction patches only the REGISTERED (global) handles; a
+ * `string in out` formal is a copy, so the outlined store body's `dst`
+ * still holds the pre-move offset and the retry would copy from -- and
+ * free -- the stale block.  Measured on 16F887 (200-byte heap, 80 one-byte
+ * appends): the stale block's free header lands in the new block's payload
+ * (s[3..5] = the [next][cap][len] bytes) and the heap gains a bogus free
+ * block.  Patch the site's own handle from the compaction's global work
+ * table: find the row whose OLD offset equals this handle's offset and
+ * install that row's new offset.  The count and table are the ones the
+ * compact just wrote, so no call-signature change is needed. */
+static void jal_string_handle_repatch_emit(pfile_t *pf, value_t h)
+{
+  label_t  loop;
+  label_t  set;
+  label_t  done;
+  value_t  w;
+  value_t  nv;
+  value_t  k;
+  value_t  one;
+  value_t  zero;
+  value_t  old;
+  value_t  old16;
+  value_t  row_old;
+  value_t  nnew;
+
+  if (!h) {
+    return;
+  }
+  w = pfile_value_find(pf, PFILE_LOG_NONE, _STRING_CPT_WORK_NAME);
+  if (VALUE_NONE == w) {
+    w = jal_str_cpt_work_ensure(pf, pfile_dynstr_reg_ct_get(pf));
+  }
+  nv = pfile_value_find(pf, PFILE_LOG_NONE, _STRING_CPT_N_NAME);
+  if ((VALUE_NONE == w) || (VALUE_NONE == nv)) {
+    value_release(w);
+    value_release(nv);
+    return;
+  }
+  loop = pfile_label_alloc(pf, 0);
+  set  = pfile_label_alloc(pf, 0);
+  done = pfile_label_alloc(pf, 0);
+  k    = jal_string_temp_index_get(pf);
+  old16 = jal_string_heap_cpt_u16_temp_get(pf);
+  one  = jal_string_const_get(pf, 1);
+  zero = jal_string_const_get(pf, 0);
+  old  = jal_string_handle_index_get(pf, h, _STRING_FIELD_OFFSET);
+  jal_string_heap_cpt_u16_assign_from_byte(pf, old16, old);
+  jal_string_assign_value(pf, k, zero);
+  pfile_cmd_label_add(pf, loop);
+  jal_string_branch_if_value_cmp(pf, OPERATOR_GE, k, nv,
+      CMD_BRANCHCOND_TRUE, done);
+  row_old = jal_str_cpt_wk_get(pf, w, k, 0U);
+  jal_string_branch_if_value_cmp(pf, OPERATOR_EQ, row_old, old16,
+      CMD_BRANCHCOND_TRUE, set);
+  value_release(row_old);
+  pfile_cmd_op_add(pf, OPERATOR_ADD, &k, k, one);
+  pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE,
+      loop, VALUE_NONE, VALUE_NONE, 0);
+  pfile_cmd_label_add(pf, set);
+  nnew = jal_str_cpt_wk_get(pf, w, k, 2U);
+  jal_string_handle_index_set(pf, h, _STRING_FIELD_OFFSET, nnew);
+  value_release(nnew);
+  pfile_cmd_label_add(pf, done);
+  value_release(zero);
+  value_release(one);
+  value_release(old16);
+  value_release(old);
+  value_release(k);
+  value_release(nv);
+  value_release(w);
+  label_release(done);
+  label_release(set);
+  label_release(loop);
+}
+
 static void jal_string_heap_compact_fill_bld(pfile_t *pf, value_t res)
 {
   value_t            wk;
@@ -8255,6 +8338,17 @@ static void jal_string_heap_compact_fill_bld(pfile_t *pf, value_t res)
   }
   fmaxb  = jal_string_index_max(isz);
   if (0U == reg_ct) {
+    value_t nv;
+
+    nv = jal_string_named_value_get(pf, _STRING_CPT_N_NAME);
+    if (VALUE_NONE != nv) {
+      value_t z;
+
+      z = jal_string_const_get(pf, 0U);
+      jal_string_assign_value(pf, nv, z);
+      value_release(z);
+      value_release(nv);
+    }
     jal_string_bool_assign(pf, res, BOOLEAN_TRUE);
     return;
   }
@@ -8327,6 +8421,17 @@ static void jal_string_heap_compact_fill_bld(pfile_t *pf, value_t res)
   cpt_out  = pfile_label_alloc(pf, 0U);
   jal_string_branch_if_const_cmp(pf, OPERATOR_EQ, nct, 0U, CMD_BRANCHCOND_TRUE,
       empty_cpt);
+  {
+    /* publish the live-block count for the call site's handle re-point
+     * (jal_string_handle_repatch_emit) */
+    value_t nv;
+
+    nv = jal_string_named_value_get(pf, _STRING_CPT_N_NAME);
+    if (VALUE_NONE != nv) {
+      jal_string_assign_value(pf, nv, nct);
+      value_release(nv);
+    }
+  }
   nmo  = jal_string_temp_index_get(pf);
   i   = jal_string_temp_index_get(pf);
   j   = jal_string_temp_index_get(pf);
@@ -8353,6 +8458,19 @@ static void jal_string_heap_compact_fill_bld(pfile_t *pf, value_t res)
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE, cpt_out,
       VALUE_NONE, VALUE_NONE, 0U);
   pfile_cmd_label_add(pf, empty_cpt);
+  {
+    value_t nv;
+
+    nv = jal_string_named_value_get(pf, _STRING_CPT_N_NAME);
+    if (VALUE_NONE != nv) {
+      value_t z;
+
+      z = jal_string_const_get(pf, 0U);
+      jal_string_assign_value(pf, nv, z);
+      value_release(z);
+      value_release(nv);
+    }
+  }
   jal_string_runtime_heap_fresh_bootstrap_emit(pf, hszc, isz,
       (variable_sz_t)(3U * (unsigned)isz), fmaxb);
   pfile_cmd_branch_add(pf, CMD_BRANCHTYPE_GOTO, CMD_BRANCHCOND_NONE, cpt_out,
@@ -8382,17 +8500,42 @@ void jal_string_heap_compact_defer_expand(pfile_t *pf)
   l = pf->str_heap_defer;
   pf->str_heap_defer = 0;
   for (d = l; d; d = n) {
+    pfile_proc_t *save_proc;
+
     n = d->link;
+    /* attribute the expansion to the procedure that owns the append site:
+     * otherwise temp/bitbucket allocation and the outlined call's edge land
+     * on whatever procedure was last active (the shared compact body), whose
+     * frame then overlaps the caller's live formals */
+    save_proc = pfile_proc_active_get(pf);
+    if (d->proc) {
+      pfile_proc_active_set(pf, d->proc);
+    }
     pfile_cmd_bld_start(pf);
     if (!(d->as_call && jal_string_heap_compact_jal_call_emit(pf, d->result))) {
       jal_string_heap_compact_fill_bld(pf, d->result);
     }
+    if (d->handle) {
+      variable_t hv;
+
+      hv = value_variable_get(d->handle);
+      /* a registered (global) handle is patched by the compact itself; only
+       * a formal's COPY -- which the registry deliberately excludes -- needs
+       * the local re-point */
+      if ((VARIABLE_NONE != hv) && !pfile_dynstr_reg_has(pf, hv)) {
+        jal_string_handle_repatch_emit(pf, d->handle);
+      }
+    }
     pfile_cmd_bld_end(pf, &nh, &nt);
     pfile_cmd_replace1_with_chain(pf, d->marker, nh, nt);
+    pfile_proc_active_set(pf, save_proc);
     /* the expanded chain's cmds hold their own references; drop the
      * reference taken by pfile_str_heap_defer_add */
     if (d->result) {
       value_release(d->result);
+    }
+    if (d->handle) {
+      value_release(d->handle);
     }
     FREE(d);
   }

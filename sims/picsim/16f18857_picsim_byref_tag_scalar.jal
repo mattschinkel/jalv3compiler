@@ -1,0 +1,129 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref hidden type tag and `_is_*` predicates
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins eng-review Q3: one hidden tag byte per byref formal (0 byte,
+--    1 word, 2 dword, 4 array) and the `_is_byte`/`_is_word`/`_is_dword`/
+--    `_is_array` predicates.  ONE non-cloned body is called with four
+--    actual types; each call must set exactly its own predicate, and COUNT
+--    must be the byte size of the aliased storage.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 120000
+-- expect byte v__check_step 1
+-- expect byte v__w_word 1
+-- expect byte v__w_byte 0
+-- expect byte v__w_dword 0
+-- expect byte v__w_arr 0
+-- expect byte v__w_cnt 2
+-- expect byte v__b_word 0
+-- expect byte v__b_byte 1
+-- expect byte v__b_dword 0
+-- expect byte v__b_arr 0
+-- expect byte v__b_cnt 1
+-- expect byte v__d_word 0
+-- expect byte v__d_byte 0
+-- expect byte v__d_dword 1
+-- expect byte v__d_arr 0
+-- expect byte v__d_cnt 4
+-- expect byte v__a_word 0
+-- expect byte v__a_byte 0
+-- expect byte v__a_dword 0
+-- expect byte v__a_arr 1
+-- expect byte v__a_cnt 3
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+
+var volatile byte _p_word = 9
+var volatile byte _p_byte = 9
+var volatile byte _p_dword = 9
+var volatile byte _p_arr = 9
+var volatile byte _p_cnt = 9
+var volatile byte _w_word = 9
+var volatile byte _w_byte = 9
+var volatile byte _w_dword = 9
+var volatile byte _w_arr = 9
+var volatile byte _w_cnt = 9
+var volatile byte _b_word = 9
+var volatile byte _b_byte = 9
+var volatile byte _b_dword = 9
+var volatile byte _b_arr = 9
+var volatile byte _b_cnt = 9
+var volatile byte _d_word = 9
+var volatile byte _d_byte = 9
+var volatile byte _d_dword = 9
+var volatile byte _d_arr = 9
+var volatile byte _d_cnt = 9
+var volatile byte _a_word = 9
+var volatile byte _a_byte = 9
+var volatile byte _a_dword = 9
+var volatile byte _a_arr = 9
+var volatile byte _a_cnt = 9
+
+procedure probe(byref in arr[]) is
+   _p_word = 0
+   _p_byte = 0
+   _p_dword = 0
+   _p_arr = 0
+   if _is_word() then
+      _p_word = 1
+   end if
+   if _is_byte() then
+      _p_byte = 1
+   end if
+   if _is_dword() then
+      _p_dword = 1
+   end if
+   if _is_array() then
+      _p_arr = 1
+   end if
+   _p_cnt = byte(COUNT(arr))
+end procedure
+
+var word wv
+var byte bv
+var dword dv
+var byte av[3]
+var byte iv
+
+wv = 0x1234
+probe(wv)
+_w_word = _p_word
+_w_byte = _p_byte
+_w_dword = _p_dword
+_w_arr = _p_arr
+_w_cnt = _p_cnt
+
+bv = 5
+probe(bv)
+_b_word = _p_word
+_b_byte = _p_byte
+_b_dword = _p_dword
+_b_arr = _p_arr
+_b_cnt = _p_cnt
+
+dv = 0x12345678
+probe(dv)
+_d_word = _p_word
+_d_byte = _p_byte
+_d_dword = _p_dword
+_d_arr = _p_arr
+_d_cnt = _p_cnt
+
+for 3 using iv loop
+   av[iv] = iv
+end loop
+probe(av)
+_a_word = _p_word
+_a_byte = _p_byte
+_a_dword = _p_dword
+_a_arr = _p_arr
+_a_cnt = _p_cnt
+
+regression_checkpoint()

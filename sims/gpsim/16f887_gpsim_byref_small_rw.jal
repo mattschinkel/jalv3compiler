@@ -1,0 +1,50 @@
+-- ------------------------------------------------------
+-- Title: 16F887 gpsim witness: byref small-array read + write (single-bank placement)
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    Pins the placement of a SMALL escaped target: a 10-byte array fits one
+--    bank, so the byref formal walks no chunk map and the linear pointer path
+--    must still read and write it.  `arr[0]`/`arr[9]` written through byref
+--    land in `small[0]`/`small[9]` (0x78/0x56), and the same offsets read
+--    back through byref return those bytes.
+--
+-- @gpsim_validate begin
+-- steps: 60000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v__ck_w0 0x78
+-- expect byte v__ck_w9 0x56
+-- expect byte v__ck_lo 0x78
+-- expect byte v__ck_hi 0x56
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte _ck_lo = 0
+var volatile byte _ck_hi = 0
+var volatile byte _ck_w0 = 0
+var volatile byte _ck_w9 = 0
+
+procedure peek(byref in arr[]) is
+   _ck_lo = arr[0]
+   _ck_hi = arr[9]
+end procedure
+
+procedure bump(byref in out arr[]) is
+   arr[0] = 0x78
+   arr[9] = 0x56
+end procedure
+
+var byte small[10]
+
+bump(small)
+_ck_w0 = small[0]
+_ck_w9 = small[9]
+regression_checkpoint()
+peek(small)
+regression_checkpoint()

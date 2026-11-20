@@ -100,6 +100,12 @@ void pfile_str_heap_defer_add(pfile_t *pf, cmd_t marker, value_t result)
 void pfile_str_heap_defer_add_ex(pfile_t *pf, cmd_t marker, value_t result,
     boolean_t as_call)
 {
+  pfile_str_heap_defer_add_handle(pf, marker, result, VALUE_NONE, as_call);
+}
+
+void pfile_str_heap_defer_add_handle(pfile_t *pf, cmd_t marker, value_t result,
+    value_t handle, boolean_t as_call)
+{
   pfile_str_heap_defer_t *d;
 
   /* the list owns a reference: on the error/abort path
@@ -108,14 +114,25 @@ void pfile_str_heap_defer_add_ex(pfile_t *pf, cmd_t marker, value_t result,
   if (result) {
     value_lock(result);
   }
+  if (handle) {
+    value_lock(handle);
+  }
   d = MALLOC(sizeof *d);
   if (!d) {
+    if (result) {
+      value_release(result);
+    }
+    if (handle) {
+      value_release(handle);
+    }
     pfile_log_syserr(pf, ENOMEM);
     return;
   }
   d->link    = pf->str_heap_defer;
   d->marker  = marker;
   d->result  = result;
+  d->handle  = handle;
+  d->proc    = pf->proc_active;
   d->as_call = as_call;
   pf->str_heap_defer = d;
 }
@@ -129,6 +146,9 @@ void pfile_str_heap_defer_free(pfile_t *pf)
     n = d->link;
     if (d->result) {
       value_release(d->result);
+    }
+    if (d->handle) {
+      value_release(d->handle);
     }
     FREE(d);
   }
@@ -3486,7 +3506,10 @@ static boolean_t pfile_ptr_flag_set(variable_t dst, flag_t flag)
   boolean_t rc;
 
   rc = BOOLEAN_FALSE;
-  if (!variable_flag_test(dst, flag)) {
+  /* a value-only pointer (e.g. a function's pointer return slot) has no
+   * backing variable; "setting" a flag on NULL is a no-op and must NOT
+   * count as a change, or pfile_lookup_mark's fixpoint never terminates */
+  if (dst && !variable_flag_test(dst, flag)) {
     rc = BOOLEAN_TRUE;
     variable_flag_set(dst, flag);
   }
@@ -3989,7 +4012,7 @@ void pfile_pointer_slot_bind_check(pfile_t *pf)
 
 /* --- dynamic string handle registry (heap compaction, Phase A) --- */
 
-static boolean_t pfile_dynstr_reg_has(pfile_t *pf, const variable_t var)
+boolean_t pfile_dynstr_reg_has(pfile_t *pf, variable_t var)
 {
   size_t i;
 

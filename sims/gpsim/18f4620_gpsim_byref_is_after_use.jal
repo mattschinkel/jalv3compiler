@@ -1,0 +1,46 @@
+-- ----------------------------------------------------------------------------
+-- Title: 18F4620 gpsim -- `_is_*()` after a byref formal use
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--   The hidden byref tag folds when every call site passes one type.  The
+--   `_is_array()` predicate may appear AFTER a use of the formal; the folded
+--   relation must still branch on its own constant bit, not on the STATUS<Z>
+--   left by the prior read.  Pre-fix, a zero first byte made the predicate
+--   take the else branch (out=0xAA); post-fix it takes the then branch and
+--   stores the loaded zero.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_out 0x00
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte out
+
+procedure sink(byref in a[]) is
+   var byte x
+   x = a[0]
+   if _is_array() then
+      out = x
+   else
+      out = 0xAA
+   end if
+end procedure
+
+const byte m1[] = {0, 66}
+
+procedure run() is
+   regression_begin_run()
+   out = 0x11
+   sink(m1)
+   regression_checkpoint()
+end procedure
+
+run()

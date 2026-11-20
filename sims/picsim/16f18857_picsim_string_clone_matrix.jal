@@ -66,7 +66,7 @@ procedure trio(byte in out a[], byte in out b[], byte in out c[]) is
    c[0] = "C"
 end procedure
 
-function mixed_ro(byte in out a[], byte in x[]) return byte is
+function mixed_ro(byte in out a[], byref in x[]) return byte is
    a[0] = "Z"
    if COUNT(x) == 3 then
       return x[0]

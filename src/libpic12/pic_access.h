@@ -73,7 +73,11 @@ typedef struct pic_access_key_ {
 /* a row may match any kind (the bind decision is about the facts) */
 #define PIC_ACCESS_KIND_ANY          0xFFFFFFFFu
 #define PIC_ACCESS_ACTION_NONE       0u
-#define PIC_ACCESS_ACTION_NOT_FAT_BIND 1u
+/* 1 is retired: G3 S1 made the scalar-pointee slot store FAT_BIND and
+ * S3/D4 made the array-pointee slot store FAT_BIND too, so the old
+ * NOT_FAT_BIND row lost its last reachable key; the engine-off path
+ * returns before the table is consulted.  The remaining numbers stay
+ * stable so no value is silently re-used. */
 #define PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP_IND 2u
 #define PIC_ACCESS_ACTION_PTR_WRITE_LOOKUP     3u
 #define PIC_ACCESS_ACTION_PTR_WRITE_LINEAR     4u

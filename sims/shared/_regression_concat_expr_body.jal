@@ -35,7 +35,7 @@ var sbyte s8 = -7
 -- - (none)
 -- Notes: the string actual is marshalled by value into `s`
 --------------------------------------------------------------------------------
-procedure show(byte in s[]) is
+procedure show(byref in s[]) is
    first_c = s[0]
 end procedure
 

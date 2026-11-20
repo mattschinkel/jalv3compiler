@@ -376,11 +376,11 @@ check in_passon_refused '
 include 18f4620
 pragma target string_heap_size 100
 var string s
-procedure inner(byte in y[]) is
+procedure inner(byref in y[]) is
   var volatile byte b = 0
   b = y[0]
 end procedure
-procedure outer(byte in x[]) is
+procedure outer(byref in x[]) is
   inner(x)
 end procedure
 s = "ab"

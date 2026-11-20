@@ -1,0 +1,38 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: byref scalar write
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins the byref alias write: `byref in out arr[]` with a `word z` actual;
+--    writes through arr[0]/arr[1] must land in z (low 0x78, high 0x56), with no
+--    copy-back step (the pointer aliases z's storage).
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 60000
+-- expect byte v__check_step 1
+-- expect byte v__ck_lo 0x78
+-- expect byte v__ck_hi 0x56
+-- @picsim_validate end
+
+include regression_16f18857_device
+include regression
+
+var word z = 0x1234
+var byte zlo at z
+var byte zhi at z + 1
+
+var volatile byte _ck_lo = 0
+var volatile byte _ck_hi = 0
+
+procedure bump(byref in out arr[]) is
+   arr[0] = 0x78
+   arr[1] = 0x56
+end procedure
+
+bump(z)
+_ck_lo = zlo
+_ck_hi = zhi
+regression_checkpoint()

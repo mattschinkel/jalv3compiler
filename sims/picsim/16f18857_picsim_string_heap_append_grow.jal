@@ -11,11 +11,18 @@
 --    block and both free runs were one byte short).  The append now uses the
 --    handle's spare capacity, grows geometrically, and compacts ONCE (the
 --    outlined string_heap_compact call) before retrying a failed growth.
+--    The growth at len 63 is that compaction; the outlined `string_put`
+--    body holds a COPY of the handle, so the retry must re-point it from
+--    the compaction's work table.  The reads below pin the whole payload,
+--    not just the last byte: s[0]=0, s[3]=3, s[40]=40, s[79]=79.
 --
 -- @picsim_validate begin
 -- steps: 3000000
 -- frequency_hz: auto
 -- expect byte v_len 80
+-- expect byte v_first 0
+-- expect byte v_c3 3
+-- expect byte v_mid 40
 -- expect byte v_last 79
 -- @picsim_validate end
 -- ----------------------------------------------------------------------------
@@ -29,6 +36,9 @@ include strings_dynamic
 var string s
 var volatile byte i
 var volatile byte len = 0
+var volatile byte first = 0
+var volatile byte c3 = 0
+var volatile byte mid = 0
 var volatile byte last = 0
 
 s = ""
@@ -36,6 +46,9 @@ for 80 using i loop
   s[i] = i
 end loop
 len = count(s)
+first = s[0]
+c3 = s[3]
+mid = s[40]
 last = s[79]
 
 forever loop

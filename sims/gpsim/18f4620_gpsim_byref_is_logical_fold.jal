@@ -1,0 +1,60 @@
+-- ----------------------------------------------------------------------------
+-- Title: 18F4620 gpsim -- folded `_is_*() & cond' and the live-tag twin
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--   A single-type call folds `_is_array() & (x == 0)' to `x == 0' (the
+--   `_is_*' relation disappears).  The same body called with a const array
+--   and a byte scalar keeps the runtime tag; both branches must follow the
+--   actual type.
+--
+-- @gpsim_validate begin
+-- steps: 200000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_fold_out 0x01
+-- expect byte v_live_out 0x02
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte fold_out
+var volatile byte live_out
+
+procedure fold_sink(byref in a[]) is
+   var byte x
+   x = a[0]
+   if _is_array() & (x == 0) then
+      fold_out = 1
+   else
+      fold_out = 2
+   end if
+end procedure
+
+procedure live_sink(byref in a[]) is
+   var byte x
+   x = a[0]
+   if _is_array() & (x == 0) then
+      live_out = 1
+   else
+      live_out = 2
+   end if
+end procedure
+
+const byte m1[] = {0, 66}
+var byte wv
+
+procedure run() is
+   regression_begin_run()
+   fold_out = 0x11
+   live_out = 0x11
+   fold_sink(m1)       -- uniform: folded, x == 0 -> 1
+   live_sink(m1)       -- live tag: array & (x == 0) -> 1
+   live_sink(wv)       -- live tag: byte & (x == 0) -> 2
+   regression_checkpoint()
+end procedure
+
+run()

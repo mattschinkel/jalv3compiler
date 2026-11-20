@@ -1,0 +1,48 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F18857 picsim witness: pragma byref_clone on restores the string clone
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    Pins T5: `pragma byref_clone on` (first line) rejoins a byref formal to
+--    the string-flavor clone candidate set.  A string actual passed to
+--    `byref in out arr[]` is cloned (one string-handle body) instead of the
+--    default one non-cloned body; the write through the formal still lands
+--    in the caller's string payload, `_is_string()` sees tag 3, and COUNT
+--    stays the text length.
+--
+-- ----------------------------------------------------------------------------
+
+-- @picsim_validate begin
+-- steps: 80000
+-- expect byte v__check_step 1
+-- expect byte v__ck_ch 66
+-- expect byte v__ck_is 1
+-- expect byte v__ck_cnt 2
+-- @picsim_validate end
+
+pragma target string_heap_size 64
+include regression_16f18857_device
+include regression
+include strings_dynamic
+
+var volatile byte _ck_ch = 0
+var volatile byte _ck_is = 0
+var volatile byte _ck_cnt = 0
+
+procedure setb(byref in out arr[]) is
+   pragma byref_clone on
+   arr[0] = 66
+   if _is_string() then
+      _ck_is = 1
+   end if
+   _ck_cnt = byte(COUNT(arr))
+end procedure
+
+var string sv
+
+sv = "AB"
+setb(sv)
+_ck_ch = sv[0]
+
+regression_checkpoint()

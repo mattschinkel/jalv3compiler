@@ -8,19 +8,27 @@
 --    appends on a 200-byte `_string_heap` (chunked on this core too).  The
 --    append uses spare capacity, grows geometrically, and compacts once
 --    before retrying a failed growth instead of fragmenting the heap.
+--    The growth at len 63 is a compaction, and the store body is the
+--    outlined `string_put` (a `string in out` FORMAL): the compaction moves
+--    the block and patches only the registered (global) handles, so the
+--    formal's copy used to keep the pre-move offset.  The retry then copied
+--    from -- and freed -- the stale block, whose free header landed in the
+--    new payload (`s[3..5]`) and left a bogus free block.  The reads below
+--    pin the whole payload, not just the last byte: s[0]=0, s[3]=3,
+--    s[40]=40, s[79]=79.
 --
 -- @gpsim_validate begin
 -- steps: 3000000
 -- frequency_hz: auto
 -- checkpoint_verify: off
---   (deliberate: this witness proves two VALUES, not a step count; the
+--   (deliberate: this witness proves VALUES, not a step count; the
 --    positive measurement and its failing negative control in the pin are
 --    the proof)
---    NOTE: the LAST-BYTE read is omitted here deliberately: a constant-index
---    read of a grown dynamic string (`last = s[79]`) stalls on this classic
---    14-bit core both before and after the append fix (pre-existing, separate
---    from the append growth this witness proves).
 -- expect byte v_len 80
+-- expect byte v_first 0
+-- expect byte v_c3 3
+-- expect byte v_mid 40
+-- expect byte v_last 79
 -- @gpsim_validate end
 -- ----------------------------------------------------------------------------
 
@@ -31,12 +39,20 @@ include strings_dynamic
 var string s
 var volatile byte i
 var volatile byte len = 0
+var volatile byte first = 0
+var volatile byte c3 = 0
+var volatile byte mid = 0
+var volatile byte last = 0
 
 s = ""
 for 80 using i loop
   s[i] = i
 end loop
 len = count(s)
+first = s[0]
+c3 = s[3]
+mid = s[40]
+last = s[79]
 
 forever loop
 end loop

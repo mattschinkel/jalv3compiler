@@ -1,0 +1,65 @@
+-- ----------------------------------------------------------------------------
+-- Title: PIC18F4620 gpsim — `at` overlay of a string's characters via byref
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    A `var byte c at x[N]` overlay on a `byref in/out x[]` formal that
+--    received a heap string aliases the string's PAYLOAD, not its handle:
+--    x[N] is the Nth character.  Pins the read side (x[0]/x[4] over "abcde"
+--    -> 'a'/'e') and the write side (x[0]=0x5A, x[4]=0x59, read back through
+--    the string pointer p[0]/p[4] -> 'Z'/'Y').  The direct `at <string-var>`
+--    form aliases the handle and is rejected (see
+--    unit-tests/test_at_string_overlay_reject.sh).
+--
+-- @gpsim_validate begin
+-- steps: 600000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v__ck0 0x61
+-- expect byte v__ck1 0x65
+-- expect byte v__ck2 0x5A
+-- expect byte v__ck3 0x59
+-- @gpsim_validate end
+--
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+pragma target string_heap_size 64
+
+var string s
+var pointer p as var string
+var volatile byte _ck0 = 0
+var volatile byte _ck1 = 0
+var volatile byte _ck2 = 0
+var volatile byte _ck3 = 0
+
+procedure peek_byref(byref in x[]) is
+   var byte c0 at x[0]
+   var byte c4 at x[4]
+   _ck0 = c0
+   _ck1 = c4
+end procedure
+
+procedure poke_byref(byref in out x[]) is
+   var byte c0 at x[0]
+   var byte c4 at x[4]
+   c0 = 0x5A
+   c4 = 0x59
+end procedure
+
+procedure run() is
+   regression_begin_run()
+   s = "abcde"
+   peek_byref(s)
+   regression_checkpoint()
+   poke_byref(s)
+   p is s
+   _ck2 = p[0]
+   _ck3 = p[4]
+   regression_checkpoint()
+end procedure
+
+run()

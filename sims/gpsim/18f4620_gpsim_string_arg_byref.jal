@@ -1,5 +1,5 @@
 -- ----------------------------------------------------------------------------
--- Title: PIC18F4620 gpsim — a string actual into a `byte in x[]` formal
+-- Title: PIC18F4620 gpsim — a string actual into a `byref in x[]` formal
 -- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
 -- Compiler: JALv2
 --
@@ -34,14 +34,14 @@ var volatile byte pok = 0
 var volatile byte mok = 0
 
 -- pure reader: no string is allocated here
-procedure pure_check(byte in x[], word in n) is
+procedure pure_check(byref in x[], word in n) is
    if (n == 5) & (x[0] == "a") & (x[4] == "e") then
       ok = 1
    end if
 end procedure
 
 -- tainted: appends to the source string through the global, reallocating it
-procedure mut_check(byte in x[], word in n) is
+procedure mut_check(byref in x[], word in n) is
    s = s & "!"
    if (n == 5) & (x[0] == "a") & (x[4] == "e") then
       mok = 1

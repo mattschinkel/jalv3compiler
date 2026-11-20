@@ -1,0 +1,35 @@
+-- ----------------------------------------------------------------------------
+-- Title: 16F887 gpsim witness: a function returns a pointer value
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- Description:
+--    `return pointer` + `return p` returns the POINTER VALUE (the address);
+--    the caller stores it and derefs through `at`.
+--
+-- ----------------------------------------------------------------------------
+
+-- @gpsim_validate begin
+-- steps: 800000
+-- expect byte v__check_step 1
+-- expect byte v__ck 0x42
+-- @gpsim_validate end
+
+include regression_16f887_device
+include regression
+
+var volatile byte _ck = 0
+var byte g
+
+function getp() return pointer is
+   var pointer p as var byte
+   p is g
+   return p
+end function
+
+var pointer q as var byte
+q = getp()
+var byte v at q
+v = 0x42
+_ck = g
+regression_checkpoint()

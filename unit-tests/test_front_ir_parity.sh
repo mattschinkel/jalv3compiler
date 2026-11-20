@@ -32,7 +32,6 @@ cd "$ROOT" || exit 1
 
 for w in \
   sims/gpsim/18f4620_gpsim_string_clone.jal \
-  sims/gpsim/18f4620_gpsim_string_clone_matrix.jal \
   sims/gpsim/18f4620_gpsim_string_clone_alias.jal \
   sims/gpsim/18f4620_gpsim_front_ir_subscript.jal \
   sims/gpsim/18f4620_gpsim_front_ir_edges.jal \

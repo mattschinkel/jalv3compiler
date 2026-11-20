@@ -1,0 +1,59 @@
+-- ----------------------------------------------------------------------------
+-- Title: 18F4620 gpsim -- nested `_is_*()` predicates, folded and live
+-- Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--   Several `_is_*()` predicates at different nesting levels and after a use
+--   of the byref formal.  The first call is a const byte array (tag folds);
+--   the second passes a byte scalar, so the same routine keeps the runtime
+--   tag.  The nested then/else choices must follow the actual type:
+--   array -> out = a[0] (0), out2 = a[1] (0x42);
+--   scalar -> out = 0xBB (outer else), out2 left at 0x42.
+--
+-- @gpsim_validate begin
+-- steps: 400000
+-- frequency_hz: auto
+-- expect byte v__check_step 1
+-- expect byte v_out 0xBB
+-- expect byte v_out2 0x42
+-- @gpsim_validate end
+-- ----------------------------------------------------------------------------
+
+include regression_18f4620_device
+include regression
+
+var volatile byte out
+var volatile byte out2
+
+procedure sink(byref in a[]) is
+   var byte x
+   var byte y
+   x = a[0]
+   if _is_array() then
+      y = a[1]
+      if _is_string() then
+         out = 0xAA
+      else
+         out = x
+      end if
+      out2 = y
+   else
+      out = 0xBB
+   end if
+end procedure
+
+const byte m1[] = {0, 66}
+var byte wv
+
+procedure run() is
+   regression_begin_run()
+   out = 0x11
+   out2 = 0x22
+   sink(m1)
+   out = 0x33
+   sink(wv)
+   regression_checkpoint()
+end procedure
+
+run()

@@ -1,0 +1,51 @@
+-- ------------------------------------------------------
+-- Title: 16F887 gpsim witness: byref big-array read + write across FSR holes
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv3
+--
+-- Description:
+--    Pins the byref chunk walk for a 300-byte actual on 16F887.  `big[300]`
+--    is placed across the SFR holes as 4 physical FSR chunks, so a byref
+--    formal must walk the actual's chunk map rather than address linearly.
+--    `arr[0]`/`arr[299]` written through byref land in `big[0]`/`big[299]`
+--    (0x78/0x56), and the same offsets read back through byref return those
+--    bytes.
+--
+-- @gpsim_validate begin
+-- steps: 60000
+-- frequency_hz: auto
+-- expect byte v__check_step 2
+-- expect byte v__ck_w0 0x78
+-- expect byte v__ck_w1 0x56
+-- expect byte v__ck_lo 0x78
+-- expect byte v__ck_hi 0x56
+-- @gpsim_validate end
+-- ------------------------------------------------------
+
+include regression_16f887_device
+include regression
+
+var volatile byte _ck_lo = 0
+var volatile byte _ck_hi = 0
+var volatile byte _ck_w0 = 0
+var volatile byte _ck_w1 = 0
+
+procedure peek(byref in arr[]) is
+   _ck_lo = arr[0]
+   _ck_hi = arr[299]
+end procedure
+
+procedure bump(byref in out arr[]) is
+   arr[0] = 0x78
+   arr[299] = 0x56
+end procedure
+
+var byte big[300]
+
+bump(big)
+_ck_w0 = big[0]
+_ck_w1 = big[299]
+regression_checkpoint()
+peek(big)
+regression_checkpoint()

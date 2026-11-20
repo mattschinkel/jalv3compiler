@@ -1,0 +1,304 @@
+-- Title: PIC16F18857 byref reference-parameters feature tour
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: comprehensive exercise of `byref` reference parameters on the
+--   enhanced-midrange PIC16F18857: scalar/array/string/pointer actuals, `at`
+--   re-typing overlays, the hidden type tag + `_is_*` predicates, no-clone,
+--   `pragma byref_clone on`, `pragma inline`, and the single-type tag fold.
+--   Self-checks and reports pass/fail over serial, like the string_dynamic
+--   demo.
+--
+-- Requires: serial_hardware, print, format, strings_dynamic
+--
+
+-- @picsim_validate begin
+-- steps: 10000000
+-- expect byte v__checks 13
+-- uart_contains: ALL BYREF CHECKS PASSED
+-- uart_contains: ##DONE##
+-- @picsim_validate end
+
+include 16f18857                     -- target PICmicro
+pragma target clock 32_000_000
+pragma target OSC      OFF           -- internal oscillator
+pragma target RSTOSC   HFINT32       -- power-up clock select (32 MHz)
+pragma target CLKOUTEN DISABLED      -- no clock output
+pragma target WDT      DISABLED      -- watchdog
+pragma target BROWNOUT DISABLED      -- no brownout reset
+pragma target FCMEN    DISABLED      -- no clock monitoring
+pragma target CSWEN    ENABLED       -- allow OSCCON1 writes
+pragma target LVP      ENABLED       -- low voltage programming
+pragma target MCLR     EXTERNAL      -- external reset
+--
+enable_digital_io()                  -- make all pins digital I/O
+_usec_delay (100_000)                -- wait for power to stabilize
+
+-- serial on EUSART (C6/C7 via PPS, the JALPIC One wiring)
+const serial_hw_baudrate  = 115200
+include pps
+pps_control_lock(FALSE)
+RC6PPS = PPS_TX
+RXPPS  = PPS_RC7
+pps_control_lock(TRUE)
+alias pin_TX is pin_C6
+alias pin_TX_direction is pin_C6_direction
+alias pin_RX is pin_C7
+alias pin_RX_direction is pin_C7_direction
+include serial_hardware
+serial_hw_init()
+alias serial_write is serial_hw_write
+alias serial_read is serial_hw_read
+alias serial_data is serial_hw_data
+alias serial_data_available is serial_hw_data_available
+include print
+include format
+pragma target string_heap_size 96
+pragma string index byte
+include strings_dynamic
+
+var volatile byte _checks = 0
+var volatile byte _ck_ptr = 0
+var volatile byte _kind = 0
+
+-- ---- byref feature procedures -------------------------------------------
+
+-- (1) word read-modify-write through an `at` overlay (reads BOTH bytes, so
+-- the carry from the low byte lands in the high byte)
+procedure bump_word(byref in out arr[]) is
+   var word v at arr
+   v = v + 1
+end procedure
+
+-- (2) byte-offset overlay into the view
+procedure set_hi(byref in out arr[]) is
+   var byte hi at arr + 1
+   hi = 0xAB
+end procedure
+
+-- (3) write an array actual through the view
+procedure fill3(byref in out arr[]) is
+   arr[0] = 0x11
+   arr[1] = 0x22
+   arr[2] = 0x33
+end procedure
+
+-- (4) a string actual is element-accessible with no clone
+procedure upcase_first(byref in out arr[]) is
+   arr[0] = 72
+end procedure
+
+-- (5) branch on the hidden runtime tag: one body, six actual types.
+-- independent `if`s (not if/elsif): under the future bitmask tag a single
+-- actual (e.g. pointer-to-byte) may fire MORE than one predicate.  Each
+-- fired predicate ORs its bit into `_kind` so the tour can verify it.
+procedure kind_of(byref in arr[]) is
+   _kind = 0
+   if _is_byte()    then
+      _kind = _kind | 0x01
+      print_string(serial_data, "byte ")
+   end if
+   if _is_word()    then
+      _kind = _kind | 0x02
+      print_string(serial_data, "word ")
+   end if
+   if _is_dword()   then
+      _kind = _kind | 0x04
+      print_string(serial_data, "dword ")
+   end if
+   if _is_string()  then
+      _kind = _kind | 0x08
+      print_string(serial_data, "string ")
+   end if
+   if _is_array()   then
+      _kind = _kind | 0x10
+      print_string(serial_data, "array ")
+   end if
+   if _is_pointer() then
+      _kind = _kind | 0x20
+      print_string(serial_data, "pointer ")
+   end if
+end procedure
+
+-- (6) single-type routine: every call passes a word, so the tag folds away
+procedure marker_word(byref in out arr[]) is
+   var byte lo at arr
+   lo = 0x5A
+end procedure
+
+-- (7) `pragma byref_clone on` restores the string-flavor clone
+procedure first_is_z(byref in out arr[]) is
+   pragma byref_clone on
+   arr[0] = 90
+end procedure
+
+-- (8) a pointer actual aliases its POINTEE (tag 5)
+procedure store_via_pointer(byref in out arr[]) is
+   var byte b at arr
+   b = 0x77
+   if _is_pointer() then
+      _ck_ptr = 1
+   end if
+end procedure
+
+-- (9) `pragma inline` composes with a plain in-out parameter
+procedure inline_bump(byte in out data) is
+   pragma inline
+   data = data + 1
+end procedure
+
+-- ---- main tour ----------------------------------------------------------
+
+var word z = 0x12FF
+var byte buf[3] = { 0, 0, 0 }
+var string s
+var volatile byte hi
+var byte bv = 0x2B
+var dword dv = 0x11223344
+var pointer p as var byte
+var byte ptarget[2] = { 0, 0 }
+var byte inc = 8
+
+s = "hello"
+p is ptarget[0]
+
+print_string(serial_data, "========================================\r\n")
+print_string(serial_data, "  JALv2 PIC16F18857 demo: byref params\r\n")
+print_string(serial_data, "========================================\r\n")
+
+-- (1) word read-modify-write (carry into the high byte)
+bump_word(z)
+if (byte(z) == 0x00) & (byte(z >> 8) == 0x13) then
+   _checks = _checks + 1
+   print_string(serial_data, "word RMW carry:   PASS\r\n")
+else
+   print_string(serial_data, "word RMW carry:   FAIL\r\n")
+end if
+
+-- (2) byte-offset overlay
+set_hi(z)
+hi = byte(z >> 8)
+if hi == 0xAB then
+   _checks = _checks + 1
+   print_string(serial_data, "offset overlay:   PASS\r\n")
+else
+   print_string(serial_data, "offset overlay:   FAIL\r\n")
+end if
+
+-- (3) array actual
+fill3(buf)
+if (buf[0] == 0x11) & (buf[1] == 0x22) & (buf[2] == 0x33) then
+   _checks = _checks + 1
+   print_string(serial_data, "array actual:     PASS\r\n")
+else
+   print_string(serial_data, "array actual:     FAIL\r\n")
+end if
+
+-- (4) string actual, no clone
+upcase_first(s)
+if s[0] == 72 then
+   _checks = _checks + 1
+   print_string(serial_data, "string actual:    PASS\r\n")
+else
+   print_string(serial_data, "string actual:    FAIL\r\n")
+end if
+
+-- (5) tag predicates: one body, six types
+print_string(serial_data, "tag predicates:   ")
+kind_of(bv)
+kind_of(z)
+kind_of(dv)
+kind_of(s)
+kind_of(buf)
+print_crlf(serial_data)
+kind_of(bv)
+if _kind == 0x01 then
+   _checks = _checks + 1
+   print_string(serial_data, "tag _is_byte:     PASS\r\n")
+else
+   print_string(serial_data, "tag _is_byte:     FAIL\r\n")
+end if
+kind_of(z)
+if _kind == 0x02 then
+   _checks = _checks + 1
+   print_string(serial_data, "tag _is_word:     PASS\r\n")
+else
+   print_string(serial_data, "tag _is_word:     FAIL\r\n")
+end if
+kind_of(dv)
+if _kind == 0x04 then
+   _checks = _checks + 1
+   print_string(serial_data, "tag _is_dword:    PASS\r\n")
+else
+   print_string(serial_data, "tag _is_dword:    FAIL\r\n")
+end if
+kind_of(s)
+if _kind == 0x08 then
+   _checks = _checks + 1
+   print_string(serial_data, "tag _is_string:   PASS\r\n")
+else
+   print_string(serial_data, "tag _is_string:   FAIL\r\n")
+end if
+kind_of(buf)
+if _kind == 0x10 then
+   _checks = _checks + 1
+   print_string(serial_data, "tag _is_array:    PASS\r\n")
+else
+   print_string(serial_data, "tag _is_array:    FAIL\r\n")
+end if
+
+-- (6) single-type routine
+marker_word(z)
+if byte(z) == 0x5A then
+   _checks = _checks + 1
+   print_string(serial_data, "single-type fold: PASS\r\n")
+else
+   print_string(serial_data, "single-type fold: FAIL\r\n")
+end if
+
+-- (7) pragma byref_clone on
+first_is_z(s)
+if s[0] == 90 then
+   _checks = _checks + 1
+   print_string(serial_data, "byref_clone:      PASS\r\n")
+else
+   print_string(serial_data, "byref_clone:      FAIL\r\n")
+end if
+
+-- (8) pointer actual aliases its pointee
+store_via_pointer(p)
+if (ptarget[0] == 0x77) & (ptarget[1] == 0) & (_ck_ptr == 1) then
+   _checks = _checks + 1
+   print_string(serial_data, "pointer actual:   PASS\r\n")
+else
+   print_string(serial_data, "pointer actual:   FAIL\r\n")
+end if
+
+-- (9) pragma inline
+inline_bump(inc)
+if inc == 9 then
+   _checks = _checks + 1
+   print_string(serial_data, "pragma inline:    PASS\r\n")
+else
+   print_string(serial_data, "pragma inline:    FAIL\r\n")
+end if
+
+print_string(serial_data, "----------------------------------------\r\n")
+print_string(serial_data, "checks passed: ")
+print_byte_dec(serial_data, _checks)
+print_string(serial_data, " of 13\r\n")
+if _checks == 13 then
+   print_string(serial_data, "ALL BYREF CHECKS PASSED\r\n")
+else
+   print_string(serial_data, "SOME CHECKS FAILED - see sections above\r\n")
+end if
+print_string(serial_data, "Sample complete.\r\n")
+print_string(serial_data, "##DONE##")
+print_crlf(serial_data)
+
+forever loop
+   _usec_delay(1_000_000)
+end loop
