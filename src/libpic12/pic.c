@@ -6418,6 +6418,10 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
   int           cmd_count;
   boolean_t     u3_fault_applied;
 
+  /* the pointer-bind consumers walk the IR (the command list) instead of a
+   * registry; record the head once per emission pass */
+  pic_var_pointer_bind_ir_set(cmd);
+
   u3_fault_applied = BOOLEAN_FALSE;
   fflush(stdout);
 

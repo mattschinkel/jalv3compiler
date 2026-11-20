@@ -106,6 +106,7 @@ void pic_var_reset(void);
 void pic_var_call_actual_bump(variable_t var);
 boolean_t pic_var_pointer_target_get(size_t ix, variable_t *var);
 void pic_var_pointer_bind_record(variable_t pvar, variable_t tvar);
+void pic_var_pointer_bind_ir_set(const cmd_t cmd_head);
 void pic_var_pointer_bind_escape(variable_t pvar);
 boolean_t pic_var_pointer_bind_escaped_var(variable_t pvar);
 boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar);

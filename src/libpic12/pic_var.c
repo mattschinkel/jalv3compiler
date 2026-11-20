@@ -19,6 +19,8 @@
 #include "../libutils/mem.h"
 #include "../libcore/pf_proc.h"
 #include "../libcore/cmd_brch.h"
+#include "../libcore/cmd_op.h"
+#include "../libcore/operator.h"
 #include "pic_msg.h"
 #include "pic_stvar.h"
 #include "pic_inst.h"
@@ -75,12 +77,6 @@ typedef struct pic_banked_edge_ {
   variable_t b;
   unsigned   ct;
 } pic_var_banked_edge_t;
-
-typedef struct pic_var_ptr_bind_ {
-  variable_t pvar;
-  variable_t tvar;
-  boolean_t  escaped;
-} pic_var_ptr_bind_t;
 
 /* a variable placed after placement ran, and the placement generation its
  * address belongs to (see pic_var_late_replace_all) */
@@ -140,9 +136,6 @@ typedef struct pic_var_state_ {
   variable_t                  *ptr_targets;
   size_t                       ptr_targets_used;
   size_t                       ptr_targets_alloc;
-  pic_var_ptr_bind_t          *ptr_binds;
-  size_t                       ptr_binds_used;
-  size_t                       ptr_binds_alloc;
   variable_t                  *call_actuals;
   size_t                       call_actuals_used;
   size_t                       call_actuals_alloc;
@@ -153,6 +146,7 @@ typedef struct pic_var_state_ {
   size_t                       openarray_strview_fed_used;
   size_t                       openarray_strview_fed_alloc;
   cmd_t                        openarray_cmd_head; /* set in pass 2 */
+  cmd_t                        bind_cmd_head;      /* pointer-bind IR head */
   /* per-formal runtime chunk maps (see pic_var_chunk_prepare_emit) */
   pic_var_formal_map_t        *formal_maps;
   size_t                       formal_maps_used;
@@ -235,7 +229,6 @@ void pic_var_reset(void)
   pic_var_trials_free();                 /* layout snapshot, if one is held */
   FREE(pic_var.banked_edges);
   FREE(pic_var.ptr_targets);
-  FREE(pic_var.ptr_binds);
   FREE(pic_var.call_actuals);
   FREE(pic_var.openarray_strview_fed);
   FREE(pic_var.formal_maps);
@@ -608,78 +601,52 @@ boolean_t pic_var_pointer_target_test(variable_t var)
  * chunk map. The pass-1-end scan marks escaping pointers; a holed
  * placement refuses only when some ESCAPED pointer binds the array. */
 
+void pic_var_pointer_bind_ir_set(const cmd_t cmd_head)
+{
+  pic_var.bind_cmd_head = cmd_head;
+}
+
 void pic_var_pointer_bind_record(variable_t pvar, variable_t tvar)
 {
-  size_t ii;
-
   if (!pvar || !tvar
       || (VARIABLE_NONE == pvar) || (VARIABLE_NONE == tvar)) {
     return;
   }
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if ((pic_var.ptr_binds[ii].pvar == pvar)
-        && (pic_var.ptr_binds[ii].tvar == tvar)) {
-      return;
-    }
-  }
-  if (pic_var.ptr_binds_used == pic_var.ptr_binds_alloc) {
-    size_t resize;
-    void  *tmp;
-
-    resize = pic_var.ptr_binds_alloc ? 2 * pic_var.ptr_binds_alloc : 32;
-    tmp = REALLOC(pic_var.ptr_binds, resize * sizeof(*pic_var.ptr_binds));
-    if (!tmp) {
-      return;
-    }
-    pic_var.ptr_binds       = tmp;
-    pic_var.ptr_binds_alloc = resize;
-  }
-  pic_var.ptr_binds[pic_var.ptr_binds_used].pvar     = pvar;
-  pic_var.ptr_binds[pic_var.ptr_binds_used].tvar     = tvar;
-  pic_var.ptr_binds[pic_var.ptr_binds_used].escaped  = BOOLEAN_FALSE;
-  pic_var.ptr_binds_used++;
+  variable_flag_set(pvar, VARIABLE_FLAG_PTR_BOUND);
 }
 
 /* is this variable the pointer side of any recorded bind? */
 boolean_t pic_var_pointer_bind_is_pvar(variable_t pvar)
 {
-  size_t ii;
-
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if (pic_var.ptr_binds[ii].pvar == pvar) {
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
+  return variable_flag_test(pvar, VARIABLE_FLAG_PTR_BOUND);
 }
 
 void pic_var_pointer_bind_escape(variable_t pvar)
 {
-  size_t    ii;
-  boolean_t changed;
-
-
-  changed = BOOLEAN_FALSE;
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if (pic_var.ptr_binds[ii].pvar == pvar) {
-      pic_var.ptr_binds[ii].escaped = BOOLEAN_TRUE;
-      changed = BOOLEAN_TRUE;
-    }
+  if (!pic_var_pointer_bind_is_pvar(pvar)) {
+    return;
   }
-  if (changed) {
-    pic_access_generation_bump();
-  }
+  variable_flag_set(pvar, VARIABLE_FLAG_PTR_ESCAPED);
+  pic_access_generation_bump();
 }
 
 /* does any ESCAPED pointer bind this target? (drives the holed
  * placement refusal; unescaped binds walk instead) */
 static boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar)
 {
-  size_t ii;
+  cmd_t cmd;
 
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if ((pic_var.ptr_binds[ii].tvar == tvar)
-        && pic_var.ptr_binds[ii].escaped) {
+  for (cmd = pic_var.bind_cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    variable_t pvar;
+
+    if (OPERATOR_POINTER_ASSIGN != cmd_optype_get(cmd)) {
+      continue;
+    }
+    if (value_variable_get(cmd_opval1_get(cmd)) != tvar) {
+      continue;
+    }
+    pvar = value_variable_get(cmd_opdst_get(cmd));
+    if (variable_flag_test(pvar, VARIABLE_FLAG_PTR_ESCAPED)) {
       return BOOLEAN_TRUE;
     }
   }
@@ -691,7 +658,7 @@ static boolean_t pic_var_pointer_bind_escaped_target(variable_t tvar)
  * does flat linear arithmetic over the holes -- refuse once, cleanly */
 void pic_var_pointer_bind_check_escaped(pfile_t *pf)
 {
-  size_t ii;
+  cmd_t cmd;
 
   /* F2b/F3a: with fat pointers on, an escaped bind to a chunked target is
    * the shape the tag exists for -- the deref dispatches on the id instead
@@ -701,17 +668,37 @@ void pic_var_pointer_bind_check_escaped(pfile_t *pf)
     return;
   }
 
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if (pic_var.ptr_binds[ii].escaped
-        && pic_variable_chunk_map_find(pic_var.ptr_binds[ii].tvar)) {
+  for (cmd = pic_var.bind_cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    variable_t pvar;
+    variable_t tvar;
+    cmd_t      prev;
+
+    if (OPERATOR_POINTER_ASSIGN != cmd_optype_get(cmd)) {
+      continue;
+    }
+    pvar = value_variable_get(cmd_opdst_get(cmd));
+    tvar = value_variable_get(cmd_opval1_get(cmd));
+    /* the old registry deduped (pvar, tvar): refuse once per pair */
+    for (prev = pic_var.bind_cmd_head; prev != cmd;
+         prev = cmd_link_get(prev)) {
+      if ((OPERATOR_POINTER_ASSIGN == cmd_optype_get(prev))
+          && (value_variable_get(cmd_opdst_get(prev)) == pvar)
+          && (value_variable_get(cmd_opval1_get(prev)) == tvar)) {
+        break;
+      }
+    }
+    if (prev != cmd) {
+      continue;
+    }
+    if (variable_flag_test(pvar, VARIABLE_FLAG_PTR_ESCAPED)
+        && pic_variable_chunk_map_find(tvar)) {
       pfile_log(pf, PFILE_LOG_ERR,
           "'%s' is bound to a banked (chunked) target and escapes this "
           "program's dereferences (stored, passed, compared, or "
           "re-bound): pointer arithmetic is linear and cannot walk the "
           "holes. Dereference it only through subscripts, keep the "
           "array within one bank, or use the large_array library.",
-          variable_name_get(pic_var.ptr_binds[ii].pvar)
-            ? variable_name_get(pic_var.ptr_binds[ii].pvar) : "?");
+          variable_name_get(pvar) ? variable_name_get(pvar) : "?");
     }
   }
 }
@@ -720,28 +707,34 @@ void pic_var_pointer_bind_check_escaped(pfile_t *pf)
  * case: the value, not a compile-time map, carries the address). */
 boolean_t pic_var_pointer_bind_escaped_var(variable_t pvar)
 {
-  size_t ii;
-
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if ((pic_var.ptr_binds[ii].pvar == pvar)
-        && pic_var.ptr_binds[ii].escaped) {
-      return BOOLEAN_TRUE;
-    }
-  }
-  return BOOLEAN_FALSE;
+  return variable_flag_test(pvar, VARIABLE_FLAG_PTR_ESCAPED);
 }
 
 /* the unescaped bind target for a pointer variable, if the target
  * carries a chunk map (the walk-eligible case) */
 variable_t pic_var_pointer_bind_walk_target(variable_t pvar)
 {
-  size_t ii;
+  cmd_t cmd;
 
-  for (ii = 0; ii < pic_var.ptr_binds_used; ii++) {
-    if ((pic_var.ptr_binds[ii].pvar == pvar)
-        && !pic_var.ptr_binds[ii].escaped
-        && pic_variable_chunk_map_find(pic_var.ptr_binds[ii].tvar)) {
-      return pic_var.ptr_binds[ii].tvar;
+  if (!pic_var_pointer_bind_is_pvar(pvar)
+      || variable_flag_test(pvar, VARIABLE_FLAG_PTR_ESCAPED)) {
+    return VARIABLE_NONE;
+  }
+  for (cmd = pic_var.bind_cmd_head; cmd; cmd = cmd_link_get(cmd)) {
+    variable_t tvar;
+
+    if (OPERATOR_POINTER_ASSIGN != cmd_optype_get(cmd)) {
+      continue;
+    }
+    if (value_variable_get(cmd_opdst_get(cmd)) != pvar) {
+      continue;
+    }
+    tvar = value_variable_get(cmd_opval1_get(cmd));
+    if ((0 == tvar) || (VARIABLE_NONE == tvar)) {
+      continue;
+    }
+    if (pic_variable_chunk_map_find(tvar)) {
+      return tvar;
     }
   }
   return VARIABLE_NONE;
@@ -1981,7 +1974,6 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
   size_t              pi;
   size_t              fi;
   unsigned            round;
-  size_t              fbi;
   cmd_t               cmd;
   pic_var_u3_pair_t  *pairs;
   size_t              pair_ct;
@@ -2001,22 +1993,30 @@ void pic_var_chunk_prepare_emit(pfile_t *pf)
    * walk, so register it (and mark the bind escaped) before any body is
    * emitted -- ids have to be stable across every emission pass. */
   if (pic_fat_pointers_enabled(pf)) {
-    for (fbi = 0; fbi < pic_var.ptr_binds_used; fbi++) {
-      variable_t tvar;
+    cmd_t bcmd;
 
-      tvar = pic_var.ptr_binds[fbi].tvar;
-      if ((0 == tvar) || (VARIABLE_NONE == tvar)
-          || !pic_mem_object_is_chunked(tvar)) {
+    for (bcmd = pic_var.bind_cmd_head; bcmd; bcmd = cmd_link_get(bcmd)) {
+      variable_t bpvar;
+      variable_t btvar;
+
+      if (OPERATOR_POINTER_ASSIGN != cmd_optype_get(bcmd)) {
+        continue;
+      }
+      bpvar = value_variable_get(cmd_opdst_get(bcmd));
+      btvar = value_variable_get(cmd_opval1_get(bcmd));
+      if ((0 == btvar) || (VARIABLE_NONE == btvar)
+          || !pic_mem_object_is_chunked(btvar)) {
         continue;
       }
       /* F3: an ESCAPED bind is the case fat pointers exist for -- the deref
        * no longer knows the object, so the value carries the id.  The phase
        * gate still forces the unescaped case (the F2 witnesses need it). */
-      if (pic_var.ptr_binds[fbi].escaped || pic_fat_force_enabled(pf)) {
+      if (variable_flag_test(bpvar, VARIABLE_FLAG_PTR_ESCAPED)
+          || pic_fat_force_enabled(pf)) {
         unsigned id;
 
-        (void) pic_fat_object_register(pf, tvar, &id);
-        pic_var.ptr_binds[fbi].escaped = BOOLEAN_TRUE;
+        (void) pic_fat_object_register(pf, btvar, &id);
+        variable_flag_set(bpvar, VARIABLE_FLAG_PTR_ESCAPED);
       }
     }
   }

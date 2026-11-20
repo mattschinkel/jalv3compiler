@@ -193,8 +193,16 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** P1.
 - **Depends on:** nothing.
 
-## U3 residual — the pointer-bind registry (`ptr_binds`)
+## U3 residual — the pointer-bind registry (`ptr_binds`) (DONE 2026-11-16 — commit `c6fe0ac`)
 
+- **Landed (2026-11-16):** Approach B, not the "object model" wording above.
+  `pic_var.ptr_binds` and `pic_var_ptr_bind_t` are deleted; the escaped bit is
+  `VARIABLE_FLAG_PTR_ESCAPED`, the bound predicate `VARIABLE_FLAG_PTR_BOUND`,
+  and the four consumers (`walk_target`, `escaped_target`, `check_escaped`, the
+  fat pre-registration loop) walk the IR command list (`bind_cmd_head`, set at
+  the top of `pic_cmd_generate`).  See
+  `docs/fixes/2026/fix_ptr_binds_registry_ir_20261116.md` and
+  `docs/investigations/ptr_binds_recipe_fallback_20261115.md`.
 - **What:** Move the pointer-bind target and its escaped bit onto the object
   model and delete `pic_var.ptr_binds`, the twin of the pair-registry
   deletion U3 landed.  `pic_var_pointer_bind_record` still appends

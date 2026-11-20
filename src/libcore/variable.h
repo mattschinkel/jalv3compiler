@@ -140,6 +140,14 @@ __extension__ typedef unsigned __int128 variable_const_t;
 #define VARIABLE_FLAG_PTR_EEPROM 0x0400U
 #define VARIABLE_FLAG_PTR_FLASH  0x0800U
 
+/* the pointer's bind escapes (the value, not a compile-time map, carries the
+ * object id); the fat producer fallback and the classic refusal read this */
+#define VARIABLE_FLAG_PTR_ESCAPED 0x4000U
+
+/* the pointer has at least one recorded bind (a (pointer, target) pair in
+ * ptr_binds); the escape scan and the classic walk read this */
+#define VARIABLE_FLAG_PTR_BOUND   0x8000U
+
 /* this variable is available in all banks; rp1:rp0/BSR will be ignord */
 #define VARIABLE_FLAG_SHARED     0x1000U
 
