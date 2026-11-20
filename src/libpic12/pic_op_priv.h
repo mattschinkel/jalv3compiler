@@ -6,7 +6,8 @@
  **           (c) 2020-2025, Rob Jansen
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Authors: Kyle A. York, Rob Jansen
+ ** Author: Matthew Schinkel, 2026
  ** Changes: created by the 2026-10-31 pic_op.c decomposition.
  **
  ** pic_op.c (8751 lines) is now one translation unit per operator

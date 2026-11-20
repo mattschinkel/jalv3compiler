@@ -5,6 +5,9 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
+ **
  ************************************************************/
 #ifndef cmd_brch_h__
 #define cmd_brch_h__

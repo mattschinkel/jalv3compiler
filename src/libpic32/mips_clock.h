@@ -1,8 +1,13 @@
-/* mips_clock.h -- PIC32MZ clock-tree solver (pragma target OSC/clock)
- *
- * Part of the jalv3compiler fork.  Author: Matthew Schinkel, 2026.
- * Design: docs/investigations/pic32_clock_select_plan.md
- */
+/************************************************************
+ **
+ ** mips_clock.h : PIC32MZ clock-tree solver (pragma target OSC/clock)
+ **
+ ** Copyright (c) 2026, Matthew Schinkel
+ ** All rights reserved
+ **
+ ** Design: docs/investigations/pic32_clock_select_plan.md
+ **
+ ************************************************************/
 #ifndef MIPS_CLOCK_H__
 #define MIPS_CLOCK_H__
 

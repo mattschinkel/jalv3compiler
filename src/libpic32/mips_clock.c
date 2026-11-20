@@ -1,28 +1,32 @@
-/* mips_clock.c -- PIC32MZ EF clock-tree solver
- *
- * Part of the jalv3compiler fork.  Author: Matthew Schinkel, 2026.
- *
- * The user states the speed and the source:
- *   pragma target clock 200_000_000
- *   pragma target OSC    FRC_SPLL
- * and this file derives the DEVCFG1 FNOSC/FCKSM/POSCMOD and DEVCFG2
- * SPLL fields (DFP ATDF encodings; probe: PIC32MZ-EF_DFP 1.6.179),
- * emits them into the HEX, and materializes the _osc_* consts the
- * device-file osc_select() helper composes at run time.
- *
- * Encodings (PIC32MZ1024EFH064.atdf):
- *   FNOSC   (DEVCFG1 2:0)   FRCDIV=0 SPLL=1 POSC=2   (MZ: 110 reserved)
- *   FCKSM   (DEVCFG1 16:15) CSECMD=1 (switching must stay enabled)
- *   POSCMOD (DEVCFG1 13:12) EC=0 HS=2 OFF=3
- *   FPLLIDIV (DEVCFG2 2:0)  field = div-1 (DIV_1=0 .. DIV_8=7)
- *   FPLLRNG  (DEVCFG2 6:4)  1=5-10 2=8-16 3=13-26 4=21-42 5=34-68 MHz
- *   FPLLICLK (DEVCFG2 7)    1=FRC 0=POSC
- *   FPLLMULT (DEVCFG2 14:8) field = mult-1 (MUL_50=0x31)
- *   FPLLODIV (DEVCFG2 18:16) 2x=1 4x=2 8x=3 16x=4 32x=7  (no /1!)
- * Runtime SFR form (osc_select): SPLLCON PLLMULT field = mult (0x32
- * = x50, proven by SPLLCON 0x01320081 at 200 MHz); OSCCON NOSC:
- * FRC=0 SPLL=1 FRCDIV=7; FRCDIV divide = OSCCON<26:24>, 1..128 pow2.
- */
+/************************************************************
+ **
+ ** mips_clock.c : PIC32MZ EF clock-tree solver
+ **
+ ** Copyright (c) 2026, Matthew Schinkel
+ ** All rights reserved
+ **
+ ** The user states the speed and the source:
+ **   pragma target clock 200_000_000
+ **   pragma target OSC    FRC_SPLL
+ ** and this file derives the DEVCFG1 FNOSC/FCKSM/POSCMOD and DEVCFG2
+ ** SPLL fields (DFP ATDF encodings; probe: PIC32MZ-EF_DFP 1.6.179),
+ ** emits them into the HEX, and materializes the _osc_* consts the
+ ** device-file osc_select() helper composes at run time.
+ **
+ ** Encodings (PIC32MZ1024EFH064.atdf):
+ **   FNOSC   (DEVCFG1 2:0)   FRCDIV=0 SPLL=1 POSC=2   (MZ: 110 reserved)
+ **   FCKSM   (DEVCFG1 16:15) CSECMD=1 (switching must stay enabled)
+ **   POSCMOD (DEVCFG1 13:12) EC=0 HS=2 OFF=3
+ **   FPLLIDIV (DEVCFG2 2:0)  field = div-1 (DIV_1=0 .. DIV_8=7)
+ **   FPLLRNG  (DEVCFG2 6:4)  1=5-10 2=8-16 3=13-26 4=21-42 5=34-68 MHz
+ **   FPLLICLK (DEVCFG2 7)    1=FRC 0=POSC
+ **   FPLLMULT (DEVCFG2 14:8) field = mult-1 (MUL_50=0x31)
+ **   FPLLODIV (DEVCFG2 18:16) 2x=1 4x=2 8x=3 16x=4 32x=7  (no /1!)
+ ** Runtime SFR form (osc_select): SPLLCON PLLMULT field = mult (0x32
+ ** = x50, proven by SPLLCON 0x01320081 at 200 MHz); OSCCON NOSC:
+ ** FRC=0 SPLL=1 FRCDIV=7; FRCDIV divide = OSCCON<26:24>, 1..128 pow2.
+ **
+ ************************************************************/
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>

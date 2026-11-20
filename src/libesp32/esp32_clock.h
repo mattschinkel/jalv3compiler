@@ -1,9 +1,14 @@
-/* esp32_clock.h -- ESP32 clock-tree solver (pragma target OSC/clock)
- *
- * Part of the jalv3compiler fork.  Author: Matthew Schinkel, 2026.
- * Design: docs/investigations/pic32_clock_select_plan.md + the ESP32
- * addendum in fixes/fix_pic32_clock_select.md (same user contract).
- */
+/************************************************************
+ **
+ ** esp32_clock.h : ESP32 clock-tree solver (pragma target OSC/clock)
+ **
+ ** Copyright (c) 2026, Matthew Schinkel
+ ** All rights reserved
+ **
+ ** Design: docs/investigations/pic32_clock_select_plan.md + the ESP32
+ ** addendum in fixes/fix_pic32_clock_select.md (same user contract).
+ **
+ ************************************************************/
 #ifndef ESP32_CLOCK_H__
 #define ESP32_CLOCK_H__
 

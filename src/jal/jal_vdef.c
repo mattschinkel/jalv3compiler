@@ -7,7 +7,8 @@
  **
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Authors: Kyle A. York, Rob Jansen
+ ** Author: Matthew Schinkel, 2026
  ** Changes: fork extensions (heavy rework)
  **
  ***********************************************************/

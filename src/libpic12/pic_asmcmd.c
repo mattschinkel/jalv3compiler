@@ -12,7 +12,8 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
  ** Changes: split out of libcore/cmd_asm.c so the shared IR layer
  **   carries no back-end opcode vocabulary
  **

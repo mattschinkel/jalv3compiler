@@ -5,6 +5,9 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
+ **
  ************************************************************/
 #ifndef cache_h__
 #define cache_h__

@@ -5,7 +5,8 @@
  ** Copyright (c) 2005, Kyle A. York
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
  ** Changes: opcode made opaque; the classic-PIC semantics live in
  **   libpic12/pic_asmcmd.c and are registered via cmd_asm_semantics_set
  **

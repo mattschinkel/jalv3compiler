@@ -1,21 +1,25 @@
-/* esp32_clock.c -- ESP32 clock validation + solved-field export
- *
- * Part of the jalv3compiler fork.  Author: Matthew Schinkel, 2026.
- *
- * The ESP32 clock tree has no user fuses -- configuration is runtime
- * registers only, so unlike the PIC32 solver there are no DEVCFG words
- * to emit.  This validates the pragma pair against the discrete,
- * hardware-verified operating points of demo_lib/esp32_clock.jal and
- * exports the fields its single esp32_clock_init() entry composes:
- *
- *   CRYSTAL : 40 MHz module crystal direct (the cold boot state -- the
- *             init call is a no-op, zero code needed)
- *   PLL     : 80 / 160 / 240 MHz from the 480 MHz BBPLL (div 6/3/2;
- *             core voltage 1.25 V at 240, 1.10 V otherwise)
- *
- * The 8 MHz internal RC (CK8M) source is deliberately NOT offered: the
- * switch sequence is unverified on hardware (see the fix doc).
- */
+/************************************************************
+ **
+ ** esp32_clock.c : ESP32 clock validation + solved-field export
+ **
+ ** Copyright (c) 2026, Matthew Schinkel
+ ** All rights reserved
+ **
+ ** The ESP32 clock tree has no user fuses -- configuration is runtime
+ ** registers only, so unlike the PIC32 solver there are no DEVCFG words
+ ** to emit.  This validates the pragma pair against the discrete,
+ ** hardware-verified operating points of demo_lib/esp32_clock.jal and
+ ** exports the fields its single esp32_clock_init() entry composes:
+ **
+ **   CRYSTAL : 40 MHz module crystal direct (the cold boot state -- the
+ **             init call is a no-op, zero code needed)
+ **   PLL     : 80 / 160 / 240 MHz from the 480 MHz BBPLL (div 6/3/2;
+ **             core voltage 1.25 V at 240, 1.10 V otherwise)
+ **
+ ** The 8 MHz internal RC (CK8M) source is deliberately NOT offered: the
+ ** switch sequence is unverified on hardware (see the fix doc).
+ **
+ ************************************************************/
 #include <errno.h>
 #include "../libutils/mem.h"
 #include "../libcore/pfile.h"

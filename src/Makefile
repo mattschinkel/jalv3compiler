@@ -3,7 +3,8 @@
 # Copyright (c) 2008, Kyle A. York
 # All rights reserved
 #
-# Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+# Original Author: Kyle A. York
+# Author: Matthew Schinkel, 2026
 # Changes: minor fork edits -- see fixes/ and git history
 #
 PARTS = libutils libcore libpic12 libpic32 libesp32 jal

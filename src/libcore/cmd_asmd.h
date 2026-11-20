@@ -5,7 +5,8 @@
  ** Copyright (c) 2004-2005, Kyle A. York
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
  ** Changes: opcode/opdst are the opaque cmd_asm types (cmd_asm.h) --
  **   no back-end header is included from libcore anymore
  **

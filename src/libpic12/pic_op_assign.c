@@ -6,7 +6,8 @@
  **           (c) 2020-2025, Rob Jansen
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Authors: Kyle A. York, Rob Jansen
+ ** Author: Matthew Schinkel, 2026
  ** Changes: split out of pic_op.c (Tier-A decomposition, 2026-10-31);
  **          code moved verbatim, forward declarations replaced by
  **          pic_op_priv.h prototypes.

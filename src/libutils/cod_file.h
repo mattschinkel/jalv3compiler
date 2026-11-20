@@ -5,6 +5,9 @@
  ** Copyright (c) 2007, Kyle A. York
  ** All rights reserved
  **
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
+ **
  ************************************************************/
 #ifndef cod_file_h__
 #define cod_file_h__

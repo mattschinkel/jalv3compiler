@@ -5,7 +5,8 @@
  ** Copyright (c) 2010, Kyle A. York
  ** All rights reserved
  **
- ** Co-author: Matthew Schinkel, 2026 (jalv3compiler fork)
+ ** Original Author: Kyle A. York
+ ** Author: Matthew Schinkel, 2026
  ** Changes: fork extensions (heavy rework)
  **
  ************************************************************/

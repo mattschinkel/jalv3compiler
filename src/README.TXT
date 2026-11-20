@@ -1,7 +1,7 @@
-Co-author note: locally adapted for the jalv3compiler fork (2026) by
-Matthew Schinkel -- build instructions updated for Linux x86_64
-and the ESP32/PIC32 back ends. Original text (jalv25r9, Kyle A.
-York / jallib) follows.
+Original author: Kyle A. York (jalv25r9).  Locally adapted for the
+jalv3compiler fork (2026) by Matthew Schinkel -- build instructions
+updated for Linux x86_64 and the ESP32/PIC32 back ends. Original text
+(jalv25r9, Kyle A. York / jallib) follows.
 
 Remarks for building the JALV2 compilers
 ========================================

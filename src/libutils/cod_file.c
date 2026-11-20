@@ -6,6 +6,9 @@
  **               2020-2020, Rob Jansen
  ** All rights reserved
  **
+ ** Original Authors: Kyle A. York, Rob Jansen
+ ** Author: Matthew Schinkel, 2026
+ **
  ************************************************************/
 #include <string.h>
 #include <stddef.h>
