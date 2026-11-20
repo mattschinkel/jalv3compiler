@@ -5,8 +5,8 @@
  ** Copyright (c) 2026, Matthew Schinkel
  ** All rights reserved
  **
- ** Design: docs/investigations/pic32_clock_select_plan.md + the ESP32
- ** addendum in fixes/fix_pic32_clock_select.md (same user contract).
+ ** Design: docs/fixes/pic32_clock_select_plan.md + the ESP32
+ ** addendum in docs/fixes/2026/fix_pic32_clock_select.md (same user contract).
  **
  ************************************************************/
 #ifndef ESP32_CLOCK_H__

@@ -76,7 +76,8 @@
     <lq>If <i>cexpr</i> is ommitted, the '=' term must exist and the size of
     the array will be set to the number of initializers present.</lq>
 
-    <lq>BIT arrays are *not* supported.</lq>
+    <lq>BIT arrays are supported; see <xref href="bit_arrays.dita"/> for the
+    packed form <codeph>VAR BIT flags[32]</codeph>.</lq>
 
     <p>AT <i>cexpr</i> [ ':' bit ]</p>
 

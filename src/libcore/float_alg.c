@@ -2,7 +2,7 @@
  **
  ** float_alg.c : shared soft-float kernel -- cut 1 (unpack/pack
  ** sub-helpers), transcribed verbatim from esp_float.c (the
- ** canonical algorithm per docs/investigations/float_alg_plan.md).
+ ** canonical algorithm per docs/fixes/float_alg_plan.md).
  ** Every helper body below emits EXACTLY the instruction stream the
  ** ESP32 macros emitted, through the ops table -- the ESP32 wiring
  ** is byte-identity-checked against the pre-extraction images.

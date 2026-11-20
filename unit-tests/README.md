@@ -78,7 +78,7 @@ the classic images for one release and prints one `JALV2-NOTICE` per
 compile. The per-program opt-out is `pragma target fat_pointers off`.
 
 The `env_switches` pin covers the accepted sets, the one-warning contract
-and the codegen consequence. `doc/designs/one-access-model.md#feature-switches`
+and the codegen consequence. `docs/designs/one-access-model.md#feature-switches`
 is the anchor.
 
 U3 open-array pair attachment (compiler): the pair set now lives on the CALL
@@ -114,13 +114,13 @@ including `--compare` with no baseline).  All are registered in
 huge arrays, thousands of blocks, binary junk) that the mutating fuzzer
 cannot generate. Registered in the L1 pin gate; every entry pins a defect
 that mutation fuzzing structurally missed. See
-`fixes/fix_adversarial_input_gate.md`.
+`docs/fixes/2026/fix_adversarial_input_gate.md`.
 
 `coverage_report.py` — line coverage of `src/` over a spread of the corpus,
 using the `COV=1` flavor and `gcov`, compared against
 `coverage_baseline.txt`. Answers "which code has no test at all?"; runs in
 the nightly CI job (~50 s), not in the L1 ladder. See
-`fixes/fix_coverage_gate.md`.
+`docs/fixes/2026/fix_coverage_gate.md`.
 
 `jaldbg.py` — the bug-investigation harness (2026-10-29, born from the
 proc-entry-BSR chase). Diagnosis layer only: the suites above stay the

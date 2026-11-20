@@ -5,7 +5,7 @@
 #
 # Original Author: Kyle A. York
 # Author: Matthew Schinkel, 2026
-# Changes: minor fork edits -- see fixes/ and git history
+# Changes: minor fork edits -- see docs/fixes/ and git history
 #
 PARTS = libutils libcore libpic12 libpic32 libesp32 jal
 

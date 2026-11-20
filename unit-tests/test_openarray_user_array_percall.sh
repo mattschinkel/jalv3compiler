@@ -2,7 +2,7 @@
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 #
 # Pins for USER arrays fed to one open-array formal from several call sites
-# (fixes/fix_openarray_user_array_percall.md; the string half is
+# (docs/fixes/2026/fix_openarray_user_array_percall.md; the string half is
 # unit-tests/test_string_arg_chunk_map.sh).
 #
 # The defect: a big buffer passed to `byte in data[]` is addressed through a

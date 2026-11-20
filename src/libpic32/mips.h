@@ -92,7 +92,10 @@ unsigned long mips_ebase_page(pfile_t *pf);
 #define MIPS_ISR_MVEC_OFS 0x1000UL  /* MX MVEC: 64x32B table at +0x200 */
 #define MIPS_MICROMIPS_LABEL "_mips_micromips"
 #define MIPS_MVEC_LABEL      "_mips_mvec"
-#define MIPS_LOADER_PFM_LABEL "_mips_loader_pfm"
+/* image shape: PFM is the default; this marker selects boot flash */
+#define MIPS_IMAGE_BFM_LABEL "_mips_image_bfm"
+/* an EXTERNAL bootloader owns boot flash + DEVCFG */
+#define MIPS_BOOT_EXTERNAL_LABEL "_mips_boot_external"
 #define MIPS_CP0_STATUS  12
 #define MIPS_CP0_CONFIG  16
 #define MIPS_CP0_COUNT    9
@@ -276,7 +279,9 @@ boolean_t  mips_micromips_enabled(pfile_t *pf);
 void       mips_isa_bind(pfile_t *pf);
 int        mips_isa_is_micromips(void);
 boolean_t  mips_mvec_enabled(pfile_t *pf);
-boolean_t  mips_loader_pfm(pfile_t *pf);
+boolean_t  mips_image_bfm(pfile_t *pf);
+boolean_t  mips_image_pfm(pfile_t *pf);
+boolean_t  mips_boot_external(pfile_t *pf);
 boolean_t  mips_isr_srs_active(pfile_t *pf);
 unsigned long mips_code_base(pfile_t *pf);
 unsigned long mips_isr_vector_addr(pfile_t *pf);

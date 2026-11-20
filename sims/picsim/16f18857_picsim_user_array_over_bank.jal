@@ -7,7 +7,7 @@
 --    callee walks it, so the second fill no longer lands through the
 --    first call's chunk bases.  Also carries the nested-call shape and
 --    the constant-subscript-past-the-first-chunk check from the same
---    witness (fixes/fix_openarray_user_array_percall.md).
+--    witness (docs/fixes/2026/fix_openarray_user_array_percall.md).
 --
 -- @picsim_validate begin
 -- steps: 800000

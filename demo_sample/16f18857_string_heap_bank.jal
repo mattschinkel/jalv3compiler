@@ -10,7 +10,7 @@
 -- string>)` marshals the text into a multi-bank `_strargN` buffer.  The
 -- callee used to address the first call site's chunks for every call and
 -- printed the first string's text for the rest; the runtime chunk map
--- (fixes/fix_openarray_formal_chunk_map.md, Addendum 3) fixed it.
+-- (docs/fixes/2026/fix_openarray_formal_chunk_map.md, Addendum 3) fixed it.
 -- Expected output, repeated every second:
 --    Const string that does it.
 --    Var string that does it.

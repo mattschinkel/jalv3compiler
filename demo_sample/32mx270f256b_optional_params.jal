@@ -18,7 +18,7 @@
 --
 -- Notes:
 --    - PAIRING RULE and fuse derivation: see blink_200mhz_ownboot.jal
---      and fixes/fix_pic32_loader_boot_init_compiler.md.
+--      and docs/fixes/fix_pic32_loader_boot_init_compiler.md.
 --    - UART: PBCLK2 = 100 MHz (PB2DIV reset /2), BRGH = 1 to
 --      BRG 216 = 115200 baud.
 --    - Build & program:

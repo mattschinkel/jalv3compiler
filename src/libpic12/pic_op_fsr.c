@@ -407,7 +407,7 @@ void pic_fsr0_add_dynamic_index(pfile_t *pf, value_t idx,
        * (storage need 1), which made this guard see span==1 for every
        * array and take the carry-free fast path whenever the BASE fit
        * a 256 window -- base+index then wrapped into low RAM (the
-       * PIC18 FSR-carry defect, docs/investigations/
+       * PIC18 FSR-carry defect, docs/fixes/
        * pic18_runtime_index_fsr_carry_20261005.md) */
       span = pic_variable_def_storage_need_get(pf,
           variable_def_get(array_var), 0);

@@ -5,7 +5,7 @@
  ** Copyright (c) 2026, Matthew Schinkel
  ** All rights reserved
  **
- ** Design: docs/investigations/pic32_clock_select_plan.md
+ ** Design: docs/fixes/pic32_clock_select_plan.md
  **
  ************************************************************/
 #ifndef MIPS_CLOCK_H__

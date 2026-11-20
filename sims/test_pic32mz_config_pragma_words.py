@@ -7,7 +7,7 @@ off-field (FWDTEN at a DMTCNT bit, FDMTEN at a reserved bit, IESO and
 FSOSCEN four bits high, DBGPER two of three bits, POSCMOD in 13:12,
 FCKSM in 16:15) so every pragma silently flipped the wrong field --
 absent pragmas kept the proven words, which is why nothing ever broke
-on silicon (fixes/fix_mips_clock_config_bit_positions.md).  This gate
+on silicon (docs/fixes/2026/fix_mips_clock_config_bit_positions.md).  This gate
 pins the corrected DFP positions: each pragma flips EXACTLY its
 device-file field against the FRC_SPLL 200 MHz baseline, and the
 "other" value of each is a no-op when the proven word already carries

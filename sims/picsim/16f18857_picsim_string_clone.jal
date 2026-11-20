@@ -8,7 +8,7 @@
 --    the ONE string rule -- below COUNT stores in place, AT COUNT appends
 --    one character (the block grows), COUNT is live.  Array actuals keep
 --    the generic body, and a reads-only body keeps the payload view.
---    (fixes/fix_string_arg_clone.md)
+--    (docs/fixes/2026/fix_string_arg_clone.md)
 --
 -- @picsim_validate begin
 -- steps: 300000

@@ -3,8 +3,8 @@
 """Self-tests for the test harness itself (no compiler needed).
 
 WHY THIS EXISTS
-    The recurring failure mode in `fixes/fix_unittests_*.md` and
-    `fixes/fix_unit_*.md` is not a compiler bug: it is the harness reporting a
+    The recurring failure mode in `docs/fixes/fix_unittests_*.md` and
+    `docs/fixes/fix_unit_*.md` is not a compiler bug: it is the harness reporting a
     green result while measuring the wrong thing.  Those fixes have no
     regression test because a broken harness is invisible to the gates it
     runs -- the gate still says PASS.

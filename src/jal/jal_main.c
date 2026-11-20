@@ -95,6 +95,7 @@ typedef enum {
   opt_boot_long_start,
   opt_boot_rickpic,
   opt_boot_loader18,
+  opt_boot_bootloader,
   /* --- misc. options --- */
   opt_misc_clear_bss,
   opt_misc_dev_options,
@@ -188,6 +189,9 @@ static const opt_def_t opt_defs[] = {
   {opt_boot_loader18, "loader18",
       "Use the 18 series bootloader preamble",
       OPT_FLAG_PFLAG | OPT_FLAG_PARAM, PFILE_FLAG_BOOT_LOADER18},
+  {opt_boot_bootloader, "bootloader",
+      "PIC32: app for an external bootloader at {addr} (overrides the loader pragma)",
+      OPT_FLAG_PARAM, PFILE_FLAG_NONE},
   {opt_none, 0, "--- Misc. Options ---", OPT_FLAG_NONE, PFILE_FLAG_NONE},
   {opt_misc_clear_bss, "clear", 
       "clear data area on program entry",
@@ -855,6 +859,7 @@ int main(int argc, char **argv)
   unsigned    task_ct;
   int         arg_no;
   ulong       loader_offset;
+  ulong       bootaddr;
   ulong       files_disabled;
   char        hexb_final[2048];
   char        hexb_temp[2048];
@@ -873,6 +878,7 @@ int main(int argc, char **argv)
   task_ct        = 0;
   arg_no         = 0;
   loader_offset  = 0;
+  bootaddr       = 0;
   files_disabled = 0;
   hex_atomic_pending = BOOLEAN_FALSE;
   {
@@ -1199,6 +1205,27 @@ int main(int argc, char **argv)
                 loader_offset = 0x0800;
               }
             }
+            break;
+          case opt_boot_bootloader:
+            {
+              char *eptr;
+
+              if (argv[arg_no] && ISDIGIT(*argv[arg_no])) {
+                bootaddr = strtoul(argv[arg_no], &eptr, 0);
+                if (*eptr
+                  || ((ULONG_MAX == bootaddr) && (ERANGE == errno))) {
+                  fprintf(stderr, "Invalid bootloader address\n");
+                  err = BOOLEAN_TRUE;
+                } else {
+                  arg_no++;
+                }
+              } else {
+                fprintf(stderr,
+                  "bootloader requires an address (e.g. -bootloader 0x9D000000)\n");
+                err = BOOLEAN_TRUE;
+              }
+            }
+            break;
         }
         if (need) {
           if (*need) {
@@ -1468,7 +1495,7 @@ int main(int argc, char **argv)
           variable_def_t def;
 
           pfile_loader_offset_set(pf, loader_offset);
-          def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER, 
+          def = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
             VARIABLE_DEF_FLAG_CONST, 4);
           builtin = VALUE_NONE;
           pfile_value_alloc(pf, PFILE_VARIABLE_ALLOC_GLOBAL,
@@ -1483,6 +1510,9 @@ int main(int argc, char **argv)
 
           pfile_include_path_set(pf, inc_path);
           jal_file_process(pf, pre_include);
+          if (bootaddr) {
+            jal_loader_external_force(pf, bootaddr);
+          }
           jal_target_cores_validate(pf);
           jal_task_core_finalize(pf);
           if (!pfile_errct_get(pf) 

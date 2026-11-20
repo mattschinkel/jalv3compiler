@@ -28,7 +28,7 @@ to reflect any changes in functionality, command line options, or output structu
 
 `--current` requires `--compiler PATH` (no implicit choice between `bin/jalv2-original` and `bin/beta/jalv3-x86-64`).
 
-**Ephemeral shadow:** Each run copies **`third_party/jallib/samples/`** and **`demo_lib/`** into **`unit-tests/.unittests_shadow/{baseline,current}/<run_id>/`** (unique **`run_id`** per process — **`fixes/fix_unittests_shadow_concurrent_run_rmtree.md`**). No automatic **`COUNT(`**↔**`_LENGTH(`** text rewriting; the repo sources are compiled as-is. The shadow tree is removed in **`finally`**.
+**Ephemeral shadow:** Each run copies **`third_party/jallib/samples/`** and **`demo_lib/`** into **`unit-tests/.unittests_shadow/{baseline,current}/<run_id>/`** (unique **`run_id`** per process — **`docs/fixes/2026/fix_unittests_shadow_concurrent_run_rmtree.md`**). No automatic **`COUNT(`**↔**`_LENGTH(`** text rewriting; the repo sources are compiled as-is. The shadow tree is removed in **`finally`**.
 
 With no CLI arguments, the script prints help and exits. Each baseline/current run clears unit-tests/Comparison/reports and Output_Compare first, then
 after the run a snapshot copy is saved under unit-tests/Comparison/report_archive/<timestamp>_<label>/.
@@ -361,7 +361,7 @@ def selftest_warning_extraction_stack_overflow_extended() -> None:
     """
     Guard: extended hardware-stack overflow text must still be extracted as a
     warning line for current_warning_messages.txt (see
-    fixes/fix_hardware_stack_overflow_unit_samples.md).
+    docs/fixes/2026/fix_hardware_stack_overflow_unit_samples.md).
     """
     sample = (
         "third_party/jallib/samples/x.jal:42: warning: Hardware stack overflow! "
@@ -593,7 +593,7 @@ def test_pic32_compile(compiler_path, parallel_workers=None, max_samples=None):
     os.makedirs(os.path.join(repo, "unit-tests", "Comparison", "reports"), exist_ok=True)
 
     # lib first: 32-bit variants + fork chipdef shadow the pristine
-    # jallib files for the PIC32 suite (see fixes/fix_lib_new_shadow.md)
+    # jallib files for the PIC32 suite (see docs/fixes/fix_lib_new_shadow.md)
     lib_s = os.path.join(repo, "demo_lib") + ";" + os.path.join(repo, "third_party/jallib/lib")
     gp_s = os.path.join(repo, "sims", "shared")
     search = lib_s + ";" + gp_s

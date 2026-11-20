@@ -38,7 +38,7 @@ resolve_jalv2() {
 
 JAL="$(resolve_jalv2)" || exit 3
 
-# Same four files documented in fixes/fix_pic_opt_verify_skip_movlb_same_file_false_positive.md
+# Same four files documented in docs/fixes/2026/fix_pic_opt_verify_skip_movlb_same_file_false_positive.md
 SAMPLES=(
   "third_party/jallib/samples/16f1825_dcf77_decoder_serial.jal"
   "third_party/jallib/samples/16f1825_philips_rc_decoder_serial.jal"

@@ -5,7 +5,7 @@
 -- Compiler: JALv2
 --
 -- Description:
---    Loader-mode image (`pragma bootloader pic32`) carrying the
+--    Loader-mode image (`pragma target image pfm`) carrying the
 --    compiler-emitted boot-flash init (mips_loader_boot_init_emit):
 --    proves the ORG-placed bring-up block executes under QEMU and
 --    enters the PFM app at 0x9D000000.  Silicon-proven sequence
@@ -22,7 +22,7 @@
 
 include regression_32mz1024efh064_device
 
-pragma bootloader pic32
+pragma target image pfm
 
 var volatile byte loader_probe
 

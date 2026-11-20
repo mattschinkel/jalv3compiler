@@ -404,7 +404,7 @@ boolean_t mips_mvec_enabled(pfile_t *pf)
 /* Effective interrupt context: shadow register set (SRS) or software
  * save/restore.  `pragma interrupt fast` opts in explicitly; `pragma
  * interrupt raw` opts out explicitly; otherwise a SINGLE-VECTOR
- * interrupt in a loader/PFM image defaults to SRS (2026-10-17:
+ * interrupt in a PFM image defaults to SRS (2026-10-17:
  * silicon-proven shape -- PRISS mapping + seeded $sp/$gp, no 26-reg
  * push).  Boot-flash images, numbered-IRQ/MVEC programs, and every
  * other target keep the universally-safe software save.  Codegen is
@@ -427,7 +427,7 @@ boolean_t mips_isr_srs_active(pfile_t *pf)
   if (pfile_flag_test(pf, PFILE_FLAG_MISC_INTERRUPT_RAW)) {
     return BOOLEAN_FALSE;
   }
-  if (!mips_loader_pfm(pf) || !pfile_isr_entry_active(pf)) {
+  if (!mips_image_pfm(pf) || !pfile_isr_entry_active(pf)) {
     return BOOLEAN_FALSE;
   }
   if (mips_mvec_enabled(pf)) {
@@ -442,9 +442,26 @@ boolean_t mips_isr_srs_active(pfile_t *pf)
   return BOOLEAN_TRUE;
 }
 
-boolean_t mips_loader_pfm(pfile_t *pf)
+/* Image shape: PFM (program flash) is the DEFAULT -- the capable shape
+ * (ISR dispatch works, and the compiler emits the boot-flash init).  The
+ * boot-flash shape is opt-in via `pragma target image bfm`, which sets
+ * the marker.  Placement is therefore "pfm unless marked bfm". */
+boolean_t mips_image_bfm(pfile_t *pf)
 {
-  return mips_marker_present(pf, MIPS_LOADER_PFM_LABEL);
+  return mips_marker_present(pf, MIPS_IMAGE_BFM_LABEL);
+}
+
+boolean_t mips_image_pfm(pfile_t *pf)
+{
+  return (boolean_t) !mips_image_bfm(pf);
+}
+
+/* TRUE when an EXTERNAL bootloader owns the reset vector and DEVCFG
+ * (`pragma bootloader {addr}`).  Suppresses the compiler's boot-flash
+ * init block and, through PFILE_FLAG_BOOT_FUSES, the config words. */
+boolean_t mips_boot_external(pfile_t *pf)
+{
+  return mips_marker_present(pf, MIPS_BOOT_EXTERNAL_LABEL);
 }
 
 unsigned long mips_code_base(pfile_t *pf)
@@ -452,16 +469,16 @@ unsigned long mips_code_base(pfile_t *pf)
   ulong off;
   ulong loc;
 
-  if (!mips_loader_pfm(pf)) {
+  if (mips_image_bfm(pf)) {
     loc = pfile_code_location_get(pf);
     if (loc) {
-      return loc;   /* pragma code_location (device default or program) */
+      return loc;   /* pragma code_location override */
     }
     return MIPS_FLASH_BASE;
   }
   off = pfile_loader_offset_get(pf);
   if (off) {
-    return (unsigned long) off;  /* pragma bootloader always wins */
+    return (unsigned long) off;  /* pragma bootloader <addr> */
   }
   return MIPS_FLASH_PFM;
 }
@@ -476,12 +493,12 @@ static boolean_t mips_k0_mirror_active(pfile_t *pf)
 {
   ulong loc;
 
-  if (mips_loader_pfm(pf)) {
+  if (mips_image_pfm(pf)) {
     return BOOLEAN_FALSE;
   }
-  /* The front end defaults code_location to the device boot sector
-   * (0xBFC00000 for PIC32); mirror only when the effective base IS
-   * boot flash -- an explicit non-default placement is respected. */
+  /* `pragma target image bfm` sets code_location to the boot sector
+   * (0xBFC00000 for PIC32); mirror only when the effective base IS boot
+   * flash -- an explicit non-default placement is respected. */
   loc = pfile_code_location_get(pf);
   return (boolean_t) (!loc || (MIPS_FLASH_BASE == loc));
 }
@@ -523,7 +540,7 @@ unsigned long mips_isr_vector_addr(pfile_t *pf)
  * Boot-flash ISR images were moved to a PFM vector page on 2026-10-17
  * and REVERTED the same day: the shape never dispatched on silicon and
  * it broke QEMU coverage (QEMU's EVIC dispatches only the BEV bootstrap
- * vector 0xBFC00400 -- every EBASE-style image, loader images included,
+ * vector 0xBFC00400 -- every EBASE-style image, PFM images included,
  * fails under QEMU).  They keep the BEV shape: QEMU-true, silicon
  * dispatch open (blocked: this bench's boot flash reached erase
  * end-of-life mid-investigation). */
@@ -543,12 +560,12 @@ unsigned long mips_ebase_page(pfile_t *pf)
      * not exist.  Use the top 4 KB of program flash (the XC32
      * exception_mem convention); mips_image_end()/the HEX writer cap
      * the app just below it. */
-    if (mips_loader_pfm(pf) && (size > 0x2000UL)) {
+    if (mips_image_pfm(pf) && (size > 0x2000UL)) {
       return base + size - 0x1000UL;
     }
     return base;
   }
-  if (mips_loader_pfm(pf) && pfile_isr_entry_active(pf)) {
+  if (mips_image_pfm(pf) && pfile_isr_entry_active(pf)) {
     return mips_code_base(pf);
   }
   return MIPS_EBASE_PAGE;
@@ -585,7 +602,7 @@ void mips_code_layout(pfile_t *pf)
 }
 
 /* Silicon bring-up init (2026-09-30 first-silicon finding, see
- * fixes/fix_pic32_mini32_silicon_bringup.md): until the prefetch
+ * docs/fixes/2026/fix_pic32_mini32_silicon_bringup.md): until the prefetch
  * module is configured and the KSEG0 L1 cache is invalidated and
  * enabled (CP0 Config.K0), every program-flash fetch costs ~8 cycles
  * on real hardware (ECC + wait states, no cache).  PRECON (0xBF8E0000)
@@ -594,7 +611,8 @@ void mips_code_layout(pfile_t *pf)
  * caches must be invalidated by index before enabling (garbage tags
  * at reset hang the core).  The cache op has no microMIPS emission
  * here, so that opt-in mode gets the PRECON write only.  Touches
- * $t0/$t1 only, and starts from a label to drop value-cache state. */
+ * $t0/$t1 only (plus $t2 in the bootloader-app PBDIV assert), and
+ * starts from a label to drop value-cache state. */
 static mips_code_t mips_cmd_entry;
 
 /* Hit-invalidate every cache line over [0x80000000, 0x80000000+count*stride)
@@ -621,6 +639,25 @@ static void mips_cache_sweep(unsigned op, unsigned count, int stride)
       stride);
 }
 
+/* Flash wait states for the solved clock.  The MZ EF flash tolerates a
+ * faster bus than the MX1/2 part, so the two families need different
+ * tables: MX1/2 wants 0 up to 20 MHz, 1 to 30 MHz, 2 to 40 MHz
+ * (DS60001168 Flash Controller, CHECON.PFMWS). */
+static int mips_flash_ws(pfile_t *pf, unsigned long clock)
+{
+  if (!clock) {
+    return 2;
+  }
+  if (MIPS_FAMILY_MX1 == mips_family(pf)) {
+    if (clock <= 20000000UL) {
+      return 0;
+    }
+    return (clock <= 30000000UL) ? 1 : 2;
+  }
+  return (clock <= 60000000UL) ? 0
+       : ((clock <= 120000000UL) ? 1 : 2);
+}
+
 static mips_code_t mips_silicon_startup_init(pfile_t *pf)
 {
   value_t    freq;
@@ -634,15 +671,19 @@ static mips_code_t mips_silicon_startup_init(pfile_t *pf)
   if (freq) {
     value_release(freq);
   }
-  ws = !clock ? 2
-     : ((clock <= 60000000UL) ? 0
-     : ((clock <= 120000000UL) ? 1 : 2));
+  ws = mips_flash_ws(pf, clock);
 
   if (MIPS_FAMILY_MZ_EF == mips_family(pf)) {
-    /* MZ prefetch/wait-state module.  The MX1/2 has no PRECON (and no
-     * CHECON); writing this address there is at best ignored and at
-     * worst a bus error, so it is family-gated. */
+    /* MZ prefetch/wait-state module at PRECON. */
     (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF8E);
+    (void) mips_code_alloc(MIPS_OP_ADDIU, MIPS_REG_T1, MIPS_REG_ZERO,
+        0x30 | ws);
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
+  }
+  else if (MIPS_FAMILY_MX1 == mips_family(pf)) {
+    /* MX1/2 has CHECON, and above ~20 MHz the flash needs wait states or
+     * the first fetch from it fails.  PREFEN=3, PFMWS from the table. */
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF80);
     (void) mips_code_alloc(MIPS_OP_ADDIU, MIPS_REG_T1, MIPS_REG_ZERO,
         0x30 | ws);
     (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
@@ -699,6 +740,60 @@ static mips_code_t mips_silicon_startup_init(pfile_t *pf)
   (void) mips_code_alloc(MIPS_OP_SYNC, 0, 0, 0);
   (void) mips_code_alloc(MIPS_OP_EHB, 0, 0, 0);
 
+  /* OSCCON.PBDIV assert for a bootloader-entered MX image: an external
+   * loader owns the fuses, so the divider it handed over is whatever the
+   * loader chose.  Force the compile-time pbdiv (DIV_2 default) so every
+   * PBCLK-clocked peripheral runs at the published _pbclk, under any
+   * loader.  SYSKEY window + one RMW; PBDIV is a peripheral divider, not
+   * a clock-source switch, so there is no OSWEN wait. */
+  if (mips_boot_external(pf) && (MIPS_FAMILY_MX1 == mips_family(pf))) {
+    unsigned long pbdiv = 2;
+    unsigned long code  = 0;
+    value_t       v;
+
+    v = pfile_value_find(pf, PFILE_LOG_NONE, "target_pbdiv");
+    if (v) {
+      pbdiv = (unsigned long) value_const_get(v);
+      value_release(v);
+    }
+    if ((1UL != pbdiv) && (2UL != pbdiv) && (4UL != pbdiv)
+        && (8UL != pbdiv)) {
+      pbdiv = 2;
+    }
+    while ((pbdiv >> code) > 1UL) {
+      code++;
+    }
+    /* unlock */
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF80);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0, 0xF230);
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_ZERO, MIPS_REG_T0, 0);
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T1, 0, 0xAA99);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T1, MIPS_REG_T1, 0x6655);
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T1, 0, 0x5566);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T1, MIPS_REG_T1, 0x99AA);
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
+    /* OSCCON = (OSCCON & ~0x000C0000) | (code << 18) */
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF80);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0, 0xF000);
+    (void) mips_code_alloc(MIPS_OP_LW, MIPS_REG_T1, MIPS_REG_T0, 0);
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T2, 0, 0xFFF3);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T2, MIPS_REG_T2, 0xFFFF);
+    (void) mips_code_r_alloc(MIPS_OP_AND, MIPS_REG_T1, MIPS_REG_T1,
+        MIPS_REG_T2, 0);
+    if (code) {
+      (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T2, 0,
+          (int) (code << 2));
+      (void) mips_code_r_alloc(MIPS_OP_OR, MIPS_REG_T1, MIPS_REG_T1,
+          MIPS_REG_T2, 0);
+    }
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
+    /* relock */
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF80);
+    (void) mips_code_alloc(MIPS_OP_ORI, MIPS_REG_T0, MIPS_REG_T0, 0xF230);
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_ZERO, MIPS_REG_T0, 0);
+  }
+
   /* Enter the KSEG0 mirror of the code that follows (clear bit 29 of
    * the laid-out KSEG1 address): KSEG1 is architecturally uncached, so
    * the cache enabled above only pays off after this jump.  The low 28
@@ -731,7 +826,7 @@ static mips_code_t mips_silicon_startup_init(pfile_t *pf)
 }
 
 /* Loader/PFM boot-flash bring-up (2026-10-04 silicon finding, see
- * fixes/fix_pic32_bare_metal_200mhz.md): a PFM app entered by a bare
+ * docs/fixes/2026/fix_pic32_bare_metal_200mhz.md): a PFM app entered by a bare
  * jump from reset boots 0/10 on silicon -- the app's own prologue runs
  * too late to establish the pre-entry state.  This is the
  * compiler-emitted form of the hand init proven 10/10 on silicon:
@@ -741,7 +836,7 @@ static mips_code_t mips_silicon_startup_init(pfile_t *pf)
  * after all other code with no ORG-back, so the layout places it as an
  * isolated boot-flash block; the entry uses lui/jr because a J from
  * boot flash cannot cross PC regions into KSEG0.  $t0/$t1 only. */
-static void mips_loader_boot_init_emit(pfile_t *pf)
+static void mips_boot_init_emit(pfile_t *pf)
 {
   value_t       freq;
   unsigned long clock;
@@ -762,9 +857,7 @@ static void mips_loader_boot_init_emit(pfile_t *pf)
   if (freq) {
     value_release(freq);
   }
-  ws = !clock ? 2
-     : ((clock <= 60000000UL) ? 0
-     : ((clock <= 120000000UL) ? 1 : 2));
+  ws = mips_flash_ws(pf, clock);
   if (lo >= 0x8000) { hi = (hi + 1) & 0xFFFF; lo -= 0x10000; }
 
   org = mips_code_alloc(MIPS_OP_ORG, 0, 0, 0);
@@ -801,7 +894,7 @@ static void mips_loader_boot_init_emit(pfile_t *pf)
   /* I-cache index-invalidate over the first 16 K of the app (op 8).
    * ISR images first zero ErrCtl/TagLo -- the canonical cache-op prelude
    * (XC32's cache init does the same). */
-  if (mips_loader_pfm(pf) && pfile_isr_entry_active(pf)) {
+  if (mips_image_pfm(pf) && pfile_isr_entry_active(pf)) {
     (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_ERRCTL, 0,
         MIPS_REG_ZERO, 0);
     (void) mips_code_r_alloc(MIPS_OP_MTC0, MIPS_CP0_TAGLO, 0,
@@ -854,7 +947,7 @@ static void mips_loader_boot_init_emit(pfile_t *pf)
       MIPS_REG_T1, 0);
 
   /* EBASE = the vector page (CP0 15, select 1): the PFM app base for
-   * loader images with an interrupt entry (see mips_ebase_page), the
+   * PFM images with an interrupt entry (see mips_ebase_page), the
    * boot-flash mirror page otherwise. */
   {
     unsigned long ebase = mips_ebase_page(pf);
@@ -934,7 +1027,16 @@ static void mips_loader_boot_init_emit(pfile_t *pf)
   /* PRECON: prefetch + pragma-derived wait states, before entering PFM
    * (MZ only -- the MX1/2 has no PRECON/CHECON). */
   if (MIPS_FAMILY_MZ_EF == mips_family(pf)) {
+    /* MZ prefetch/wait-state module at PRECON. */
     (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF8E);
+    (void) mips_code_alloc(MIPS_OP_ADDIU, MIPS_REG_T1, MIPS_REG_ZERO,
+        0x30 | ws);
+    (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
+  }
+  else if (MIPS_FAMILY_MX1 == mips_family(pf)) {
+    /* MX1/2 has CHECON, and above ~20 MHz the flash needs wait states or
+     * the first fetch from it fails.  PREFEN=3, PFMWS from the table. */
+    (void) mips_code_alloc(MIPS_OP_LUI, MIPS_REG_T0, 0, 0xBF80);
     (void) mips_code_alloc(MIPS_OP_ADDIU, MIPS_REG_T1, MIPS_REG_ZERO,
         0x30 | ws);
     (void) mips_code_alloc(MIPS_OP_SW, MIPS_REG_T1, MIPS_REG_T0, 0);
@@ -1002,14 +1104,14 @@ static void mips_loader_boot_init_emit(pfile_t *pf)
    * mode with BEV cleared above).  Jump to the app's stub block
    * (mips_isr_vector_addr = base + MIPS_ISR_OFS; lui/jr because the
    * stub lives in another PC region).  Without this block the fetch
-   * hits erased flash -- single-vector ISR in a loader image was
+   * hits erased flash -- single-vector ISR in a PFM image was
    * QEMU-only (its EVIC laxness + BEV=1 boot-flash bodies hid it).
-   * Multi-vector loader images: MX270 silicon DISPATCHES them
+   * Multi-vector PFM images: MX270 silicon DISPATCHES them
    * (2026-10-24 bench, mvec_hw3 -- both numbered slots through the
-   * 64x32B table; see fixes/fix_mx_bench_day_20261024.md), so the
+   * 64x32B table; see docs/fixes/2026/fix_mx_bench_day_20261024.md), so the
    * earlier "OFFx dispatch is EBASE-relative while the stubs sit in
    * the app region" claim described a modeling limitation, not
-   * silicon.  MZ loader MVEC remains bench-unverified. */
+   * silicon.  MZ PFM MVEC remains bench-unverified. */
   if (pfile_isr_entry_active(pf) && !intcon_val) {
     unsigned long stub = mips_isr_vector_addr(pf);
 
@@ -1037,10 +1139,19 @@ void mips_cmd_generate(pfile_t *pf, const cmd_t cmd)
   mips_isa_bind(pf);
   mips_access_audit(pf);
 
+  /* The classic loader18 preamble/offset is meaningless here, and the
+   * offset would otherwise become the code base (0x0800) on a PFM
+   * image: refuse instead of laying out a silent garbage image. */
+  if (pfile_flag_test(pf, PFILE_FLAG_BOOT_LOADER18)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "loader18 is only available on classic cores; use "
+      "`pragma bootloader {addr}` for a PIC32 bootloader app");
+  }
+
   /* The MX1/2 boot flash is 3 KB and the generated device file's const
    * pool alone (SFR/fuse/USERID constants) is larger than that, so a
    * boot-flash image cannot be programmed.  Require the PFM shape. */
-  if ((MIPS_FAMILY_MX1 == mips_family(pf)) && !mips_loader_pfm(pf)) {
+  if ((MIPS_FAMILY_MX1 == mips_family(pf)) && !mips_image_pfm(pf)) {
     pfile_log(pf, PFILE_LOG_ERR,
       "PIC32MX boot flash is only 3 KB (and the device-file constant "
       "pool does not fit); use `pragma target image pfm` (app in program "
@@ -1060,7 +1171,7 @@ void mips_cmd_generate(pfile_t *pf, const cmd_t cmd)
    * actually wanted.  The MX rule above already refuses MX boot-flash
    * (3 KB), so this one is MZ-only to keep exactly one diagnostic. */
   if ((MIPS_FAMILY_MX1 != mips_family(pf))
-      && pfile_isr_entry_active(pf) && !mips_loader_pfm(pf)) {
+      && pfile_isr_entry_active(pf) && !mips_image_pfm(pf)) {
     pfile_log(pf, PFILE_LOG_ERR,
       "boot-flash images cannot dispatch interrupts -- the EIC fetches "
       "its vector page at EBASE+0x200, which only a PFM image points into "
@@ -1156,7 +1267,7 @@ void mips_cmd_generate(pfile_t *pf, const cmd_t cmd)
    * with no reset, power cycle or MCLR needed.  Emitted last with no
    * ORG-back so translated user code simply follows the vector. */
   if (!pfile_isr_entry_active(pf)
-      && !mips_loader_pfm(pf)) {
+      && !mips_image_pfm(pf)) {
     /* Both bootstrap vectors (BEV=1): 0x200 = TLB refill, 0x380 =
      * general exception.  A crash on erased flash raises Reserved
      * Instruction -> tight exception loop re-fetching 0x380; the
@@ -1219,10 +1330,11 @@ void mips_cmd_generate(pfile_t *pf, const cmd_t cmd)
     (void) mips_code_alloc(MIPS_OP_NOP, 0, 0, 0);
   }
 
-  /* Loader/PFM images carry their own boot-flash init block (last, so
-   * the ORG placement terminates the layout stream cleanly). */
-  if (mips_loader_pfm(pf)) {
-    mips_loader_boot_init_emit(pf);
+  /* A PFM image carries its own boot-flash init block unless an external
+   * bootloader owns boot flash (`pragma bootloader {addr}`).  Last, so
+   * the ORG placement terminates the layout stream cleanly. */
+  if (mips_image_pfm(pf) && !mips_boot_external(pf)) {
+    mips_boot_init_emit(pf);
   }
 
   /* resolve forward branches + JAL to float helpers */

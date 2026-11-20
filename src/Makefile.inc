@@ -7,7 +7,7 @@
 #
 # Original Authors: Kyle A. York, Rob Jansen
 # Author: Matthew Schinkel, 2026
-# Changes: fork extensions (build system) -- see fixes/ and git history
+# Changes: fork extensions (build system) -- see docs/fixes/ and git history
 #
 # Usage:
 #   higher level makefiles define PROGRAM (program name) or LIBRARY
@@ -81,17 +81,17 @@ else
 endif
 
 # Append experiment flags (e.g. ROM (A) `-DJALV2_ROM_A_STRING_LITERAL_CALL=1`) without
-# replacing the platform `CFLAGS` line — see `fixes/fix_rom_a_jalv2_rom_a_string_literal_call_toggle.md`.
+# replacing the platform `CFLAGS` line — see `docs/fixes/2026/fix_rom_a_jalv2_rom_a_string_literal_call_toggle.md`.
 CFLAGS += $(EXTRA_CFLAGS)
 
-# Build flavors (dev tooling, 2026-10-05 — fixes/fix_dev_tooling.md):
+# Build flavors (dev tooling, 2026-10-05 — docs/fixes/2026/fix_dev_tooling.md):
 #   SAN=1 (or the historical ASAN=1) -> ASan+UBSan debug build,
 #     bin/beta/jalv3-x86-64-san, objects in .obj-x86-64-san/
 #   COV=1 -> gcov instrumentation, bin/beta/jalv3-x86-64-cov,
 #     objects in .obj-x86-64-cov/ (.gcda written beside them)
 # Flavors get their OWN object dirs and output names so instrumented and
 # primary artifacts never mix (mixed-object lesson,
-# fixes/fix_pic32_startup_silicon_cache.md). Library names carry the same
+# docs/fixes/2026/fix_pic32_startup_silicon_cache.md). Library names carry the same
 # tag via lazy $(LIBTAG) expansion in the per-part Makefiles.
 FLAVOR :=
 FLAVORFLAGS :=

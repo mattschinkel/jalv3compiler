@@ -500,8 +500,8 @@ if (( LEVEL >= 1 )); then
   # Compile-only pins (negative diagnostics + implementation-defined codegen
   # shapes).  They run AFTER the runtime suites: gpsim-first discipline, and
   # a compile-clean run proves nothing about behavior.  This gate is what
-  # actually executes the scripts documented as "pins" in fixes/ (nothing
-  # did before 2026-10-22 -- see fixes/fix_test_suite_gap_audit.md).
+  # actually executes the scripts documented as "pins" in docs/fixes/ (nothing
+  # did before 2026-10-22 -- see docs/fixes/2026/fix_test_suite_gap_audit.md).
   if (( NO_PINS )); then
     skip "L1 compile-pin regressions (--no-pins)"
   else

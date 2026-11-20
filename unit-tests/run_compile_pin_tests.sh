@@ -121,11 +121,11 @@ run_sh front_ir_esp32              unit-tests/test_front_ir_parity_esp32.sh "$CC
 run_sh front_ir_clone_builtin      unit-tests/test_front_ir_clone_builtin.sh "$CC"
 # Public `string_*` helper calls are outlined through the strings_dynamic
 # forwarder (one shared body, ~21 words/site) instead of expanding the whole
-# builtin body (~740 words/site). fixes/fix_string_outline_calls.md.
+# builtin body (~740 words/site). docs/fixes/fix_string_outline_calls.md.
 run_sh string_outline_calls         unit-tests/test_string_outline_calls.sh "$CC"
 # Phase 4b: EVERY user-level string store must lower to the shared body (the
 # ~500-word inline expansion stays legal only inside the forwarder itself, per
-# the measurement recorded in docs/investigations/full_ir_phase4_decision_*).
+# the measurement recorded in docs/fixes/full_ir_phase4_decision_*).
 run_sh string_store_outline_coverage unit-tests/test_string_store_outline_coverage.sh "$CC"
 # A 'put/'get accessor used inside its own body compiles to a self-call (an
 # unbounded hardware-stack recursion, silently) -- refused with one message.
@@ -136,19 +136,19 @@ run_sh string_formal_literals      unit-tests/test_string_formal_literals.sh "$C
 # Open-array formal CHUNK-MAP ambiguity: a formal serving two different
 # multi-bank actuals walks only the first one's chunks (silently read the
 # first string's text); the compiler's `_strargN` buffer is the case the
-# author can act on (fixes/fix_openarray_formal_chunk_map.md).
+# author can act on (docs/fixes/2026/fix_openarray_formal_chunk_map.md).
 run_sh string_arg_chunk_map        unit-tests/test_string_arg_chunk_map.sh "$CC"
 # The USER-array half of the same defect: a formal fed two different multi-bank
 # user arrays addressed the second one with the first one's bank math.  Now
 # every such formal owns a map that each call site fills (and none is created
 # for a single layout -- the inertness the corpus relies on).
-# fixes/fix_openarray_user_array_percall.md
+# docs/fixes/2026/fix_openarray_user_array_percall.md
 run_sh openarray_user_array_percall unit-tests/test_openarray_user_array_percall.sh "$CC"
-# fixes/fix_openarray_out_formals.md
+# docs/fixes/2026/fix_openarray_out_formals.md
 run_sh openarray_out_params unit-tests/test_openarray_out_params.sh "$CC"
-# fixes/fix_openarray_pointer_store.md
+# docs/fixes/2026/fix_openarray_pointer_store.md
 run_sh openarray_pointer_store unit-tests/test_openarray_pointer_store.sh "$CC"
-# fixes/fix_open_bit_formal_out.md
+# docs/fixes/2026/fix_open_bit_formal_out.md
 run_sh open_bit_out_refused unit-tests/test_open_bit_out_refused.sh "$CC"
 run_sh error_hook                  unit-tests/test_error_hook.sh "$CC"
 run_sh optional_params_negative    unit-tests/test_optional_params_negative.sh "$CC"
@@ -168,14 +168,14 @@ run_sh reserved_internal_names    unit-tests/test_reserved_internal_names.sh "$C
 # The fixture pin covers the two known entries into the p-code builder's
 # missing-operand path; the fuzz run is the broad sweep. Both are DETERMINISTIC
 # (fixed seed + fixed input count) and the fuzz job fails on any crash or hang.
-# fixes/fix_malformed_input_clean.md.
+# docs/fixes/fix_malformed_input_clean.md.
 run_sh malformed_input_clean       unit-tests/test_malformed_input_clean.sh "$CC"
 # Shape-pathological inputs the mutating fuzzer cannot generate (deep
 # nesting, 2000 blocks, 1 MB arrays, binary junk). Every entry pins a
 # defect found by hand: unbounded parser recursion (SIGSEGV), the 1000-block
 # map cap that printed ERROR and exited 0, and the 1024-byte clamp that
-# silently skipped BSS clearing. fixes/fix_bounded_parser_recursion.md,
-# fixes/fix_data_area_map_guards.md.
+# silently skipped BSS clearing. docs/fixes/2026/fix_bounded_parser_recursion.md,
+# docs/fixes/fix_data_area_map_guards.md.
 run_sh adversarial_inputs          unit-tests/test_adversarial_inputs.sh "$CC"
 # Address-space exhaustion is a clean fatal exit (one line, exit 1, no signal,
 # no half-built-program diagnostics, no leftover HEX): fix_oom_policy +
@@ -194,7 +194,7 @@ run_py malformed_input_fuzz_multi  unit-tests/fuzz_jal_inputs.py --compiler "$CC
 run_sh pointer_bind_semantics      unit-tests/test_pointer_bind_semantics.sh "$CC"
 # The bind enforces the pointee signature: a scalar pointee takes a variable
 # of the same signature (or an element / scalar pseudo-variable), never an
-# array or a string.  fixes/fix_pointer_bind_signature.md.
+# array or a string.  docs/fixes/fix_pointer_bind_signature.md.
 run_sh pointer_bind_signature      unit-tests/test_pointer_bind_signature.sh "$CC"
 run_sh pointer_pseudo_binds        unit-tests/test_pointer_pseudo_binds.sh "$CC"
 run_sh multibank_array_errors      unit-tests/test_multibank_array_errors.sh "$CC"
@@ -236,10 +236,10 @@ run_sh pic12_indirect_refusal     unit-tests/test_pic12_indirect_refusal.sh "$CC
 run_sh two_compiles               unit-tests/test_two_compiles.sh "$CC"
 # Header dependency tracking (the mixed-object lesson): a header edit must
 # rebuild the CURRENT flavor's object, and building another flavor must not
-# rewrite the dependency rules. fixes/fix_build_dep_flavor_collision.md
+# rewrite the dependency rules. docs/fixes/2026/fix_build_dep_flavor_collision.md
 run_sh build_deps                  unit-tests/test_build_deps.sh
 # Stack-depth walker edge classes: small CFG shapes with an unambiguous depth,
-# plus the at-limit / over-limit diagnostics (fixes/fix_pic_stack_depth_*.md).
+# plus the at-limit / over-limit diagnostics (docs/fixes/fix_pic_stack_depth_*.md).
 run_sh stack_depth_cfg             unit-tests/test_stack_depth_cfg.sh "$CC"
 run_py in_process_units            unit-tests/test_inprocess_units.py --compiler "$CC"
 run_sh task_locals                 unit-tests/test_task_locals.sh "$CC"
@@ -262,6 +262,9 @@ run_sh cli_hex_contract           unit-tests/test_cli_hex_contract.sh "$CC"
 # PIC32 implementation-defined shapes that QEMU cannot model
 run_py pic32_bootflash_fuses       unit-tests/test_pic32_bootflash_fuses.py --compiler "$CC"
 run_py pic32_isr_shapes            unit-tests/test_pic32_isr_shapes.py --compiler "$CC"
+run_py pic32_image_shape           unit-tests/test_pic32_image_shape.py --compiler "$CC"
+run_py pic32_pbclk                 unit-tests/test_pic32_pbclk.py --compiler "$CC"
+run_py pic32_loader_internal       unit-tests/test_pic32_loader_internal.py --compiler "$CC"
 run_py pic32mx_mvec_layout         unit-tests/test_pic32mx_mvec_layout.py --compiler "$CC"
 
 # Source comment blocks vs the code they document (no build needed).
@@ -287,7 +290,7 @@ run_py validate_contract           unit-tests/check_validate_contract.py
 run_py validate_exemptions         unit-tests/check_validate_exemptions.py
 # The harness's own decision points (crash-without-summary = failure, spawn
 # error vs sample failure, asm-noise normalization, --compare with no
-# baseline exits 2). Every bug in fixes/fix_unittests_*.md was a green harness
+# baseline exits 2). Every bug in docs/fixes/fix_unittests_*.md was a green harness
 # measuring nothing; this is the self-test that does not need a compiler.
 run_py harness_contract            unit-tests/test_harness_contract.py
 # (test_pic32mx_clock_words.py is its own L1 gate in unit-tests/run_gates.sh.)

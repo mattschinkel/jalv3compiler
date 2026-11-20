@@ -1,10 +1,142 @@
 # TODOS
 
 Live, prioritized backlog for jalv3. Sources: the one-access-model design
-(`doc/designs/one-access-model.md`) and the open items carried out of the
-workspace backlog (`/home/jal/AGENTS.md`, "TODO / pending work" — that
+(`docs/designs/one-access-model.md`) and the open items carried out of the
+workspace backlog ("TODO / pending work" — that
 section keeps the detailed history and links; the open entries are mirrored
 here). Each entry names its evidence and the fix/investigation doc.
+
+## PIC32/MIPS32: a `dword` procedure parameter appears to corrupt the caller (ROOT-CAUSED 2026-11-15 — program reads the EJTAG mailbox twice; not codegen)
+
+- **What:** On PIC32, adding a procedure that takes a `dword` parameter and
+  calling it from one branch of an `if/elsif` chain changes the result of a
+  *different* branch that is never entered. A `byte` parameter or no parameter
+  at all is fine. Bisected on hardware (PIC32MX270F256B @ 40 MHz, driving the
+  EJTAG mailbox): the `PE_EXEC_VERSION` reply becomes `0x00000007` instead of
+  `0x00070301` — the low half (the version) is lost.
+- **Why:** Silent, and the symptom is far from the cause: correct-looking code
+  compiles and links, and the value that goes wrong is produced by a path the
+  new procedure never touches. It blocks the JAL rewrite of Microchip's PIC32
+  flash agent (`share/JALPIC_One_PIC32_share/pic32_flash_agent.jal`), whose
+  handlers take `dword` arguments.
+- **Root cause (2026-11-15, verified on the bench):** the test program reads
+  the FastData mailbox **twice per command**:
+  `cmd = mailbox >> 16` and `arg = mailbox & 0xFFFF`.  Every CPU access to
+  `0xFF200000` is paired with one host FastData operation (a host write is
+  consumed by a processor load, a host read supplied by a processor store), so
+  the second load stalls and the host's read returns a stale value instead of
+  the reply — `0x00000007`, the command half of the host's own `0x00070000`.
+  The `dword` parameter did not corrupt anything: `do_read(arg)` keeps `arg`
+  alive, `arg` forces the second load, and the passing build only passed
+  because dead-code elimination of the unused `arg` left one mailbox access
+  per host word.  Disassembly, QEMU and the bench A/B are in
+  `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`: the two reads appear at the loop
+  head, the version branch/reply/post are identical modulo `$gp` offsets, and
+  the same witness with `cmdword = mailbox` returns `0x00070301` on the
+  target.
+- **Fixed:** both witnesses (`witness_no_param.jal`, `witness_dword_param.jal`)
+  read once; `pic32_flash_agent.jal` reads the command word once and no longer posts
+  `0xCAFEBABE` at startup (with the handshake that post is consumed as the
+  first reply); `pic32_prog.py --flash-agent-addr` settles 0.1 s after `jump_to`.
+  Hardware after the fix: witness PASS `0x00070301`; flash agent version
+  `0x00070301`, `--verify-read` of its own image **3,188 bytes OK**, and a
+  vendor-programmed row read back 32/32 through the flash agent.
+- **Also fixed on the way (agent, not codegen):** `NVMCONSET = NVMCON_WR` wrote
+  the bit's 0/1 value instead of the `0x8000` mask, so no NVM operation ever
+  started (`flash_end` then saw WR already clear and reported success); row
+  program never set `NVMSRCADDR` and its buffer was cached; and the NVMOP
+  row/word codes were swapped (1 = word, 3 = row on MX1/2).  With those in,
+  the agent programs, erases pages and CRC-verifies on the bench (see the
+  "write path" entry below and `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`).
+- **Found while auditing "dword and larger":** a real, *different* codegen
+  defect in the same area — a PIC32 indirect call (any proc also called
+  through a pointer) with a `qword` formal strands the value cache across the
+  raw 8-byte copy, so a neighbouring 4-byte formal's next read is elided and
+  returns the qword's high word.  Fixed 2026-11-15
+  (`docs/fixes/2026/fix_mips_wide_assign_cache.md`), witness
+  `sims/pic32/32mx270f256b_param_wide_copy.jal` (pre-fix `0x1C`, post-fix
+  `0x1F`; 183 existing PIC32 images byte-identical).  It needs a qword
+  formal, so it does not explain the agent report.
+- **Context:** `docs/fixes/2026/fix_dword_param_report.md` has the full
+  bisection (six builds) and the observation recipe (write `0x00070000` to
+  `0xFF200000`, read back).  Both witnesses are built at 40 MHz with the
+  CHECON fix from `docs/fixes/2026/fix_pic32mx_flash_wait_states.md`, which is unrelated.
+- **Effort:** root cause + witness fix delivered; the agent write path is
+  bench-bound.
+- **Priority:** P3 (the reported corruption is closed; the agent write path
+  continues in its own entry below).
+- **Depends on:** nothing for the report; bench for the agent write path.
+
+## PIC32 flash agent — write path (DONE 2026-11-15: NVMOP row/word were swapped)
+
+- **What:** `pic32_flash_agent.jal` now programs flash on the bench.  The payload was
+  never lost (a debug build returned the first and last row words intact);
+  the operation codes were reversed: on this MX1/2 part **1 = word program**
+  (`NVMDATA`), **3 = row program** (`NVMSRCADDR`), **4 = page erase**.  With
+  `NVMOP_ROW = 1` / `NVMOP_WORD = 3` the agent wrote one zero word for a "row"
+  and a whole stale-source row for a "word".  The early spare addresses
+  (`0x1D040000`, `0x1D050000`) were also past the end of the 256 KB array,
+  which is why their reads were zeros and their writes `WRERR`.
+- **Verified on the bench:** row program 32/32 words at `0x1D020000`; word
+  program `0xDEADBEEF` at `0x1D030000`; `--verify` CRC every row `ok` through
+  the agent; page erase (`NVMOP 4`) leaves the page erased while the agent keeps
+  running.
+- **Also landed in the same pass:** `NVMCONSET = WR_MASK` (the SET register
+  takes the mask, not the bit's 0/1 value), `NVMSRCADDR` set for row program
+  with the buffer at a KSEG1 alias, one mailbox read per command word, no
+  startup mailbox post, and a 0.1 s `--flash-agent-addr` settle (plus `--verify` now
+  enters the agent).
+- **Context:** `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`.
+- **Effort:** delivered.
+- **Priority:** P3 (done).
+
+## PIC32 flash agent — RAM deployment (DONE 2026-11-15)
+
+- **What:** the agent is now built for and downloaded into SRAM, the same RAM-loaded model
+  the host expects: no flash footprint, no app-layout change, and a
+  controller chip erase cannot remove it.  It is linked at `0xA0004000` — just
+  above the 16 KB window the PIC32 startup clears before `_main` — through
+  `pragma bootloader 0xA0004000`; `build_flash_agent_ram.py` produces `flash_agent_ram.hex` and
+  the raw little-endian word image `flash_agent_ram.bin`, and `pic32_prog.py` gained
+  `--flash-agent-load` (default `0xA0004000`; a vendor bootstrap image would need `0xA0000900`).
+- **Verified on the bench:** `pic32_prog.py --hex blink.hex --erase --program
+  --verify-read` with the defaults (our agent, no vendor binary) erases, downloads
+  723 words, programs 13 rows + 4 config words, and reads back 1,436 bytes
+  OK.  A vendor bootstrap image still loads with `--flash-agent <file> --flash-agent-load 0xA0000900`.
+- **Fixed on the way:** `next_word()` replaced its "wait for a value change"
+  loop with a single read.  With the FastData handshake each read consumes
+  one host word, so the old loop desynced on two identical data words in a
+  row — image rows contain them (padding, repeated instructions), which is
+  why the flash-resident agent programmed simple test rows but failed partway
+  through a real image.
+- **Not needed:** `-no-clear` (still ignored by the PIC32 back end); the
+  `0xA0004000` placement avoids the startup clear instead.  A flash-resident
+  monitor would still need it, or a reserved-region layout.
+- **Context:** `docs/fixes/2026/fix_flash_agent_mailbox_single_read.md`, `build_flash_agent_ram.py`,
+  `flash_agent_ram.bin`, `flash_agent_ram.hex`.
+- **Effort:** delivered.
+
+## Host tool: Microchip loader stub removed (DONE 2026-11-15)
+
+- **What:** `PE_LOADER` in `pic32_prog.py` is now an original 15-instruction
+  stub (destination, count, payload, then a `0xDEAD0000` start sentinel; copy
+  and jump), replacing the 42-halfword DS61145 sample.  The default agent image is our
+  `flash_agent_ram.bin`; `a vendor bootstrap image` is an optional bootstrap only.  Provenance notes
+  in `pic32_flash_agent.jal` now cite the published mailbox protocol and the documented
+  MX1/2 flash controller, and `share/JALPIC_One_PIC32_share/NOTICE` states
+  what is ours and what is excluded.
+- **Verified:** the stub downloads our agent (723 words, version `0x00070301`)
+  and a vendor bootstrap image (422 words) and both program and verify; the full
+  erase/program/read-back cycle passes with the defaults.
+- **Still private:** `a vendor bootstrap image` (out of tree, `jal-private/`) and
+  `the vendor disassembly notes` (disassembly listings).  Neither is needed by a
+  distributed tool: any working programmer can install ours, and ours programs every
+  subsequent image.
+- **Context:** `share/JALPIC_One_PIC32_share/NOTICE`, `pic32_prog.py`,
+  `build_flash_agent_ram.py`.
+- **Effort:** delivered.
+
+## Land the E1+E2+E3 batch (DONE 2026-11-11 — commit `522468f`)
 
 ## Land the E1+E2+E3 batch (DONE 2026-11-11 — commit `522468f`)
 
@@ -17,17 +149,17 @@ here). Each entry names its evidence and the fix/investigation doc.
   stale relative to this source, and L3 has not run for this batch.
 - **Pros:** Makes the batch shippable and the tracked binaries consistent.
 - **Cons:** None; it is the release step, not new work.
-- **Context:** E1-E3 fix docs are in `fixes/`; final L2 was ALL GATES PASS
+- **Context:** E1-E3 fix docs are in `docs/fixes/`; final L2 was ALL GATES PASS
   (897 s) with hex manifest 0 drift. Committed 2026-11-11 (`522468f`) with
   both tracked binaries; the `Commit:` headers in the E-series fix docs are
   still `(pending)` and want backfilling, as does the L3 line in
-  `fixes/fix_whereis_runtime_slot_fat.md`.
-- **Effort:** human S / CC ~1h (plus the L3 run).
+  `docs/fixes/2026/fix_whereis_runtime_slot_fat.md`.
+- **Effort:** human S (plus the L3 run).
 - **Priority:** P1.
 - **Depends on:** nothing; the recipe-row coverage gap below does not block
   landing (the gate reports it).
 
-## U3 registry boundary (DONE 2026-11-11 — `fixes/fix_u3_pair_attach.md`)
+## U3 registry boundary (DONE 2026-11-11 — `docs/fixes/2026/fix_u3_pair_attach.md`)
 
 - **What:** The open-array (actual -> formal) pairs now live on the CALL
   branch command (`cmd_branch_pair_t`: dup/free/dump, the record rules
@@ -57,7 +189,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   expected pairs per call and the `u3_pair_attach` pin proves it non-vacuous
   with drop/alter fault hooks; the corpus (2,940 images) and all 303
   classic sims are byte-identical.
-- **Effort:** human ~2-3 wk / CC ~3-5 d (delivered).
+- **Effort:** human ~2-3 wk (delivered).
 - **Priority:** P1.
 - **Depends on:** nothing.
 
@@ -72,7 +204,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   (`pic_var_pointer_bind_check_escaped`, `src/libpic12/pic_var.c:684`).
 - **Why:** it is the last file-static registry the plan path reads, and U3's
   close-out defers it by name ("`ptr_binds` stays persistent (its refactor
-  was deferred in the plan)", `fixes/fix_u3_pair_attach.md`).  Under the fat
+  was deferred in the plan)", `docs/fixes/2026/fix_u3_pair_attach.md`).  Under the fat
   engine the bind decision already comes from the `BIND` recipe rows, so the
   registry is now a fallback plus the classic-only refusal.
 - **Pros:** completes the deletion arc U3 started and removes cross-pass
@@ -82,10 +214,10 @@ here). Each entry names its evidence and the fix/investigation doc.
   `JALV2_FAT_POINTERS=0` rollback switch (owner-deferred to the release
   after this one).  Porting only the fat-side escaped bit is possible now;
   doing both at once is cheaper AFTER the switch is removed.
-- **Context:** `fixes/fix_u3_pair_attach.md` "Deferred / open";
+- **Context:** `docs/fixes/2026/fix_u3_pair_attach.md` "Deferred / open";
   `src/libpic12/pic_var.c` (the registry and its accessors, ~600-730);
   consumers `src/libpic12/pic_op_ptr.c:80` and `src/libpic12/pic.c:6813`.
-- **Effort:** human ~3-5 d / CC ~1-2 d (registry-scale, not a linkage edit).
+- **Effort:** human ~3-5 d (registry-scale, not a linkage edit).
 - **Priority:** P3.
 - **Depends on:** none; the rollback-switch removal is the natural moment
   (so the classic half is deleted rather than ported).
@@ -94,29 +226,29 @@ here). Each entry names its evidence and the fix/investigation doc.
 
 - **What:** every F5 surface except the G3 slot identity (tracked as the S3
   residual below) is closed and the **default flip landed
-  2026-11-11** (`fixes/fix_fat_default_flip.md`): `JALV2_FAT_POINTERS`
+  2026-11-11** (`docs/fixes/2026/fix_fat_default_flip.md`): `JALV2_FAT_POINTERS`
   defaults **on**, precedence is pragma > env > on, `JALV2_FAT_POINTERS=0`
   still restores the classic images for one release (one `JALV2-NOTICE` per
   compile) and `pragma target fat_pointers off` is the per-program opt-out.
   The fat default-flip blocker landed 2026-11-11: the 14H 3-byte pointer
   form staged the ROM/UPPER byte as PCLATH for `_pic_indirect`, so an
   indirect device call jumped to the wrong page
-  (`fixes/fix_fat_ptr3_indirect_page.md`); the fat-on L1 is green.  The
+  (`docs/fixes/2026/fix_fat_ptr3_indirect_page.md`); the fat-on L1 is green.  The
   walk-path null guard landed 2026-11-11
-  (`fixes/fix_unbound_walk_guard.md`; F5 §4).  The chunked-heap append
+  (`docs/fixes/2026/fix_unbound_walk_guard.md`; F5 §4).  The chunked-heap append
   growth landed 2026-11-11
-  (`fixes/fix_string_heap_append.md`; the F5 §1.2 item).  Strict `JALV2_*`
+  (`docs/fixes/2026/fix_string_heap_append.md`; the F5 §1.2 item).  Strict `JALV2_*`
   switch parsing + `--features` landed 2026-11-11
-  (`fixes/fix_env_switches.md`).  CLI validation (ENG S1) landed 2026-11-11:
+  (`docs/fixes/2026/fix_env_switches.md`).  CLI validation (ENG S1) landed 2026-11-11:
   the `-explain-access` line must be 1..65535, the dump path non-empty, an
   unreadable source fails without an image and an unwritable dump fails
   without touching a pre-existing output
-  (`fixes/fix_access_cli_validation.md`, pin `test_access_cli.sh`); the
+  (`docs/fixes/2026/fix_access_cli_validation.md`, pin `test_access_cli.sh`); the
   mingw toolchain version is recorded in
   `bin/beta/jalv3-x86-64.exe.provenance`.  G3 slot surfaces: **S1 (runtime element offset) and S2 (runtime slot
-  index) landed 2026-11-11** (`fixes/fix_fat_slot_runtime_ofs.md`,
-  `fixes/fix_fat_slot_runtime_index.md`); **S3's runtime pointee subscript
-  landed** (`fixes/fix_fat_slot_array_subscript.md`).  S3's fat slot VALUE
+  index) landed 2026-11-11** (`docs/fixes/2026/fix_fat_slot_runtime_ofs.md`,
+  `docs/fixes/2026/fix_fat_slot_runtime_index.md`); **S3's runtime pointee subscript
+  landed** (`docs/fixes/2026/fix_fat_slot_array_subscript.md`).  S3's fat slot VALUE
   for array pointees (identity for a loaded pointer) is parked on a
   front-end split of the slot offset from the pointee subscript; the
   design and touchpoints are in
@@ -137,7 +269,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   this one**; every engine-off branch is still live through the rollback,
   so there is no dead classic code to delete before then.
 - **Context:** `docs/investigations/fat_pointer_f5_survey_20261109.md`; F2d
-  record `fixes/fix_fat_pointer_f2d_table.md`; flip measurement
+  record `docs/fixes/2026/fix_fat_pointer_f2d_table.md`; flip measurement
   `docs/investigations/fat_default_flip_measurement_20261110.md`. The 14H
   3-byte automatic selection stays parked (size is fixed at parse time; the
   3-byte default removed the motivation) — reopen only if a pre-parse pass
@@ -149,7 +281,7 @@ here). Each entry names its evidence and the fix/investigation doc.
 
 ## S3 residual — fat slot VALUE for array pointees (G3 identity) — DONE 2026-11-14
 
-- **Status:** LANDED — `fixes/fix_fat_slot_array_identity.md`.  A pointer
+- **Status:** LANDED — `docs/fixes/2026/fix_fat_slot_array_identity.md`.  A pointer
   slot bound to an ARRAY now stores the ordinary fat pointer value
   `(id(big), offset)` under the engine (design D4), so a **loaded** pointer
   (`p = pa[0]`) carries the object identity and `p[i]` reuses the O(1)
@@ -167,14 +299,14 @@ here). Each entry names its evidence and the fix/investigation doc.
   and closes the documented `k>0` gap for the loaded-pointer form.
 - **Context:** design memo
   `docs/investigations/fat_slot_g3_design_20261111.md` (D4/D5 + the
-  measurement arms); landed slice `fixes/fix_fat_slot_array_subscript.md`;
+  measurement arms); landed slice `docs/fixes/2026/fix_fat_slot_array_subscript.md`;
   witnesses `sims/picsim/16f18857_picsim_pointer_slot_array_runtime.jal`
   and `sims/gpsim/16f887_gpsim_pointer_slot_array_runtime.jal` (loaded-pointer
   arm added); pin `unit-tests/test_fat_pointer_deref.sh` (G3 S3 encoding
   refreshed); access-matrix/coverage baseline refreshed (22/29 rows —
   `NOT_FAT_BIND` is shadowed by `FAT_BIND` under the engine, the intentional
   D4 flip).
-- **Effort:** human ~1 wk / CC ~1-2 d.
+- **Effort:** human ~1 wk.
 - **Priority:** P2.
 
 ## Recipe-row coverage fixtures (A12)
@@ -185,7 +317,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   (`sims/picsim/16f18857_picsim_whereis_slot_runtime.jal`,
   `sims/gpsim/16f887_gpsim_string_arg_view_in.jal`) and the baseline pins
   **23/29**.  Rows **1, 25** were already covered.  The six remaining rows
-  are audited in `fixes/fix_recipe_row_fixtures.md`: **3, 4, 7, 9** are
+  are audited in `docs/fixes/2026/fix_recipe_row_fixtures.md`: **3, 4, 7, 9** are
   structurally unreachable through the current routers (a lookup write is
   refused before emit; the ptr-class router always sets PTR_LOOKUP at
   PTR_WRITE and the read rows 7/9 need a key the router never produces);
@@ -205,12 +337,12 @@ here). Each entry names its evidence and the fix/investigation doc.
   rows 3/4/7/9/16/22.
 - **Context:** `unit-tests/plan-matrix/coverage.txt` pins the current set and
   `run_access_matrix.sh --check` fails on regressions;
-  `fixes/fix_recipe_row_fixtures.md` records the row-by-row audit.
-- **Effort:** human ~1d / CC ~2h for the residual if the grammar changes.
+  `docs/fixes/2026/fix_recipe_row_fixtures.md` records the row-by-row audit.
+- **Effort:** human ~1d for the residual if the grammar changes.
 - **Priority:** P3.
 - **Depends on:** none; E2's row identity does not affect it.
 
-## `WHEREIS` of a runtime subscript silently drops the offset (DONE 2026-11-14 — refused, `fixes/fix_whereis_runtime_subscript.md`)
+## `WHEREIS` of a runtime subscript silently drops the offset (DONE 2026-11-14 — refused, `docs/fixes/2026/fix_whereis_runtime_subscript.md`)
 
 - **What:** `c = whereis(big[i])` with a runtime `i` returns the array BASE.
   On 16F18857 with `big[200]` at 0x22, `i = 100` emits `movlw 34; movwf c`
@@ -224,7 +356,7 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Why:** a silent wrong address.  `whereis(big[i]) - whereis(big[0])` is 0
   for every `i`, and a program that derives a pointer from it reads the wrong
   byte.  This is NOT the runtime-slot form fixed 2026-11-12
-  (`fixes/fix_whereis_runtime_slot_fat.md`, which is `WHEREIS(pa[k])` on a
+  (`docs/fixes/2026/fix_whereis_runtime_slot_fat.md`, which is `WHEREIS(pa[k])` on a
   pointer slot and resolves the fat tag); this is a plain array with a
   runtime index.
 - **Pros:** Closes the last silent `WHEREIS` shape; the refusal variant is a
@@ -236,7 +368,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   `src/libpic12/pic_op_assign.c`.  The address-report item below landed
   2026-11-14: a refused runtime subscript returns before the emit site, so it
   prints no `whereis:` line (the error is the report).
-- **Effort:** human S / CC ~1 h (refuse) | ~3 h (support).
+- **Effort:** human S.
 - **Priority:** done (refused — the small variant; support deferred).
 - **Depends on:** none.
 
@@ -247,7 +379,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   The read emits `base + 6 + index` and a chunk walk over `_string_heap`; the
   defect is not yet localized, so the first deliverable is a witness that
   reproduces it and names the stage that stalls.
-- **Why:** recorded as a residual in `fixes/fix_string_heap_append.md`
+- **Why:** recorded as a residual in `docs/fixes/2026/fix_string_heap_append.md`
   (2026-11-11) and it reproduces with the pre-fix binary, so it is a
   pre-existing defect rather than a regression from the growth policy; it
   had no ticket until now.
@@ -256,10 +388,10 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Cons:** Measure first: the stall may sit in the caller rather than the
   read path, in which case the deliverable is a witness plus a record, not a
   fix.
-- **Context:** "Residual" in `fixes/fix_string_heap_append.md`; the same
+- **Context:** "Residual" in `docs/fixes/2026/fix_string_heap_append.md`; the same
   section records that `pragma string alloc best_fit` still only affects the
   exact request.  Heap growth itself is fixed (2026-11-11).
-- **Effort:** human ~1 d / CC ~2-3 h.
+- **Effort:** human ~1 d.
 - **Priority:** P3.
 - **Depends on:** none.
 
@@ -267,7 +399,7 @@ here). Each entry names its evidence and the fix/investigation doc.
 
 - **What:** Phases 3 and 4 landed (the block-dup clone at `2e65a20`, the
   phase-4 measured decision memo).  **Phase 7 landed 2026-11-12**
-  (`fixes/fix_clone_eligibility_marker.md`): the dead
+  (`docs/fixes/2026/fix_clone_eligibility_marker.md`): the dead
   `body_pos`/`body_pos_valid` marker is gone (its only reader was the
   clone-eligibility test; the plan's `block_ct > 0` replacement is
   unusable because the block count is only generated by the -dump path,
@@ -282,13 +414,13 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Pros:** Removes the last stale state on the retired re-parse.
 - **Cons:** None; bookkeeping.
 - **Context:** Plan Phase 7; `docs/investigations/full_ir_phase4_decision_20261107.md`;
-  `fixes/fix_clone_eligibility_marker.md`.
-- **Effort:** human ~2-4 h / CC ~1 h — either write the ~31-formal clone
+  `docs/fixes/2026/fix_clone_eligibility_marker.md`.
+- **Effort:** human ~2-4 h — either write the ~31-formal clone
   witness that drives the mask width, or retire the note.
 - **Priority:** P3.
 - **Depends on:** none.
 
-## Access-recipe adoption on the 32-bit back ends (DONE 2026-11-12 — `fixes/fix_access_recipe_32bit_families.md`)
+## Access-recipe adoption on the 32-bit back ends (DONE 2026-11-12 — `docs/fixes/2026/fix_access_recipe_32bit_families.md`)
 
 - **What:** Phase 8.  **Landed 2026-11-12:** the PIC32 pointer-WRITE family
   and the ESP32 deref-ADDRESS family (shared by its read and write paths)
@@ -315,7 +447,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   (mask rule audited) as the classic family.
 - **Cons:** The recorder is the orthogonal half; without it the per-backend
   plan-diff subset cannot exist.
-- **Context:** `fixes/fix_access_recipe_32bit_families.md` (the A/B:
+- **Context:** `docs/fixes/2026/fix_access_recipe_32bit_families.md` (the A/B:
   246/246 images byte-identical across sims/pic32 + sims/esp32);
   `src/libcore/access_recipe.h`; the spike record in E3.
 - **Effort:** delivered 2026-11-12; the phase doc states nothing in the
@@ -335,7 +467,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   code rather than deleting it.
 - **Why:** the plan's C12 payoff metric: the interpreter must shrink the
   special cases to earn its complexity; it did not.
-- **Context:** `fixes/fix_access_interpreter_no_go.md` (the prototype, the
+- **Context:** `docs/fixes/2026/fix_access_interpreter_no_go.md` (the prototype, the
   dual-path/fault-hook proof, and the measurements).  Reopen only after
   the recipe KEY carries the deciding facts (OPENARRAY, pointee
   mutability) so a row's behavior is a function of the key alone.
@@ -365,8 +497,8 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Pros:** The benchmarked handoff pattern (ISR bumps `tick`, main
   observes, parks on `done`) is now covered on both targets.
 - **Cons:** The silicon half stays untested by decision, not by omission.
-- **Context:** gap list in `/home/jal/AGENTS.md` ("Interrupt (ISR) test
-  coverage"); `fixes/fix_isr_source_bodies.md` records the Phase 4 landing
+- **Context:** gap list in the private project notes ("Interrupt (ISR) test
+  coverage"); `docs/fixes/2026/fix_isr_source_bodies.md` records the Phase 4 landing
   and the excluded hardware half.
 - **Effort:** none.
 - **Priority:** P3 (record).
@@ -398,7 +530,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   stable over repeated resets: the APP core claims the started `painter`
   task with `S32C1I`, runs it on its own stack, and the PRO core resumes
   main, which sees the shared counter pass 1000.  Four measured causes
-  were fixed on the way (recorded in `fixes/fix_smp_dispatcher.md`):
+  were fixed on the way (recorded in `docs/fixes/2026/fix_smp_dispatcher.md`):
   the DPORT release preceded the `.bss` zeroing (the APP core claimed
   staging garbage as a task PC); both cores shared one stack (now a
   private 4 KB `_esp32_app_stack`); `S32C1I` against DRAM does not store
@@ -458,7 +590,7 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Cons:** Bench-bound; not observable in QEMU.
 - **Context:** `docs/investigations/mz_isr_nesting_20261103.md`; the
   ErrorEPC line-map method is ready for any candidate chip.
-- **Effort:** bench-bound; CC ~2 h per attempt.
+- **Effort:** bench-bound.
 - **Priority:** P3.
 - **Depends on:** a working MZ bench (or a new chip).
 
@@ -466,22 +598,26 @@ here). Each entry names its evidence and the fix/investigation doc.
 
 - **What:** A jalv2 bare-metal boot-flash build: compiler startup, UART1
   transport, NVM row-writes (SYSKEY/NVMCON sequence), KSEG0 jump to the
-  `pragma bootloader pic32` app; the compiler emits the paired boot flash
+  `pragma bootloader {addr}` app; the compiler emits the paired boot flash
   directly (the vendor flow has no in-bootloader dispatch).
 - **Why:** Future direction (noted 2026-10-01); when a bootloader is wanted
   it will be a JAL program, not the vendor one.
 - **Pros:** End-to-end JAL PIC32 toolchain.
-- **Cons:** Prerequisite: fix the PFM-layout 2x quirk first; USB HID
-  transport is a much bigger lift than UART.
-- **Context:** `/home/jal/AGENTS.md` ("PIC32 bootloader written in JAL") —
-  the vendor-flow reverse-engineering intel is recorded in that entry (the
-  linked retired doc is not in this checkout). `pragma bootloader pic32`
-  already exists for the app side. The PFM-layout 2x quirk prerequisite is
-  still OPEN — `fixes/fix_pic32_startup_silicon_cache.md` ("Open quirk --
-  PFM layout runs 2x slow with the prologue").
-- **Effort:** human ~1-2 wk / CC ~3-5 d.
+- **Cons:** USB HID transport is a much bigger lift than UART; the
+  boot-flash ISR path is refused by design (boot-flash images cannot
+  dispatch interrupts - use PFM), so an interrupt-driven loader needs the
+  bench-only EBASE work first.
+- **Context:** the vendor-flow reverse-engineering intel is recorded in the
+  private project notes (the linked retired doc is not in this checkout).
+  `pragma bootloader {addr}` already exists for the app side, and since
+  2026-11-14 the PFM app shape is the compiler default
+  (`docs/fixes/2026/fix_pic32_image_shape_split.md`). The PFM-layout 2x quirk
+  prerequisite is CLOSED (2026-10-17) — see
+  `docs/fixes/2026/fix_pic32_startup_silicon_cache.md`. Remaining prerequisite: none
+  recorded for the UART transport.
+- **Effort:** human ~1-2 wk.
 - **Priority:** P3.
-- **Depends on:** the PFM-layout 2x quirk.
+- **Depends on:** none (the PFM-layout 2x quirk closed 2026-10-17).
 
 ## Module / separate-compilation architecture
 
@@ -496,13 +632,13 @@ here). Each entry names its evidence and the fix/investigation doc.
   run.
 - **Pros:** Required at OS scale; keeps the small-MCU whole-program path.
 - **Cons:** Very large; a design gate must pass first.
-- **Context:** `/home/jal/AGENTS.md` ("Module / separate-compilation
+- **Context:** the private project notes ("Module / separate-compilation
   architecture").
-- **Effort:** human XL / CC design gate ~1-2 d, implementation weeks.
+- **Effort:** human XL, implementation weeks.
 - **Priority:** P3.
 - **Depends on:** the original decision gate (measure a real large project).
 
-## `whereis` address reporting in `-explain-access` (DONE 2026-11-14 — `fixes/fix_whereis_explain_access.md`)
+## `whereis` address reporting in `-explain-access` (DONE 2026-11-14 — `docs/fixes/2026/fix_whereis_explain_access.md`)
 
 - **What:** `-explain-access <file>:<line>` now reports a WHEREIS resolved on
   the line, not just the access rows.  The new `whereis:` line carries the
@@ -519,14 +655,14 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **No fabricated recipe:** WHEREIS is not an emitted access and resolves
   through the chunk map, not the plan, so it has no recipe row.  The address
   line is the join; the access rows are the recipe half and are unchanged.
-- **Context:** `fixes/fix_whereis_explain_access.md`; pin arms in
+- **Context:** `docs/fixes/2026/fix_whereis_explain_access.md`; pin arms in
   `unit-tests/test_access_cli.sh` (chunked + linear, both fail pre-fix);
   images byte-identical against the HEAD binary.  A runtime-slot
   `WHEREIS(pa[k])` has no compile-time address and prints no line.
 - **Effort:** delivered (~1 h).
 - **Priority:** done.
 
-## A3 — one placement policy (DONE 2026-11-13 — `fixes/fix_pic_mem_place.md`)
+## A3 — one placement policy (DONE 2026-11-13 — `docs/fixes/2026/fix_pic_mem_place.md`)
 
 - **What:** the placement subsystem now has **one entry**, `pic_mem_place()`:
   a request carries a policy -- SINGLE (one window, with an optional defer),
@@ -547,7 +683,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   access matrix 0 drift.  The only programs that can change are ones that
   used to refuse (leftover / fragmented single-window objects), which now
   defer and are placed.
-- **Descriptor:** `fixes/fix_pic_mem_descriptor.md` -- `pic_mem.h` now owns
+- **Descriptor:** `docs/fixes/2026/fix_pic_mem_descriptor.md` -- `pic_mem.h` now owns
   the request (`pic_mem_request_t`: need/padding/slots/stride/chunkable/
   bit-array/linear-only/pointer-target/virt/region/policy) and the result
   view; the adapters read the variable once, and the search reads only the
@@ -557,9 +693,9 @@ here). Each entry names its evidence and the fix/investigation doc.
   commit target is a variable/group (every placed object is
   variable-backed today, including compiler scratch); the request is a pic12
   backend API, and the 32-bit allocators remain separate by design.
-- **Context:** `fixes/fix_pic_mem_place.md`, the frame/walk fix docs,
+- **Context:** `docs/fixes/2026/fix_pic_mem_place.md`, the frame/walk fix docs,
   `docs/investigations/unified_allocator_20261108.md` (A3).
-- **Facade finish** (`doc/designs/finish-placement-facade.md`): a review of
+- **Facade finish** (`docs/designs/finish-placement-facade.md`): a review of
   the landed A3 found the architecture correct but the facade unfinished --
   dead DEFER/PINNED policies, hand-rolled FRAME requests, a three-way
   element-stride rule, and `req->region` dead for GROUP.  Step 1 (drop the
@@ -569,7 +705,7 @@ here). Each entry names its evidence and the fix/investigation doc.
   the dead region field) all landed 2026-11-13 byte-identical.
 - **Priority:** done; facade finished.
 
-## A7 — the always-on allocator report (DONE 2026-11-14 — `fixes/fix_alloc_report_a7.md`)
+## A7 — the always-on allocator report (DONE 2026-11-14 — `docs/fixes/2026/fix_alloc_report_a7.md`)
 
 - **What:** the allocator now reports its own usage.  One static helper
   `pic_mem_usage_get()` computes data/shared used/free/largest; the end-of-
@@ -585,8 +721,8 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Residual (deferred):** the ERR escape hatch (`JALV2_ALLOC_AUDIT=warn`
   demote), and piece-3 model purity (the coverage check still reads
   `pic_variable_storage_need_get` instead of the object view).
-- **Context:** `fixes/fix_alloc_report_a7.md`,
-  `doc/designs/finish-allocator-report.md`,
-  `doc/designs/finish-allocator-report.ceo-review.md`,
+- **Context:** `docs/fixes/2026/fix_alloc_report_a7.md`,
+  `docs/designs/finish-allocator-report.md`,
+  `docs/designs/finish-allocator-report.review.md`,
   `docs/investigations/unified_allocator_20261108.md` (A7).
 - **Priority:** done; residual deferred.

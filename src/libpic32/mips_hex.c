@@ -153,24 +153,21 @@ static boolean_t mips_fuse_user_overrides_apply(pfile_t *pf,
  * mirrors libpic12's pic_config_dump but writes 32-bit little-endian
  * words, since PIC32 config registers are full dwords in boot flash.
  * Solved clock words (pragma target OSC) emit for EVERY image shape --
- * for the loader flow they replace the splice tool's DEVCFG defaults. */
+ * for a bootloader app they replace the splice tool's DEVCFG defaults. */
 static void mips_fuses_emit(pfile_t *pf)
 {
   value_t fuses;
   value_t base;
 
-  /* Device-file _fuses defaults FIRST (boot-fuses images only): the
+  /* Device-file _fuses defaults FIRST (when DEVCFG is on): the
    * solved clock words below must win -- emitting the defaults AFTER
    * the solve (the old order) silently erased DEVCFG0-3 for every
    * boot-flash image carrying `pragma target OSC`, so a full-chip
    * erase left the part on erased fuses and the image never ran
    * (bench 2026-10-17). */
-  if (pfile_flag_test(pf, PFILE_FLAG_BOOT_FUSES)
-      && !mips_loader_pfm(pf)) {
+  if (pfile_flag_test(pf, PFILE_FLAG_BOOT_FUSES)) {
   fuses = pfile_value_find(pf, PFILE_LOG_NONE, "_fuses");
-  if (!fuses) {
-    return;
-  }
+  if (fuses) {
   base = pfile_value_find(pf, PFILE_LOG_ERR, "_fuse_base");
   if (value_is_array(fuses)) {
     variable_ct_t ii;
@@ -217,7 +214,7 @@ static void mips_fuses_emit(pfile_t *pf)
     pfile_write_hex(pf, (ulong) mips_hex_addr(pf, MIPS_FLASH_BASE + 0xFFC3UL),
         (unsigned char) ((val >> 24) & 0xFF));
   }
-  value_release(fuses);  }
+  value_release(fuses);  }  }
 
   {
     unsigned long dcfg[4];
@@ -238,7 +235,7 @@ static void mips_fuses_emit(pfile_t *pf)
             "fuse pragma bits are not emitted: add `pragma target clock`"
             " (solved DEVCFG) or use a boot-fuses image");
       }
-    } else {
+    } else if (!mips_boot_external(pf)) {
       int ii;
 
       mips_fuse_user_overrides_apply(pf, dcfg);
@@ -287,12 +284,12 @@ void mips_hex_write(pfile_t *pf)
     unsigned long ebase = mips_ebase_page(pf);
     unsigned long base  = mips_code_base(pf);
     unsigned long last  = 0;
-    boolean_t     loader = mips_loader_pfm(pf);
+    boolean_t     pfm    = mips_image_pfm(pf);
     boolean_t     mx     = (MIPS_FAMILY_MX1 == mips_family(pf));
 
-    /* The MX loader flow keeps its vector/restart page in the top 4 KB
+    /* The MX PFM flow keeps its vector/restart page in the top 4 KB
      * of program flash: the app must stay below it. */
-    if (loader && mx && (ebase > base) && ((!end) || (ebase < end))) {
+    if (pfm && mx && (ebase > base) && ((!end) || (ebase < end))) {
       end = ebase;
     }
     if (end) {
@@ -303,7 +300,7 @@ void mips_hex_write(pfile_t *pf)
         if (!mips_inst_size(c)) {
           continue;
         }
-        if (loader) {
+        if (pfm) {
           /* skip the boot-flash init block and the vector page */
           if ((a < base) || (a >= base + 0x100000UL)) {
             continue;
@@ -323,7 +320,7 @@ void mips_hex_write(pfile_t *pf)
       if (last > end) {
         pfile_log(pf, PFILE_LOG_ERR,
             "PIC32 image ends at 0x%08lx, past the %s limit 0x%08lx",
-            last, loader ? "program-flash" : "boot-flash", end);
+            last, pfm ? "program-flash" : "boot-flash", end);
       }
     }
   }

@@ -29,7 +29,7 @@
 --    Board: 32MZ1024EFH064 (PK5).  The arming clears the power-on
 --    Cause.IP[1:0] request before releasing the exception level, and
 --    every handler entry clears it again -- without that, ISR images are
---    dark on this part (fixes/fix_pic32_mz_isr_state_clear.md).
+--    dark on this part (docs/fixes/2026/fix_pic32_mz_isr_state_clear.md).
 --    Flash:  python3 pic_programmer.py program --board mini32 --file <hex>
 --    Capture: python3 jal-private/ftdi_usb_serial.py --seconds 5 --baud 115200
 --

@@ -10,7 +10,7 @@
 --    the bank-1 variants, and the runtime-indexed overlay over
 --    GPIO_OUT.  QEMU (espressif) models the GPIO block read-as-zero
 --    and does not retain writes -- VALUE checks are impossible there
---    (see fixes/fix_esp32_pin_aliases.md: the addressed registers are
+--    (see docs/fixes/2026/fix_esp32_pin_aliases.md: the addressed registers are
 --    listing-verified instead); this body proves the accesses execute
 --    fault-free and the program completes.
 --

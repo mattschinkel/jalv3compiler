@@ -5,7 +5,7 @@
 -- Description: port of 18f4620_gpsim_string_heap_word_index: at heap 300
 --    the index fields are WORD-sized; a 100-character literal, appends
 --    past the first block and element reads verify the word-index path
---    on the 128-byte-bank midrange part (fixes/
+--    on the 128-byte-bank midrange part (docs/fixes/
 --    fix_string_heap_word_index_fields.md).
 --
 -- @picsim_validate begin

@@ -7,7 +7,7 @@
 -- Description:
 --    A dynamic string passed to a `byte in out x[]` / `byte out x[]`
 --    formal is routed to a lazily created string-flavored CLONE of the
---    callee (fixes/fix_string_arg_view.md's clone follow-up): the body is
+--    callee (docs/fixes/2026/fix_string_arg_view.md's clone follow-up): the body is
 --    re-parsed with the formal as a string handle, so the ONE string rule
 --    applies -- below COUNT store in place, AT COUNT append one character
 --    (grow), past COUNT the range error -- and COUNT is live.  Array

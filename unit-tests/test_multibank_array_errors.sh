@@ -1,7 +1,7 @@
 #!/bin/bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 # Negative pins for the multibank array placement refusals (elem_sz fix).
-# The 16f18857 false-refusal fix (fixes/fix_16f18857_multibank_elem_sz.md)
+# The 16f18857 false-refusal fix (docs/fixes/2026/fix_16f18857_multibank_elem_sz.md)
 # must NOT turn the allocator into accept-everything: a program whose
 # array genuinely does not fit still gets the clean, variable-naming
 # error, and a pointer-bound array still gets the holed-run refusal.
@@ -114,7 +114,7 @@ check "escaped pointer-bound bank-spanning array refused" \
 # to a lookup table" follow-up.  It must reach the pointer refusal, not
 # pic_assign_to_ptr's lookup error -- the report was the never-written-array
 # MUST-COMPILE acceptance shapes (16f18857, the non-monotonic false-refusal
-# witnesses from fixes/fix_16f18857_multibank_elem_sz.md -- word[400] and
+# witnesses from docs/fixes/2026/fix_16f18857_multibank_elem_sz.md -- word[400] and
 # byte[720] compile; the compile-only 16f18857 file was dropped from the
 # old tests/ tree in the 2026-10-29 restructure, so pin them here):
 cat > "$WORK/mb_word.jal" << 'EOF4'

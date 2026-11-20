@@ -140,7 +140,7 @@ unsigned long mips_code_size(pfile_t *pf)
  * Returns 0 when there is no bound. */
 unsigned long mips_image_end(pfile_t *pf)
 {
-  if (mips_loader_pfm(pf)) {
+  if (mips_image_pfm(pf)) {
     unsigned long sz = mips_code_size(pf);
 
     if (MIPS_FAMILY_MZ_EF == mips_family(pf)) {

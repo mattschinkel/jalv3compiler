@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN"
+"topic.dtd">
+<topic id="runtime_errors" xml:lang="en-US">
+  <title>Runtime errors and the error hook</title>
+
+  <body>
+    <p>When a run-time error occurs, the compiler records it in shared cells
+    and, if the program defines <codeph>procedure _error_hook()</codeph>,
+    calls it at the point of failure. No parameters and no registration: the
+    name is the opt-in. With no hook there is no call overhead, and the cells
+    stay set for polling.</p>
+
+    <section>
+      <title>The error cells</title>
+
+      <p><codeph>_error_source</codeph> names the subsystem that raised the
+      error, and the matching domain cell holds the code:</p>
+
+      <codeblock>_error_source = _ERROR_SOURCE_STRING   -- _string_error holds the code (1)
+_error_source = _ERROR_SOURCE_USER     -- application-raised (2)
+_error_source = _ERROR_SOURCE_CORE     -- _core_error holds the code (3)</codeblock>
+
+      <p><codeph>_string_error</codeph> records the result of the most recent
+      string operation. Reading it returns the stored code and resets it to
+      none, so read it once per operation:</p>
+
+      <codeblock>_string_error_none         0
+_string_error_heap_full    1   -- no heap space for the operation
+_string_error_overflow     2   -- a fixed string was truncated
+_string_error_invalid      3   -- a string argument was invalid
+_string_error_range        4   -- a value was outside its range</codeblock>
+
+      <p><codeph>_core_error</codeph> records the core-pin error on multi-core
+      targets: <codeph>_core_error_none</codeph> (0) and
+      <codeph>_core_error_range</codeph> (1) for a <codeph>core(...)</codeph>
+      value outside 0..N.</p>
+    </section>
+
+    <section>
+      <title>Defining the hook</title>
+
+      <codeblock>procedure _error_hook() is
+   var byte err
+   if _error_source == _ERROR_SOURCE_STRING then
+      err = _string_error          -- read ONCE: the read clears it
+      if err == _STRING_ERROR_HEAP_FULL then
+         -- handle heap full
+      end if
+   end if
+end procedure</codeblock>
+
+      <p>The cells are consume-on-read: read each into a variable once and
+      compare that. The hook clears the cells when it returns.</p>
+    </section>
+
+    <section>
+      <title>The ready-made handler</title>
+
+      <p><codeph>INCLUDE error_hook</codeph> installs a handler that reports
+      every error the compiler can raise. Tailor it with two optional aliases
+      declared before the include: <codeph>ALIAS _error_bit IS
+      &lt;bit&gt;</codeph> latches a flag, and <codeph>ALIAS _error_device IS
+      &lt;device&gt;</codeph> selects where the error is printed.</p>
+
+      <codeblock>include print
+alias _error_device is serial_data
+alias _error_bit    is led
+include error_hook</codeblock>
+    </section>
+  </body>
+</topic>

@@ -6,7 +6,7 @@
 --
 -- Description:
 --    A dynamic string passed to a `byte in out x[]` / `byte out x[]`
---    formal is routed to a string-flavored clone of the callee (fixes/
+--    formal is routed to a string-flavored clone of the callee (docs/fixes/
 --    fix_string_arg_clone.md): the body is re-parsed with the formal as
 --    a string handle, so the ONE string rule applies -- below COUNT
 --    store in place, AT COUNT append one character, COUNT live.  Array

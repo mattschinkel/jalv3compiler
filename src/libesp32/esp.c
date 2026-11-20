@@ -116,7 +116,7 @@ static unsigned esp_isr_int_get(pfile_t *pf, pfile_proc_t *isr)
      * established (silicon, 2026-11-03: a level-2 handler was entered
      * at VECBASE+0x3C0 with an exception-style return, but the boot-time
      * source kept the line asserted and stormed, and QEMU models only
-     * level 1 -- see fixes/fix_esp32_isr_cpu_int_selection.md).
+     * level 1 -- see docs/fixes/2026/fix_esp32_isr_cpu_int_selection.md).
      * Refusing is better than the old behaviour, which IGNORED the
      * number and silently armed CPU interrupt 1. */
     pfile_log(pf, PFILE_LOG_ERR,
@@ -134,7 +134,7 @@ static unsigned esp_isr_int_get(pfile_t *pf, pfile_proc_t *isr)
  * (EXC_IRQ, EXCCAUSE 2, EPC1, PS.EXCM) and enters through the user
  * exception slot at +0x340, while levels 2..7 are true interrupts with
  * their own 0x40-spaced slots at +0x180..+0x2C0 (the "double" slots --
- * see fixes/fix_esp32_phase3g_isr_vector.md, which pinned the +0x340
+ * see docs/fixes/2026/fix_esp32_phase3g_isr_vector.md, which pinned the +0x340
  * slot and the +0x180..+0x280 range from QEMU's vector table). */
 static unsigned long esp_isr_slot(unsigned level)
 {

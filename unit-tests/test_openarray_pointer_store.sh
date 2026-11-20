@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 # A user POINTER actual bound to an `in out` / `out` open-array formal
-# (fixes/fix_openarray_pointer_store.md): the formal stores the ADDRESS VALUE
+# (docs/fixes/2026/fix_openarray_pointer_store.md): the formal stores the ADDRESS VALUE
 # and the back end's linear pointer store writes the element through it.
 # Pins the accepted element widths and the remaining refusals (a const
 # pointee cannot be a writable actual; a scalar is not an array).

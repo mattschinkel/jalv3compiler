@@ -4,7 +4,7 @@
 # String-store OUTLINE COVERAGE pin (phase 4b of the front-end IR work).
 #
 # Every user-level `s[i] = c` on a heap string must lower to ONE call of the
-# shared `string_put`/`_string_put` body (fixes/fix_string_outline_calls.md),
+# shared `string_put`/`_string_put` body (docs/fixes/2026/fix_string_outline_calls.md),
 # not to the ~500-word inline expansion.  The inline expansion stays legal in
 # exactly one place: inside the forwarder body itself (outlining a call to
 # yourself would recurse), which is what `jal_string_forwarder_body_p` guards.

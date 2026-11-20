@@ -10,7 +10,7 @@
 --    is tagged, and the classic resolve path rebuilds the second byte's
 --    address through the IRP page and calls the shared segment walk; the
 --    result must equal `WHEREIS(big[100])`, the element slot 1 was bound
---    to (fixes/fix_whereis_runtime_slot_fat.md).
+--    to (docs/fixes/2026/fix_whereis_runtime_slot_fat.md).
 --
 -- @gpsim_validate begin
 -- steps: 2000000

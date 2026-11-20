@@ -4,29 +4,29 @@
 
 Pins the 2026-10-17 PIC32 ISR work, which QEMU cannot fully model:
 
-* fixes/fix_pic32_isr_srs_default.md -- a plain `pragma interrupt` on a
+* docs/fixes/2026/fix_pic32_isr_srs_default.md -- a plain `pragma interrupt` on a
   PIC32MZ loader/PFM image takes the shadow-register-set (SRS) path;
   `pragma interrupt raw` opts out to software save/restore.  QEMU leaves
   PRISS unmapped, so the emulator cannot tell the two apart -- the
   listing can.
-* fixes/fix_pic32_isr_fast_srs_silicon.md -- the SRS seed writes
+* docs/fixes/2026/fix_pic32_isr_fast_srs_silicon.md -- the SRS seed writes
   PRISS = 0x76543211 and seeds the shadow sets' $sp/$gp with `wrpgpr`.
-* fixes/fix_pic32_bootflash_fuses.md -- SRS has no microMIPS encoding:
+* docs/fixes/2026/fix_pic32_bootflash_fuses.md -- SRS has no microMIPS encoding:
   plain/fast + `pragma isa micromips` must fail with a message naming
   `pragma interrupt raw`; raw + micromips must compile.
-* fixes/fix_isr_label_leak_noise.md -- no `label leak: ...` stderr noise
+* docs/fixes/2026/fix_isr_label_leak_noise.md -- no `label leak: ...` stderr noise
   on any interrupt compile.
 * PIC32MX (fix_pic32mx270f256b_support.md) has no PRISS/shadow sets:
   plain interrupts use software save/restore, `fast` is rejected, and
   numbered/MVEC interrupts are rejected.
-* fixes/fix_pic32_bootflash_isr_refusal.md -- a boot-flash (non-PFM)
+* docs/fixes/2026/fix_pic32_bootflash_isr_refusal.md -- a boot-flash (non-PFM)
   image cannot dispatch interrupts: the EIC fetches its vector page at
   EBASE+0x200 and only the PFM boot init points it into the app, so
   `pragma interrupt` there is REFUSED (it used to compile, run, and
   silently never fire).  Any interrupt kind must be refused, exactly one
   error, and a boot-flash program WITHOUT an interrupt must still
   compile.
-* fixes/fix_pic32_mz_isr_state_clear.md -- the arming must not inherit
+* docs/fixes/2026/fix_pic32_mz_isr_state_clear.md -- the arming must not inherit
   stale exception state.  Two emissions are pinned: `Cause = IV` (a
   WRITE, so a software-interrupt request latched at power-on is cleared
   -- a read-modify-write preserved it and the released core delivered it
@@ -79,6 +79,9 @@ def build_body(device: str, clock: str, interrupt: str,
              "pragma target OSC FRC_SPLL"]
     if image_pfm:
         lines.append("pragma target image pfm")
+    else:
+        # PFM is the default now; the boot-flash shape is explicit.
+        lines.append("pragma target image bfm")
     if micromips:
         lines.append("pragma isa micromips")
     if mvec_table:

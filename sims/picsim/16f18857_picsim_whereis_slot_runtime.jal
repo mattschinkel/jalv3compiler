@@ -14,7 +14,7 @@
 --    was bound to (`big[100]`, in a later chunk): under the fat engine the
 --    stored pointer is the tagged (id, object offset) form, and the runtime
 --    slot path resolves it through the shared segment walk, exactly like
---    the const-index form and the engine-off path (fixes/
+--    the const-index form and the engine-off path (docs/fixes/
 --    fix_whereis_runtime_slot_fat.md).  Before the fix this form returned
 --    the raw encoded value (100) instead of the address.
 --

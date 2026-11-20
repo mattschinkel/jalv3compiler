@@ -344,8 +344,10 @@ unsigned         pic_core_ct_get(pfile_t *pf);
 unsigned         pic_code_gen_pass_get(pfile_t *pf);
 /* Clock-tree solve hook (pragma target OSC/clock), routed through the
  * back-end registry; no-op when the target's back end has no solver
- * (classic cores) -- docs/investigations/pic32_clock_select_plan.md */
+ * (classic cores) -- docs/fixes/pic32_clock_select_plan.md */
 void             pic32_clock_solve_maybe(pfile_t *pf);
+/* CLI `-bootloader {addr}` override, applied after parsing (jal_incl.c) */
+void             jal_loader_external_force(pfile_t *pf, unsigned long addr);
 /* the _reentrant block is a temporary holding area for re-entrant functions */
 
 #define PIC_FLAG_NONE       0x0000

@@ -10,12 +10,12 @@
     be concatenated at run time. Dynamic strings are supported on every
     target, but they need a heap whose size is fixed at compile time.</p>
 
-    <p>The heap size is declared with a WORD constant named
-    _string_heap_size. It must appear before the first dynamic string and
+    <p>The heap size is set with <codeph>pragma target string_heap_size
+    &lt;bytes&gt;</codeph>. It must appear before the first dynamic string and
     before the strings_dynamic library is included, because that library
     declares wrappers with STRING formals:</p>
 
-    <codeblock>CONST WORD _string_heap_size = 255
+    <codeblock>pragma target string_heap_size 255
 INCLUDE strings_dynamic
 
 VAR STRING name = "JALv3"
@@ -43,9 +43,10 @@ PRAGMA STRING RETRY ON | OFF</codeblock>
       allocator compacts the heap once and retries the search; with OFF it
       fails immediately and sets the error byte.</p>
 
-      <p>The older PRAGMA STRING HEAP &lt;bytes&gt; line is still accepted, but
-      it is ignored: it neither sets the heap size nor produces a warning. Use
-      the _string_heap_size constant instead.</p>
+      <p>The older forms <codeph>PRAGMA STRING HEAP &lt;bytes&gt;</codeph> and
+      <codeph>CONST WORD _string_heap_size = ...</codeph> were removed. Set
+      the heap size with <codeph>pragma target string_heap_size
+      &lt;bytes&gt;</codeph> instead.</p>
     </section>
 
     <section>

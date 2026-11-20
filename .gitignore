@@ -14,15 +14,6 @@
 !/src/
 !/unit-tests/
 
-# The fat default-flip evidence (Phase 2, approved plan): the release
-# decision rests on this report, so it is committed deliberately.  Every
-# other file under docs/ stays private/untracked.
-!/docs/
-/docs/*
-!/docs/investigations/
-/docs/investigations/*
-!/docs/investigations/fat_default_flip_measurement_20261110.md
-
 # Private project notes live OUTSIDE this repo (the doc root). One must never
 # be committed from here, at the root or inside a re-included directory -- the
 # /* rule above does not cover the latter. No slash: matches at any depth.

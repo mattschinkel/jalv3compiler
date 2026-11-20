@@ -543,7 +543,7 @@ static void jal_parse_pragma_target_ieso(pfile_t *pf)
   jal_pragma_variable_assign(pf, "target_ieso");
 }
 
-/* PIC32 clock selection (docs/investigations/pic32_clock_select_plan.md):
+/* PIC32 clock selection (docs/fixes/pic32_clock_select_plan.md):
  * `pragma target OSC <mode>` stores the numeric mode in target_osc.
  * The mode names are parser keywords (classic fuse-entry style), NOT
  * device-file consts -- consts in the device file cost RAM/zero-init
@@ -598,6 +598,56 @@ static void jal_parse_pragma_target_osc(pfile_t *pf)
      * half-built expression reached the p-code builder with a NULL operand).
      * Recovery: drop it and let the rest of the line produce its own
      * diagnostics. */
+    if (!pf_token_is_eof(pf)) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
+  }
+}
+
+/* `pragma target pbdiv <DIV_1|DIV_2|DIV_4|DIV_8>` -- the peripheral-bus
+ * clock divide (PIC32MX).  Parser keywords mirror `pragma target OSC`
+ * (identifiers arrive lowercased); DIV_2 is the compiler default and
+ * matches the proven FPBDIV=DIV_2 fuse.  The MZ "ignored" warning is
+ * emitted by the clock solver, where the family is known. */
+static void jal_parse_pragma_target_pbdiv(pfile_t *pf)
+{
+  typedef struct pragma_pbdiv_ {
+    const char    *name;
+    unsigned long  divide;
+  } pragma_pbdiv_t;
+  static const pragma_pbdiv_t divides[] = {
+    {"div_1", 1UL}, {"div_2", 2UL}, {"div_4", 4UL}, {"div_8", 8UL}
+  };
+  const char *tok = pf_token_ptr_get(pf);
+  value_t     cpu;
+  size_t      i;
+
+  cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+  if (cpu && (PIC_TARGET_CPU_MIPS32 != (pic_target_cpu_t) value_const_get(cpu))) {
+    value_release(cpu);
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma target pbdiv requires the PIC32 back end");
+    if (!pf_token_is_eof(pf)) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
+    return;
+  }
+  if (cpu) {
+    value_release(cpu);
+  }
+  for (i = 0; i < COUNT(divides); i++) {
+    if (!strcmp(divides[i].name, tok)) {
+      break;
+    }
+  }
+  if (i < COUNT(divides)) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_pragma_const_assign(pf, "target_pbdiv",
+      (variable_const_t) divides[i].divide);
+    pic32_clock_solve_maybe(pf);   /* re-publish _pbclk for the new divide */
+  } else {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "unknown pbdiv: %s (DIV_1, DIV_2, DIV_4, DIV_8)", tok);
     if (!pf_token_is_eof(pf)) {
       pf_token_get(pf, PF_TOKEN_NEXT);
     }
@@ -757,36 +807,146 @@ static void jal_parse_pragma_target_oscillator(pfile_t *pf)
   jal_pragma_variable_assign(pf, "target_oscillator");
 }
 
-/* `pragma target image pfm` -- honest-name form of the image shape the
- * 32mz sample kit uses: app in program flash (PFM) at 0x9D000000 plus
- * the compiler-emitted boot block. No bootloader is involved; the
- * legacy `pragma bootloader pic32` predates the own-boot flow and
- * remains fully supported. PIC32-only (the flag/offset semantics are
- * meaningless on classic cores). */
-static void jal_parse_pragma_target_image(pfile_t *pf);
-static void jal_parse_pragma_loader32(pfile_t *pf);
+/* Image shape: `pragma target image pfm|bfm` is PLACEMENT only.
+ *
+ *   pfm (default) -- app in program flash (0x9D000000) + compiler boot
+ *                    init, DEVCFG included unless `pragma bootloader`.
+ *   bfm           -- app at the reset vector (boot flash), DEVCFG
+ *                    included; the classic blank-chip/QEMU shape.
+ *
+ * Who owns the reset vector and the config words is a SEPARATE concern:
+ * `pragma bootloader {addr}` means an external bootloader does. */
+static void jal_parse_pragma_image_pfm(pfile_t *pf);
+static void jal_parse_pragma_image_bfm(pfile_t *pf);
+static void jal_marker_label(pfile_t *pf, const char *name);
+
+/* TRUE when target_cpu has been resolved to the requested core. */
+static boolean_t jal_pragma_cpu_is(pfile_t *pf, pic_target_cpu_t want)
+{
+  value_t   cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+  boolean_t hit = cpu && (want == (pic_target_cpu_t) value_const_get(cpu));
+
+  if (cpu) {
+    value_release(cpu);
+  }
+  return hit;
+}
+
+/* Front-end marker check (markers are labels; the back end has its own
+ * accessor but the front end must not include a target header). */
+static boolean_t jal_marker_present(pfile_t *pf, const char *name)
+{
+  label_t lbl = pfile_label_find(pf, PFILE_LOG_NONE, name);
+
+  if (lbl) {
+    label_release(lbl);
+    return BOOLEAN_TRUE;
+  }
+  return BOOLEAN_FALSE;
+}
+
+/* `pragma target loader internal` -- explicit self-boot (the default):
+ * the compiler's own boot block + DEVCFG, as opposed to
+ * `pragma bootloader {addr}` where an external loader owns both.  A
+ * marker only (self-boot is the default, so no emission change) plus the
+ * mutual-exclusion check against `pragma bootloader`. */
+static void jal_parse_pragma_target_loader(pfile_t *pf)
+{
+  const char *tok = pf_token_ptr_get(pf);
+  value_t     cpu;
+
+  if (strcmp(tok, "internal")) {
+    pfile_log(pf, PFILE_LOG_ERR, "unknown loader: %s (internal)", tok);
+    if (!pf_token_is_eof(pf)) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
+    return;
+  }
+  cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+  if (cpu && (PIC_TARGET_CPU_MIPS32 != (pic_target_cpu_t) value_const_get(cpu))) {
+    value_release(cpu);
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma target loader requires the PIC32 back end");
+    if (!pf_token_is_eof(pf)) {
+      pf_token_get(pf, PF_TOKEN_NEXT);
+    }
+    return;
+  }
+  if (cpu) {
+    value_release(cpu);
+  }
+  if (jal_marker_present(pf, "_mips_boot_external")) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "conflicting loader: `pragma bootloader` already made this a "
+      "bootloader-app image");
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    return;
+  }
+  pf_token_get(pf, PF_TOKEN_NEXT);
+  jal_marker_label(pf, "_mips_loader_internal");
+}
 
 static void jal_parse_pragma_target_image(pfile_t *pf)
 {
   if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "pfm")) {
-    value_t cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
-    boolean_t mips = cpu
-      && (PIC_TARGET_CPU_MIPS32 == (pic_target_cpu_t) value_const_get(cpu));
-
-    if (cpu) {
-      value_release(cpu);
-    }
-    if (!mips) {
-      pfile_log(pf, PFILE_LOG_ERR,
-        "pragma target image pfm requires the PIC32 back end");
-    } else {
-      pf_token_get(pf, PF_TOKEN_NEXT);
-      jal_parse_pragma_loader32(pf);
-    }
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_parse_pragma_image_pfm(pf);
+  } else if (pf_token_is(pf, PF_TOKEN_CURRENT, PFILE_LOG_NONE, "bfm")) {
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    jal_parse_pragma_image_bfm(pf);
   } else {
-    pfile_log(pf, PFILE_LOG_ERR, "unknown image form: %s (pfm)",
+    pfile_log(pf, PFILE_LOG_ERR, "unknown image form: %s (pfm, bfm)",
       pf_token_ptr_get(pf));
   }
+}
+
+static void jal_parse_pragma_image_pfm(pfile_t *pf)
+{
+  value_t val;
+
+  if (!jal_pragma_cpu_is(pf, PIC_TARGET_CPU_MIPS32)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma target image pfm requires the PIC32 back end");
+    return;
+  }
+  if (jal_marker_present(pf, "_mips_image_bfm")) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "conflicting image shape: boot flash (bfm) was already selected");
+    return;
+  }
+  /* PFM is the default base; an address narrows the app slot (USB HID
+   * bootloader flows).  Placement does NOT touch fuses or boot init. */
+  val = jal_token_to_constant(pf, PFILE_LOG_NONE);
+  if (val) {
+    unsigned long addr = value_const_get(val);
+
+    if (addr < 0x9D000000UL) {
+      pfile_log(pf, PFILE_LOG_ERR,
+        "pragma target image pfm address 0x%08lx is not in program flash "
+        "(0x9D000000+)", addr);
+    } else {
+      pfile_loader_offset_set(pf, addr);
+    }
+    value_release(val);
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  }
+}
+
+static void jal_parse_pragma_image_bfm(pfile_t *pf)
+{
+  if (!jal_pragma_cpu_is(pf, PIC_TARGET_CPU_MIPS32)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma target image bfm requires the PIC32 back end");
+    return;
+  }
+  if (jal_marker_present(pf, "_mips_boot_external")) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "conflicting image shape: `pragma bootloader` already put the app "
+      "in program flash");
+    return;
+  }
+  jal_marker_label(pf, "_mips_image_bfm");
+  pfile_code_location_set(pf, 0xBFC00000UL);
 }
 
 static void jal_parse_pragma_target(pfile_t *pf)
@@ -844,6 +1004,8 @@ static void jal_parse_pragma_target(pfile_t *pf)
         void      (*action)(pfile_t *);
       } pic32_pragmas[] = {
         {"osc",        jal_parse_pragma_target_osc},
+        {"pbdiv",      jal_parse_pragma_target_pbdiv},
+        {"loader",     jal_parse_pragma_target_loader},
         {"oscillator", jal_parse_pragma_target_oscillator},
     {"fat_pointers", jal_parse_pragma_target_fat_pointers},
     {"enable_cores", jal_parse_pragma_target_enable_cores},
@@ -959,6 +1121,34 @@ static void jal_marker_label(pfile_t *pf, const char *name)
   if (lbl) {
     label_release(lbl);
   }
+}
+
+/* CLI `-bootloader {addr}` override, applied AFTER parsing so it wins over
+ * any source-level `pragma target loader internal` (the source marker is a
+ * front-end conflict guard only; the back end keys off the external
+ * marker).  Mirrors the PIC32 branch of `pragma bootloader {addr}`. */
+void jal_loader_external_force(pfile_t *pf, unsigned long addr)
+{
+  value_t cpu;
+
+  cpu = pfile_value_find(pf, PFILE_LOG_NONE, "target_cpu");
+  if (cpu && (PIC_TARGET_CPU_MIPS32 != (pic_target_cpu_t) value_const_get(cpu))) {
+    value_release(cpu);
+    pfile_log(pf, PFILE_LOG_ERR, "-bootloader is only available on PIC32");
+    return;
+  }
+  if (cpu) {
+    value_release(cpu);
+  }
+  if (addr < 0x9D000000UL) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "-bootloader address 0x%08lx is not in program flash (0x9D000000+)",
+      addr);
+    return;
+  }
+  jal_marker_label(pf, "_mips_boot_external");
+  pfile_flag_clr(pf, PFILE_FLAG_BOOT_FUSES);
+  pfile_loader_offset_set(pf, addr);
 }
 
 static void jal_parse_pragma_interrupt_mvec(pfile_t *pf)
@@ -1555,6 +1745,12 @@ static void jal_parse_pragma_loader18(pfile_t *pf)
 {
   value_t val;
 
+  if (jal_pragma_cpu_is(pf, PIC_TARGET_CPU_MIPS32)
+      || jal_pragma_cpu_is(pf, PIC_TARGET_CPU_ESP32)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma bootloader loader18 is only available on classic cores");
+    return;
+  }
   pfile_flag_change(pf, ~BOOTLOADER_FLAGS, PFILE_FLAG_BOOT_LOADER18);
   val = jal_token_to_constant(pf, PFILE_LOG_NONE);
   if (val) {
@@ -1566,16 +1762,108 @@ static void jal_parse_pragma_loader18(pfile_t *pf)
   }
 }
 
+/* Address for a bootloader app: program flash only -- an app "for a
+ * bootloader" cannot itself live at the reset vector. */
+static boolean_t jal_pragma_loader_addr_ok(pfile_t *pf, unsigned long addr)
+{
+  if (addr < 0x9D000000UL) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma bootloader address 0x%08lx is not in program flash "
+      "(0x9D000000+)", addr);
+    return BOOLEAN_FALSE;
+  }
+  return BOOLEAN_TRUE;
+}
 
-static void jal_parse_pragma_loader32(pfile_t *pf)
+/* `pragma bootloader {addr}` -- an EXTERNAL bootloader owns the reset
+ * vector and the config words: app in program flash at {addr}, no
+ * compiler boot block, no DEVCFG.  (Auto-detected per target; the
+ * classic cores keep their old `pragma bootloader` flag-reset meaning.) */
+static void jal_parse_pragma_bootloader_default(pfile_t *pf)
 {
   value_t val;
 
-  jal_marker_label(pf, "_mips_loader_pfm");
+  if (jal_pragma_cpu_is(pf, PIC_TARGET_CPU_MIPS32)) {
+    val = jal_token_to_constant(pf, PFILE_LOG_NONE);
+    if (!val) {
+      pfile_log(pf, PFILE_LOG_ERR,
+        "pragma bootloader requires a program-flash address on PIC32 "
+        "(e.g. `pragma bootloader 0x9D000000`)");
+      return;
+    }
+    if (jal_marker_present(pf, "_mips_loader_internal")) {
+      pfile_log(pf, PFILE_LOG_ERR,
+        "conflicting loader: `pragma target loader internal` already made "
+        "this a self-boot image");
+      value_release(val);
+      pf_token_get(pf, PF_TOKEN_NEXT);
+      return;
+    }
+    if (jal_pragma_loader_addr_ok(pf, value_const_get(val))) {
+      jal_marker_label(pf, "_mips_boot_external");
+      pfile_flag_clr(pf, PFILE_FLAG_BOOT_FUSES);
+      pfile_loader_offset_set(pf, value_const_get(val));
+    }
+    value_release(val);
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    return;
+  }
+  if (jal_pragma_cpu_is(pf, PIC_TARGET_CPU_ESP32)) {
+    val = jal_token_to_constant(pf, PFILE_LOG_NONE);
+    if (!val) {
+      pfile_log(pf, PFILE_LOG_ERR,
+        "pragma bootloader requires a flash offset on ESP32 "
+        "(e.g. `pragma bootloader 0x10000`)");
+      return;
+    }
+    pfile_loader_offset_set(pf, value_const_get(val));
+    value_release(val);
+    pf_token_get(pf, PF_TOKEN_NEXT);
+    return;
+  }
+  /* classic cores: bare form resets the boot flags (historic meaning); a
+   * numeric address is the loader18 preamble at that offset. */
+  val = jal_token_to_constant(pf, PFILE_LOG_NONE);
+  if (val) {
+    pfile_flag_change(pf, ~BOOTLOADER_FLAGS, PFILE_FLAG_BOOT_LOADER18);
+    pfile_loader_offset_set(pf, value_const_get(val));
+    value_release(val);
+    pf_token_get(pf, PF_TOKEN_NEXT);
+  } else {
+    pfile_flag_change(pf, ~BOOTLOADER_FLAGS, 0);
+  }
+}
+
+/* `pragma bootloader pic32 [addr]` -- the legacy spelling of
+ * `pragma bootloader {addr}`; kept as an alias (address optional,
+ * default 0x9D000000). */
+static void jal_parse_pragma_bootloader_pic32(pfile_t *pf)
+{
+  value_t val;
+
+  if (!jal_pragma_cpu_is(pf, PIC_TARGET_CPU_MIPS32)) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "pragma bootloader pic32 requires the PIC32 back end");
+    return;
+  }
+  if (jal_marker_present(pf, "_mips_image_bfm")) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "conflicting image shape: boot flash (bfm) was already selected");
+    return;
+  }
+  if (jal_marker_present(pf, "_mips_loader_internal")) {
+    pfile_log(pf, PFILE_LOG_ERR,
+      "conflicting loader: `pragma target loader internal` already made "
+      "this a self-boot image");
+    return;
+  }
+  jal_marker_label(pf, "_mips_boot_external");
   pfile_flag_clr(pf, PFILE_FLAG_BOOT_FUSES);
   val = jal_token_to_constant(pf, PFILE_LOG_NONE);
   if (val) {
-    pfile_loader_offset_set(pf, value_const_get(val));
+    if (jal_pragma_loader_addr_ok(pf, value_const_get(val))) {
+      pfile_loader_offset_set(pf, value_const_get(val));
+    }
     value_release(val);
     pf_token_get(pf, PF_TOKEN_NEXT);
   } else {
@@ -1594,10 +1882,9 @@ static const pragma_word_t pragma_bootloader[] = {
     ~BOOTLOADER_FLAGS,
     PFILE_FLAG_BOOT_BLOADER),
   DEFINE_FN("loader18", jal_parse_pragma_loader18, PRAGMA_WORD_FLAG_ABSORB),
-  DEFINE_FN("pic32", jal_parse_pragma_loader32, PRAGMA_WORD_FLAG_ABSORB),
-  DEFINE_FLAG(0,
-    ~BOOTLOADER_FLAGS,
-    0),
+  DEFINE_FN("pic32", jal_parse_pragma_bootloader_pic32,
+    PRAGMA_WORD_FLAG_ABSORB),
+  DEFINE_FN(0, jal_parse_pragma_bootloader_default, PRAGMA_WORD_FLAG_ABSORB),
   DEFINE_END_OF_LIST
 };
 #undef BOOTLOADER_FLAGS

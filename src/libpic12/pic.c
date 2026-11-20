@@ -669,8 +669,8 @@ static void pic_openarray_formals_block(pfile_proc_t *proc)
  * filling two 150-byte arrays through one `byte in data[]` wrote the second
  * fill through the first call's chunk bases; gpsim: big_a[0]=100, big_b[0]=0).
  * Strings hit the same defect and got a runtime map
- * (fixes/fix_openarray_formal_chunk_map.md); this is the USER-array half
- * (fixes/fix_openarray_user_array_percall.md).
+ * (docs/fixes/2026/fix_openarray_formal_chunk_map.md); this is the USER-array half
+ * (docs/fixes/2026/fix_openarray_user_array_percall.md).
  *
  * A formal that needs per-call addressing owns a map buffer
  * (pic_var_openarray_formal_map_get); every call site of that formal writes
@@ -6304,7 +6304,7 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
  *
  * JALV2_U3_CALL_SHAPES=1 makes the pass-1 open-array record site print one
  * row per CALL parameter on stderr.  It is the generator for the
- * docs/investigations/u3_call_shape_matrix_*.md acceptance artifact: it
+ * docs/fixes/u3_call_shape_matrix_*.md acceptance artifact: it
  * shows every shape (direct/indirect, array actual, element actual,
  * pointer (pass-on) formal, scalar formal, string-view mark) before the
  * pair registry becomes an IR attachment.
@@ -7347,7 +7347,7 @@ boolean_t pic_fat_pointers_enabled(pfile_t *pf)
         "JALV2-NOTICE: JALV2_FAT_POINTERS=0 selects the classic pointer "
         "representation; that mode is deprecated and the switch is removed "
         "after this release (per program: `pragma target fat_pointers off`; "
-        "doc/designs/one-access-model.md#feature-switches)\n");
+        "docs/designs/one-access-model.md#feature-switches)\n");
   }
   return on;
 }

@@ -164,7 +164,7 @@ void jal_val_baseofs_add(pfile_t *pf, value_t val, value_t ofs)
    * (byte arrays) skips the scaling MUL that otherwise materializes the
    * lookup, so `arr[T[k]]` died with "banked data op (MOVLB) for operand
    * with unknown file address (T); 0xFFFF/256 is not a valid bank select"
-   * on every classic core (see fixes/fix_const_table_runtime_subscript.md).
+   * on every classic core (see docs/fixes/2026/fix_const_table_runtime_subscript.md).
    * value_is_lookup is exactly "declared-const variable whose baseofs is
    * not constant", i.e. the runtime-indexed table read. */
   rval = ofs;

@@ -9,8 +9,7 @@
 
     <codeblock>          PRAGMA STRING INDEX { AUTO | BYTE | WORD }
           PRAGMA STRING ALLOC { FIRST_FIT | BEST_FIT }
-          PRAGMA STRING RETRY { ON | OFF }
-          PRAGMA STRING HEAP <i>cexpr</i></codeblock>
+          PRAGMA STRING RETRY { ON | OFF }</codeblock>
 
     <p>These pragmas configure the dynamic string heap. They must appear
     before the first dynamic string declaration and before the
@@ -29,15 +28,17 @@
     allocation fails immediately and the error is recorded in
     _string_error.</p>
 
-    <p>The heap size itself is not set by this pragma. Declare it with a WORD
-    constant before the first dynamic string:</p>
+    <p>The heap size itself is not set by these pragmas. Set it with
+    <codeph>pragma target string_heap_size &lt;bytes&gt;</codeph> before the
+    first dynamic string:</p>
 
-    <codeblock>CONST WORD _string_heap_size = 255
+    <codeblock>pragma target string_heap_size 255
 PRAGMA STRING INDEX BYTE
 INCLUDE strings_dynamic</codeblock>
 
-    <note>The older PRAGMA STRING HEAP form is accepted but ignored: it
-    neither sets the heap size nor produces a diagnostic. Use the
-    _string_heap_size constant instead.</note>
+    <note>The older forms <codeph>PRAGMA STRING HEAP &lt;bytes&gt;</codeph> and
+    <codeph>CONST WORD _string_heap_size = ...</codeph> were removed; use
+    <codeph>pragma target string_heap_size &lt;bytes&gt;</codeph>
+    instead.</note>
   </body>
 </topic>

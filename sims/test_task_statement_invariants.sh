@@ -6,7 +6,7 @@
 #      (_task_suspend me() inside its own body) must NOT become
 #      REENTRANT -- the statements are scheduler operations, not
 #      invocations, and must not create CALL edges (the bug class from
-#      fixes/fix_classic_task_control.md).
+#      docs/fixes/2026/fix_classic_task_control.md).
 #   2. _task_yield compiles warning-free; the deprecated `suspend`
 #      alias compiles with exactly one warning per use.
 #   3. bare `start` is not a keyword (legal identifier since its rename)

@@ -48,7 +48,7 @@ typedef struct {
  * home candidates and -- worse -- call-graph edges, feeding wrong
  * callee-write-set decisions for the file-level $s keep. Growable arrays
  * replaced dropped-pend registries on the ESP32 back end for the same
- * reason (fixes/fix_esp32_latebind_registry_cleanup.md). */
+ * reason (docs/fixes/2026/fix_esp32_latebind_registry_cleanup.md). */
 
 /* Caller-saved pool: $t0 last so address LEA prefers colder homes first. */
 static const unsigned mips_alloc_caller_pool[] = {

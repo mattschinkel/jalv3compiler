@@ -6,7 +6,7 @@
 --
 -- Description:
 --    The PIC18 twin of sims/gpsim/16f1825_gpsim_user_array_over_bank.jal
---    (fixes/fix_openarray_user_array_percall.md): one `byte in data[]` formal
+--    (docs/fixes/2026/fix_openarray_user_array_percall.md): one `byte in data[]` formal
 --    fed several big buffers, so the callee body is emitted ONCE and the
 --    layout has to arrive per call.  The same three sections as the 16F1825
 --    witness run here --

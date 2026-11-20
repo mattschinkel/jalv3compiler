@@ -8,7 +8,7 @@
 --
 -- Description:
 --    Runtime half of `pragma target OSC` / `pragma target clock`
---    (docs/investigations/pic32_clock_select_plan.md).  The compiler
+--    (docs/fixes/pic32_clock_select_plan.md).  The compiler
 --    solves the clock tree at compile time and OVERWRITES the _osc_*
 --    defaults below; include this file ONLY when you actually call
 --    osc_select() -- the defaults cost a few RAM bytes / zero-init
@@ -24,7 +24,7 @@
 --    write (NOSC + OSWEN) and wait for OSWEN to self-clear.
 --    NEVER gate on CLKSTAT DIVSPLLRDY -- it never reads set on MZ; the
 --    PLL locks during the wait (proven recipe,
---    fixes/fix_pic32_runtime_clock_switch.md).
+--    docs/fixes/2026/fix_pic32_runtime_clock_switch.md).
 --
 -- Notes:
 --    - pragma order vs this include does not matter for the consts

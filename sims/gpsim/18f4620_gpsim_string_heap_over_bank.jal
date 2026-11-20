@@ -12,7 +12,7 @@
 --    a compiler `_strargN` buffer, the callee is emitted ONCE, and its
 --    subscript used the FORMAL's chunk map -- which was copied from the
 --    first call site's actual, so every later call addressed the first
---    buffer's chunks (fixes/fix_openarray_formal_chunk_map.md).
+--    buffer's chunks (docs/fixes/2026/fix_openarray_formal_chunk_map.md).
 --
 --    The fix hands the ACTIVE layout to the callee at run time: the call
 --    site fills `_chunkmap` with [count][base lo,hi,span]... and points

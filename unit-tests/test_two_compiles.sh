@@ -3,7 +3,7 @@
 # A4 acceptance: a SECOND compile in the same process must produce exactly
 # the same output as the first.
 #
-# This is what the per-module state conversion (fixes/fix_pic_var_state_reset
+# This is what the per-module state conversion (docs/fixes/fix_pic_var_state_reset
 # .md and the seven module docs beside it) exists for: it drives
 # jal_reset_between_compiles(), which zeroes every module's state between
 # iterations, and compares the HEX of a single compile against the HEX of the

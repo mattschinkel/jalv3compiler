@@ -275,6 +275,7 @@ static void config_flag_apply(pfile_t *pf, const char *name,
 
 #define MX_DEVCFG1_FNOSC   0x00000007UL
 #define MX_DEVCFG1_POSCMOD 0x00000300UL
+#define MX_DEVCFG1_FPBDIV  0x00003000UL
 #define MX_DEVCFG1_FCKSM   0x0000C000UL
 #define MX_DEVCFG1_FSOSCEN 0x00000020UL
 #define MX_DEVCFG1_IESO    0x00000080UL
@@ -397,6 +398,49 @@ static unsigned long mx_log2(unsigned long n)
   return c;
 }
 
+/* Publish the peripheral-bus clock (`_pbclk`) and its divide (`_pbdiv`)
+ * whenever target_clock is known -- independent of the OSC solve, so a
+ * delay-only program also gets a correct _pbclk.  Idempotent: the
+ * clock/OSC/POSC/pbdiv pragmas each re-run the solver.  MX only; on MZ
+ * the peripheral bus is split across PBxDIV blocks, so a user-set pbdiv
+ * is ignored with a warning. */
+static void mips_clock_pbclk_publish(pfile_t *pf)
+{
+  value_t       v;
+  unsigned long target = 0;
+  unsigned long pbdiv  = 2;
+
+  if (MIPS_FAMILY_MX1 != mips_family(pf)) {
+    v = pfile_value_find(pf, PFILE_LOG_NONE, "target_pbdiv");
+    if (v) {
+      value_release(v);
+      pfile_log(pf, PFILE_LOG_WARN,
+        "pragma target pbdiv is ignored on this family "
+        "(the peripheral bus is split across PBxDIV blocks)");
+    }
+    return;
+  }
+  v = pfile_value_find(pf, PFILE_LOG_NONE, "target_clock");
+  if (v) {
+    target = (unsigned long) value_const_get(v);
+    value_release(v);
+  }
+  if (!target) {
+    return;
+  }
+  v = pfile_value_find(pf, PFILE_LOG_NONE, "target_pbdiv");
+  if (v) {
+    pbdiv = (unsigned long) value_const_get(v);
+    value_release(v);
+  }
+  if ((1UL != pbdiv) && (2UL != pbdiv) && (4UL != pbdiv)
+      && (8UL != pbdiv)) {
+    pbdiv = 2;
+  }
+  osc_const_alloc(pf, "_pbdiv", pbdiv);
+  osc_const_alloc(pf, "_pbclk", target / pbdiv);
+}
+
 /* MX runtime consts: OSCCON encodes PLLMULT as mult-15 and
  * PLLODIV/FRCDIV as log2 codes. */
 static boolean_t mips_clock_solve_mx(pfile_t *pf)
@@ -409,6 +453,7 @@ static boolean_t mips_clock_solve_mx(pfile_t *pf)
   unsigned long mult = 1;
   unsigned long odiv = 1;
   unsigned long frcdiv = 0;              /* code (0 = /1) */
+  unsigned long pbdiv  = 2;              /* peripheral divide (1/2/4/8) */
   unsigned long fnosc;
   unsigned long poscmod = 3;
   unsigned long nosec;
@@ -433,6 +478,15 @@ static boolean_t mips_clock_solve_mx(pfile_t *pf)
   if (v) {
     posc_hz = (unsigned long) value_const_get(v);
     value_release(v);
+  }
+  v = pfile_value_find(pf, PFILE_LOG_NONE, "target_pbdiv");
+  if (v) {
+    pbdiv = (unsigned long) value_const_get(v);
+    value_release(v);
+  }
+  if ((1UL != pbdiv) && (2UL != pbdiv) && (4UL != pbdiv)
+      && (8UL != pbdiv)) {
+    pbdiv = 2;
   }
   if (!target) {
     return BOOLEAN_TRUE;                 /* defer to the clock pragma */
@@ -514,8 +568,9 @@ static boolean_t mips_clock_solve_mx(pfile_t *pf)
       return BOOLEAN_FALSE;
   }
 
-  dcfg1 = (MX_DCFG1_PROVEN & ~(MX_DEVCFG1_FNOSC | MX_DEVCFG1_POSCMOD))
-        | fnosc | (poscmod << 8);
+  dcfg1 = (MX_DCFG1_PROVEN & ~(MX_DEVCFG1_FNOSC | MX_DEVCFG1_POSCMOD
+                             | MX_DEVCFG1_FPBDIV))
+        | fnosc | (poscmod << 8) | (mx_log2(pbdiv) << 12);
   dcfg2 = MX_DCFG2_PROVEN;
   if (pll) {
     dcfg2 = (dcfg2 & ~(MX_DEVCFG2_FPLLIDIV | MX_DEVCFG2_FPLLMUL
@@ -593,6 +648,8 @@ boolean_t mips_clock_solve(pfile_t *pf)
   unsigned long  poscmod = 0x3UL;         /* OFF */
   unsigned long  nosec;
   unsigned long  dcfg2;
+
+  mips_clock_pbclk_publish(pf);
 
   if (MIPS_FAMILY_MX1 == mips_family(pf)) {
     return mips_clock_solve_mx(pf);

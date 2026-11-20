@@ -6,10 +6,10 @@
 # atomically and never clobber a target it does not own.
 #
 # Recurring defect family (no automated coverage before this pin):
-#   fixes/fix_cli_help_infinite_loop.md        -- --help/--version spun forever
-#   fixes/fix_atomic_hex_rename_install.md     -- failed compile truncated a good HEX
-#   fixes/fix_hex_output_dev_null_guard.md     -- rename/remove destroyed /dev/null
-#   fixes/fix_empty_hex_error_count.md         -- empty output still said 0 errors
+#   docs/fixes/2026/fix_cli_help_infinite_loop.md        -- --help/--version spun forever
+#   docs/fixes/2026/fix_atomic_hex_rename_install.md     -- failed compile truncated a good HEX
+#   docs/fixes/2026/fix_hex_output_dev_null_guard.md     -- rename/remove destroyed /dev/null
+#   docs/fixes/2026/fix_empty_hex_error_count.md         -- empty output still said 0 errors
 #
 # The non-regular-target case uses a FIFO, NOT /dev/null: a regression in the
 # guard would replace/unlink the device node, and a test that causes the

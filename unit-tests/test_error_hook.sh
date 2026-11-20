@@ -1,7 +1,7 @@
 #!/bin/bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 #
-# Pins for the `_error_hook` runtime error handler (fixes/fix_error_hook.md).
+# Pins for the `_error_hook` runtime error handler (docs/fixes/2026/fix_error_hook.md).
 #
 # The compiler detects the hook by NAME at each raise site: define
 # `procedure _error_hook()` and it is called there, with `_error_source` and

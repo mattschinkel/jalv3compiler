@@ -1285,7 +1285,7 @@ end procedure
 -- ============================================
 -- Procedure/function pointers: see pointers.jal. Data-pointer smoke:
 -- 16f877_pointer_basic_test.jal. Pointer-to-pseudo rvalue (**`x = p`** after
--- **`p is <pseudo>`**): fixes/fix_pointer_pseudo_rvalue_via_get.md;
+-- **`p is <pseudo>`**): docs/fixes/2026/fix_pointer_pseudo_rvalue_via_get.md;
 -- gpsim_tests/16f877_gpsim_pointer_pseudo_rvalue_get.jal
 
 var byte _syntax_ptr_pseudo_shadow
@@ -1355,7 +1355,7 @@ procedure test_jalv2_pointers is
     ptr_fold_buf[1] = 101
 
     -- Const-pointee pointer: reads OK; writes rejected at compile time
-    -- (see fixes/fix_pointer_const_pointee_write.md).
+    -- (see docs/fixes/2026/fix_pointer_const_pointee_write.md).
     var pointer ptr_const_read as const byte[2]
     var byte const_read_buf[2]
     var byte const_read_tmp

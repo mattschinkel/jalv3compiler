@@ -3086,15 +3086,8 @@ static void mips_emit_call(pfile_t *pf, const cmd_t cmd)
       }
     }
     if (mips_is_wide(pval, arg, VALUE_NONE)) {
+      /* mips_wide_assign drops the t-scratch bindings it clobbers */
       mips_wide_assign(pf, pval, arg);
-      /* the raw wide copy clobbers the t-scratch WITHOUT updating the
-       * value cache -- drop bindings for those registers so later
-       * loads of other values cannot hit stale copies (the float-str
-      * battery caught a caller reading its call return as the last
-       * copied word) */
-      mips_reg_cache_clobber(MIPS_REG_T1);
-      mips_reg_cache_clobber(MIPS_REG_T2);
-      mips_reg_cache_clobber(MIPS_REG_T3);
     } else {
       mips_load_value(pf, arg, MIPS_REG_T1);
       mips_store_value(pf, pval, MIPS_REG_T1);
@@ -3142,13 +3135,8 @@ static void mips_emit_call(pfile_t *pf, const cmd_t cmd)
       continue;
     }
     if (mips_is_wide(arg, pval, VALUE_NONE)) {
+      /* mips_wide_assign drops the t-scratch bindings it clobbers */
       mips_wide_assign(pf, arg, pval);
-      /* raw wide copy clobbers the t-scratch -- drop stale bindings
-       * (same guard as pass 1; the length check of the float-str
-       * battery read its call return through a stale T1 binding) */
-      mips_reg_cache_clobber(MIPS_REG_T1);
-      mips_reg_cache_clobber(MIPS_REG_T2);
-      mips_reg_cache_clobber(MIPS_REG_T3);
     } else {
       mips_load_value(pf, pval, MIPS_REG_T1);
       mips_store_value(pf, arg, MIPS_REG_T1);

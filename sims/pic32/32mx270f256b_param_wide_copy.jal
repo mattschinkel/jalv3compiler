@@ -1,0 +1,90 @@
+-- ------------------------------------------------------
+-- Title: PIC32MX270F256B @sim_validate — wide parameter copy
+--
+-- Author: Matthew Schinkel, Copyright (c) 2026 all rights reserved.
+-- Compiler: JALv2
+--
+-- Description:
+--    PIC32 indirect-call parameter copy.  A proc with a qword formal
+--    next to a dword formal copies both through the shared inbox; the
+--    qword's raw copy clobbered $t1 while the value cache still mapped
+--    the dword home to it, so the callee's next read of the dword was
+--    elided and returned the qword's high word.  Pre-fix the dword
+--    formal reads 0x11223344 instead of 0xA1B2C3D4, in both orders.
+--
+-- Notes:
+--    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_param_wide_copy.jal
+--
+-- @sim_validate begin
+-- duration_s: 0.5
+-- machine: pic32mx7-explorer16
+-- expect byte v_r 31
+-- @sim_validate end
+
+include regression_32mx270f256b_device
+
+var volatile byte r
+var volatile dword rd
+var volatile qword rq
+
+var dword d_in = 0xA1B2C3D4
+var qword q_in = 0x1122334455667788
+var dword d_next = 0x0BADF00D
+var qword q_next = 0xDEADBEEFCAFEF00D
+
+procedure _take_dq(dword in a, qword in b) is
+   rd = a
+   rq = b
+end procedure
+
+procedure _take_qd(qword in b, dword in a) is
+   rq = b
+   rd = a
+end procedure
+
+procedure _take_d(dword in a) is
+   rd = a
+end procedure
+
+function _mix_dq(dword in a, qword in b) return qword is
+   return b + a
+end function
+
+var pointer fp as procedure (dword in, qword in)
+var pointer fq as procedure (qword in, dword in)
+var pointer fd as procedure (dword in)
+var pointer ff as function (dword in, qword in) return qword
+
+r = 0
+
+-- 1: indirect (dword, qword) — the pre-fix failure
+fp is _take_dq
+fp(d_in, q_in)
+if (rd == d_in) & (rq == q_in) then
+   r = r | 1
+end if
+
+-- 2: indirect (qword, dword) — same trap, opposite order
+fq is _take_qd
+fq(q_in, d_in)
+if (rd == d_in) & (rq == q_in) then
+   r = r | 2
+end if
+
+-- 3: a wide function result with the same mixed signature
+ff is _mix_dq
+if ff(d_in, q_in) == 0x11223344F7193B5C then
+   r = r | 4
+end if
+
+-- 4: the callers' neighbours are untouched
+if (d_next == 0x0BADF00D) & (q_next == 0xDEADBEEFCAFEF00D) then
+   r = r | 8
+end if
+
+-- 5: a dword-only indirect call still marshals correctly
+fd is _take_d
+fd(d_in)
+if rd == d_in then
+   r = r | 16
+end if

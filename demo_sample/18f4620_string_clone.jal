@@ -12,7 +12,7 @@
 --              (the block grows), past COUNT raises the range error, and
 --              COUNT is live. Array actuals keep the generic body -- one
 --              declared procedure, two compiled flavors.
---              (fixes/fix_string_arg_clone.md)
+--              (docs/fixes/2026/fix_string_arg_clone.md)
 --
 -- Requires: 18f4620, serial_hardware, print, strings_dynamic
 --

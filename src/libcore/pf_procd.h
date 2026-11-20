@@ -68,7 +68,7 @@ struct pfile_proc_ {
                                    to the return label */
   const char         *name;
   int                 irq; /* PIC32 OFFx vector; -1 = unnumbered */
-  /* string-flavored clone bookkeeping (docs/investigations/
+  /* string-flavored clone bookkeeping (docs/fixes/
    * string_clone_design_20261105.md): whether the body may be duplicated
    * at all (include, pragma or a nested routine inside it blocks that),
    * and the lazily created string clones.  The retired source re-parse's

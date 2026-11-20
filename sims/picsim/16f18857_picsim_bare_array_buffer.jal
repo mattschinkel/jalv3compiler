@@ -6,7 +6,7 @@
 -- Description:
 --    Pins the bare byte-array operand in '&' chains (5+32 bytes verbatim past the old 16-element cast limit; chain form == cast form).
 --    Promoted from the 2026-10-06 fix tmp/witness into the suite
---    (fixes/fix_bare_array_chain_concat.md).
+--    (docs/fixes/2026/fix_bare_array_chain_concat.md).
 --
 -- Sources:
 --

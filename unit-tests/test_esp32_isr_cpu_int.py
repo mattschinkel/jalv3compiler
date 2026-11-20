@@ -15,7 +15,7 @@ interrupt never arrived and nothing said so).  Since 2026-11-03:
   = 1<<N, entry at VECBASE+0x340, exit `rfe`;
 * numbers 6..31 (levels 2..7) are REFUSED with one error -- the per-level
   slots could not be established (see
-  fixes/fix_esp32_isr_cpu_int_selection.md);
+  docs/fixes/2026/fix_esp32_isr_cpu_int_selection.md);
 * a second `pragma interrupt` stays a hard error.
 
 Bench-proven on silicon 2026-11-03: `pragma interrupt 1` and

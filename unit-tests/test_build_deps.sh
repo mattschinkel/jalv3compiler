@@ -8,12 +8,12 @@
 # source.
 #
 # Recurring defect family (no automated coverage before this pin):
-#   fixes/fix_makefile_dep_include_tab.md   -- -include was eaten as recipe
+#   docs/fixes/2026/fix_makefile_dep_include_tab.md   -- -include was eaten as recipe
 #                                              text for years (deps dead)
-#   fixes/fix_gop_walk_depth.md             -- project rule ignored sub-make
+#   docs/fixes/2026/fix_gop_walk_depth.md             -- project rule ignored sub-make
 #                                              failures, linking stale archives
-#   fixes/fix_variable_arena.md             -- struct changes needed a clean
-#   fixes/fix_build_dep_flavor_collision.md -- NEW: the shared .dep was
+#   docs/fixes/2026/fix_variable_arena.md             -- struct changes needed a clean
+#   docs/fixes/2026/fix_build_dep_flavor_collision.md -- NEW: the shared .dep was
 #       overwritten by the last flavor, so after an SAN/COV build a default
 #       header edit never rebuilt the default object
 #

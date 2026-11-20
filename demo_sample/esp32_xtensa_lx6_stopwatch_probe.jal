@@ -17,8 +17,8 @@
 --    an inflated tick count.
 --
 -- Sources:
---    fixes/fix_esp32_delay_timer_based.md (the TIMG1 delay rewrite)
---    fixes/fix_stopwatch_32bit_port.md (the stopwatch library)
+--    docs/fixes/2026/fix_esp32_delay_timer_based.md (the TIMG1 delay rewrite)
+--    docs/fixes/2026/fix_stopwatch_32bit_port.md (the stopwatch library)
 --
 -- Notes:
 --    - BENCH CAVEAT (2026-10-23): keep the serial MONITOR connection
@@ -33,7 +33,7 @@
 --      at interface and device level -- still occurs) and not DTR/RTS
 --      state (held asserted -- still occurs).
 --    - esptool write_flash 0x1000 (image sliced from the hex2flashbin
---      full-flash bin; see fixes/fix_pic32_physical_hex_default.md for
+--      full-flash bin; see docs/fixes/2026/fix_pic32_physical_hex_default.md for
 --      the slicing recipe).  After flashing, POWER CYCLE the board
 --      before trusting speed readings (RTS-only resets leave this
 --      board in a degraded state -- see the bench note in the fix doc).

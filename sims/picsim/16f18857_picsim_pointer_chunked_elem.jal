@@ -14,7 +14,7 @@
 --    walk scratch. byte*N pointees parse now too (the *N width
 --    mis-parsed as a subscript before a dimension bracket) and work --
 --    byte*N is an N-BYTE wide type (see
---    docs/investigations/byteN_bitN_domain_map_20261027.md), so their
+--    docs/fixes/byteN_bitN_domain_map_20261027.md), so their
 --    placement is correct byte-multiples; bit*N is the packed bit-field
 --    family. Scratch-probed either way.
 --

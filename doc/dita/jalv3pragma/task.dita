@@ -9,11 +9,9 @@
 
     <codeblock>          PRAGMA TASK <i>cexpr</i></codeblock>
 
-    <p>Set the maximum concurrent task count to <i>cexpr</i>. It is generally
-    better to set this in your program, instead of doing so with the compiler
-    option ("-tasks") as it is unlikely to change.</p>
-
-    <p>nb: When multiple tasks are used, the main task requires one task
-    slot.</p>
+    <note>PRAGMA TASK was removed. The scheduler sizes its slot table from the
+    <codeph>task ... end task</codeph> declarations (plus slot 0 for the main
+    program); the -task compiler option can pre-size the table but is not
+    needed in source.</note>
   </body>
 </topic>

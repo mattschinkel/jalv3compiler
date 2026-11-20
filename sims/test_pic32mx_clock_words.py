@@ -39,7 +39,7 @@ DEVCFG_ADDR = {
 CASES = [
     ("frc_8mhz", ["pragma target clock 8_000_000",
                   "pragma target OSC FRC"], None),  # expected derived below
-    # silicon-proven 2026-10-25 (fixes/fix_mx_osc_pllmult_code_const.md
+    # silicon-proven 2026-10-25 (docs/fixes/2026/fix_mx_osc_pllmult_code_const.md
     # addenda): MX270 boots FNOSC=FRCDIV already divided
     ("frcdiv_4mhz", ["pragma target clock 4_000_000",
                      "pragma target OSC FRCDIV"], None),
@@ -60,7 +60,7 @@ CASES = [
     ("frc_spll_40_wdt", ["pragma target clock 40_000_000",
                          "pragma target OSC FRC_SPLL",
                          "pragma target WDT ENABLED"], None),
-    # silicon-proven 2026-10-25 (fixes/fix_mx_wdt_silicon_ab.md): WDT on +
+    # silicon-proven 2026-10-25 (docs/fixes/2026/fix_mx_wdt_silicon_ab.md): WDT on +
     # PS1024 resets the board every ~1.0 s, PS2048 every ~2.0 s (exact
     # doubling; WDT base ~1 ms, non-windowed)
     ("frc_spll_40_wdt_ps1024", ["pragma target clock 40_000_000",
@@ -71,7 +71,7 @@ CASES = [
                                 "pragma target OSC FRC_SPLL",
                                 "pragma target WDT ENABLED",
                                 "pragma target WDTPS PS2048"], None),
-    # silicon-proven 2026-10-26 (fixes/fix_mx_wdt_runtime_sequence.md):
+    # silicon-proven 2026-10-26 (docs/fixes/2026/fix_mx_wdt_runtime_sequence.md):
     # the CONTROL-mode combination the wdt sample ships -- fuse stays
     # DISABLED, WDTPS sets the runtime period (SWDTPS in WDTCON is a
     # read-only mirror of it), reset lands ~4.1 s after the last
@@ -138,6 +138,8 @@ def compile_case(compiler: pathlib.Path, tmp: pathlib.Path, name: str,
     body = ["include 32mx270f256b", *pragmas]
     if pfm:
         body.append("pragma target image pfm")
+    else:
+        body.append("pragma target image bfm")
     body += ["var dword i", "forever loop", "   i = i + 1", "end loop", ""]
     src.write_text("\n".join(body))
     proc = subprocess.run(

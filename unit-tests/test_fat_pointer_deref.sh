@@ -854,7 +854,7 @@ fi
 # identical defect): pre-fix pa[0] = 50 (arr[4]) and pa[1] = 0; post-fix
 # 10 / 50.  The fix keeps a CONSTANT destination base offset; a runtime
 # slot index (`slots[rti] is x`) keeps its old path -- recorded as a
-# pre-existing limitation in fixes/fix_fat_pointer_slot_element_bind.md.
+# pre-existing limitation in docs/fixes/fix_fat_pointer_slot_element_bind.md.
 mkdir -p "$WORK/slot"
 cat > "$WORK/slot/s.jal" <<'JALS'
 -- @picsim_validate begin

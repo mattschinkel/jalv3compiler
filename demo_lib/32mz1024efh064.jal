@@ -40,7 +40,6 @@ pragma  target  inst     3            -- instruction set : mips32r2
 pragma  target  chip     32MZ1024EFH064
 pragma  stack            32
 pragma  code             1048576
-pragma  code_location     0xBFC00000  -- code base without pragma bootloader (from .PIC boot sector)
 pragma  ID               0xBF800020,4
 pragma  data             0x80000000-0x8007FFFF
 pragma  shared           0x80000000-0x8007FFFF

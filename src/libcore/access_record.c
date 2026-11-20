@@ -70,7 +70,7 @@ static boolean_t access_record_env_on(const char *name)
   }
   fprintf(stderr,
       "JALV2-SWITCH: %s='%s' is not on/off; using off "
-      "(doc/designs/one-access-model.md#feature-switches)\n", name, v);
+      "(docs/designs/one-access-model.md#feature-switches)\n", name, v);
   return BOOLEAN_FALSE;
 }
 

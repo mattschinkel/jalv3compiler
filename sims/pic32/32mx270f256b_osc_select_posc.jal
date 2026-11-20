@@ -12,7 +12,7 @@
 --    divider codes (mult code 5, odiv code 1), then re-selects
 --    NOSC=3 (POSCPLL).  Silicon-proven 2026-10-25: COSC stays 3 with
 --    SLOCK=1 and the beat cadence is identical before/after the call
---    (fixes/fix_mx_osc_pllmult_code_const.md).  QEMU does not model
+--    (docs/fixes/2026/fix_mx_osc_pllmult_code_const.md).  QEMU does not model
 --    the PLL/OSWEN beyond storing the register, hence the bounded
 --    waits.
 --

@@ -2,7 +2,7 @@
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 """PIC32MZ boot-flash DEVCFG ordering gate (compile-only).
 
-Pins fixes/fix_pic32_bootflash_fuses.md: a boot-flash image (no
+Pins docs/fixes/2026/fix_pic32_bootflash_fuses.md: a boot-flash image (no
 `pragma target image pfm`) once emitted the device-file `_fuses`
 defaults ON TOP of the solved clock words, so every DEVCFG word read
 back erased and the part came up on config defaults -- the image never
@@ -97,6 +97,8 @@ def compile_case(compiler: pathlib.Path, tmp: pathlib.Path, name: str,
             "pragma target OSC FRC_SPLL"]
     if pfm:
         body.append("pragma target image pfm")
+    else:
+        body.append("pragma target image bfm")
     body += list(pragmas)
     body += ["var dword i", "forever loop", "   i = i + 1", "end loop", ""]
     src.write_text("\n".join(body))

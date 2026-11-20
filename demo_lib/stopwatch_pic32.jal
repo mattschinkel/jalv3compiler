@@ -12,9 +12,8 @@
 -- ratios of CPU time regardless of the FRC/SPLL absolute accuracy.
 --
 -- `stopwatch_read_cycles` returns PBCLK ticks. `stopwatch_read_time`
--- converts ticks via target_clock (assumes PBCLK = target_clock/2 --
--- the standard configuration, same convention as
--- serial_hw_uart_clock), so it reports real seconds.
+-- converts ticks via the peripheral-bus clock (_pbclk on MX, SYSCLK/2
+-- on MZ), so it reports real seconds.
 --
 -- Sources:
 --
@@ -35,6 +34,15 @@ if !defined(STOPWATCH_VAR_SIZE) then
 end if
 if !defined(STOPWATCH_MIN_VALUE) then
    const STOPWATCH_MIN_VALUE = STOPWATCH_NS
+end if
+
+-- Peripheral-bus clock the Timer2/3 pair ticks at: _pbclk when the MX
+-- clock solver published it (target_clock / pbdiv), else SYSCLK/2 (the
+-- MZ PB3DIV=/2 boot default).
+if (defined(_pbclk) == TRUE) then
+   const dword _stopwatch_pbclk = _pbclk
+else
+   const dword _stopwatch_pbclk = target_clock / 2
 end if
 
 -- guarded 32-bit read result (filled by _stopwatch_read32)
@@ -127,8 +135,8 @@ function stopwatch_read_time() return byte*STOPWATCH_VAR_SIZE is
    var byte*8 _stopwatch_time
    _stopwatch_read32()
 
-   -- nanoseconds per tick = 2_000_000_000 / target_clock
-   _stopwatch_time = (_stopwatch_ticks * 2_000_000_000) / target_clock
+   -- nanoseconds per tick = 1_000_000_000 / PBCLK
+   _stopwatch_time = (_stopwatch_ticks * 1_000_000_000) / _stopwatch_pbclk
    if STOPWATCH_MIN_VALUE == STOPWATCH_US then
       _stopwatch_time = _stopwatch_time / 1_000
    elsif STOPWATCH_MIN_VALUE == STOPWATCH_MS then

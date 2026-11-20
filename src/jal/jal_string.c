@@ -66,7 +66,7 @@ typedef struct jal_string_state_ {
                                        * already issued (see
                                        * jal_string_core_gate) */
   unsigned            dec_no_shared;
-  /* ALIAS-AWARE REALLOCATION TAINT (fixes/fix_string_arg_view.md): one
+  /* ALIAS-AWARE REALLOCATION TAINT (docs/fixes/2026/fix_string_arg_view.md): one
    * entry per (procedure, string variable it may grow); VARIABLE_NONE
    * means "some string we cannot name" (growth through a pointer, an
    * unparsed/indirect call path, an inline builtin fallback).  The
@@ -75,7 +75,7 @@ typedef struct jal_string_state_ {
   jal_string_grow_ent_t *grow;
   size_t               grow_used;
   size_t               grow_alloc;
-  /* STORES THROUGH OPEN-ARRAY FORMALS (fixes/fix_string_arg_clone.md):
+  /* STORES THROUGH OPEN-ARRAY FORMALS (docs/fixes/2026/fix_string_arg_clone.md):
    * (procedure, formal variable) pairs noted when a body assigns through
    * that formal -- only storing formals need the string clone; read-only
    * formals keep the cheaper payload view */
@@ -1253,8 +1253,8 @@ value_t jal_string_length_value_get(pfile_t *pf, value_t val)
  * A marshalling buffer larger than one RAM bank is split by the allocator,
  * so a callee body that serves several of them cannot carry any one layout:
  * the BACK END hands the active layout over at run time through a per-formal
- * map (fixes/fix_openarray_formal_chunk_map.md, then
- * fixes/fix_openarray_user_array_percall.md).  Nothing is created here -- the
+ * map (docs/fixes/2026/fix_openarray_formal_chunk_map.md, then
+ * docs/fixes/2026/fix_openarray_user_array_percall.md).  Nothing is created here -- the
  * map's size depends on the final placement, so it is created after it. */
 value_t jal_string_arg_byte_array(pfile_t *pf, value_t src)
 {
@@ -2145,7 +2145,7 @@ value_t jal_string_arg_payload_ptr(pfile_t *pf, value_t str, value_t *len_out)
 }
 
 /*
- * A string payload handed to an open-array formal as a VIEW (fixes/
+ * A string payload handed to an open-array formal as a VIEW (docs/fixes/
  * fix_string_arg_view.md): the actual becomes the HEAP ARRAY value, the
  * payload's base offset (handle.OFFSET + header) is staged into a
  * compiler-owned word at the call site, and the back end installs the

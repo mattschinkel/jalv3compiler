@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PIC18 v6-core (Q43) Access Bank regression gate.
 
-Pins the encodings protected by fixes/fix_pic18_v6_access_bank_shared.md:
+Pins the encodings protected by docs/fixes/2026/fix_pic18_v6_access_bank_shared.md:
 
   1. Q43 witness (`18f47q43_serial_hardware`): every `v__access` file
      operand's variable lives inside the relocated Access Bank windows
@@ -11,7 +11,7 @@ Pins the encodings protected by fixes/fix_pic18_v6_access_bank_shared.md:
      the fix; 61 when the D3 guard rejected the windows).
   2. Classic non-regression (`18f4620_serial_hw_echo`): no `v__access`
      operand targets the 0x60-0x7F bank-0 GPR hole (the classic guard,
-     fixes/fix_pic18_variable_shared_flag_access_bank_low_gpr.md).
+     docs/fixes/2026/fix_pic18_variable_shared_flag_access_bank_low_gpr.md).
 
 Usage: python3 unit-tests/test_pic18_v6_access_bank.py [--compiler PATH]
 Exit 0 = all checks pass.

@@ -2179,7 +2179,7 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
     value_dereference(val);
   }
   /* A STRING actual into an out/in-out open byte-array formal first tries
-   * the STRING-FLAVORED CLONE (docs/investigations/
+   * the STRING-FLAVORED CLONE (docs/fixes/
    * string_clone_design_20261105.md): the callee's body re-parsed with
    * this formal as a string handle, giving it the full string semantics
    * (the append rule at COUNT, live COUNT, growth through the handle --
@@ -2256,7 +2256,7 @@ static void jal_call_out_param_parse(pfile_t *pf, const char *ptr, variable_def_
        * unnamed pointer target, or another formal) would leave the copy
        * stale and the next write through it corrupts the heap.  Such a
        * callee is not cloned; the view/refusal below reports it
-       * (fixes/fix_string_arg_clone_alias.md). */
+       * (docs/fixes/fix_string_arg_clone_alias.md). */
       if ((ii > 0) && (ii <= pfile_proc_param_ct_get(callee))) {
         fval = pfile_proc_param_get(callee, ii);
         fvar = fval ? value_variable_get(fval) : VARIABLE_NONE;
@@ -2564,7 +2564,7 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
      * source string: its body must be parsed already (a forward call is
      * treated as unsafe) and it must not (transitively) reallocate a heap
      * string.  `in out`/`out` use the same gate with the payload VIEW
-     * (fixes/fix_string_arg_view.md); a tainted callee on the IN side keeps
+     * (docs/fixes/2026/fix_string_arg_view.md); a tainted callee on the IN side keeps
      * the snapshot -- the check is that the callee cannot invalidate the
      * bytes, not that it does not write.
      */
@@ -2598,7 +2598,7 @@ static void jal_call_in_param_parse(pfile_t *pf, const char *ptr, variable_def_t
            * one piece, so the cheap pointer path stays */
           pptr = jal_string_arg_payload_ptr(pf, val, &len);
         } else {
-          /* LARGER heap (2026-11-05, fixes/fix_string_arg_view.md): the
+          /* LARGER heap (2026-11-05, docs/fixes/2026/fix_string_arg_view.md): the
            * payload VIEW -- the heap array + a staged base offset into the
            * formal's runtime chunk map on FSR0 cores, the payload pointer
            * on flat 32-bit targets, VALUE_NONE (snapshot fallback) on a

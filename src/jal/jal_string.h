@@ -32,7 +32,7 @@ value_t   jal_string_arg_payload_ptr(pfile_t *pf, value_t str,
 value_t   jal_string_arg_payload_view(pfile_t *pf, value_t str,
     value_t *len_out);
 void      jal_string_note_realloc(pfile_t *pf);
-/* alias-aware reallocation taint (fixes/fix_string_arg_view.md): growth
+/* alias-aware reallocation taint (docs/fixes/2026/fix_string_arg_view.md): growth
  * sites that know their destination record the exact string variable;
  * the propagation substitutes a callee's formals with each call's
  * actuals; the consumer asks whether a callee can move ONE given string */
@@ -44,7 +44,7 @@ boolean_t jal_string_grow_aliases(pfile_proc_t *callee, value_t actual);
  * the formal being cloned (the actual variable itself, an unnamed pointer
  * target, or another formal).  The clone's formal is a handle COPY, so such
  * a move is invisible to it -- the stale handle would then be used for a
- * write (fixes/fix_string_arg_clone_alias.md) */
+ * write (docs/fixes/fix_string_arg_clone_alias.md) */
 boolean_t jal_string_grow_aliases_other(pfile_proc_t *callee,
     variable_t formal, value_t actual);
 /* stores through open-array formals (clone-vs-view decision) */

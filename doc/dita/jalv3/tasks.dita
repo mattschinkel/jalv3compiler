@@ -16,15 +16,10 @@
     one task to another automatically, control passes only when a task
     explicitly yields. Tasks take no parameters.</p>
 
-    <p>The number of task slots is set with the TASK pragma, or with the
-    compiler option -task:</p>
-
-    <codeblock>          PRAGMA TASK <i>cexpr</i></codeblock>
-
-    <p>The count includes the main program itself. To run the main program
-    plus three worker tasks, use PRAGMA TASK 4. It is generally better to set
-    this in the program than with the compiler option, because the number is
-    unlikely to change.</p>
+    <p>Task slots are sized automatically from the task declarations: the
+    scheduler allocates one slot per TASK plus slot 0 for the main program.
+    There is no PRAGMA TASK; the -task compiler option can pre-size the table
+    but is not needed in source.</p>
 
     <p>A task is started with the _task_start statement. It may be started
     from the main program or from another task:</p>
@@ -67,9 +62,7 @@
 
     <p>Example:</p>
 
-    <codeblock>          PRAGMA TASK 3
-
-          VAR BYTE a_count = 0
+    <codeblock>          VAR BYTE a_count = 0
           VAR BYTE b_count = 0
 
           TASK task_a() IS

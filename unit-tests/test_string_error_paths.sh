@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 # Deterministic negative tests for the string assign/concat error paths
-# (fixes/fix_string_error_path_free_corruption.md) plus the dynamic-string
-# type/syntax gates (fixes/fix_dynamic_string_syntax_safety.md).
+# (docs/fixes/2026/fix_string_error_path_free_corruption.md) plus the dynamic-string
+# type/syntax gates (docs/fixes/2026/fix_dynamic_string_syntax_safety.md).
 #
 # PASS per case: exit code 1 AND a final "N errors, M warnings" line AND,
 # when a substring is supplied, that diagnostic is present.
@@ -205,7 +205,7 @@ r = string_to_array(rom, s)' "assign to constant"
 # The OUT direction marshals nothing (the snapshot lives in the IN parser),
 # so the callee would write through the string's handle and silently corrupt
 # the heap.  A CLEAN callee now receives the payload VIEW on every core
-# family (fixes/fix_string_arg_view.md) -- including the CLASSIC 14-bit
+# family (docs/fixes/2026/fix_string_arg_view.md) -- including the CLASSIC 14-bit
 # core, whose walk uses the baked chunk map plus a per-formal base cell.
 # A callee that can reallocate a string keeps the refusal (no snapshot
 # exists on the OUT path).

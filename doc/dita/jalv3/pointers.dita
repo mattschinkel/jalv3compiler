@@ -142,7 +142,7 @@ p = 5               -- calls sensor'PUT</codeblock>
       string. Assignment and concatenation through the pointer act on the
       string it refers to:</p>
 
-      <codeblock>CONST WORD _string_heap_size = 128
+      <codeblock>pragma target string_heap_size 128
 INCLUDE strings_dynamic
 VAR STRING text
 VAR POINTER p AS VAR STRING

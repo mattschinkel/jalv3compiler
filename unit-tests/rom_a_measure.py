@@ -8,8 +8,8 @@ the delta, and the win/loss distribution.  Metric: the compiler's own
 32-bit back ends print no code-area line, so fall back to the emitted
 instruction count from the .asm listing.
 
-Used by `fixes/fix_rom_a_default_decision.md` (and its 2026-11-04 addendum /
-`fixes/fix_ptr_read_call_fsr_clobber.md`) to re-decide
+Used by `docs/fixes/2026/fix_rom_a_default_decision.md` (and its 2026-11-04 addendum /
+`docs/fixes/2026/fix_ptr_read_call_fsr_clobber.md`) to re-decide
 `JALV2_ROM_A_STRING_LITERAL_CALL`:
 
     python3 unit-tests/rom_a_measure.py --off ./bin/beta/jalv3-x86-64 \

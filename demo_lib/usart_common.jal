@@ -61,11 +61,17 @@ procedure _calculate_and_set_baudrate() is
    if (usart_hw_serial == TRUE) then               -- USART in asynchronous mode
 
       if (defined(U1MODE) == TRUE) then            -- PIC32 UART (U1MODE type)
-         -- Baudrate from PB clock (PBCLK2). pic32_startup() default is
-         -- SYSCLK/2; override by defining serial_hw_uart_clock before
-         -- including the serial library.
+         -- Baudrate from the peripheral-bus clock.  MX publishes _pbclk
+         -- (= target_clock / pbdiv, DIV_2 default); MZ keeps PBCLK2 =
+         -- SYSCLK/2 (its multi-PBxDIV model publishes no _pbclk).
+         -- Override by defining serial_hw_uart_clock before including
+         -- the serial library.
          if (defined(serial_hw_uart_clock) == FALSE) then
-            const dword serial_hw_uart_clock = target_clock / 2
+            if (defined(_pbclk) == TRUE) then
+               const dword serial_hw_uart_clock = _pbclk
+            else
+               const dword serial_hw_uart_clock = target_clock / 2
+            end if
          end if
 
          -- BRGH = 1: U1BRG = Fpb / (4 * baud) - 1

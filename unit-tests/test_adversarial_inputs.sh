@@ -28,8 +28,8 @@
 #   error would be a regression, not a repair.  Shape 4 is now an
 #   explicitly bounded construct: legal up to the cap, one clean
 #   diagnostic beyond it.
-#   fixes/fix_bounded_parser_recursion.md, fixes/fix_data_area_map_guards.md
-#   fixes/fix_bounded_statement_recursion.md
+#   docs/fixes/2026/fix_bounded_parser_recursion.md, docs/fixes/2026/fix_data_area_map_guards.md
+#   docs/fixes/2026/fix_bounded_statement_recursion.md
 #
 # PASS = rc is not a signal (>=128) and, when the compile fails, an
 #        "N errors, M warnings" summary is present.
@@ -235,7 +235,7 @@ check "2000 nested if blocks (statement-nesting cap)" \
 # keep its analysis state in a fixed [PIC_CODE_GOP_DEPTH] (256) array: 2 000
 # SEQUENTIAL if statements overflowed it and tripped
 # `assert(data->ix < PIC_CODE_GOP_DEPTH)` in the PIC back end.  Legal input,
-# must compile clean.  (Witness: fixes/fix_gop_walk_depth.md)
+# must compile clean.  (Witness: docs/fixes/2026/fix_gop_walk_depth.md)
 gen "$WORK/branches_seq_2000.jal" <<'PY'
 import sys
 n = 2000

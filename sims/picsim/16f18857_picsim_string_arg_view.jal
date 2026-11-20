@@ -5,7 +5,7 @@
 --
 -- Description:
 --    A heap string actual bound to a `byte out x[]` / `byte in out x[]`
---    formal is handed over as a payload VIEW (fixes/fix_string_arg_view.md):
+--    formal is handed over as a payload VIEW (docs/fixes/2026/fix_string_arg_view.md):
 --    the formal's runtime chunk map carries the HEAP's layout plus a base
 --    word staged from the handle (OFFSET + header), and the hidden count is
 --    COUNT(s).  The callee's writes land in the live payload, count-bounded;

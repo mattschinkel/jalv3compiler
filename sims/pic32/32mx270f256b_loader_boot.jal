@@ -5,7 +5,7 @@
 -- Compiler: JALv2
 --
 -- Description:
---    PIC32MX1/2 (M4K) loader-mode image (`pragma bootloader pic32`)
+--    PIC32MX1/2 (M4K) loader-mode image (`pragma target image pfm`)
 --    carrying the compiler-emitted boot-flash init block.  The MX boot
 --    flash is 3 KB, so the boot block must stay below the config words
 --    at 0xBFC00BF0 and the app runs from program flash at 0x9D000000
@@ -24,7 +24,7 @@ include 32mx270f256b
 
 pragma target clock 40_000_000
 pragma target OSC   FRC_SPLL
-pragma bootloader pic32
+pragma target image pfm
 
 var volatile byte loader_probe
 

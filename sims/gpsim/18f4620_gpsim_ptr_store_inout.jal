@@ -5,7 +5,7 @@
 --
 -- Description:
 --    A user POINTER actual bound to an `in out` / `out` open-array formal
---    (fixes/fix_openarray_pointer_store.md): the formal stores the ADDRESS
+--    (docs/fixes/2026/fix_openarray_pointer_store.md): the formal stores the ADDRESS
 --    VALUE, and the back end's linear pointer store writes the element
 --    through it.  Covers byte (static and runtime index), `out`, word and
 --    dword elements.

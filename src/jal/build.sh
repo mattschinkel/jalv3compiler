@@ -58,7 +58,7 @@ echo "#endif" >> $DST
 # handed over as a payload VIEW (the heap array + a staged base offset; the
 # callee reads/writes the live payload through the formal's runtime chunk
 # map), when the callee cannot reallocate a heap string; content-only and
-# count-bounded (fixes/fix_string_arg_view.md).  Opt-out:
+# count-bounded (docs/fixes/2026/fix_string_arg_view.md).  Opt-out:
 # -DJALV2_STRING_ARG_VIEW=0
 echo "" >> $DST
 echo "#ifndef JALV2_STRING_ARG_VIEW" >> $DST

@@ -42,7 +42,7 @@ end if
 -- 0x6000Exxx analog-domain registers were added to the generator from
 -- IDF v4.4.7's regi2c_ctrl.h (ANA_CONFIG_REG) and our own ROM
 -- disassembly (I2C_ANA_MST_CMD0, no public header name exists --
--- fixes/fix_esp32_analog_regs_device_file.md)
+-- docs/fixes/2026/fix_esp32_analog_regs_device_file.md)
 var volatile dword _esp32_clk_conf   at RTC_CNTL_CLK_CONF
 var volatile dword _esp32_rtc_cntl   at RTC_CNTL
 var volatile dword _esp32_options0   at RTC_CNTL_OPTIONS0

@@ -5,10 +5,10 @@
 # exit 1, no half-built-program diagnostics, no signal, no leftover HEX.
 #
 # Recurring defect family (no automated coverage before this pin):
-#   fixes/fix_oom_policy.md             -- ENOMEM logged then every caller
+#   docs/fixes/2026/fix_oom_policy.md             -- ENOMEM logged then every caller
 #                                          carried on: 125 diagnostics, then
 #                                          SIGABRT in the value detector
-#   fixes/fix_compiler_oom_null_guards.md, fixes/fix_defensive_hardening.md
+#   docs/fixes/2026/fix_compiler_oom_null_guards.md, docs/fixes/2026/fix_defensive_hardening.md
 #
 # The fix doc pinned this with a manual `ulimit -v` probe; this script makes
 # it a gate.  A tight limit is deliberately applied to a corpus giant, then

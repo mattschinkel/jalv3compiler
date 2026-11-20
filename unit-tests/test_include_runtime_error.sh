@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
-# include-inside-runtime-conditional (fixes/fix_include_runtime_error.md):
+# include-inside-runtime-conditional (docs/fixes/2026/fix_include_runtime_error.md):
 # error shapes must fail with the message; const/defined() shapes must be clean.
 # Usage: unit-tests/test_include_runtime_error.sh [compiler]
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

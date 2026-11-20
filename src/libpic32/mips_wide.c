@@ -429,7 +429,11 @@ static void mips_wide_store_chunk(pfile_t *pf, unsigned long addr,
   }
 }
 
-void mips_wide_assign(pfile_t *pf, value_t dst, value_t src)
+/* Raw N-byte copy.  The byte/word moves below are emitted directly, so
+ * they bypass the value cache and leave $t0-$t3 holding something other
+ * than what the cache last bound them to.  The public entry point drops
+ * those bindings afterwards (see mips_wide_assign). */
+static void mips_wide_assign_emit(pfile_t *pf, value_t dst, value_t src)
 {
   unsigned   dst_sz;
   unsigned   src_sz;
@@ -517,6 +521,22 @@ void mips_wide_assign(pfile_t *pf, value_t dst, value_t src)
         BOOLEAN_FALSE);
     mips_wide_store_byte(pf, dst, off, MIPS_REG_T1, MIPS_REG_T2, thru);
   }
+}
+
+void mips_wide_assign(pfile_t *pf, value_t dst, value_t src)
+{
+  mips_wide_assign_emit(pf, dst, src);
+  /* The copy clobbers the scratch registers WITHOUT telling the value
+   * cache.  A later read of a home the cache still maps to one of them
+   * would then be elided and use the copied word instead of the home:
+   * the indirect-call parameter copy hit exactly that (a dword home
+   * stayed bound to $t1 across the qword copy that followed it, so the
+   * callee's next read returned the qword's high word).  Drop the
+   * bindings here, at the one place that emits the raw moves. */
+  mips_reg_cache_clobber(MIPS_REG_T0);
+  mips_reg_cache_clobber(MIPS_REG_T1);
+  mips_reg_cache_clobber(MIPS_REG_T2);
+  mips_reg_cache_clobber(MIPS_REG_T3);
 }
 
 /* ---------- shared wide ALU/NEG/INCR-DECR primitives (wide_alg) ----

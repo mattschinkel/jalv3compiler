@@ -15,7 +15,7 @@
 --
 --    Phase 4(b): interrupt numbers greater than 1.  ESP32 levels 2..7
 --    (CPU interrupt numbers 6..31) stay a REFUSED shape by design
---    (fixes/fix_esp32_isr_cpu_int_selection.md): the compiler reports one
+--    (docs/fixes/2026/fix_esp32_isr_cpu_int_selection.md): the compiler reports one
 --    error instead of arming the wrong line.  That refusal is the
 --    negative control and is pinned by the compile-only test above.
 --

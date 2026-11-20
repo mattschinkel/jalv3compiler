@@ -17,7 +17,7 @@
 --    The fix spills + colds caller-saved homes on the fall-through edge
 --    BEFORE the label node, and at every branch edge, so a label never
 --    stores a caller-saved register that an incoming back-edge may have
---    clobbered.  See fixes/fix_mips_caller_home_label_spill.md.
+--    clobbered.  See docs/fixes/fix_mips_caller_home_label_spill.md.
 --
 --    Pre-fix this body prints `A|1.5|3` and never reaches ##DONE##;
 --    post-fix it prints the full `A|1.5|3141|` and sets `ok`.

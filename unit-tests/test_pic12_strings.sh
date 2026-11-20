@@ -1,6 +1,6 @@
 #!/bin/bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
-# Pins the PIC_12 string gate (fixes/fix_pic12_string_support.md).
+# Pins the PIC_12 string gate (docs/fixes/2026/fix_pic12_string_support.md).
 #
 # A 12-bit core has no FSR/INDF and no PCLATH, so the string runtime cannot
 # be built for it.  Before this gate, `var string s; s = "xy"` on a 12F508

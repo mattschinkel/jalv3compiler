@@ -369,7 +369,7 @@ boolean_t pic_env_on_default(const char *name, boolean_t def)
   if (pic_env_warn_once(name)) {
     fprintf(stderr,
         "JALV2-SWITCH: %s='%.*s' is not on/off; using %s "
-        "(doc/designs/one-access-model.md#feature-switches)\n",
+        "(docs/designs/one-access-model.md#feature-switches)\n",
         name, (int) n, s, def ? "on" : "off");
   }
   return def;

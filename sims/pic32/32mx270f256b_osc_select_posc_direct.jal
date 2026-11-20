@@ -11,7 +11,7 @@
 --    device block (the shared wrapper pins FRC_SPLL).  Silicon-proven
 --    2026-10-25: boots C2, returns C2 S0 K0 (SLOCK 0 is correct -- the
 --    PLL is unused on this path), cadence identical before/after
---    (fixes/fix_mx_osc_pllmult_code_const.md addenda).
+--    (docs/fixes/2026/fix_mx_osc_pllmult_code_const.md addenda).
 --
 -- Notes:
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_osc_select_posc_direct.jal

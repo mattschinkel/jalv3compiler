@@ -1219,7 +1219,7 @@ void pic_fat_desc_fill_emit(pfile_t *pf)
  * filling two 150-byte arrays through one `byte in data[]` wrote the second
  * fill through the first call's chunk bases -- gpsim: big_a[0]=100,
  * big_b[0]=0).  The string half of this defect was fixed the same way
- * (fixes/fix_openarray_formal_chunk_map.md); drivers, sd_card and fat32 have
+ * (docs/fixes/2026/fix_openarray_formal_chunk_map.md); drivers, sd_card and fat32 have
  * the USER-array shape, and they are compile-only, so nothing caught it.
  *
  * Fix: each such formal owns a small map buffer
@@ -1625,7 +1625,7 @@ static void pic_variable_chunk_map_copy(pfile_t *pf, variable_t src,
  *
  * An open-array formal's subscripts used to be emitted against the FORMAL's
  * chunk map, which one callee body can only carry for one actual -- a second
- * chunked actual read the first one's memory (fixes/
+ * chunked actual read the first one's memory (docs/fixes/
  * fix_openarray_formal_chunk_map.md).  A formal fed two different layouts now
  * owns a map that every call site fills (pic_var_chunk_prepare_emit), while
  * the old baked propagation below still serves the one-layout case. */

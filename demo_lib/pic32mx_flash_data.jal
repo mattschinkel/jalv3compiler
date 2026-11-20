@@ -1,0 +1,174 @@
+-- --------------------------------------------------------------
+-- Title:     PIC32MX flash data block (page erase, row write, read)
+-- Author:    Matthew Schinkel, Copyright (c) 2026, all rights reserved
+-- Compiler:  3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description:
+--    Read, erase and write a reserved block of program flash on the
+--    PIC32MX1XX/2XX family, modelled on jallib's 18FxxJyy
+--    `peripheral/flash_memory/flash_data.jal`.
+--
+--    The application reserves one erased flash page and uses it as a data
+--    block.  Erase is a page operation (NVMOP 4); programming is a 128-byte
+--    row operation (NVMOP 3) whose source is a RAM buffer.  The sequence is
+--    the documented MX1/2 one: NVMCON = op|WREN, settle, NVMKEY unlock,
+--    NVMCONSET = WR mask, poll WR, clear WREN, then report LVDERR/WRERR.
+--
+--    Usage: define FLASH_RESERVED (the KSEG0 address of the reserved page)
+--    and declare the data array `flash_data` BEFORE including this file:
+--
+--       const dword FLASH_RESERVED = 0x9D030000
+--       var dword flash_data[128]          -- up to one page
+--       include pic32mx_flash_data
+--
+--       flash_erase_block()
+--       flash_save_block()
+--       flash_restore_block()
+--
+--    Notes:
+--      - FLASH_RESERVED must be aligned to the erase page.  FLASH_PAGE_BYTES
+--        defaults to 1024 (measured on a PIC32MX270F256B) and can be
+--        overridden before the include.
+--      - `flash_data` must hold a whole number of 128-byte rows.
+--      - The row source is placed at FLASH_ROW_ADDR (KSEG1, uncached)
+--        because the flash controller reads physical RAM, not the D-cache.
+--        Override the address before the include if it collides with RAM.
+--      - Do not call these from an interrupt handler.  The reserved page is
+--        read through the KSEG1 alias, so no stale D-cache line is used.
+-- --------------------------------------------------------------
+
+-- The MX1/2 flash controller only: MZ has a different one (NVMCON2 and a
+-- second bank, 16-byte NVMDATA0-3 writes, larger rows and pages), so it must
+-- not be driven by this sequence.
+if defined(NVMCON2) then
+   _error "pic32mx_flash_data: PIC32MX1/2 only (MZ has a different flash controller)"
+end if
+
+-- Reserved page: the caller must define this before the include.
+if !defined(FLASH_RESERVED) then
+   _error "pic32mx_flash_data: define FLASH_RESERVED (KSEG0 address of the reserved page)"
+end if
+
+if !defined(FLASH_PAGE_BYTES) then
+   const dword FLASH_PAGE_BYTES = 1024
+end if
+
+-- Row source buffer: uncached RAM the flash controller can read.
+if !defined(FLASH_ROW_ADDR) then
+   const dword FLASH_ROW_ADDR = 0xA0002000
+end if
+
+const dword FLASH_ROW_BYTES  = 128
+const word  FLASH_ROW_WORDS  = 32
+
+const byte  FLASH_NVMOP_WORD = 1
+const byte  FLASH_NVMOP_ROW  = 3
+const byte  FLASH_NVMOP_PAGE = 4
+
+const dword FLASH_WREN = 0x00004000
+const dword FLASH_WR   = 0x00008000
+const dword FLASH_KEY1 = 0xAA996655
+const dword FLASH_KEY2 = 0x556699AA
+
+-- KSEG1 view of the reserved page and the RAM row buffer.
+const dword FLASH_VIEW_ADDR = (FLASH_RESERVED & 0x1FFFFFFF) | 0xA0000000
+const dword FLASH_ROW_PHYS  = FLASH_ROW_ADDR & 0x1FFFFFFF
+
+var volatile dword _flash_view[FLASH_PAGE_BYTES / 4] at { FLASH_VIEW_ADDR }
+var volatile dword _flash_row[FLASH_ROW_WORDS] at { FLASH_ROW_ADDR }
+
+var byte _flash_status
+
+-- Sanity checks (compile time).
+if (FLASH_RESERVED & (FLASH_PAGE_BYTES - 1)) != 0 then
+   _error "pic32mx_flash_data: FLASH_RESERVED is not aligned to FLASH_PAGE_BYTES"
+end if
+
+if ((count(flash_data) * 4) > FLASH_PAGE_BYTES) then
+   _error "pic32mx_flash_data: flash_data is larger than the reserved page"
+end if
+
+if ((count(flash_data) & (FLASH_ROW_WORDS - 1)) != 0) then
+   _error "pic32mx_flash_data: flash_data must be a whole number of 128-byte rows"
+end if
+
+-- Run one flash-controller operation and latch its error flags.
+procedure _flash_op(byte in op, dword in phys_addr) is
+   var dword settle
+
+   NVMADDR = phys_addr
+   NVMCON  = dword(op) | FLASH_WREN
+
+   settle = 0
+   while settle < 400 loop
+      settle = settle + 1
+   end loop
+
+   NVMKEY    = FLASH_KEY1
+   NVMKEY    = FLASH_KEY2
+   NVMCONSET = FLASH_WR
+
+   while NVMCON_WR loop
+   end loop
+
+   NVMCONCLR = FLASH_WREN
+
+   _flash_status = 0
+   if NVMCON_LVDERR then
+      _flash_status = _flash_status | 1
+   end if
+   if NVMCON_WRERR then
+      _flash_status = _flash_status | 2
+   end if
+end procedure
+
+-- Erase the reserved page.
+procedure flash_erase_block() is
+   _flash_op(FLASH_NVMOP_PAGE, FLASH_RESERVED & 0x1FFFFFFF)
+end procedure
+
+-- Program the reserved page from flash_data, one 128-byte row at a time.
+procedure flash_save_block() is
+   var word i
+   var word r
+   var word rows
+
+   rows = word(count(flash_data) / FLASH_ROW_WORDS)
+   r = 0
+   while r < rows loop
+      i = 0
+      while i < FLASH_ROW_WORDS loop
+         _flash_row[i] = flash_data[r * FLASH_ROW_WORDS + i]
+         i = i + 1
+      end loop
+
+      NVMSRCADDR = FLASH_ROW_PHYS
+      _flash_op(FLASH_NVMOP_ROW,
+          (FLASH_RESERVED & 0x1FFFFFFF) + dword(r) * FLASH_ROW_BYTES)
+      r = r + 1
+   end loop
+end procedure
+
+-- Copy the reserved page back into flash_data.
+procedure flash_restore_block() is
+   var word i
+
+   i = 0
+   while i < count(flash_data) loop
+      flash_data[i] = _flash_view[i]
+      i = i + 1
+   end loop
+end procedure
+
+-- Read one 32-bit word from the reserved page, at a byte offset.
+function flash_read_word(dword in offset) return dword is
+   return _flash_view[word(offset / 4)]
+end function
+
+-- TRUE when the last erase/program operation reported LVDERR or WRERR.
+function flash_error() return bit is
+   return _flash_status != 0
+end function

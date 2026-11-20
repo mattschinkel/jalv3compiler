@@ -6,7 +6,7 @@
 -- Description:
 --    Pins the bare byte-array operand in '&' chains (the chain form must reproduce the string()-cast values exactly).
 --    Promoted from the 2026-10-06 fix tmp/witness into the suite
---    (fixes/fix_bare_array_chain_concat.md).
+--    (docs/fixes/2026/fix_bare_array_chain_concat.md).
 --
 -- Sources:
 --

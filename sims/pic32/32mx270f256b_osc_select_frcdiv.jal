@@ -12,7 +12,7 @@
 --    divided (clean banner at the divided-PBCLK baud -- the MZ
 --    "FRCDIV boots at 8 MHz" behavior does NOT reproduce on MX), and
 --    the re-assert returns C7 S0 K0 with a 0.5009 s cadence unchanged
---    (fixes/fix_mx_osc_pllmult_code_const.md addenda).
+--    (docs/fixes/2026/fix_mx_osc_pllmult_code_const.md addenda).
 --
 -- Notes:
 --    ./bin/jalv3-x86-64 -s 'lib;tests' tests/pic32/32mx270f256b_osc_select_frcdiv.jal

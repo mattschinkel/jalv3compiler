@@ -10,7 +10,7 @@
 --    actual's own variable, a pointer target, another formal) is the shape
 --    the clone cannot serve -- it is refused at the call site with
 --    "writes through it would corrupt the string"
---    (fixes/fix_string_clone_alias.md).
+--    (docs/fixes/2026/fix_string_clone_alias.md).
 --
 --    This witness pins the ALLOWED side: an in-out callee that appends
 --    through the formal while it also grows an unrelated global string, and

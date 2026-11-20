@@ -9,7 +9,7 @@ later-created worker threads inherit both, so full-suite runs never
 compete with foreground work on this shared host -- and still run at full
 speed on an otherwise idle machine (priority only arbitrates under
 contention).  Lowering priority needs no privileges; failures are warned,
-never fatal.  See fixes/fix_unit_test_low_priority.md.
+never fatal.  See docs/fixes/fix_unit_test_low_priority.md.
 
 Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 """

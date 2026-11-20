@@ -55,7 +55,7 @@
 --   through the exact shortest-round-trip renderer when
 --   const _PRINT_FLOAT_EXACT = TRUE is defined before this include
 --   (see the note at print_float below and
---   fixes/fix_print_jal_shadow.md). Every other procedure is unchanged.
+--   docs/fixes/2026/fix_print_jal_shadow.md). Every other procedure is unchanged.
 -- - This library replaces an older version which had no scalability.
 --   It should be compatible with the old library except for:
 --   * All procedures for binary output have been renamed to
@@ -622,7 +622,7 @@ end if     -- (PRINT_MAX_VAR_SIZE > 0)
 --            - float
 -- Returns:   nothing
 -- Note:      FORK SHADOW (demo_lib/print.jal; see
---            fixes/fix_print_jal_shadow.md): print_float here has TWO
+--            docs/fixes/2026/fix_print_jal_shadow.md): print_float here has TWO
 --            bodies. The pristine jallib print.jal keeps the original
 --            [-]#.#######e[-]## renderer (which only carries ~6 reliable
 --            significant digits and loops forever on +/-inf).

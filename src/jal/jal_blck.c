@@ -1352,7 +1352,7 @@ static void jal_assign_lvalue_parse(jal_assign_ctx_t *ctx)
   /* an assignment whose target resolves INTO an open-array formal (the
    * element view carries the formal's variable) tells the clone-vs-view
    * decision that this formal is stored through -- read-only formals keep
-   * the cheaper payload view (fixes/fix_string_arg_clone.md) */
+   * the cheaper payload view (docs/fixes/2026/fix_string_arg_clone.md) */
   if (val) {
     variable_t tvar = value_variable_get(val);
 

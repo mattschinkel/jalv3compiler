@@ -1,0 +1,61 @@
+-- Title: PIC32MX270F256B flash data block
+-- Author: Matthew Schinkel
+-- Compiler: 3.0a1
+--
+-- This file is part of jallib (https://github.com/jallib/jallib)
+-- Released under the BSD license (http://www.opensource.org/licenses/bsd-license.php)
+--
+-- Description: saves a 512-byte block to a reserved flash page, erases the
+--              page, programs it back, restores it into RAM and checks the
+--              contents.  Exercises demo_lib/pic32mx_flash_data.jal.
+--
+-- Requires: 32mx270f256b, pic32mx_flash_data
+
+include 32mx270f256b
+
+pragma target clock 40_000_000
+pragma target OSC   FRC_SPLL
+pragma target WDT   DISABLED
+
+-- One erased page, well clear of the program image.
+const dword FLASH_RESERVED = 0x9D030000
+
+var dword flash_data[128]
+var volatile byte flash_ok
+var volatile dword heartbeat
+var dword fi
+
+include pic32mx_flash_data
+
+-- Fill the block with a pattern, save it, clobber RAM, restore and verify.
+fi = 0
+while fi < count(flash_data) loop
+   flash_data[fi] = 0x11223344 + fi
+   fi = fi + 1
+end loop
+
+flash_erase_block()
+flash_save_block()
+
+fi = 0
+while fi < count(flash_data) loop
+   flash_data[fi] = 0
+   fi = fi + 1
+end loop
+
+flash_restore_block()
+
+flash_ok = 1
+fi = 0
+while fi < count(flash_data) loop
+   if flash_data[fi] != (0x11223344 + fi) then
+      flash_ok = 0
+   end if
+   fi = fi + 1
+end loop
+
+-- Leave the result where a debugger or the next boot can see it.
+heartbeat = 0x600DF00D | dword(flash_ok)
+
+forever loop
+end loop

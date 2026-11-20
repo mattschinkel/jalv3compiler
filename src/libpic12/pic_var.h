@@ -131,7 +131,7 @@ variable_t pic_var_openarray_formal_map_get(variable_t formal);
  * map (the actual is a bare pointer, or the callee is reached through a
  * function pointer / as a reentrant procedure) */
 void pic_var_openarray_formal_block(variable_t formal);
-/* STRING PAYLOAD VIEW (fixes/fix_string_arg_view.md): a call site whose
+/* STRING PAYLOAD VIEW (docs/fixes/2026/fix_string_arg_view.md): a call site whose
  * open-array actual is a heap-string payload registers the actual VALUE
  * (a value of the `_string_heap` array) with the staging global that holds
  * the payload's runtime base offset; the call-site map fill copies that

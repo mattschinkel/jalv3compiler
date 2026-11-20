@@ -2,7 +2,7 @@
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
 #
 # Pins for open-array formals fed MULTI-BANK actuals
-# (fixes/fix_openarray_formal_chunk_map.md,
+# (docs/fixes/2026/fix_openarray_formal_chunk_map.md,
 #  docs/investigations/runtime_chunk_arguments_design_20261102.md).
 #
 # The callee body is emitted ONCE, so its subscripts used to key off the
@@ -124,7 +124,7 @@ fi
 #     version of the guard refused this case too -- it could not tell "another
 #     actual's map is installed" from "this same actual was propagated in an
 #     earlier placement round"; pic_variable_chunk_map_t.owner now records it.
-#     Since the payload VIEW (fixes/fix_string_arg_view.md) a string site at
+#     Since the payload VIEW (docs/fixes/2026/fix_string_arg_view.md) a string site at
 #     a heap > 64 ALWAYS wires the runtime map -- the payload base offset is
 #     runtime data and the baked map cannot carry it -- so the contract is
 #     "clean compile AND the map is present".

@@ -14,7 +14,7 @@
 --    exact.  The two configurations that DID corrupt were
 --      * `_string_heap_size` 100  -> the `_strargN` argument buffers are
 --        multi-bank, so a second string-argument call site read the first
---        one's chunks (fixes/fix_openarray_formal_chunk_map.md), and
+--        one's chunks (docs/fixes/2026/fix_openarray_formal_chunk_map.md), and
 --      * `_string_heap_size` 48   -> too small for the concat pieces; the
 --        compiler warns "recommend at least 80" and the third string comes
 --        out empty (runtime `_string_error`), which is diagnosed, not silent.

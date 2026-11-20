@@ -6,7 +6,7 @@
 --
 -- Description:
 --    The control shapes that must keep working for the per-call chunk
---    addressing of user arrays (fixes/fix_openarray_user_array_percall.md).
+--    addressing of user arrays (docs/fixes/2026/fix_openarray_user_array_percall.md).
 --    A runtime map is created only when a formal is fed two DIFFERENT layouts
 --    and at least one of them is split across RAM banks, so these shapes must
 --    still be addressed by the BAKED layout (or by the pointer alone) and be

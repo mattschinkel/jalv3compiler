@@ -193,7 +193,7 @@ void mips_delay_create(pfile_t *pf, variable_const_t usec)
   }
 
   /* The I-cache sweep is the crash-into-new-image mechanism (see
-   * fixes/fix_pic32_crash_into_new_image.md).  JALV2_NO_DELAY_SWEEP=1
+   * docs/fixes/2026/fix_pic32_crash_into_new_image.md).  JALV2_NO_DELAY_SWEEP=1
    * disables it for diagnosis / images that never live across an ICSP
    * reprogram. */
   if (!getenv("JALV2_NO_DELAY_SWEEP"))

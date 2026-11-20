@@ -5,10 +5,10 @@
 # says so ONCE instead of producing a 25-diagnostic cascade.
 #
 # Recurring defect family (no automated coverage before this pin):
-#   fixes/fix_reserved_internal_names.md -- compiler finds its own scratch by
+#   docs/fixes/2026/fix_reserved_internal_names.md -- compiler finds its own scratch by
 #       NAME (`_pfile_strc_cpt`, `_pic_temp`, ...); a user declaration was
 #       silently adopted, so the program and the compiler shared storage.
-#   fixes/fix_string_heap_compact_outline_call_internal_name_guard.md --
+#   docs/fixes/2026/fix_string_heap_compact_outline_call_internal_name_guard.md --
 #       the same class in an emitted helper name.
 #
 # The fix doc ends with "a negative fixture could be added to
@@ -103,7 +103,7 @@ expect_one_error "string free-list head" "$WORK/r_sfree.jal" \
   "'_string_free_head' is reserved for the compiler"
 
 # the runtime chunk map and its walk scratch are per-formal now, and both carry
-# the `_pic_chunk` prefix (fixes/fix_openarray_user_array_percall.md)
+# the `_pic_chunk` prefix (docs/fixes/2026/fix_openarray_user_array_percall.md)
 cat >"$WORK/r_chunkmap.jal" <<'EOF'
 include 16f877
 var byte _pic_chunkmap_7
@@ -122,7 +122,7 @@ EOF
 expect_one_error "chunk-walk scratch" "$WORK/r_chunkcnt.jal" \
   "uses the compiler-reserved prefix '_pic_chunk'"
 
-# the string-flavored clone of a procedure (fixes/fix_string_arg_clone.md)
+# the string-flavored clone of a procedure (docs/fixes/2026/fix_string_arg_clone.md)
 cat >"$WORK/r_strp.jal" <<'EOF'
 include 16f877
 var byte _strp_bump

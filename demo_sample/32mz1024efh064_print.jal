@@ -9,7 +9,7 @@
 -- Description:
 --    jallib print-library demo on a fully self-sourced bare-metal image:
 --    the compiler-emitted boot-flash init (scripts see
---    fixes/fix_pic32_loader_boot_init_compiler.md), our own DEVCFG2 fuse
+--    docs/fixes/2026/fix_pic32_loader_boot_init_compiler.md), our own DEVCFG2 fuse
 --    integer (0x400131A0 = FRC /1 x50 /2 to boot SPLL 200.0 MHz), and a
 --    pragma-200 PFM app with ZERO clock code.  Prints a banner, integer
 --    dec/hex conversions with self-checks, then one "alive - N s"

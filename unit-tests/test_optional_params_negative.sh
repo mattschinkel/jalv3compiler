@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Matthew Schinkel, Copyright (c) 2026, all rights reserved.
-# Negative shapes for optional parameters (fixes/fix_optional_params.md):
+# Negative shapes for optional parameters (docs/fixes/2026/fix_optional_params.md):
 # each snippet must FAIL to compile with the expected diagnostic.
 # Usage: unit-tests/test_optional_params_negative.sh [compiler]
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

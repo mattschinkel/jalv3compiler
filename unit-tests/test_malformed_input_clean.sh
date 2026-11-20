@@ -8,7 +8,7 @@
 #   pf_expr.c: pfile_cmd_op_add: Assertion `val1 != VALUE_NONE' failed
 # i.e. a one-line typo aborted the process (SIGABRT, exit 134) instead of
 # reporting the syntax error. Two independent entries into that path are
-# pinned here (fixes/fix_malformed_input_clean.md):
+# pinned here (docs/fixes/2026/fix_malformed_input_clean.md):
 #   1. `pragma target OSC` with an unknown mode left the bad token in the
 #      stream, so the pragma line was re-parsed as a phantom `case` statement;
 #   2. `case of` with no expression builds the case compare with no left

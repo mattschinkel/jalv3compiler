@@ -19,8 +19,8 @@
 --    `strings_dynamic`), so it is usable in float-only programs.
 --
 -- Sources:
---  - fixes/fix_float_literal_parser_and_runtime_renderer.md (renderer)
---  - fixes/fix_open_defects_20261007.md (classic division exactness)
+--  - docs/fixes/2026/fix_float_literal_parser_and_runtime_renderer.md (renderer)
+--  - docs/fixes/2026/fix_open_defects_20261007.md (classic division exactness)
 -- ------------------------------------------------------
 --
 

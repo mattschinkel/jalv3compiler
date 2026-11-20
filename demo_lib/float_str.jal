@@ -15,9 +15,9 @@
 --    this file). Extracted unchanged from strings_dynamic.jal 2026-10-21.
 --
 -- Sources:
---  - fixes/fix_float_literal_parser_and_runtime_renderer.md (renderer)
---  - fixes/fix_string_concat_float_consts.md (stage 2d const/format policy)
---  - fixes/fix_float_str_extraction.md (this extraction)
+--  - docs/fixes/2026/fix_float_literal_parser_and_runtime_renderer.md (renderer)
+--  - docs/fixes/2026/fix_string_concat_float_consts.md (stage 2d const/format policy)
+--  - docs/fixes/2026/fix_float_str_extraction.md (this extraction)
 -- ------------------------------------------------------
 --
 
@@ -29,7 +29,7 @@
 -- Returns:
 -- - byte - text length written into buf
 -- Notes: Stage 2d v2, the runtime twin of the compiler's float-CONST
---   renderer (fixes/fix_string_concat_float_consts.md). IEEE754 binary32
+--   renderer (docs/fixes/2026/fix_string_concat_float_consts.md). IEEE754 binary32
 --   decomposes to sign / 24-bit mantissa / 2^E; digits come from exact
 --   128-bit integer arithmetic (value = num/den, subnormal tails scaled by
 --   5^t so the denominator stays <= 2^120); the shortest form is probed

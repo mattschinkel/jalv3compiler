@@ -29,7 +29,7 @@
 --    Requires nothing: no heap, no strings_dynamic, no other include.
 --
 -- Sources:
---  - fixes/fix_print_float_compact.md
+--  - docs/fixes/2026/fix_print_float_compact.md
 -- ------------------------------------------------------
 --
 

@@ -9,7 +9,7 @@
 --    frame is one contiguous run).  A3 increment 3 defers such an object to
 --    the group/chunk placement: it is split across windows and its runtime
 --    subscripts walk the chunk map.  The walk state is saved/restored at the
---    ISR boundary (fixes/fix_isr_walk_state.md), so the ISR can walk while
+--    ISR boundary (docs/fixes/2026/fix_isr_walk_state.md), so the ISR can walk while
 --    the main line is mid-walk.
 --
 --    The handler fills `line[160]` on each of three INT0 edges and XORs the

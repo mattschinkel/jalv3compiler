@@ -37,7 +37,7 @@ CONST STRING S7 = hex(TBL)         -- "010203"</codeblock>
       <xref href="strings_dynamic.dita"/>, and therefore need the string
       heap:</p>
 
-      <codeblock>CONST WORD _string_heap_size = 64
+      <codeblock>pragma target string_heap_size 64
 VAR STRING out
 VAR BYTE cnt = 26
 

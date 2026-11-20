@@ -205,7 +205,7 @@ void mips_const_pool_resolve(pfile_t *pf)
        * on MZ, the top 4 KB of program flash on MX): the global max
        * would place the const pool into boot flash / the vector page.
        * Pool only after the app's own region. */
-      if (mips_loader_pfm(pf)
+      if (mips_image_pfm(pf)
           && ((c->addr >= MIPS_FLASH_BASE)
               || ((ebase != mips_code_base(pf))
                   && (c->addr >= ebase)
@@ -252,14 +252,14 @@ void mips_const_pool_resolve(pfile_t *pf)
   {
     unsigned long end = mips_image_end(pf);
 
-    if (mips_loader_pfm(pf) && (MIPS_FAMILY_MX1 == mips_family(pf))
+    if (mips_image_pfm(pf) && (MIPS_FAMILY_MX1 == mips_family(pf))
         && !mips_mx_mvec_active(pf)) {
       unsigned long eb = mips_ebase_page(pf);
 
       if (eb && ((!end) || (eb < end))) {
         end = eb;
       }
-    } else if (!mips_loader_pfm(pf)) {
+    } else if (!mips_image_pfm(pf)) {
       /* boot-flash MZ images have no bound; MX boot images are rejected
        * in mips_cmd_generate before reaching here. */
       end = 0;

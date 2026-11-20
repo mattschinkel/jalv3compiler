@@ -9,7 +9,7 @@
 --    re-flavored, and every other actual keeps its pointer/view
 --    marshalling.  Pre-fix only the first string actual was converted, so
 --    the later formals read the wrong representation (0 errors, wrong
---    code).  (fixes/fix_string_arg_clone.md)
+--    code).  (docs/fixes/2026/fix_string_arg_clone.md)
 --
 -- @picsim_validate begin
 -- steps: 900000

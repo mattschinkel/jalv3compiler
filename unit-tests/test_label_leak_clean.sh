@@ -8,7 +8,7 @@
 # on stderr after the error summary -- error recovery abandons partially
 # built cmd trees, so the surviving reference is an artifact of the failed
 # parse, not a user-facing defect.  The trace is now reported only for
-# clean (-debug=compiler) runs (fixes/fix_label_leak_clean_diagnostics.md).
+# clean (-debug=compiler) runs (docs/fixes/2026/fix_label_leak_clean_diagnostics.md).
 #
 # The fixture aliases a pseudo-device name that does not exist, so the
 # `print_string(serial_data, ...)` call inside a procedure takes the

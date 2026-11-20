@@ -44,7 +44,6 @@ pragma  target  chip     32MX270F256B
 const byte _MIPS_FAMILY = 2   -- PIC32MX1/2 (M4K) family
 pragma  stack            32
 pragma  code             262144
-pragma  code_location     0xBFC00000  -- code base without pragma bootloader (from .PIC boot sector)
 pragma  ID               0xBF80F220,4
 pragma  data             0x80000000-0x8000FFFF
 pragma  shared           0x80000000-0x8000FFFF
