@@ -50,12 +50,20 @@
 -- Notes: .
 -- - FORK SHADOW: this is the repo's demo_lib copy of jallib print.jal
 --   (include path resolves demo_lib first). It differs from the pristine
---   third_party/jallib/lib/print.jal in exactly ONE procedure:
+--   third_party/jallib/lib/print.jal in TWO procedures:
 --   print_float, which renders through the compact body by default and
 --   through the exact shortest-round-trip renderer when
 --   const _PRINT_FLOAT_EXACT = TRUE is defined before this include
 --   (see the note at print_float below and
---   docs/fixes/2026/fix_print_jal_shadow.md). Every other procedure is unchanged.
+--   docs/fixes/2026/fix_print_jal_shadow.md); and print_string, whose
+--   formal list is locked on the compiler version so the same file also
+--   builds with jalv2 (see the note at print_string below and
+--   docs/fixes/2026/fix_print_jal_jalv2_compat.md). Every other procedure
+--   is unchanged.
+-- - Version lock: `jal_version` is the compiler's own version constant
+--   (jalv2 = 2004, jalv3 = 3000) and a constant `if` skips the branch the
+--   compiler did not select without parsing it, so compiler-specific
+--   syntax may sit in the other branch.
 -- - This library replaces an older version which had no scalability.
 --   It should be compatible with the old library except for:
 --   * All procedures for binary output have been renamed to
@@ -121,7 +129,16 @@ end procedure
 -- Arguments: - device name
 --            - string (array of bytes)
 -- Returns:   nothing
+-- Notes:     The formal list is locked on the compiler version, the body is
+--            the same on both sides. jalv3 passes the string by reference
+--            (byref in str[]), which also accepts a dynamic `string`
+--            actual; jalv2 has no byref keyword and keeps the classic
+--            jallib open-array formal. A constant `if` is skipped without
+--            being parsed, so each compiler only ever sees its own
+--            signature - but KEEP THE TWO BODIES IN STEP.
 -- --------------------------------------------------------------
+if jal_version >= 3000 then
+
 procedure print_string(volatile byte out device, byref in str[]) is
    var word len = count(str)
    var byte i
@@ -134,6 +151,23 @@ procedure print_string(volatile byte out device, byref in str[]) is
       device = str[i]
    end loop
 end procedure
+
+else
+
+procedure print_string(volatile byte out device, byte in str[]) is
+   var word len = count(str)
+   var byte i
+   for len using i loop
+      if (defined(print_string_terminator) == TRUE) then
+         if (str[i] == print_string_terminator) then
+            exit loop
+         end if
+      end if
+      device = str[i]
+   end loop
+end procedure
+
+end if     -- jal_version >= 3000
 
 
 -- --------------------------------------------------------------
