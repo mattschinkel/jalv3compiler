@@ -348,6 +348,7 @@ void pfile_str_heap_defer_add_ex(pfile_t *pf, cmd_t marker, value_t result,
 void pfile_str_heap_defer_free(pfile_t *pf);
 
 void pfile_cmd_cursor_set(pfile_t *pf, cmd_t cmd);
+cmd_t pfile_cmd_head_get(const pfile_t *pf);
 
 label_t pfile_label_temp_head_get(pfile_t *pf);
 

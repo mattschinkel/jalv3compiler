@@ -28,6 +28,7 @@
 #include "cmd_log.h"
 #include "cmdarray.h"
 #include "pfiled.h"
+#include "pf_alias.h"
 #include "pf_proc.h"
 #include "pf_msg.h"
 #include "pf_cmd.h"
@@ -4307,6 +4308,11 @@ void pfile_cmd_dump(pfile_t *pf, const char *prog_name,
   pfile_cmd_arithmetic_check(pf);
   pfile_pointer_slot_bind_check(pf);
 
+  if (pfile_alias_dump_enabled()) {
+    pfile_alias_summary_build(pf);
+    pfile_alias_summary_dump(pf, stderr);
+  }
+
   /* first, write the program name, version, and command line */
   pfile_write(pf, pfile_write_asm, "; compiler: %s\n", prog_name);
   pfile_write(pf, pfile_write_asm, "; command line: ");
@@ -5390,6 +5396,11 @@ pfile_token_ct_t pfile_token_ct_get(pfile_t *pf)
 void pfile_cmd_cursor_set(pfile_t *pf, cmd_t cmd)
 {
   pf->cmd_cursor = cmd;
+}
+
+cmd_t pfile_cmd_head_get(const pfile_t *pf)
+{
+  return pf->cmd_head;
 }
 
 /* Real storage size of a def under a FLAT 32-bit address space (ESP32 /

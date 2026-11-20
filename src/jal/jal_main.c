@@ -22,6 +22,7 @@
 #include "../libcore/pf_msg.h"
 #include "../libcore/pf_expr.h"
 #include "../libcore/pf_cmd.h"
+#include "../libcore/pf_alias.h"
 #include "../libpic12/pic_cmdo.h"
 #include "../libpic12/pic.h"
 #include "../libpic32/pic32.h"
@@ -828,6 +829,7 @@ static void jal_reset_between_compiles(void)
   piccolst_state_reset();
   pic_stvar_state_reset();
   cmd_optm_state_reset();
+  pfile_alias_state_reset();
   mips_reg_cache_reset();
   esp_float_reset();
   esp_const_pool_reset();
