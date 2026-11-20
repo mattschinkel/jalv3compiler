@@ -249,6 +249,17 @@ static void pic_assign_from_lookup_byte_14bit(pfile_t *pf, label_t lbl,
 static void pic_assign_from_lookup(pfile_t *pf, value_t dst,
     value_t src)
 {
+  /* A 12-bit part has no FSR/IRP: it cannot read a table.  Both a const
+   * array with a runtime index and a byref view of a const array reach
+   * this lowering, which is the 14-bit one -- it writes PCLATH to select
+   * the table page, and 12-bit parts have no PCLATH.  Refuse the
+   * capability here, once, instead of letting the setup fail with
+   * "'_pclath' not found".  Constant indices never get here: they are
+   * folded to the literal before code generation. */
+  if (pic_is_12bit(pf)) {
+    (void) pic_refuse_no_indirect(pf);
+    return;
+  }
   if (value_is_bit(dst)) {
     /* assign src to a temporary, then the temporary to dst */
     value_t       tmp;

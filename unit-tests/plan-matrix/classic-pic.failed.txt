@@ -38,6 +38,7 @@ sims/gpsim/12f509_gpsim_core.jal
 sims/gpsim/16f887_gpsim_byref_at_overlay.jal
 sims/gpsim/16f887_gpsim_byref_at_subscript.jal
 sims/gpsim/16f887_gpsim_byref_big_rw.jal
+sims/gpsim/16f887_gpsim_byref_is_full_set.jal
 sims/gpsim/16f887_gpsim_byref_ptr_wide.jal
 sims/gpsim/16f887_gpsim_byref_scalar_rw.jal
 sims/gpsim/16f887_gpsim_byref_small_rw.jal

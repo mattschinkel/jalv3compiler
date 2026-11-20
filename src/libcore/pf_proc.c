@@ -462,20 +462,24 @@ void pfile_proc_variable_fixup(pfile_proc_t *proc, pfile_t *pf, flag_t flags)
     pfile_tag_alloc(pf, PFILE_BITBUCKET_VARNAME), def, 
     VARIABLE_NONE, pf, &bitbucket);
   inuse0 = pfile_bitbucket_packed_lo_reserve_get(pf);
-  pfile_block_variable_fixup(pfile_proc_block_root_get(proc), 
+  pfile_block_variable_fixup(pfile_proc_block_root_get(proc),
     bitbucket, inuse0, flags);
   /*
-   * Packed procedure bits use _bitbucket; if a program has none, the bucket
+   * Packed procedure bits use _bitbucket; if a procedure has none, the bucket
    * stays size 0, is not AUTO, and is skipped by variable allocation. Later,
    * pic_variable_counters_clear zeros assign/use before asm, so an empty
-   * bucket is also omitted from -asm EQU output. tests (expect
-   * bit_clear v__bitbucket 0) and check-asm-symbols need the symbol: grow to
-   * one byte and mark AUTO so it gets a base. pic_variable_counters_set bumps
-   * assign when pcode never references the bucket so pic_variable_alloc_fixup
-   * does not reclaim its GPR. Classic PIC12/14: pfile_bitbucket_packed_lo_reserve_get
-   * leaves pool bit 0 unused so that EQU byte's file bit 0 stays clear for gpsim.
+   * bucket is also omitted from -asm EQU output. Only the file-level (root
+   * proc) bucket is grown to one byte and marked AUTO: gpsim tests
+   * (expect bit_clear v__bitbucket 0) and check-asm-symbols need that one
+   * symbol, while per-procedure empty buckets would otherwise cost one GPR
+   * byte each (jalv25r9 leaves them at size 0). pic_variable_counters_set
+   * bumps assign when pcode never references the bucket so
+   * pic_variable_alloc_fixup does not reclaim its GPR. Classic PIC12/14:
+   * pfile_bitbucket_packed_lo_reserve_get leaves pool bit 0 unused so that
+   * EQU byte's file bit 0 stays clear for gpsim.
    */
-  if (0 == variable_sz_get(bitbucket)) {
+  if ((0 == variable_sz_get(bitbucket))
+      && (PFILE_PROC_NONE == pfile_proc_parent_get(proc))) {
     variable_def_t d1;
 
     d1 = variable_def_alloc(0, VARIABLE_DEF_TYPE_INTEGER,
@@ -484,6 +488,10 @@ void pfile_proc_variable_fixup(pfile_proc_t *proc, pfile_t *pf, flag_t flags)
     /* AUTO so pic_variable_alloc_block assigns a base; assign/use here are
      * cleared later by pic_variable_counters_clear and are not used for -asm. */
     variable_flag_set(bitbucket, VARIABLE_FLAG_AUTO);
+    /* Mark the placeholder so pic_variable_alloc_fixup's classic
+     * dead-top-bucket reclaim only drops THIS empty bucket, never a bucket
+     * that genuinely packs write-only bits. */
+    variable_flag_set(bitbucket, VARIABLE_FLAG_BITBUCKET_EMPTY);
   }
   variable_release(bitbucket);
 }

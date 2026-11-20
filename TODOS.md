@@ -446,6 +446,49 @@ here). Each entry names its evidence and the fix/investigation doc.
 - **Priority:** done.
 - **Depends on:** none.
 
+## gpsim 16F887 witnesses run with the watchdog ENABLED (OPEN 2026-11-19)
+
+- **What:** `sims/gpsim/16f887_gpsim_string_heap_append_grow.jal` now FAILs on
+  the working-tree build: `v_len`, `v_c3`, `v_mid`, `v_last` all come back 0
+  (`v_first` "passes" only because it expects 0).  The payload itself is fine
+  — the identical image passes all five checks with the WDT off.
+- **Cause:** the witness includes bare `16f887`, whose fuses leave the
+  watchdog ENABLED (`__config 0x2007 = 0x3fff`), instead of the shared
+  `sims/shared/regression_16f887_device.jal` defaults (`pragma target WDT
+  CONTROL`).  gpsim's WDT model resets ~41.3k instructions into the run
+  (~4.1 ms at the harness's 40 MHz) and the batch `step` stops at the reset,
+  so a witness that reaches its reads later than that never sets them.
+  This one sits exactly on the line: the HEAD binary completes at 40.93k
+  instructions (~365 under the expiry), the working tree at 41.50k (~200
+  over).  The in-flight (uncommitted) per-procedure empty-`_bitbucket`
+  shrink moves the heap down one byte (`_pic_chunk_t` 0x1c6 -> 0x1c5), and
+  the growth/compaction walk costs ~570 instructions more (same 2086-line
+  instruction stream, same call count, correct values).
+- **Fix (prepared and reverted on request):** `pragma target WDT CONTROL`
+  under the device include (`__config 0x2007` 0x3fff -> 0x3ff7).  Verified:
+  witness PASS at the committed 3M-step budget and
+  `unit-tests/test_string_heap_append.sh` 8/8 (both cores, content control,
+  structure checks).  The tree keeps the failing witness until this lands.
+- **Same latent trap, still open:** eight more 16F887 gpsim witnesses include
+  bare `16f887` and set no WDT:
+  `16f887_gpsim_pointer_slot_array_runtime.jal`,
+  `16f887_gpsim_pointer_slot_chunked_elem.jal`,
+  `16f887_gpsim_pointer_slot_runtime_index.jal`,
+  `16f887_gpsim_pointer_slot_runtime_ofs.jal`,
+  `16f887_gpsim_string_arg_view_in.jal`,
+  `16f887_gpsim_unbound_walk_bound.jal`,
+  `16f887_gpsim_unbound_walk_trap.jal`,
+  `16f887_gpsim_whereis_slot_runtime.jal`.
+  They pass only because they finish inside one WDT period; any RAM/layout
+  change can flip them (AGENTS.md probe rule: a gpsim witness on a
+  WDT-defaults-ON part must disable the WDT).
+- **Evidence:** the 2026-10-30 probe rule in AGENTS.md and the artifact
+  record in `docs/investigations/string_literal_compare_16f1825_20261030.md`;
+  measured with `sims/jal_gpsim_validate.sh` on `bin/beta/jalv3-x86-64` vs
+  the `HEAD` binary.
+- **Priority:** P1 (red classic-runtime gate).
+- **Depends on:** none (land with the in-flight classic bitbucket reclaim).
+
 ## Full front-end IR — one accepted note (Phases 3/4/7 done)
 
 - **What:** Phases 3 and 4 landed (the block-dup clone at `2e65a20`, the
@@ -777,3 +820,16 @@ here). Each entry names its evidence and the fix/investigation doc.
   `docs/designs/finish-allocator-report.review.md`,
   `docs/investigations/unified_allocator_20261108.md` (A7).
 - **Priority:** done; residual deferred.
+
+## `codegen-optimization` — deferred scope (CEO review 2026-11-19)
+
+Deferred from the approved plan `docs/designs/codegen_parity_optimization_20261119.md`
+(SCOPE EXPANSION). Ruler: asm comparable-or-better than jalv25r9 in code+RAM.
+
+- **Whole-program alias/escape analysis** (D6 deferred) — unlock string/pointer
+  optimizations on the full-IR substrate; P3, L effort. Depends on a landed,
+  measured first pass.
+- **Classic-core (12/14-bit) bank scheduling** (D6 deferred) — extend the PIC18
+  movlb win; guard the known best-fit 30-43% midrange-ROM regression. P3, L.
+- **Fold in the 6 critical bugs from the 2026-11-14 review** (D4/D6 deferred) —
+  independent source track. P2, M.

@@ -33,6 +33,7 @@
 -- ----------------------------------------------------------------------------
 
 include 16f887
+pragma target WDT CONTROL
 pragma target string_heap_size 200
 include strings_dynamic
 

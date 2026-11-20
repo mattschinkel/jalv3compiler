@@ -157,6 +157,13 @@ __extension__ typedef unsigned __int128 variable_const_t;
  * single-constant-assign scan would not see them */
 #define VARIABLE_FLAG_OVERLAY_HOST 0x2000U
 
+/* the file-level `_bitbucket` placeholder grown from size 0 to one byte in
+ * pfile_proc_variable_fixup purely so gpsim `v__bitbucket` has an address.
+ * Distinguishes it from a bucket that genuinely packs bits: the classic
+ * dead-top-bucket reclaim must only reclaim this empty placeholder, never a
+ * bucket whose packed bits are write-only (assigned, never read). */
+#define VARIABLE_FLAG_BITBUCKET_EMPTY 0x00010000U
+
 #define VARIABLE_FLAG_PTR_MASK \
   (VARIABLE_FLAG_PTR_PTR       \
    | VARIABLE_FLAG_PTR_LOOKUP  \

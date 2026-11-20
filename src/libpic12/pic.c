@@ -4993,10 +4993,11 @@ void pic_variable_counters_set(pfile_t *pf)
       }
     }
   }
-  /* Empty _bitbucket is grown to 1 byte in pfile_proc_variable_fixup; pcode
-   * never references it, so assign/use stay 0 here. pic_variable_alloc_fixup
-   * would otherwise clear its GPR (variable_is_assigned false). gpsim
-   * check-asm-symbols and expect bit_clear v__bitbucket 0 need a real address. */
+  /* The file-level (root proc) empty _bitbucket is grown to 1 byte in
+   * pfile_proc_variable_fixup; pcode never references it, so assign/use stay
+   * 0 here. pic_variable_alloc_fixup would otherwise clear its GPR
+   * (variable_is_assigned false). gpsim check-asm-symbols and
+   * expect bit_clear v__bitbucket 0 need a real address. */
   {
     pfile_proc_t *proc;
 
@@ -6116,12 +6117,12 @@ static void pic_var_use_stash_merge_pass1(pfile_t *pf)
 
 /* Reentrancy-guard necessity. The guard (frame push/pop around a second
  * activation) protects the procedure's frame: parameters and locals. A
- * frame holding nothing but the placeholder 1-byte _bitbucket that this
- * procedure's generated code never references has nothing to protect,
- * yet every procedure carries that bucket (pfile_proc_variable_fixup
- * grows size-0 buckets to one byte for symbol visibility), so
- * frame_sz alone over-triggers the guard on both-context leaf
- * procedures (steppermotor sample: 3 procedures x ~14 insns).
+ * frame holding nothing but a _bitbucket that this procedure's generated
+ * code never references has nothing to protect. Only the file-level (root
+ * proc) bucket is grown to one byte for symbol visibility; per-procedure
+ * empty buckets stay size 0 and no longer inflate frame_sz, but a reentrant
+ * procedure that packs bits still carries a referenced bucket, so the guard
+ * must know whether the bucket is actually live.
  *
  * The bucket's use/assign counters cannot answer this: counters_set
  * deliberately bumps unused buckets so allocation keeps their GPR. So
@@ -6355,6 +6356,9 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
   cmd_t      cmd_ptr;
   pic_code_t c;
   unsigned   total_ct;
+  boolean_t  classic_trials;
+
+  classic_trials = pic_classic_layout_trials_enabled(pf);
 
   pic_var_trial_install(pf, window);
   if (pic_var_refusal_get(0, 0, 0)) {
@@ -6394,7 +6398,8 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
    * compile time on large programs). Exact verification for close
    * calls uses the full path above. */
   /* selection metric: total emitted instructions (PIC18 words), with
-   * the surviving MOVLB count as tie-break */
+   * the surviving bank-select count as tie-break (MOVLB on 16-bit /
+   * 14H, the RP0/RP1 preamble on classic 14-bit) */
   total_ct = 0;
   *movlb_ct = 0;
   for (c = pic_code_list_head_get(pf); c; c = pic_code_next_get(c)) {
@@ -6406,7 +6411,12 @@ static unsigned long pic_trial_layout_emit(pfile_t *pf, const cmd_t cmd,
       continue;
     }
     total_ct++;
-    if (PIC_OPCODE_MOVLB == op) {
+    if (classic_trials) {
+      if ((PIC_OPCODE_DATALO_SET == op) || (PIC_OPCODE_DATALO_CLR == op)
+          || (PIC_OPCODE_DATAHI_SET == op) || (PIC_OPCODE_DATAHI_CLR == op)) {
+        (*movlb_ct)++;
+      }
+    } else if (PIC_OPCODE_MOVLB == op) {
       (*movlb_ct)++;
     }
   }
@@ -6641,7 +6651,8 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
      * genuine allocation by the real allocator. On by default;
      * JALV2_NO_LAYOUT_TRIALS opts out. */
     if ((2 == pic_state.code_gen_pass)
-        && (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+        && (pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)
+          || pic_classic_layout_trials_enabled(pf))
         && !pfile_errct_get(pf) && pic_var_trials_available(pf)
         && !pic_env_on("JALV2_NO_LAYOUT_TRIALS")) {
       unsigned long tot_plain;
@@ -6649,16 +6660,52 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
       unsigned      ml_plain;
       unsigned      ml_win;
       int           win;
+      boolean_t     classic_trials;
+      unsigned long f_plain;
+      unsigned long f_win;
+      boolean_t     base_chunked;
+      boolean_t     win_chunked;
+      boolean_t     trial_skip;
+      unsigned      page_size;
 
-      tot_plain = pic_trial_layout_emit(pf, cmd, lbl_tmp, 0,
-          &ml_plain, 0);
-      tot_win   = pic_trial_layout_emit(pf, cmd, lbl_tmp, 1,
-          &ml_win, 0);
+      classic_trials = pic_classic_layout_trials_enabled(pf);
+      f_plain = 0;
+      f_win   = 0;
+      page_size = pic_target_page_size_get(pf);
+      base_chunked = pic_var_any_chunked(pf);
+      trial_skip = BOOLEAN_FALSE;
       win = 0;
-      if ((unsigned long) -1 != tot_win
+      if (classic_trials) {
+        /* Refuse a chunk-changing candidate BEFORE emitting any trial code:
+         * a trial emission perturbs the branch optimizer, so a skip made
+         * after emission would not reproduce the no-trial baseline.  This
+         * pre-check only re-places (no emission), so the win=0 result stays
+         * byte-identical to the no-trial baseline. */
+        pic_var_trial_install(pf, 1);
+        win_chunked = pic_var_any_chunked(pf);
+        pic_var_trial_install(pf, 0);
+        if (win_chunked != base_chunked) {
+          trial_skip = BOOLEAN_TRUE;
+        }
+      } else {
+        win_chunked = BOOLEAN_FALSE;
+      }
+      if (!trial_skip) {
+        tot_plain = pic_trial_layout_emit(pf, cmd, lbl_tmp, 0,
+            &ml_plain, 0);
+        tot_win   = pic_trial_layout_emit(pf, cmd, lbl_tmp, 1,
+            &ml_win, 0);
+      } else {
+        tot_plain = 0;
+        tot_win   = 0;
+        ml_plain  = 0;
+        ml_win    = 0;
+      }
+      if (!trial_skip
+          && (unsigned long) -1 != tot_win
           && ((tot_win < tot_plain)
             || ((tot_win == tot_plain) && (ml_win < ml_plain)))) {
-        if (tot_plain > 3072UL) {
+        if (!classic_trials && (tot_plain > 3072UL)) {
           /* beyond the exact-verification band: the optimization tail
            * dominates compile time on const-table-heavy programs, so
            * four more tail runs would blow the compile-time budget;
@@ -6667,15 +6714,16 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
           if (100U * tot_win < 99U * tot_plain) {
             win = 1;
           }
-        } else if ((10U * (tot_plain - tot_win)) >= tot_plain) {
+        } else if (!classic_trials
+            && ((10U * (tot_plain - tot_win)) >= tot_plain)) {
           /* landslide (>=10% smaller): trust the cheap metric */
           win = 1;
         } else {
-          /* close call: verify both layouts under the real
-           * optimization tail; adopt only when meaningfully smaller
-           * (>=1%); near-ties keep the proven baseline */
-          unsigned long f_plain;
-          unsigned long f_win;
+          /* close call (and every classic-core candidate): verify both
+           * layouts under the real optimization tail; adopt only when
+           * meaningfully smaller (>=1%); near-ties keep the baseline.
+           * Classic 14-bit programs are small enough that the tail is
+           * cheap, so they never trust the raw-emission shortcut. */
           unsigned      fml;
 
           f_plain = pic_trial_layout_emit(pf, cmd, lbl_tmp, 0,
@@ -6683,11 +6731,26 @@ void pic_cmd_generate(pfile_t *pf, const cmd_t cmd)
           f_win   = pic_trial_layout_emit(pf, cmd, lbl_tmp, 1,
               &fml, 1);
           if (((unsigned long) -1 != f_win)
-              && ((unsigned long) -1 != f_plain)
-              && (100U * f_win < 99U * f_plain)) {
-            win = 1;
+              && ((unsigned long) -1 != f_plain)) {
+            if (classic_trials
+                && (0U != page_size)
+                && ((f_plain % page_size) > (page_size - 128UL))) {
+              /* the baseline sits just under a page boundary: a small layout
+               * change can cross it and trigger the discontinuous branch
+               * expansion, which the trial cannot see -- keep the baseline */
+              win = 0;
+            } else if (100U * f_win < 99U * f_plain) {
+              win = 1;
+            }
           }
         }
+      }
+      if (pic_env_on("JALV2_CLASSIC_TRIALS_DBG")) {
+        fprintf(stderr,
+            "classic-trials: raw plain=%lu win=%lu (ml %u/%u) "
+            "full plain=%lu win=%lu chunked %d/%d -> win=%d\n",
+            tot_plain, tot_win, ml_plain, ml_win, f_plain, f_win,
+            base_chunked, win_chunked, win);
       }
       if (pfile_errct_get(pf)) {
         pic_var_trial_install(pf, 0);
@@ -7244,6 +7307,16 @@ boolean_t pic_is_14bit(pfile_t *pf)
 boolean_t pic_is_14bit_hybrid(pfile_t *pf)
 {
   return (PIC_TARGET_CPU_14HBIT == pic_target_cpu_get(pf));
+}
+
+/* Classic 14-bit layout trials: the PIC18/14H access-window mechanism
+ * applied to the classic core's `pragma shared` common-RAM window.  On by
+ * default; JALV2_NO_CLASSIC_LAYOUT_TRIALS opts out (PIC18/14H are gated by
+ * JALV2_NO_LAYOUT_TRIALS instead). */
+boolean_t pic_classic_layout_trials_enabled(pfile_t *pf)
+{
+  return pic_is_14bit(pf)
+    && !pic_env_on("JALV2_NO_CLASSIC_LAYOUT_TRIALS");
 }
 
 boolean_t pic_is_16bit(pfile_t *pf)

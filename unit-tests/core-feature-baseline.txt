@@ -1,0 +1,34 @@
+# core	feature	status	value
+# value: '-' for a fold (self-checking twin), an instruction
+# code-size number for accept, the pinned diagnostic for refuse,
+# the reason for na.  Refresh with --update after a reviewed change.
+pic12	tag_fold	fold	-
+pic12	masked_predicate	fold	-
+pic12	logical_fold	fold	-
+pic12	byref_view_const	refuse	12-bit core: no indirect addressing (no FSR/IRP); a pointer or a runtime index needs a 14-bit part -- use a constant index here
+pic12	byref_view_runtime	na	no general indirect addressing; the constant-index cell records the refusal
+pic12	indirect_addressing	refuse	12-bit core: no indirect addressing (no FSR/IRP); a pointer or a runtime index needs a 14-bit part -- use a constant index here
+pic14	tag_fold	fold	-
+pic14	masked_predicate	fold	-
+pic14	logical_fold	fold	-
+pic14	byref_view_const	accept	26
+pic14	byref_view_runtime	accept	32
+pic14	indirect_addressing	accept	16
+pic18	tag_fold	fold	-
+pic18	masked_predicate	fold	-
+pic18	logical_fold	fold	-
+pic18	byref_view_const	accept	58
+pic18	byref_view_runtime	accept	72
+pic18	indirect_addressing	accept	34
+pic32	tag_fold	fold	-
+pic32	masked_predicate	fold	-
+pic32	logical_fold	fold	-
+pic32	byref_view_const	accept	119
+pic32	byref_view_runtime	accept	123
+pic32	indirect_addressing	accept	115
+esp32	tag_fold	fold	-
+esp32	masked_predicate	fold	-
+esp32	logical_fold	fold	-
+esp32	byref_view_const	accept	329
+esp32	byref_view_runtime	accept	351
+esp32	indirect_addressing	accept	276

@@ -96,7 +96,7 @@ JALV2_FAT_POINTERS=0
 export JALV2_FAT_POINTERS
 for _s in test_openarray_chunked_pins.sh test_multibank_array_errors.sh \
           test_alloc_capacity.sh test_access_recipe.sh run_plan_gate.sh \
-          run_access_matrix.sh; do
+          run_access_matrix.sh core_feature_matrix.py; do
   if ! grep -q 'JALV2_FAT_POINTERS' "$ROOT/unit-tests/$_s"; then
     echo "FAIL: gate-mode pin (T3): $_s does not state JALV2_FAT_POINTERS" >&2
     exit 2
@@ -126,6 +126,12 @@ run_sh byref_is_full_set          unit-tests/test_byref_is_full_set.sh "$CC"
 # A pointer actual with a wider numeric/float pointee passes through the
 # byref byte view; uniform calls fold the tag.
 run_sh byref_ptr_wide            unit-tests/test_byref_ptr_wide.sh "$CC"
+# Core x feature matrix: the tag / masked-predicate / logical folds are
+# policy, not a classic-PIC pass -- they are registered once in the pfile
+# vectors and must fire on 12/14/18F/PIC32/ESP32 alike.  Each core also
+# states what it cannot lower (n/a) or refuses (diagnostic pinned), so a
+# shared pass can never silently stop running on one back end.
+run_py core_feature_matrix        unit-tests/core_feature_matrix.py --compiler "$CC"
 # Typed front-end semantic subscript layer (the retired JALV2_FRONT_IR
 # switch is gone; the layer is the only lowering): the clone witnesses run
 # under gpsim and must keep passing as the single-arm pin.

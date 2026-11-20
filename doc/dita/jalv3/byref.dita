@@ -45,31 +45,246 @@ end procedure</codeblock>
       <codeph>(tag &amp; mask) == value</codeph>, so a single-type call folds
       them to constants.</p>
 
-      <p>Scalar size predicates (the SIGNED bit is ignored, so
-      <codeph>_is_byte()</codeph> is true for both byte and sbyte):
-      <codeph>_is_byte()</codeph>, <codeph>_is_word()</codeph>,
-      <codeph>_is_dword()</codeph>, <codeph>_is_qword()</codeph>,
-      <codeph>_is_oword()</codeph>, <codeph>_is_float()</codeph>. Signed
-      predicates: <codeph>_is_sbyte()</codeph>, <codeph>_is_sword()</codeph>,
-      <codeph>_is_sdword()</codeph>, <codeph>_is_sqword()</codeph>,
-      <codeph>_is_soword()</codeph>. Kind predicates:
-      <codeph>_is_string()</codeph>, <codeph>_is_array()</codeph>,
-      <codeph>_is_pointer()</codeph>.</p>
+      <p>The predicates are built-in functions written
+      <codeph>_is_&lt;type&gt;()</codeph>; the parentheses are optional. They
+      return a <codeph>bit</codeph> and may only be used inside a procedure
+      or function that has exactly one byref formal:</p>
 
-      <p>Element and pointee predicates: <codeph>_is_byte_array()</codeph>,
-      <codeph>_is_word_array()</codeph>, <codeph>_is_dword_array()</codeph>,
-      <codeph>_is_qword_array()</codeph>, <codeph>_is_oword_array()</codeph>,
-      <codeph>_is_float_array()</codeph>, their <codeph>_is_s*_array()</codeph>
-      twins, and the matching <codeph>_is_byte_pointer()</codeph> ..
-      <codeph>_is_float_pointer()</codeph> and
-      <codeph>_is_s*_pointer()</codeph> set. A fixed
-      <codeph>const byte[] = "..."</codeph> is an array, so it tests
-      <codeph>_is_array()</codeph>, not <codeph>_is_string()</codeph>; a
-      dynamic string and a pointer-to-string test
-      <codeph>_is_string()</codeph>.</p>
+      <codeblock>procedure inspect(byref in v[]) is
+   if _is_array() then
+      out = 1              ; v is an array
+   else if _is_sbyte() then
+      out = 2              ; v is a signed byte
+   end if
+end procedure</codeblock>
 
-      <p>A procedure may have exactly one byref formal for the predicates to
-      be unambiguous.</p>
+      <p>Any other use is refused with
+      <codeph>_is_*() needs exactly one byref formal in this procedure
+      (found N)</codeph>.</p>
+
+      <p><b>Width predicates.</b> The SIGNED bit is ignored, so
+      <codeph>_is_byte()</codeph> is true for both <codeph>byte</codeph> and
+      <codeph>sbyte</codeph>:</p>
+
+      <table>
+        <tgroup cols="2" colsep="1" rowsep="1">
+          <tbody>
+            <row>
+              <entry><b>Predicate</b></entry>
+              <entry><b>True when the actual is</b></entry>
+            </row>
+            <row>
+              <entry><codeph>_is_byte()</codeph></entry>
+              <entry>a byte or sbyte</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_word()</codeph></entry>
+              <entry>a word or sword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_dword()</codeph></entry>
+              <entry>a dword or sdword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_qword()</codeph></entry>
+              <entry>a qword or sqword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_oword()</codeph></entry>
+              <entry>an oword or soword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_float()</codeph></entry>
+              <entry>a float</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+      <p><b>Signed predicates.</b> These test the SIGNED bit, so they are true
+      only for the explicitly signed type:</p>
+
+      <table>
+        <tgroup cols="2" colsep="1" rowsep="1">
+          <tbody>
+            <row>
+              <entry><b>Predicate</b></entry>
+              <entry><b>True when the actual is</b></entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sbyte()</codeph></entry>
+              <entry>an sbyte</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sword()</codeph></entry>
+              <entry>a sword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sdword()</codeph></entry>
+              <entry>an sdword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sqword()</codeph></entry>
+              <entry>an sqword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_soword()</codeph></entry>
+              <entry>an soword</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+      <p><b>Kind predicates.</b> These test what the actual is, not its
+      element or pointee type:</p>
+
+      <table>
+        <tgroup cols="2" colsep="1" rowsep="1">
+          <tbody>
+            <row>
+              <entry><b>Predicate</b></entry>
+              <entry><b>True when the actual is</b></entry>
+            </row>
+            <row>
+              <entry><codeph>_is_string()</codeph></entry>
+              <entry>a dynamic string, or a pointer to a string</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_array()</codeph></entry>
+              <entry>an array (including a fixed
+              <codeph>const byte[] = "..."</codeph>)</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_pointer()</codeph></entry>
+              <entry>a pointer</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+      <p><b>Element predicates.</b> True for an array whose elements have the
+      named type:</p>
+
+      <table>
+        <tgroup cols="2" colsep="1" rowsep="1">
+          <tbody>
+            <row>
+              <entry><b>Predicate</b></entry>
+              <entry><b>True when the actual is</b></entry>
+            </row>
+            <row>
+              <entry><codeph>_is_byte_array()</codeph></entry>
+              <entry>an array of byte</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_word_array()</codeph></entry>
+              <entry>an array of word</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_dword_array()</codeph></entry>
+              <entry>an array of dword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_qword_array()</codeph></entry>
+              <entry>an array of qword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_oword_array()</codeph></entry>
+              <entry>an array of oword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_float_array()</codeph></entry>
+              <entry>an array of float</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sbyte_array()</codeph></entry>
+              <entry>an array of sbyte</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sword_array()</codeph></entry>
+              <entry>an array of sword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sdword_array()</codeph></entry>
+              <entry>an array of sdword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sqword_array()</codeph></entry>
+              <entry>an array of sqword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_soword_array()</codeph></entry>
+              <entry>an array of soword</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+      <p><b>Pointee predicates.</b> True for a pointer whose pointee has the
+      named type:</p>
+
+      <table>
+        <tgroup cols="2" colsep="1" rowsep="1">
+          <tbody>
+            <row>
+              <entry><b>Predicate</b></entry>
+              <entry><b>True when the actual is</b></entry>
+            </row>
+            <row>
+              <entry><codeph>_is_byte_pointer()</codeph></entry>
+              <entry>a pointer to byte</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_word_pointer()</codeph></entry>
+              <entry>a pointer to word</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_dword_pointer()</codeph></entry>
+              <entry>a pointer to dword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_qword_pointer()</codeph></entry>
+              <entry>a pointer to qword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_oword_pointer()</codeph></entry>
+              <entry>a pointer to oword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_float_pointer()</codeph></entry>
+              <entry>a pointer to float</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sbyte_pointer()</codeph></entry>
+              <entry>a pointer to sbyte</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sword_pointer()</codeph></entry>
+              <entry>a pointer to sword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sdword_pointer()</codeph></entry>
+              <entry>a pointer to sdword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_sqword_pointer()</codeph></entry>
+              <entry>a pointer to sqword</entry>
+            </row>
+            <row>
+              <entry><codeph>_is_soword_pointer()</codeph></entry>
+              <entry>a pointer to soword</entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+
+      <p>A fixed <codeph>const byte[] = "..."</codeph> is an array, so it
+      tests <codeph>_is_array()</codeph>, not <codeph>_is_string()</codeph>;
+      a dynamic string and a pointer-to-string test
+      <codeph>_is_string()</codeph>. When the procedure is re-flavored by
+      <codeph>pragma byref_clone</codeph>, its formal is a string: inside that
+      clone <codeph>_is_string()</codeph> is statically true and every other
+      predicate is false.</p>
     </section>
 
     <section>

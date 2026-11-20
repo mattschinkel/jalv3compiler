@@ -161,6 +161,10 @@ void pic_var_banked_access_bump(variable_t var);
 void pic_var_trials_free(void);
 boolean_t pic_var_trials_available(pfile_t *pf);
 void pic_var_trial_install(pfile_t *pf, int window);
+/* classic 14-bit layout trials (on by default; see pic_var.c) */
+boolean_t pic_classic_layout_trials_enabled(pfile_t *pf);
+/* TRUE when any placed variable is chunked (spans more than one bank). */
+boolean_t pic_var_any_chunked(pfile_t *pf);
 /* placement-refusal state (trial-safe; see pic_var.c) */
 boolean_t pic_var_refusal_get(variable_t *var, variable_sz_t *sz,
     variable_sz_t *best);

@@ -694,6 +694,15 @@ static void pic_indirect_create(pfile_t *pf)
   variable_sz_t      ii;
   variable_sz_t      pc_sz;
 
+  /* A 12-bit part has no PCLATH (and no FSR/IRP), so a computed call
+   * cannot be built.  The routine is created from the preamble whenever
+   * the program carries an indirect call, before the read that would
+   * need it is lowered; refuse the capability here instead of writing
+   * PCLATH and failing with "'_pclath' not found". */
+  if (pic_is_12bit(pf)) {
+    (void) pic_refuse_no_indirect(pf);
+    return;
+  }
   lsb = pic_var_pointer_get(pf);
   /* the PC width is a CORE property (3 bytes on PIC18, 2 on 14/14H), not the
    * pointer size: with the F4 3-byte pointer form on 14H this wrote _pclatu

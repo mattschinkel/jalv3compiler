@@ -344,6 +344,29 @@ static pic_variable_chunk_map_t *pic_variable_chunk_map_find(variable_t var)
   return 0;
 }
 
+/* Drop a variable's chunk map (if any).  Placement re-runs under the layout
+ * trials; a variable the window layout placed multi-bank keeps its map after
+ * the baseline is re-installed unless it is cleared first, so the stale
+ * multi-bank map leaked into the final single-bank layout. */
+static void pic_variable_chunk_map_clear(variable_t var)
+{
+  pic_variable_chunk_map_t **pprev;
+
+  for (pprev = &pic_var.chunk_maps; *pprev; ) {
+    if ((*pprev)->var == var) {
+      pic_variable_chunk_map_t *dead;
+
+      dead   = *pprev;
+      *pprev = dead->link;
+      FREE(dead->base);
+      FREE(dead->sz);
+      FREE(dead);
+    } else {
+      pprev = &(*pprev)->link;
+    }
+  }
+}
+
 /* The one element-size rule: a non-bit array whose element def byte size
  * divides the storage size gets that size (chunk boundaries fall on whole
  * elements); everything else -- scalars, bit arrays, the bitbucket -- is 1
@@ -4947,14 +4970,14 @@ static void pic_variable_access_window_prepass(pfile_t *pf,
   size_t                       e;
 
   /* free bytes of the general list inside the bank-independent
-   * window: PIC18 GPR access bank (0x00-0x5f); 14H common RAM (the
-   * device's `pragma shared` ranges, e.g. 0x70-0x7f mirrored in
-   * every bank — a variable there needs no MOVLB regardless of BSR).
-   * Occupants become access/shared-addressed via
-   * pic_variable_shared_set, so the bytes are MOVLB-free by the same
-   * mechanism on both families. */
+   * window: PIC18 GPR access bank (0x00-0x5f); 14H common RAM and the
+   * classic 14-bit common RAM (the device's `pragma shared` ranges,
+   * e.g. 0x70-0x7f mirrored in every bank -- a variable there needs no
+   * bank-select regardless of RP0/RP1 or BSR).  Occupants become
+   * access/shared-addressed via pic_variable_shared_set, so the bytes
+   * are bank-select-free by the same mechanism on every family. */
   win = 0;
-  if (pic_is_14bit_hybrid(pf)) {
+  if (pic_is_14bit_hybrid(pf) || pic_classic_layout_trials_enabled(pf)) {
     const pic_bank_info_t *shared;
 
     for (shared = pic_var.map.shared_pragma; shared; shared = shared->link) {
@@ -5101,6 +5124,32 @@ boolean_t pic_var_trials_available(pfile_t *pf)
       ? BOOLEAN_TRUE : BOOLEAN_FALSE;
 }
 
+/* TRUE once any placed variable is chunked (spans more than one bank
+ * window).  The classic-core trial pre-check compares this between the
+ * baseline and window layouts: a chunk-changing candidate is refused
+ * because the trial's raw/full metrics cannot price the walk change. */
+boolean_t pic_var_any_chunked(pfile_t *pf)
+{
+  pfile_proc_t *proc;
+
+  for (proc = pfile_proc_root_get(pf); proc; proc = pfile_proc_next(proc)) {
+    pfile_block_t *blk;
+
+    for (blk = pfile_proc_block_root_get(proc); blk;
+         blk = pfile_block_next(blk)) {
+      variable_t var;
+
+      for (var = pfile_block_variable_list_head(blk); var;
+           var = variable_link_get(var)) {
+        if (pic_mem_object_is_chunked(var)) {
+          return BOOLEAN_TRUE;
+        }
+      }
+    }
+  }
+  return BOOLEAN_FALSE;
+}
+
 void pic_var_trial_install(pfile_t *pf, int window)
 {
   struct variable_ **data2;
@@ -5121,6 +5170,9 @@ void pic_var_trial_install(pfile_t *pf, int window)
   }
   for (kk = 0; kk < pic_var.snap->used; kk++) {
     variable_base_set(pic_var.snap->data[kk], pic_var.snap->virt[kk], 0);
+    /* re-placement must re-derive chunking from scratch; a map left by the
+     * previous (thrown-away) layout would stick to a single-bank placement */
+    pic_variable_chunk_map_clear(pic_var.snap->data[kk]);
   }
   pic_blist_max = pic_var.snap->max;
   /* build the requested layout on a private copy of the candidates */
@@ -5146,10 +5198,36 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
     struct variable_ **data;
   } vinfo;
   pfile_proc_t *proc;
+  variable_base_t max_auto_base;
 
   vinfo.used  = 0;
   vinfo.alloc = 0;
   vinfo.data  = 0;
+  max_auto_base = 0;
+  /* Highest AUTO (non-sticky) base. A dead _bitbucket at that top can be
+   * reclaimed without shifting any live variable placed above it. */
+  for (proc = pfile_proc_root_get(pf);
+       proc;
+       proc = pfile_proc_next(proc)) {
+    pfile_block_t *blk;
+
+    for (blk = pfile_proc_block_root_get(proc);
+         blk;
+         blk = pfile_block_next(blk)) {
+      variable_t vptr;
+
+      for (vptr = pfile_block_variable_list_head(blk);
+           vptr;
+           vptr = variable_link_get(vptr)) {
+        if (variable_is_auto(vptr)
+            && !variable_is_sticky(vptr)
+            && (VARIABLE_BASE_UNKNOWN != variable_base_get(vptr, 0))
+            && (variable_base_get(vptr, 0) > max_auto_base)) {
+          max_auto_base = variable_base_get(vptr, 0);
+        }
+      }
+    }
+  }
   /* first, find each allocated variable */
   for (proc = pfile_proc_root_get(pf);
        proc;
@@ -5175,6 +5253,26 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
             variable_base_set(vptr, VARIABLE_BASE_UNKNOWN, 0);
             continue;
           }
+          if (!variable_is_used(vptr)) {
+            const char *nm;
+
+            nm = variable_name_get(vptr);
+            if (nm && (0 == strcmp(nm, PFILE_BITBUCKET_VARNAME))
+                && variable_flag_test(vptr, VARIABLE_FLAG_BITBUCKET_EMPTY)
+                && (variable_base_get(vptr, 0) >= max_auto_base)
+                && !pic_is_16bit(pf)
+                && !pic_is_14bit_hybrid(pf)) {
+              /* The empty gpsim placeholder _bitbucket, kept alive only by
+               * the counters-set bump (assigned, never read in pcode), is
+               * dead. Reclaim it only on classic 12/14-bit cores and only
+               * when it is the top AUTO variable: a lower one is a layout
+               * spacer, and on PIC18 / 14H the layout trials make even a top
+               * reclaim non-neutral. A bucket that packs real bits never
+               * carries BITBUCKET_EMPTY, so a write-only bit array is safe. */
+              variable_base_set(vptr, VARIABLE_BASE_UNKNOWN, 0);
+              continue;
+            }
+          }
           if (vinfo.used == vinfo.alloc) {
             size_t resize;
             void  *tmp;
@@ -5197,8 +5295,10 @@ static void pic_variable_alloc_fixup(pfile_t *pf)
   /* sort the variables by position */
   qsort(vinfo.data, vinfo.used, sizeof(*vinfo.data), vinfo_cmp);
   /* PIC18 / 14H: capture the pre-placement state so trial layouts can
-   * be built later by re-running the placement from here */
-  if ((pic_is_16bit(pf) || pic_is_14bit_hybrid(pf))
+   * be built later by re-running the placement from here.  Classic 14-bit
+   * joins only behind the opt-in classic-trials flag. */
+  if ((pic_is_16bit(pf) || pic_is_14bit_hybrid(pf)
+        || pic_classic_layout_trials_enabled(pf))
       && (0U != vinfo.used) && pic_var.banked_edges_used) {
     struct pic_var_layout_snap_ *snap;
     pfile_proc_t                 *sproc;

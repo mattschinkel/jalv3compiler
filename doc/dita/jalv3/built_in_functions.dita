@@ -8,5 +8,24 @@
     <p>JALv3 attempts to be a minimal language with most complex operations
     done with sub-programs, however some functions simply cannot be
     efficiently supported externally.</p>
+
+    <section>
+      <title>byref type predicates</title>
+
+      <p>The <codeph>_is_*()</codeph> family is built in: each predicate
+      tests the hidden type tag of a byref formal and returns a
+      <codeph>bit</codeph>. The set is
+      <codeph>_is_byte()</codeph>, <codeph>_is_word()</codeph>,
+      <codeph>_is_dword()</codeph>, <codeph>_is_qword()</codeph>,
+      <codeph>_is_oword()</codeph>, <codeph>_is_float()</codeph>, their
+      signed <codeph>_is_s*()</codeph> forms, the kind tests
+      <codeph>_is_string()</codeph>, <codeph>_is_array()</codeph> and
+      <codeph>_is_pointer()</codeph>, and the matching
+      <codeph>_is_*_array()</codeph> / <codeph>_is_*_pointer()</codeph>
+      element and pointee tests.</p>
+
+      <p>The full predicate table and the byref syntax are in
+      <xref href="byref.dita"/>.</p>
+    </section>
   </body>
 </topic>

@@ -9,17 +9,19 @@
 #
 # What this pin proves:
 #   1. the refusal is ONE diagnostic, naming the core's limit
-#      ("12-bit core: no indirect addressing ..."), for BOTH shapes that need
-#      indirection -- a runtime array index and a pointer-to-array index --
-#      and on every 12-bit family member tested (12F509, 10F200);
-#   2. the old noise is gone (no "'_irp' not found" anywhere);
+#      ("12-bit core: no indirect addressing ..."), for every shape that
+#      needs indirection -- a runtime array index, a pointer-to-array index,
+#      and a byref view of a const array (which takes the 14-bit table
+#      lowering) -- and on every 12-bit family member tested (12F509, 10F200);
+#   2. the old noise is gone (no "'_irp' not found" and no "'_pclath' not
+#      found" anywhere);
 #   3. the refusal is a CAPABILITY, not a blanket ban: a constant index on the
 #      same part still compiles;
 #   4. the same shapes on a 14-bit part still compile (the control: the
 #      programs are legal where the core has the hardware);
-#   5. a pre-fix compiler has 2 "'_irp' not found" errors per shape and no
-#      capability message, so the pin is discriminating (jaldbg pin-check
-#      new=PASS old=FAIL).
+#   5. a pre-fix compiler has 2 "'_irp' not found" errors per dynamic shape,
+#      and one "'_pclath' not found" for the byref view, so the pin is
+#      discriminating.
 #
 # Usage: unit-tests/test_pic12_indirect_refusal.sh [compiler]
 set -u
@@ -60,6 +62,19 @@ gen_const() { # $1 device, $2 file: constant index
   } > "$2"
 }
 
+gen_byref_view() { # $1 device, $2 file: byref view of a const array
+  {
+    echo "include $1"
+    echo "var volatile byte out"
+    echo "procedure sink(byref in a[]) is"
+    echo "   out = a[0]"
+    echo "end procedure"
+    echo "const byte m1[] = {0, 66}"
+    echo "out = 0x11"
+    echo "sink(m1)"
+  } > "$2"
+}
+
 check_refusal() { # $1 device, $2 label, $3 generator
   local dev=$1 label=$2 gen=$3 src log nerr rc
   src="$WORK/${label}_$dev.jal"
@@ -81,6 +96,12 @@ check_refusal() { # $1 device, $2 label, $3 generator
     fails=$((fails + 1))
   else
     echo "ok   $dev $label: no '_irp' not found lines"
+  fi
+  if grep -q "'_pclath' not found" "$log"; then
+    echo "FAIL: $dev $label: the 14-bit table setup leaked '_pclath'"
+    fails=$((fails + 1))
+  else
+    echo "ok   $dev $label: no '_pclath' not found lines"
   fi
 }
 
@@ -104,11 +125,18 @@ check_refusal 12f509 dyn gen_dyn
 check_refusal 12f509 ptr gen_ptr
 check_refusal 10f200 dyn gen_dyn
 check_refusal 10f200 ptr gen_ptr
+# A byref view of a CONST array takes the 14-bit table lowering (PCLATH);
+# it is a pointer access too, so it must refuse with the same capability
+# message instead of leaking "'_pclath' not found".
+check_refusal 12f509 byref gen_byref_view
+check_refusal 10f200 byref gen_byref_view
 # 3. a constant index is still legal on the 12-bit part
 check_compiles 12f509 const gen_const
+check_compiles 10f200 const gen_const
 # 4. the same shapes are legal on a 14-bit part (the control)
 check_compiles 12f1840 dyn gen_dyn
 check_compiles 12f1840 ptr gen_ptr
+check_compiles 12f1840 byref gen_byref_view
 
 echo ""
 if [ "$fails" -ne 0 ]; then
